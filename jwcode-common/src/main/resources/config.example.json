@@ -1,0 +1,70 @@
+{
+  "_comment": "JWCode 配置文件示例",
+  "_version": "1.0.0",
+  "model": {
+    "_comment": "默认使用的模型",
+    "default": "sonnet",
+    "fallback": "opus"
+  },
+  "api": {
+    "_comment": "API 配置",
+    "baseUrl": "https://api.anthropic.com",
+    "timeout": 60000,
+    "maxRetries": 3
+  },
+  "ui": {
+    "_comment": "UI 配置",
+    "theme": "dark",
+    "verbose": false,
+    "showSpinner": true,
+    "reducedMotion": false
+  },
+  "permissions": {
+    "_comment": "权限配置",
+    "mode": "default",
+    "autoApprovePatterns": [
+      "git status",
+      "git log --oneline -10",
+      "ls -la",
+      "pwd",
+      "cat *.md"
+    ],
+    "alwaysDenyPatterns": [
+      "rm -rf /",
+      "sudo rm -rf",
+      "mkfs",
+      "dd if=/dev/zero"
+    ]
+  },
+  "mcp": {
+    "_comment": "MCP 服务器配置",
+    "servers": {
+      "filesystem": {
+        "type": "stdio",
+        "command": "mcp-server-filesystem",
+        "args": ["/workspace"]
+      },
+      "git": {
+        "type": "stdio",
+        "command": "mcp-server-git",
+        "args": ["--repository", "."]
+      }
+    }
+  },
+  "plugins": {
+    "_comment": "插件配置",
+    "enabled": [],
+    "disabled": []
+  },
+  "session": {
+    "_comment": "会话配置",
+    "persistence": true,
+    "maxHistorySize": 100,
+    "autoSave": true
+  },
+  "telemetry": {
+    "_comment": "遥测配置",
+    "enabled": true,
+    "anonymous": true
+  }
+}

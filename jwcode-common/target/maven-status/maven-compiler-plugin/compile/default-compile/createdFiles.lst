@@ -1,0 +1,6 @@
+com\jwcode\common\service\AuthService.class
+com\jwcode\common\util\Preconditions.class
+com\jwcode\common\config\ConfigLoader.class
+com\jwcode\common\auth\OAuthFlow.class
+com\jwcode\common\auth\OAuthFlow$AuthResult.class
+com\jwcode\common\auth\AuthManager.class
