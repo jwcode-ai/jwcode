@@ -1,0 +1,6 @@
+jwcode-core/target/*
+jwcode-web/target/*
+jwcode-core/target/*
+jwcode-cli/target/*
+jwcode-common/target/*
+jwcode-core/target/classes/*
