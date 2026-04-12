@@ -17,6 +17,7 @@ public class CliLogger {
     // ANSI 颜色
     public static final String RESET = "\u001B[0m";
     public static final String BOLD = "\u001B[1m";
+    public static final String DIM = "\u001B[2m";
     public static final String GRAY = "\u001B[90m";
     public static final String RED = "\u001B[91m";
     public static final String GREEN = "\u001B[92m";
@@ -276,5 +277,152 @@ public class CliLogger {
     
     public static void logDebug(String message) {
         getInstance().debug(message);
+    }
+    
+    // ============ AI 活动日志便捷方法 ============
+    
+    /**
+     * 记录 AI 正在读取文件
+     */
+    public static String readingFile(String filePath) {
+        return ActivityLogger.start(ActivityType.FILE_READ, "读取文件: " + filePath);
+    }
+    
+    /**
+     * 记录 AI 正在写入文件
+     */
+    public static String writingFile(String filePath) {
+        return ActivityLogger.start(ActivityType.FILE_WRITE, "写入文件: " + filePath);
+    }
+    
+    /**
+     * 记录 AI 正在编辑文件
+     */
+    public static String editingFile(String filePath) {
+        return ActivityLogger.start(ActivityType.FILE_EDIT, "编辑文件: " + filePath);
+    }
+    
+    /**
+     * 记录 AI 正在搜索代码
+     */
+    public static String searchingCode(String pattern, String path) {
+        String desc = "搜索: " + pattern;
+        if (path != null) desc += " 在 " + path;
+        return ActivityLogger.start(ActivityType.CODE_SEARCH, desc);
+    }
+    
+    /**
+     * 记录 AI 正在搜索文件
+     */
+    public static String searchingFiles(String pattern) {
+        return ActivityLogger.start(ActivityType.GLOB_SEARCH, "搜索文件: " + pattern);
+    }
+    
+    /**
+     * 记录 AI 正在执行命令
+     */
+    public static String executingCommand(String command) {
+        return ActivityLogger.start(ActivityType.SHELL_EXEC, "执行: " + truncate(command, 60));
+    }
+    
+    /**
+     * 记录 AI 正在网络搜索
+     */
+    public static String webSearching(String query) {
+        return ActivityLogger.start(ActivityType.WEB_SEARCH, "搜索: " + query);
+    }
+    
+    /**
+     * 记录 AI 正在思考
+     */
+    public static String aiThinking(String topic) {
+        return ActivityLogger.start(ActivityType.AI_THINKING, "思考: " + topic);
+    }
+    
+    /**
+     * 记录 AI 正在规划
+     */
+    public static String aiPlanning(String task) {
+        return ActivityLogger.start(ActivityType.AI_PLANNING, "规划: " + task);
+    }
+    
+    /**
+     * 完成活动
+     */
+    public static void done(String activityId) {
+        ActivityLogger.complete(activityId);
+    }
+    
+    /**
+     * 完成活动（带结果）
+     */
+    public static void done(String activityId, String result) {
+        ActivityLogger.complete(activityId, result);
+    }
+    
+    /**
+     * 活动失败
+     */
+    public static void failed(String activityId, String error) {
+        ActivityLogger.fail(activityId, error);
+    }
+    
+    /**
+     * 更新进度
+     */
+    public static void progress(String activityId, int percent) {
+        ActivityLogger.progress(activityId, percent);
+    }
+    
+    // ============ 实时状态显示 ============
+    
+    /**
+     * 显示 AI 正在思考动画
+     */
+    public static void showThinking(String message) {
+        String id = ActivityLogger.start(ActivityType.AI_THINKING, message);
+        // 模拟思考动画
+        try {
+            for (int i = 0; i <= 100; i += 10) {
+                Thread.sleep(100);
+                ActivityLogger.progress(id, i);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        ActivityLogger.complete(id, "思考完成");
+    }
+    
+    /**
+     * 显示工具调用框（KimiCode 风格）
+     */
+    public static void toolCallBox(String toolName, String params) {
+        System.out.println();
+        System.out.println(CYAN + "┌─ Tool: " + BOLD + toolName + RESET);
+        if (params != null && !params.isEmpty()) {
+            String[] lines = params.split("\\r?\\n");
+            for (String line : lines) {
+                System.out.println(CYAN + "│ " + GRAY + truncate(line, 70) + RESET);
+            }
+        }
+        System.out.println(CYAN + "└" + RESET);
+    }
+    
+    /**
+     * 显示工具结果框
+     */
+    public static void toolResultBox(String toolName, boolean success, String result) {
+        String color = success ? GREEN : RED;
+        String icon = success ? "✓" : "✗";
+        System.out.println(color + icon + " " + toolName + (success ? " 成功" : " 失败") + RESET);
+        if (result != null && !result.isEmpty()) {
+            System.out.println(GRAY + "  → " + truncate(result, 60) + RESET);
+        }
+    }
+    
+    private static String truncate(String str, int maxLength) {
+        if (str == null) return "";
+        if (str.length() <= maxLength) return str;
+        return str.substring(0, maxLength - 3) + "...";
     }
 }

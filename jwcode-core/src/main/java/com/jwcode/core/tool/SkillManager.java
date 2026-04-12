@@ -2,7 +2,6 @@ package com.jwcode.core.tool;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import com.jwcode.core.session.Session;
-import com.jwcode.core.service.ApiService;
 import com.jwcode.core.service.ToolExecutionService;
 
 import java.io.IOException;
@@ -47,11 +46,6 @@ public class SkillManager {
     private final ToolExecutionService toolExecutionService;
     
     /**
-     * API 服务
-     */
-    private final ApiService apiService;
-    
-    /**
      * HTTP 客户端（用于远程技能加载）
      */
     private final HttpClient httpClient;
@@ -76,14 +70,11 @@ public class SkillManager {
      * 
      * @param skillRegistry 技能注册表
      * @param toolExecutionService 工具执行服务
-     * @param apiService API 服务
      */
     public SkillManager(SkillRegistry skillRegistry, 
-                        ToolExecutionService toolExecutionService,
-                        ApiService apiService) {
+                        ToolExecutionService toolExecutionService) {
         this.skillRegistry = skillRegistry;
         this.toolExecutionService = toolExecutionService;
-        this.apiService = apiService;
         this.httpClient = HttpClient.newHttpClient();
         this.remoteSkillCache = new ConcurrentHashMap<>();
         this.executionHistory = new ArrayList<>();
@@ -95,7 +86,7 @@ public class SkillManager {
      * @param skillRegistry 技能注册表
      */
     public SkillManager(SkillRegistry skillRegistry) {
-        this(skillRegistry, null, null);
+        this(skillRegistry, null);
     }
     
     /**

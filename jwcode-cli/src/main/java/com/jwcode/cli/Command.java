@@ -39,4 +39,13 @@ public interface Command {
      * @return 命令执行结果
      */
     CommandResult execute(String args, CommandContext context);
+    
+    /**
+     * 获取命令别名
+     * 
+     * @return 命令别名数组
+     */
+    default String[] getAliases() {
+        return new String[0];
+    }
 }

@@ -83,7 +83,8 @@ public class DebugAgent implements Agent {
     
     @Override
     public ModelConfig getModelConfig() {
-        return new ModelConfig("claude-3-5-sonnet", 0.3, 4000);
+        // 模型名称必须通过外部配置设置，不允许硬编码
+        return new ModelConfig(null, 0.3, 4000);
     }
     
     @Override

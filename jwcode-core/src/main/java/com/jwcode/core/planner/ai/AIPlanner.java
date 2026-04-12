@@ -4,9 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jwcode.core.agent.Agent;
 import com.jwcode.core.planner.PlanStep;
-import com.jwcode.core.service.ApiClient;
-import com.jwcode.core.service.ApiRequest;
-import com.jwcode.core.model.Message;
+import com.jwcode.core.llm.*;
 import com.jwcode.core.session.Session;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,7 +30,7 @@ public class AIPlanner {
     
     private static final Logger log = LoggerFactory.getLogger(AIPlanner.class);
     
-    private final ApiClient apiClient;
+    private final LLMService llmService;
     private final ObjectMapper objectMapper;
     
     // 分析结果缓存
@@ -42,8 +40,8 @@ public class AIPlanner {
     // 学习记忆
     private final AILearningMemory learningMemory;
     
-    public AIPlanner(ApiClient apiClient) {
-        this.apiClient = apiClient;
+    public AIPlanner(LLMService llmService) {
+        this.llmService = llmService;
         this.objectMapper = new ObjectMapper();
         this.analysisCache = new ConcurrentHashMap<>();
         this.learningMemory = new AILearningMemory();
@@ -350,12 +348,9 @@ public class AIPlanner {
      * 调用 AI
      */
     private CompletableFuture<String> callAI(String prompt) {
-        ApiRequest request = ApiRequest.builder()
-            .model("sonnet")
-            .messages(List.of(Message.createUserMessage(prompt)))
-            .build();
+        List<LLMMessage> messages = List.of(LLMMessage.user(prompt));
         
-        return apiClient.sendRequest(request)
+        return llmService.chat(messages)
             .thenApply(response -> {
                 if (response.hasError()) {
                     throw new RuntimeException("AI 调用失败: " + response.getErrorMessage());

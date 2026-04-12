@@ -1,9 +1,8 @@
 package com.jwcode.core.skill;
 
-import lombok.extern.slf4j.Slf4j;
-
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 /**
@@ -11,8 +10,9 @@ import java.util.stream.Collectors;
  * 
  * 管理所有技能的注册、查找和生命周期
  */
-@Slf4j
 public class SkillRegistry {
+    
+    private static final Logger logger = Logger.getLogger(SkillRegistry.class.getName());
     
     private final Map<String, Skill> skills = new ConcurrentHashMap<>();
     private final Map<Skill.Category, List<Skill>> skillsByCategory = new ConcurrentHashMap<>();
@@ -30,7 +30,7 @@ public class SkillRegistry {
         skillsByCategory
             .computeIfAbsent(skill.getCategory(), k -> new ArrayList<>())
             .add(skill);
-        log.info("[SkillRegistry] 注册技能: " + skill.getId());
+        logger.info("[SkillRegistry] 注册技能: " + skill.getId());
     }
     
     /**
@@ -41,7 +41,7 @@ public class SkillRegistry {
         if (removed != null) {
             skillsByCategory.getOrDefault(removed.getCategory(), new ArrayList<>())
                 .remove(removed);
-            log.info("[SkillRegistry] 注销技能: " + skillId);
+            logger.info("[SkillRegistry] 注销技能: " + skillId);
         }
     }
     
@@ -290,6 +290,6 @@ public class SkillRegistry {
             register(skill);
         }
         
-        log.info("[SkillRegistry] 已注册 " + builtinSkills.size() + " 个内置技能");
+        logger.info("[SkillRegistry] 已注册 " + builtinSkills.size() + " 个内置技能");
     }
 }

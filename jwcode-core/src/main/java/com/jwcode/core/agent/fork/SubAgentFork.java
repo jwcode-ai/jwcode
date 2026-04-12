@@ -2,8 +2,8 @@ package com.jwcode.core.agent.fork;
 
 import com.jwcode.core.agent.Agent;
 import com.jwcode.core.agent.AgentManager;
-import com.jwcode.core.query.EngineConfig;
-import com.jwcode.core.query.QueryEngine;
+import com.jwcode.core.llm.*;
+import com.jwcode.core.model.Message;
 import com.jwcode.core.session.Session;
 import com.jwcode.core.session.SessionFork;
 import com.jwcode.core.tool.*;
@@ -44,7 +44,7 @@ public class SubAgentFork {
     private String agentType = "general";
     private String customSystemPrompt;
     private Map<String, Object> contextData = new HashMap<>();
-    private EngineConfig engineConfig;
+    private LLMQueryEngine.EngineConfig engineConfig;
     private long timeoutMs = 60000;
     
     public SubAgentFork(Agent parentAgent, Session parentSession, ToolRegistry toolRegistry) {
@@ -52,7 +52,7 @@ public class SubAgentFork {
         this.parentSession = parentSession;
         this.toolRegistry = toolRegistry;
         this.tools = new ArrayList<>();
-        this.engineConfig = EngineConfig.defaultConfig();
+        this.engineConfig = LLMQueryEngine.EngineConfig.defaultConfig();
     }
     
     /**
@@ -106,7 +106,7 @@ public class SubAgentFork {
     /**
      * 设置引擎配置
      */
-    public SubAgentFork withEngineConfig(EngineConfig config) {
+    public SubAgentFork withEngineConfig(LLMQueryEngine.EngineConfig config) {
         this.engineConfig = config;
         return this;
     }
@@ -147,13 +147,10 @@ public class SubAgentFork {
             parentAgent.getId()
         );
         
-        // 4. 创建 QueryEngine
-        QueryEngine engine = QueryEngine.builder()
-            .session(forkedSession)
-            .model(parentAgent.getModelConfig().getModel())
-            .toolRegistry(toolRegistry)
-            .engineConfig(engineConfig)
-            .build();
+        // 4. 创建 LLMQueryEngine
+        // TODO: 需要从配置创建 LLMFactory
+        LLMFactory llmFactory = LLMFactory.createDefault();
+        LLMQueryEngine engine = llmFactory.createQueryEngine(forkedSession);
         
         // 5. 返回结果
         return new SubAgentResult(childAgent, forkedSession, engine, timeoutMs);
@@ -249,11 +246,11 @@ public class SubAgentFork {
     public static class SubAgentResult {
         private final ForkedAgent agent;
         private final Session session;
-        private final QueryEngine engine;
+        private final LLMQueryEngine engine;
         private final long timeoutMs;
         
         public SubAgentResult(ForkedAgent agent, Session session, 
-                             QueryEngine engine, long timeoutMs) {
+                             LLMQueryEngine engine, long timeoutMs) {
             this.agent = agent;
             this.session = session;
             this.engine = engine;
@@ -262,7 +259,7 @@ public class SubAgentFork {
         
         public ForkedAgent getAgent() { return agent; }
         public Session getSession() { return session; }
-        public QueryEngine getEngine() { return engine; }
+        public LLMQueryEngine getEngine() { return engine; }
         public long getTimeoutMs() { return timeoutMs; }
         
         /**
@@ -272,7 +269,15 @@ public class SubAgentFork {
             return engine.query(prompt)
                 .thenApply(result -> {
                     if (result.isSuccess()) {
-                        return result.getMessage().getContent().toString();
+                        Message message = result.getMessage();
+                        // 提取文本内容
+                        StringBuilder sb = new StringBuilder();
+                        for (Message.ContentBlock block : message.getContent()) {
+                            if (block instanceof Message.TextContent) {
+                                sb.append(((Message.TextContent) block).getText());
+                            }
+                        }
+                        return sb.toString();
                     } else {
                         return "Error: " + result.getErrorMessage();
                     }

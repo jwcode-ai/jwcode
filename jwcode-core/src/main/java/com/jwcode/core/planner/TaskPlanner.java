@@ -6,7 +6,7 @@ import com.jwcode.core.agent.parallel.SubAgentTask;
 import com.jwcode.core.planner.ai.AITaskPlanner;
 import com.jwcode.core.planner.ai.DynamicExecutionEngine;
 import com.jwcode.core.planner.ai.TaskAnalysis;
-import com.jwcode.core.service.ApiClient;
+import com.jwcode.core.llm.LLMService;
 import com.jwcode.core.session.Session;
 import com.jwcode.core.tool.ToolRegistry;
 import org.slf4j.Logger;
@@ -55,13 +55,13 @@ public class TaskPlanner {
         this(agentRegistry, null, null);
     }
     
-    public TaskPlanner(AgentRegistry agentRegistry, ApiClient apiClient, ToolRegistry toolRegistry) {
+    public TaskPlanner(AgentRegistry agentRegistry, LLMService llmService, ToolRegistry toolRegistry) {
         this.agentRegistry = agentRegistry;
         this.planValidator = new PlanValidator();
         
         // 初始化 AI 规划器
-        if (apiClient != null && toolRegistry != null) {
-            this.aiTaskPlanner = new AITaskPlanner(apiClient, toolRegistry);
+        if (llmService != null && toolRegistry != null) {
+            this.aiTaskPlanner = new AITaskPlanner(llmService, toolRegistry);
         } else {
             this.aiTaskPlanner = null;
         }

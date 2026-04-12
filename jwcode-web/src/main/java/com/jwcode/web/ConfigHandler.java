@@ -1,0 +1,384 @@
+package com.jwcode.web;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.jwcode.core.config.ConfigManager;
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpHandler;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.Map;
+
+/**
+ * 配置 API - 从 ConfigManager 读取真实配置
+ */
+public class ConfigHandler implements HttpHandler {
+    
+    private final ObjectMapper objectMapper = new ObjectMapper();
+    
+    @Override
+    public void handle(HttpExchange exchange) throws IOException {
+        String method = exchange.getRequestMethod();
+        String path = exchange.getRequestURI().getPath();
+        
+        // 设置 CORS 头
+        exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
+        
+        if ("OPTIONS".equalsIgnoreCase(method)) {
+            exchange.sendResponseHeaders(200, -1);
+            return;
+        }
+        
+        // 路由处理
+        if (path.endsWith("/api/config/advanced")) {
+            handleAdvancedConfig(exchange, method);
+        } else if (path.endsWith("/api/config/advanced/toggle")) {
+            handleAdvancedToggle(exchange, method);
+        } else {
+            // 默认配置路由
+            switch (method.toUpperCase()) {
+                case "GET":
+                    getConfig(exchange);
+                    break;
+                case "POST":
+                case "PUT":
+                    updateConfig(exchange);
+                    break;
+                case "DELETE":
+                    deleteConfig(exchange);
+                    break;
+                default:
+                    sendJsonResponse(exchange, 405, createError("Method not allowed"));
+            }
+        }
+    }
+    
+    /**
+     * 处理高级配置端点 /api/config/advanced
+     */
+    private void handleAdvancedConfig(HttpExchange exchange, String method) throws IOException {
+        switch (method.toUpperCase()) {
+            case "GET":
+                getAdvancedConfig(exchange);
+                break;
+            case "POST":
+            case "PUT":
+                updateAdvancedConfig(exchange);
+                break;
+            default:
+                sendJsonResponse(exchange, 405, createError("Method not allowed"));
+        }
+    }
+    
+    /**
+     * 处理高级配置切换端点 /api/config/advanced/toggle
+     */
+    private void handleAdvancedToggle(HttpExchange exchange, String method) throws IOException {
+        if ("POST".equalsIgnoreCase(method)) {
+            toggleAdvancedConfig(exchange);
+        } else {
+            sendJsonResponse(exchange, 405, createError("Method not allowed, only POST is supported"));
+        }
+    }
+    
+    /**
+     * 获取配置 - 从 ConfigManager 读取真实配置
+     */
+    private void getConfig(HttpExchange exchange) throws IOException {
+        ConfigManager configManager = ConfigManager.getInstance();
+        Map<String, String> allConfig = configManager.getAll();
+        
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("success", true);
+        
+        // 系统信息
+        ObjectNode system = response.putObject("system");
+        system.put("version", "1.0.0");
+        system.put("streaming", true);
+        system.put("websocketPort", 8081);
+        
+        // 用户配置
+        ObjectNode userConfig = response.putObject("user");
+        configManager.getUserConfig().forEach(userConfig::put);
+        
+        // 项目配置
+        ObjectNode projectConfig = response.putObject("project");
+        configManager.getProjectConfig().forEach(projectConfig::put);
+        
+        // 合并后的配置
+        ObjectNode config = response.putObject("config");
+        allConfig.forEach(config::put);
+        
+        // 高级功能配置
+        addAdvancedConfigToResponse(response, configManager);
+        
+        sendJsonResponse(exchange, 200, response);
+    }
+    
+    /**
+     * 获取配置值，带默认值
+     */
+    private String getConfigWithDefault(ConfigManager configManager, String key, String defaultValue) {
+        String value = configManager.get(key);
+        return value != null ? value : defaultValue;
+    }
+    
+    /**
+     * 添加高级功能配置到响应
+     */
+    private void addAdvancedConfigToResponse(ObjectNode response, ConfigManager configManager) {
+        ObjectNode advanced = response.putObject("advanced");
+        
+        // Thinking Mode (深度推理模式)
+        ObjectNode thinking = advanced.putObject("thinking");
+        thinking.put("enabled", Boolean.parseBoolean(getConfigWithDefault(configManager, "thinking.enabled", "false")));
+        thinking.put("description", "深度推理模式 - AI 将花更多时间分析再给出回答");
+        
+        // YOLO Mode (全自动模式)
+        ObjectNode yolo = advanced.putObject("yolo");
+        yolo.put("enabled", Boolean.parseBoolean(getConfigWithDefault(configManager, "yolo.enabled", "false")));
+        yolo.put("description", "全自动模式 - AI 将自动执行命令而无需确认");
+        
+        // Auto Swarm Mode (自动 Agent Swarm 模式)
+        ObjectNode autoSwarm = advanced.putObject("autoSwarm");
+        autoSwarm.put("enabled", Boolean.parseBoolean(getConfigWithDefault(configManager, "autoSwarm.enabled", "false")));
+        autoSwarm.put("description", "自动 Agent Swarm 模式 - 根据任务复杂度自动创建 Agent 团队");
+        
+        // Auto AI Mode (自动 AI 规划模式)
+        ObjectNode autoAI = advanced.putObject("autoAI");
+        autoAI.put("enabled", Boolean.parseBoolean(getConfigWithDefault(configManager, "autoAI.enabled", "false")));
+        autoAI.put("description", "自动 AI 规划模式 - 复杂任务自动启用 Agent Swarm");
+        
+        // Context Compression (上下文压缩功能)
+        ObjectNode compression = advanced.putObject("compression");
+        compression.put("enabled", Boolean.parseBoolean(getConfigWithDefault(configManager, "compression.enabled", "true")));
+        compression.put("description", "上下文压缩功能 - 自动压缩长对话以节省 Token");
+        compression.put("maxMessages", Integer.parseInt(getConfigWithDefault(configManager, "compression.maxMessages", "50")));
+        compression.put("tokenThreshold", Integer.parseInt(getConfigWithDefault(configManager, "compression.tokenThreshold", "4000")));
+    }
+    
+    /**
+     * 获取高级功能配置 - GET /api/config/advanced
+     */
+    private void getAdvancedConfig(HttpExchange exchange) throws IOException {
+        ConfigManager configManager = ConfigManager.getInstance();
+        
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("success", true);
+        
+        // 添加高级功能配置
+        addAdvancedConfigToResponse(response, configManager);
+        
+        sendJsonResponse(exchange, 200, response);
+    }
+    
+    /**
+     * 更新高级功能配置 - POST/PUT /api/config/advanced
+     */
+    private void updateAdvancedConfig(HttpExchange exchange) throws IOException {
+        ObjectNode request = parseRequestBody(exchange);
+        
+        if (request == null) {
+            sendJsonResponse(exchange, 400, createError("请求体不能为空"));
+            return;
+        }
+        
+        ConfigManager configManager = ConfigManager.getInstance();
+        
+        // 支持批量更新高级配置
+        if (request.has("configs")) {
+            ObjectNode configs = (ObjectNode) request.get("configs");
+            configs.fields().forEachRemaining(entry -> {
+                String key = entry.getKey();
+                String value = entry.getValue().asText();
+                // 验证是否为有效的高级配置键
+                if (isValidAdvancedConfigKey(key)) {
+                    configManager.set(key, value);
+                }
+            });
+        } else if (request.has("key") && request.has("value")) {
+            // 单个更新
+            String key = request.get("key").asText();
+            String value = request.get("value").asText();
+            
+            if (!isValidAdvancedConfigKey(key)) {
+                sendJsonResponse(exchange, 400, createError("无效的高级配置键: " + key));
+                return;
+            }
+            
+            configManager.set(key, value);
+        } else {
+            sendJsonResponse(exchange, 400, createError("需要提供 configs 或 key/value"));
+            return;
+        }
+        
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("success", true);
+        response.put("message", "高级配置已更新");
+        
+        sendJsonResponse(exchange, 200, response);
+    }
+    
+    /**
+     * 切换布尔值配置 - POST /api/config/advanced/toggle
+     * 请求体: { "key": "thinking.enabled" }
+     */
+    private void toggleAdvancedConfig(HttpExchange exchange) throws IOException {
+        ObjectNode request = parseRequestBody(exchange);
+        
+        if (request == null || !request.has("key")) {
+            sendJsonResponse(exchange, 400, createError("需要提供 key 参数"));
+            return;
+        }
+        
+        String key = request.get("key").asText();
+        
+        if (!isValidAdvancedConfigKey(key)) {
+            sendJsonResponse(exchange, 400, createError("无效的高级配置键: " + key));
+            return;
+        }
+        
+        // 只支持布尔值配置的切换
+        if (!isBooleanConfigKey(key)) {
+            sendJsonResponse(exchange, 400, createError("该配置项不支持切换操作: " + key));
+            return;
+        }
+        
+        ConfigManager configManager = ConfigManager.getInstance();
+        String currentValue = getConfigWithDefault(configManager, key, "false");
+        String newValue = Boolean.parseBoolean(currentValue) ? "false" : "true";
+        
+        configManager.set(key, newValue);
+        
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("success", true);
+        response.put("message", "配置已切换");
+        response.put("key", key);
+        response.put("value", Boolean.parseBoolean(newValue));
+        
+        sendJsonResponse(exchange, 200, response);
+    }
+    
+    /**
+     * 检查是否为有效的高级配置键
+     */
+    private boolean isValidAdvancedConfigKey(String key) {
+        return key.equals("thinking.enabled") ||
+               key.equals("yolo.enabled") ||
+               key.equals("autoSwarm.enabled") ||
+               key.equals("autoAI.enabled") ||
+               key.equals("compression.enabled") ||
+               key.equals("compression.maxMessages") ||
+               key.equals("compression.tokenThreshold");
+    }
+    
+    /**
+     * 检查是否为布尔值配置键
+     */
+    private boolean isBooleanConfigKey(String key) {
+        return key.endsWith(".enabled");
+    }
+    
+    /**
+     * 更新配置
+     */
+    private void updateConfig(HttpExchange exchange) throws IOException {
+        ObjectNode request = parseRequestBody(exchange);
+        
+        if (request == null) {
+            sendJsonResponse(exchange, 400, createError("请求体不能为空"));
+            return;
+        }
+        
+        ConfigManager configManager = ConfigManager.getInstance();
+        
+        // 支持批量更新
+        if (request.has("configs")) {
+            ObjectNode configs = (ObjectNode) request.get("configs");
+            configs.fields().forEachRemaining(entry -> {
+                configManager.set(entry.getKey(), entry.getValue().asText());
+            });
+        } else if (request.has("key") && request.has("value")) {
+            // 单个更新
+            String key = request.get("key").asText();
+            String value = request.get("value").asText();
+            configManager.set(key, value);
+        } else {
+            sendJsonResponse(exchange, 400, createError("需要提供 configs 或 key/value"));
+            return;
+        }
+        
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("success", true);
+        response.put("message", "配置已更新");
+        
+        sendJsonResponse(exchange, 200, response);
+    }
+    
+    /**
+     * 删除配置
+     */
+    private void deleteConfig(HttpExchange exchange) throws IOException {
+        String query = exchange.getRequestURI().getQuery();
+        String key = null;
+        
+        if (query != null) {
+            for (String param : query.split("&")) {
+                String[] parts = param.split("=");
+                if (parts.length == 2 && "key".equals(parts[0])) {
+                    key = parts[1];
+                    break;
+                }
+            }
+        }
+        
+        ObjectNode response = objectMapper.createObjectNode();
+        
+        if (key == null || key.isEmpty()) {
+            response.put("success", false);
+            response.put("error", "需要提供 key 参数");
+            sendJsonResponse(exchange, 400, response);
+            return;
+        }
+        
+        ConfigManager configManager = ConfigManager.getInstance();
+        configManager.delete(key);
+        
+        response.put("success", true);
+        response.put("message", "配置已删除");
+        response.put("key", key);
+        
+        sendJsonResponse(exchange, 200, response);
+    }
+    
+    private ObjectNode parseRequestBody(HttpExchange exchange) throws IOException {
+        try (InputStream is = exchange.getRequestBody()) {
+            String body = new String(is.readAllBytes(), StandardCharsets.UTF_8);
+            if (body.isEmpty()) {
+                return null;
+            }
+            return objectMapper.readValue(body, ObjectNode.class);
+        }
+    }
+    
+    private void sendJsonResponse(HttpExchange exchange, int statusCode, ObjectNode json) throws IOException {
+        byte[] bytes = objectMapper.writeValueAsBytes(json);
+        exchange.getResponseHeaders().set("Content-Type", "application/json");
+        exchange.sendResponseHeaders(statusCode, bytes.length);
+        try (OutputStream os = exchange.getResponseBody()) {
+            os.write(bytes);
+        }
+    }
+    
+    private ObjectNode createError(String message) {
+        ObjectNode error = objectMapper.createObjectNode();
+        error.put("success", false);
+        error.put("error", message);
+        return error;
+    }
+}

@@ -42,6 +42,26 @@ public abstract class Message {
     public List<ToolCallInfo> getToolCalls() { return toolCalls; }
     public boolean hasToolCalls() { return toolCalls != null && !toolCalls.isEmpty(); }
     
+    /**
+     * 获取消息的文本内容
+     * 如果消息包含多个 TextContent，将它们连接起来
+     */
+    public String getTextContent() {
+        if (content == null || content.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (ContentBlock block : content) {
+            if (block instanceof TextContent) {
+                if (sb.length() > 0) {
+                    sb.append("\n");
+                }
+                sb.append(((TextContent) block).getText());
+            }
+        }
+        return sb.toString();
+    }
+    
     public enum Role { 
         USER("user"), 
         ASSISTANT("assistant"), 
@@ -132,12 +152,14 @@ public abstract class Message {
     /**
      * 创建包含工具调用的 assistant 消息
      * 这是修复 tool_call_id not found 问题的关键方法
+     * 
+     * 注意：即使 content 为空，也必须添加一个空字符串的 TextContent，
+     * 因为某些 API（如 Moonshot/Kimi）要求 assistant 消息必须有 content 字段
      */
     public static Message createAssistantMessageWithToolCalls(String content, List<ToolCallInfo> toolCalls) {
         List<ContentBlock> blocks = new ArrayList<>();
-        if (content != null && !content.isEmpty()) {
-            blocks.add(new TextContent(content));
-        }
+        // 必须添加 content，即使是空字符串
+        blocks.add(new TextContent(content != null ? content : ""));
         return new Message(null, Role.ASSISTANT, blocks, toolCalls) {};
     }
 }

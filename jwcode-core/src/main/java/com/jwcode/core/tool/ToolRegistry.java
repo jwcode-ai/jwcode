@@ -4,6 +4,7 @@ import com.jwcode.common.util.Preconditions;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Logger;
 
 /**
  * ToolRegistry - 工具注册表
@@ -21,6 +22,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * @since 1.0.0
  */
 public class ToolRegistry {
+    
+    private static final Logger logger = Logger.getLogger(ToolRegistry.class.getName());
     
     /**
      * 工具映射表（名称 -> 工具实例）
@@ -64,6 +67,9 @@ public class ToolRegistry {
                 toolsByName.put(alias, tool);
             }
         }
+        
+        // 记录工具注册日志
+        logger.info("[ToolRegistry] 注册工具: " + name);
         
         return this;
     }
@@ -215,6 +221,8 @@ public class ToolRegistry {
         registry.register(new ExitWorktreeTool());
         registry.register(new SyntheticOutputTool());
         registry.register(new McpAuthTool());
+        
+        logger.info("[ToolRegistry] 已注册 " + registry.size() + " 个内置工具");
         
         return registry;
     }

@@ -3,7 +3,7 @@ package com.jwcode.core.planner.ai;
 import com.jwcode.core.agent.Agent;
 import com.jwcode.core.planner.ExecutionPlan;
 import com.jwcode.core.planner.PlanStep;
-import com.jwcode.core.service.ApiClient;
+import com.jwcode.core.llm.LLMService;
 import com.jwcode.core.session.Session;
 import com.jwcode.core.tool.ToolRegistry;
 import org.slf4j.Logger;
@@ -26,8 +26,8 @@ public class AITaskPlanner {
     private final ExecutionTracer executionTracer;
     private final AILearningMemory learningMemory;
     
-    public AITaskPlanner(ApiClient apiClient, ToolRegistry toolRegistry) {
-        this.aiPlanner = new AIPlanner(apiClient);
+    public AITaskPlanner(LLMService llmService, ToolRegistry toolRegistry) {
+        this.aiPlanner = new AIPlanner(llmService);
         this.dependencyAnalyzer = new SmartDependencyAnalyzer();
         this.executionEngine = new DynamicExecutionEngine(toolRegistry);
         this.executionTracer = new ExecutionTracer();

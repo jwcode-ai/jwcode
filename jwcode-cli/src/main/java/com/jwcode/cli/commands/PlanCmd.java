@@ -4,10 +4,10 @@ import com.jwcode.cli.Command;
 import com.jwcode.cli.CommandContext;
 import com.jwcode.cli.CommandResult;
 import com.jwcode.cli.log.CliLogger;
+import com.jwcode.core.llm.*;
 import com.jwcode.core.planner.*;
 import com.jwcode.core.planner.ai.AITaskPlanner;
 import com.jwcode.core.planner.ai.TaskAnalysis;
-import com.jwcode.core.service.ApiClient;
 import com.jwcode.core.tool.ToolRegistry;
 
 import java.util.HashMap;
@@ -29,11 +29,12 @@ public class PlanCmd implements Command {
     private final AITaskPlanner aiPlanner;
     
     public PlanCmd() {
-        this.planner = new TaskPlanner(null);
-        // 初始化 AI 规划器
-        ApiClient apiClient = new ApiClient();
+        // 初始化 AI 规划器（使用新的 LLM 架构）
+        LLMFactory llmFactory = LLMFactory.createDefault();
+        LLMService llmService = llmFactory.getLLMService();
         ToolRegistry toolRegistry = ToolRegistry.createDefault();
-        this.aiPlanner = new AITaskPlanner(apiClient, toolRegistry);
+        this.planner = new TaskPlanner(null, llmService, toolRegistry);
+        this.aiPlanner = new AITaskPlanner(llmService, toolRegistry);
     }
     
     @Override

@@ -64,7 +64,7 @@ public class BridgeCmd implements Command {
      * 启动桥接服务器
      */
     private CommandResult handleStart(String args) {
-        int port = 8080;
+        int port = 8081;
         if (!args.isEmpty()) {
             try {
                 port = Integer.parseInt(args.trim());

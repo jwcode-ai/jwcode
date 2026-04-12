@@ -10,10 +10,10 @@ import com.jwcode.core.advanced.swarm.AgentSwarm;
 import com.jwcode.core.advanced.swarm.AutoSwarmTrigger;
 import com.jwcode.core.advanced.thinking.ThinkingModeManager;
 import com.jwcode.core.advanced.yolo.YoloModeManager;
+import com.jwcode.core.llm.*;
 import com.jwcode.core.planner.ai.AITaskPlanner;
 import com.jwcode.core.planner.ai.AutoAIPlannerTrigger;
 import com.jwcode.core.planner.ai.TaskAnalysis;
-import com.jwcode.core.service.ApiClient;
 import com.jwcode.core.tool.ToolRegistry;
 
 import java.io.IOException;
@@ -47,10 +47,11 @@ public class AdvancedCmd implements Command {
         this.agentSwarm = new AgentSwarm();
         this.autoSwarmTrigger = new AutoSwarmTrigger(agentSwarm);
         
-        // 初始化 AI 规划器
-        ApiClient apiClient = new ApiClient();
+        // 初始化 AI 规划器（使用新的 LLM 架构）
+        LLMFactory llmFactory = LLMFactory.createDefault();
+        LLMService llmService = llmFactory.getLLMService();
         ToolRegistry toolRegistry = ToolRegistry.createDefault();
-        this.aiTaskPlanner = new AITaskPlanner(apiClient, toolRegistry);
+        this.aiTaskPlanner = new AITaskPlanner(llmService, toolRegistry);
         this.autoAIPlannerTrigger = new AutoAIPlannerTrigger(aiTaskPlanner);
     }
     

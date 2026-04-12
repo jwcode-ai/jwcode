@@ -68,7 +68,7 @@ public class JLine3Terminal implements AutoCloseable {
     }
     
     /**
-     * 读取用户输入
+     * 读取用户输入（单行）
      */
     public String readLine(String prompt) {
         try {
@@ -80,6 +80,37 @@ public class JLine3Terminal implements AutoCloseable {
             // EOF
             return null;
         }
+    }
+    
+    /**
+     * 读取多行输入（支持 Shift+Enter 和反斜杠续行）
+     * Claude Code 风格的多行输入
+     */
+    public String readMultiline(String prompt) {
+        StringBuilder input = new StringBuilder();
+        String continuationPrompt = "      │ ";  // 多行继续提示
+        
+        // 读取第一行
+        String line = readLine(prompt);
+        if (line == null) return null;
+        
+        input.append(line);
+        
+        // 检测反斜杠续行或 Shift+Enter（检测行末有反斜杠）
+        while (line.endsWith("\\")) {
+            // 移除末尾的反斜杠
+            if (input.length() > 0 && input.charAt(input.length() - 1) == '\\') {
+                input.deleteCharAt(input.length() - 1);
+            }
+            
+            // 读取下一行
+            line = readLine(continuationPrompt);
+            if (line == null) break;
+            
+            input.append("\n").append(line);
+        }
+        
+        return input.toString();
     }
     
     /**

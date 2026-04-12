@@ -113,7 +113,7 @@ public class AgentConfig {
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class ModelConfig {
-        private String name = "sonnet";
+        private String name = null;  // 模型名称必须配置，不允许硬编码
         private Double temperature = 0.7;
         private Integer maxTokens = 4096;
         private Double topP = 1.0;

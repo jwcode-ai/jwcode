@@ -1,8 +1,9 @@
 package com.jwcode.web.stream;
 
 import com.jwcode.common.config.ConfigLoader;
-import com.jwcode.core.query.QueryEngine;
-import com.jwcode.core.query.QueryResult;
+import com.jwcode.core.config.JwcodeConfig;
+import com.jwcode.core.config.YamlConfigLoader;
+import com.jwcode.core.llm.*;
 import com.jwcode.core.session.Session;
 import com.jwcode.core.tool.ToolRegistry;
 
@@ -164,9 +165,8 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         Session session = sessions.get(sessionId);
         
         if (session == null) {
-            // 创建新会话
-            session = new Session(sessionId, System.getProperty("user.dir"));
-            sessions.put(sessionId, session);
+            // 创建新会话（包含系统提示词）
+            session = createNewSession(sessionId, null);
         }
         
         connectionSessions.put(conn, sessionId);
@@ -220,18 +220,74 @@ public class StreamingWebSocketHandler extends WebSocketServer {
      */
     private void handleCreateSession(WebSocket conn, ClientMessage msg) {
         String sessionId = "session-" + System.currentTimeMillis();
-        Session session = new Session(sessionId, System.getProperty("user.dir"));
-        
-        if (msg.model != null) {
-            session.setModel(msg.model);
-        }
-        
-        sessions.put(sessionId, session);
+        Session session = createNewSession(sessionId, msg.model);
         
         // 返回会话信息
         sendMessage(conn, MessageType.SESSION_CREATED, 
             String.format("{\"sessionId\": \"%s\", \"model\": \"%s\"}", 
                 sessionId, session.getModel()));
+        
+        // 广播日志
+        WebSocketLogBroadcaster.getInstance().broadcast(
+            LogEntry.info("Session", "创建新会话: " + sessionId)
+        );
+    }
+    
+    /**
+     * 创建新会话（包含系统提示词）
+     */
+    private Session createNewSession(String sessionId, String model) {
+        Session session = new Session(sessionId, System.getProperty("user.dir"));
+        
+        // 加载并添加系统提示词
+        try {
+            String systemPrompt = com.jwcode.core.config.SystemPromptLoader.getSystemPrompt();
+            if (systemPrompt != null && !systemPrompt.isEmpty()) {
+                com.jwcode.core.model.Message systemMessage = 
+                    com.jwcode.core.model.Message.createSystemMessage(systemPrompt);
+                session.addMessage(systemMessage);
+            }
+        } catch (Exception e) {
+            logger.warning("加载系统提示词失败: " + e.getMessage());
+        }
+        
+        // 设置模型
+        if (model != null && !model.isEmpty()) {
+            session.setModel(model);
+        } else {
+            // 从配置读取默认模型
+            String defaultModel = null;
+            try {
+                // 优先从 YAML 配置读取
+                com.jwcode.core.config.JwcodeConfig yamlConfig = com.jwcode.core.config.YamlConfigLoader.getInstance().getConfig();
+                com.jwcode.core.config.JwcodeConfig.ModelDefinition modelDef = yamlConfig.getDefaultModel();
+                if (modelDef != null && modelDef.getName() != null) {
+                    defaultModel = modelDef.getName();
+                }
+            } catch (Exception e) {
+                // 忽略错误，尝试旧版配置
+            }
+            
+            if (defaultModel == null || defaultModel.isEmpty()) {
+                try {
+                    com.jwcode.common.config.ConfigLoader config = new com.jwcode.common.config.ConfigLoader();
+                    defaultModel = (String) config.getConfig("api.model", false);
+                } catch (Exception e) {
+                    // 忽略错误
+                }
+            }
+            
+            if (defaultModel != null && !defaultModel.isEmpty()) {
+                session.setModel(defaultModel);
+            } else {
+                // 没有配置模型，记录警告
+                System.err.println("[警告] 未配置默认模型，请检查配置文件");
+                session.setModel("unknown");
+            }
+        }
+        
+        sessions.put(sessionId, session);
+        return session;
     }
     
     /**
@@ -258,56 +314,61 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     }
     
     /**
-     * 转义 JSON 字符串
+     * 转义 JSON 字符串中的控制字符
+     * 注意：只转义真正的换行符等控制字符，不要转义已经转义的字符
      */
     private String escapeJson(String str) {
         if (str == null) return "";
-        return str.replace("\\", "\\\\")
-                  .replace("\"", "\\\"")
-                  .replace("\n", "\\n")
-                  .replace("\r", "\\r")
-                  .replace("\t", "\\t");
+        StringBuilder sb = new StringBuilder();
+        for (char c : str.toCharArray()) {
+            switch (c) {
+                case '"': sb.append("\\\""); break;
+                case '\\': sb.append("\\\\"); break;
+                case '\b': sb.append("\\b"); break;
+                case '\f': sb.append("\\f"); break;
+                case '\n': sb.append("\\n"); break;
+                case '\r': sb.append("\\r"); break;
+                case '\t': sb.append("\\t"); break;
+                default:
+                    if (c < 0x20) {
+                        sb.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        sb.append(c);
+                    }
+            }
+        }
+        return sb.toString();
     }
     
     /**
-     * 执行查询
+     * 执行查询 - 增强版，支持步骤展示
+     * 步骤与消息分离：步骤显示在独立容器中，完成后收起或淡化
      */
     private void executeQuery(WebSocket conn, Session session, String message) {
         try {
-            // 从配置文件读取 model
-            ConfigLoader config = new ConfigLoader();
-            String model = (String) config.getConfig("api.model", false);
+            // 从 YAML 配置读取模型信息
+            JwcodeConfig config = YamlConfigLoader.getInstance().getConfig();
+            JwcodeConfig.ModelDefinition modelDef = config != null ? config.getDefaultModel() : null;
+            String model = modelDef != null ? modelDef.getId() : "unknown";
             
-            // 如果配置文件没有设置，使用默认值
-            if (model == null || model.isEmpty()) {
-                model = "sonnet"; // 默认模型
-                WebSocketLogBroadcaster.getInstance().broadcast(
-                    LogEntry.warn("System", "未配置 api.model，使用默认值: sonnet")
-                );
-            } else {
-                WebSocketLogBroadcaster.getInstance().broadcast(
-                    LogEntry.info("System", "使用模型: " + model)
-                );
-            }
+            WebSocketLogBroadcaster.getInstance().broadcast(
+                LogEntry.info("System", "使用模型: " + model)
+            );
             
             // 如果 session 没有设置 model，则设置
             if (session.getModel() == null) {
                 session.setModel(model);
             }
             
-            // 创建 QueryEngine
-            QueryEngine engine = QueryEngine.builder()
-                .session(session)
-                .model(model)
-                .toolRegistry(toolRegistry)
-                .build();
+            // 创建 LLM 步骤
+            sendStepAction(conn, "思考", "AI 正在思考...");
             
-            WebSocketLogBroadcaster.getInstance().broadcast(
-                LogEntry.info("System", "QueryEngine 已创建，开始查询...")
-            );
+            // 创建 LLMFactory 和 QueryEngine
+            LLMFactory llmFactory = LLMFactory.fromConfig(config);
+            LLMQueryEngine engine = llmFactory.createQueryEngine(session);
             
             // 执行查询
-            QueryResult result = engine.query(message).join();
+            LLMQueryEngine.QueryResult result = engine.query(message).join();
             
             if (result.isSuccess()) {
                 // 获取 AI 的完整响应
@@ -315,7 +376,9 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                 String response = extractMessageContent(aiMessage);
                 
                 if (response != null && !response.isEmpty()) {
-                    // 模拟流式输出（逐字符发送以显示流式效果）
+                    // 标记步骤完成，开始输出
+                    sendStepComplete(conn, "思考", "完成");
+                    // 流式输出AI回复
                     simulateStreamOutput(conn, response);
                 }
                 
@@ -334,11 +397,68 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         } catch (Exception e) {
             logger.severe("查询执行失败: " + e.getMessage());
             e.printStackTrace();
+            
             sendMessage(conn, MessageType.ERROR, escapeJson("执行失败: " + e.getMessage()));
             WebSocketLogBroadcaster.getInstance().broadcast(
                 LogEntry.error("执行异常: " + e.getMessage())
             );
         }
+    }
+    
+    /**
+     * 发送步骤开始事件
+     */
+    private void sendStepStart(WebSocket conn, String stepName, String description) {
+        String json = String.format(
+            "{\"step\":\"%s\",\"description\":\"%s\",\"status\":\"start\"}",
+            escapeJson(stepName), escapeJson(description)
+        );
+        sendMessage(conn, MessageType.STEP_START, json);
+        WebSocketLogBroadcaster.getInstance().broadcast(
+            LogEntry.info("Step", "[开始] " + stepName + ": " + description)
+        );
+    }
+    
+    /**
+     * 发送步骤思考事件
+     */
+    private void sendStepThinking(WebSocket conn, String stepName, String thought) {
+        String json = String.format(
+            "{\"step\":\"%s\",\"thought\":\"%s\",\"status\":\"thinking\"}",
+            escapeJson(stepName), escapeJson(thought)
+        );
+        sendMessage(conn, MessageType.STEP_THINKING, json);
+        WebSocketLogBroadcaster.getInstance().broadcast(
+            LogEntry.info("Thinking", "[思考] " + stepName + ": " + thought)
+        );
+    }
+    
+    /**
+     * 发送步骤动作事件
+     */
+    private void sendStepAction(WebSocket conn, String stepName, String action) {
+        String json = String.format(
+            "{\"step\":\"%s\",\"action\":\"%s\",\"status\":\"action\"}",
+            escapeJson(stepName), escapeJson(action)
+        );
+        sendMessage(conn, MessageType.STEP_ACTION, json);
+        WebSocketLogBroadcaster.getInstance().broadcast(
+            LogEntry.tool("[动作] " + stepName + ": " + action)
+        );
+    }
+    
+    /**
+     * 发送步骤完成事件
+     */
+    private void sendStepComplete(WebSocket conn, String stepName, String result) {
+        String json = String.format(
+            "{\"step\":\"%s\",\"result\":\"%s\",\"status\":\"complete\"}",
+            escapeJson(stepName), escapeJson(result)
+        );
+        sendMessage(conn, MessageType.STEP_COMPLETE, json);
+        WebSocketLogBroadcaster.getInstance().broadcast(
+            LogEntry.success("[完成] " + stepName + ": " + result)
+        );
     }
     
     /**
@@ -352,6 +472,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     
     /**
      * 从 Message 对象中提取文本内容
+     * 过滤掉系统提示词和thinking内容，防止泄露
      */
     private String extractMessageContent(com.jwcode.core.model.Message message) {
         if (message == null || message.getContent() == null) {
@@ -361,10 +482,43 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         StringBuilder sb = new StringBuilder();
         for (com.jwcode.core.model.Message.ContentBlock block : message.getContent()) {
             if (block instanceof com.jwcode.core.model.Message.TextContent) {
-                sb.append(((com.jwcode.core.model.Message.TextContent) block).getText());
+                String text = ((com.jwcode.core.model.Message.TextContent) block).getText();
+                // 过滤系统提示词泄露（以"用户说"、"分析请求"等开头的内部思考）
+                text = filterInternalThinking(text);
+                sb.append(text);
             }
         }
         return sb.toString();
+    }
+    
+    /**
+     * 过滤内部思考内容，防止系统提示词泄露
+     */
+    private String filterInternalThinking(String text) {
+        if (text == null || text.isEmpty()) {
+            return text;
+        }
+        
+        // 定义需要过滤的内部思考标记
+        String[] thinkingMarkers = {
+            "用户说", "分析请求", "正在分析用户输入", "💭", 
+            "我已经找到了用户", "根据系统提示", "作为AI助手",
+            "我需要", "我会", "让我", "思考过程："
+        };
+        
+        // 如果文本以这些标记开头，说明是内部思考，返回空
+        for (String marker : thinkingMarkers) {
+            if (text.trim().startsWith(marker)) {
+                logger.fine("过滤内部思考内容: " + truncate(text, 50));
+                return "";
+            }
+        }
+        
+        // 移除 thinking XML 标签及其内容
+        text = text.replaceAll("(?s)<thinking>.*?</thinking>", "");
+        text = text.replaceAll("(?s)\\[思考\\].*?\\[/思考\\]", "");
+        
+        return text.trim();
     }
     
     /**
@@ -434,6 +588,11 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         THINKING,       // 思考过程
         TOOL_CALL,      // 工具调用
         TOOL_RESULT,    // 工具结果
+        STEP_START,     // 步骤开始
+        STEP_THINKING,  // 步骤思考中
+        STEP_ACTION,    // 步骤执行动作
+        STEP_COMPLETE,  // 步骤完成
+        PROGRESS,       // 进度更新
         COMPLETE,       // 完成
         ERROR,          // 错误
         PONG,           // 心跳响应

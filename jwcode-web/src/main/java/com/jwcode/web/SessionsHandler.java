@@ -8,10 +8,11 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 
 import java.io.IOException;
 import java.io.OutputStream;
-import java.util.Collection;
+import java.time.Instant;
+import java.time.format.DateTimeFormatter;
 
 /**
- * 会话管理 API
+ * 会话管理 API - 从 WebSessionManager 动态获取真实会话数据
  */
 public class SessionsHandler implements HttpHandler {
     
@@ -25,52 +26,95 @@ public class SessionsHandler implements HttpHandler {
     @Override
     public void handle(HttpExchange exchange) throws IOException {
         String method = exchange.getRequestMethod();
+        String path = exchange.getRequestURI().getPath();
+        
+        // 设置 CORS 头
+        exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
+        
+        if ("OPTIONS".equalsIgnoreCase(method)) {
+            exchange.sendResponseHeaders(200, -1);
+            return;
+        }
         
         if ("GET".equalsIgnoreCase(method)) {
             listSessions(exchange);
         } else if ("POST".equalsIgnoreCase(method)) {
             createSession(exchange);
         } else if ("DELETE".equalsIgnoreCase(method)) {
-            deleteSession(exchange);
+            deleteSession(exchange, path);
         } else {
             sendJsonResponse(exchange, 405, createError("Method not allowed"));
         }
     }
     
+    /**
+     * 列出所有会话 - 从 WebSessionManager 动态获取
+     */
     private void listSessions(HttpExchange exchange) throws IOException {
         ObjectNode response = objectMapper.createObjectNode();
         response.put("success", true);
+        response.put("count", sessionManager.getAllSessions().size());
         
         ArrayNode sessions = response.putArray("sessions");
         
-        // 添加示例会话
-        ObjectNode session1 = objectMapper.createObjectNode();
-        session1.put("id", "session_001");
-        session1.put("title", "分析项目架构");
-        session1.put("createdAt", "2026-04-05T10:00:00Z");
-        sessions.add(session1);
+        // 从 WebSessionManager 获取真实会话数据
+        for (WebSessionManager.WebSession session : sessionManager.getAllSessions()) {
+            ObjectNode sessionNode = objectMapper.createObjectNode();
+            sessionNode.put("id", session.getId());
+            sessionNode.put("title", session.getTitle());
+            sessionNode.put("createdAt", DateTimeFormatter.ISO_INSTANT.format(
+                Instant.ofEpochMilli(session.getCreatedAt())
+            ));
+            sessions.add(sessionNode);
+        }
         
-        ObjectNode session2 = objectMapper.createObjectNode();
-        session2.put("id", "session_002");
-        session2.put("title", "修复 Bug");
-        session2.put("createdAt", "2026-04-05T09:30:00Z");
-        sessions.add(session2);
-        
+        // 如果没有会话，返回空数组而不是 null
         sendJsonResponse(exchange, 200, response);
     }
     
+    /**
+     * 创建新会话
+     */
     private void createSession(HttpExchange exchange) throws IOException {
+        String sessionId = sessionManager.generateSessionId();
+        WebSessionManager.WebSession session = sessionManager.getOrCreateSession(sessionId);
+        session.setTitle("新会话 " + sessionId);
+        
         ObjectNode response = objectMapper.createObjectNode();
         response.put("success", true);
-        response.put("sessionId", "session_" + System.currentTimeMillis());
+        response.put("sessionId", sessionId);
+        response.put("title", session.getTitle());
+        response.put("createdAt", DateTimeFormatter.ISO_INSTANT.format(
+            Instant.ofEpochMilli(session.getCreatedAt())
+        ));
         response.put("message", "会话创建成功");
+        
         sendJsonResponse(exchange, 201, response);
     }
     
-    private void deleteSession(HttpExchange exchange) throws IOException {
+    /**
+     * 删除会话
+     */
+    private void deleteSession(HttpExchange exchange, String path) throws IOException {
+        // 从路径中提取 sessionId，如 /api/sessions/session_001
+        String sessionId = path.substring(path.lastIndexOf('/') + 1);
+        
         ObjectNode response = objectMapper.createObjectNode();
+        
+        if (sessionId.isEmpty() || "sessions".equals(sessionId)) {
+            response.put("success", false);
+            response.put("error", "需要提供 sessionId");
+            sendJsonResponse(exchange, 400, response);
+            return;
+        }
+        
+        sessionManager.removeSession(sessionId);
         response.put("success", true);
         response.put("message", "会话已删除");
+        response.put("sessionId", sessionId);
+        
         sendJsonResponse(exchange, 200, response);
     }
     

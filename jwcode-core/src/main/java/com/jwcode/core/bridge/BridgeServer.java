@@ -5,7 +5,7 @@ import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpExchange;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.jwcode.core.query.QueryEngine;
+import com.jwcode.core.llm.LLMQueryEngine;
 import com.jwcode.core.session.Session;
 
 import java.io.IOException;
@@ -32,7 +32,7 @@ public class BridgeServer {
     private HttpServer server;
     private final int port;
     private final Map<String, BridgeSession> sessions = new ConcurrentHashMap<>();
-    private QueryEngine queryEngine;
+    private LLMQueryEngine queryEngine;
     
     public BridgeServer(int port) {
         this.port = port;
@@ -73,7 +73,7 @@ public class BridgeServer {
     /**
      * 设置 QueryEngine
      */
-    public void setQueryEngine(QueryEngine queryEngine) {
+    public void setQueryEngine(LLMQueryEngine queryEngine) {
         this.queryEngine = queryEngine;
     }
     

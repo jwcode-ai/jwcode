@@ -43,7 +43,8 @@ public class Session {
         this.updatedAt = Instant.now();
         this.messages = new CopyOnWriteArrayList<>();
         this.metadata = new HashMap<>();
-        this.model = "sonnet";
+        // 模型必须通过 setModel() 设置，不允许硬编码
+        this.model = null;
     }
     
     public String getId() { return id; }

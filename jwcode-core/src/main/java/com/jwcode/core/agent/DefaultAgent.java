@@ -72,7 +72,9 @@ public class DefaultAgent implements Agent {
     
     @Override
     public ModelConfig getModelConfig() {
-        return new ModelConfig("claude-3-5-sonnet", 0.7, 4000);
+        // 模型名称必须通过外部配置设置，不允许硬编码
+        // 如果返回 null，调用方应使用全局配置的模型
+        return new ModelConfig(null, 0.7, 4000);
     }
     
     @Override
