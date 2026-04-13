@@ -3,14 +3,9 @@ package com.jwcode.core.tool;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jwcode.core.search.*;
 import com.jwcode.core.tool.context.ToolExecutionContext;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -18,18 +13,48 @@ import java.util.function.Consumer;
 import java.util.logging.Logger;
 
 /**
- * WebSearch 工具 - 网页搜索（重构后）
+ * WebSearch 工具 - 网页搜索（增强版，Phase 8）
  * 
- * 使用 DuckDuckGo 搜索或 Google Custom Search API
- * 支持搜索引擎查询信息、新闻、文档等
+ * 使用 SearchEngineFactory 支持多搜索引擎
+ * 支持 DuckDuckGo 和 Google Custom Search
+ * 集成搜索结果缓存和结果处理管道
+ * 
+ * @author JWCode Team
+ * @since 1.0.0
  */
 public class WebSearchTool implements Tool<WebSearchTool.Input, WebSearchTool.Output, WebSearchTool.Progress> {
     
     private static final Logger logger = Logger.getLogger(WebSearchTool.class.getName());
     private static final ObjectMapper MAPPER = new ObjectMapper();
     
-    // 默认使用 DuckDuckGo HTML 搜索
-    private static final String DUCKDUCKGO_URL = "https://html.duckduckgo.com/html/?q=";
+    // 搜索引擎工厂
+    private final SearchEngineFactory engineFactory;
+    
+    // 搜索结果缓存
+    private final SearchCache cache;
+    
+    // 结果处理器
+    private final SearchResultProcessor processor;
+    
+    // 默认配置
+    private static final String DEFAULT_ENGINE = "duckduckgo";
+    private static final int DEFAULT_MAX_RESULTS = 5;
+    private static final int MAX_ALLOWED_RESULTS = 20;
+    
+    public WebSearchTool() {
+        this.engineFactory = SearchEngineFactory.getInstance();
+        this.cache = new SearchCache();
+        this.processor = new SearchResultProcessor();
+    }
+    
+    /**
+     * 创建带自定义配置的 WebSearchTool
+     */
+    public WebSearchTool(SearchCache cache, SearchResultProcessor processor) {
+        this.engineFactory = SearchEngineFactory.getInstance();
+        this.cache = cache != null ? cache : new SearchCache();
+        this.processor = processor != null ? processor : new SearchResultProcessor();
+    }
     
     @Override
     public String getName() {
@@ -38,7 +63,7 @@ public class WebSearchTool implements Tool<WebSearchTool.Input, WebSearchTool.Ou
     
     @Override
     public String getDescription() {
-        return "搜索网页内容。使用搜索引擎查询信息、新闻、文档等。";
+        return "搜索网页内容。支持多搜索引擎（DuckDuckGo、Google），支持搜索结果缓存和智能处理。";
     }
     
     @Override
@@ -48,16 +73,19 @@ public class WebSearchTool implements Tool<WebSearchTool.Input, WebSearchTool.Ou
                
                参数:
                - query: 搜索查询词（必需）
-               - max_results: 最大结果数（可选，默认 5）
+               - max_results: 最大结果数（可选，默认 5，最大 20）
+               - engine: 搜索引擎（可选，默认 duckduckgo，可选值: duckduckgo, google）
+               - use_cache: 是否使用缓存（可选，默认 true）
                
                示例:
-               - {"query": "Java 21 新特性"} - 搜索 Java 21 的新特性
-               - {"query": "Spring Boot 教程", "max_results": 10} - 搜索 Spring Boot 教程，返回 10 条结果
-               - {"query": "OpenAI API 文档"} - 搜索 OpenAI API 文档
+               - {"query": "Java 21 新特性"} - 使用默认引擎搜索
+               - {"query": "Spring Boot 教程", "max_results": 10} - 返回 10 条结果
+               - {"query": "OpenAI API 文档", "engine": "google"} - 使用 Google 搜索
                
                注意:
                - 使用简洁明确的搜索词
                - 可以包含版本号、技术栈名称等关键词
+               - Google 引擎需要配置 API Key
                """;
     }
     
@@ -69,7 +97,9 @@ public class WebSearchTool implements Tool<WebSearchTool.Input, WebSearchTool.Ou
                     "type": "object",
                     "properties": {
                         "query": {"type": "string", "description": "搜索查询词"},
-                        "max_results": {"type": "integer", "description": "最大结果数", "default": 5}
+                        "max_results": {"type": "integer", "description": "最大结果数", "default": 5},
+                        "engine": {"type": "string", "description": "搜索引擎", "default": "duckduckgo", "enum": ["duckduckgo", "google"]},
+                        "use_cache": {"type": "boolean", "description": "是否使用缓存", "default": true}
                     },
                     "required": ["query"]
                 }
@@ -102,16 +132,50 @@ public class WebSearchTool implements Tool<WebSearchTool.Input, WebSearchTool.Ou
                     return ToolResult.error("搜索查询词不能为空");
                 }
                 
-                int maxResults = input.max_results != null ? input.max_results : 5;
+                String engineName = input.engine != null ? input.engine.toLowerCase() : DEFAULT_ENGINE;
+                int maxResults = input.max_results != null ? input.max_results : DEFAULT_MAX_RESULTS;
+                boolean useCache = input.use_cache != null ? input.use_cache : true;
+                
+                // 限制最大结果数
+                if (maxResults < 1) maxResults = 1;
+                if (maxResults > MAX_ALLOWED_RESULTS) maxResults = MAX_ALLOWED_RESULTS;
+                
+                // 检查缓存
+                if (useCache) {
+                    List<SearchResult> cachedResults = cache.get(input.query, engineName);
+                    if (cachedResults != null && !cachedResults.isEmpty()) {
+                        logger.fine("使用缓存的搜索结果: " + input.query);
+                        Output cachedOutput = createOutput(input.query, cachedResults, engineName, true);
+                        return ToolResult.success(cachedOutput);
+                    }
+                }
+                
+                // 获取搜索引擎
+                SearchEngine engine = engineFactory.getEngine(engineName);
+                if (engine == null) {
+                    return ToolResult.error("未知的搜索引擎: " + engineName);
+                }
+                
+                // 检查引擎是否可用
+                if (!engine.isAvailable()) {
+                    if (engine.requiresApiKey()) {
+                        return ToolResult.error("搜索引擎 '" + engineName + "' 需要配置 API Key");
+                    }
+                    return ToolResult.error("搜索引擎 '" + engineName + "' 当前不可用");
+                }
                 
                 // 执行搜索
-                List<SearchResult> results = performSearch(input.query, maxResults);
+                List<SearchResult> rawResults = engine.search(input.query, maxResults);
                 
-                Output output = new Output();
-                output.success = true;
-                output.query = input.query;
-                output.results = results;
+                // 处理结果
+                List<SearchResult> processedResults = processor.process(rawResults, maxResults, true);
                 
+                // 缓存结果
+                if (useCache && !processedResults.isEmpty()) {
+                    cache.put(input.query, engineName, processedResults);
+                }
+                
+                Output output = createOutput(input.query, processedResults, engineName, false);
                 return ToolResult.success(output);
                 
             } catch (Exception e) {
@@ -122,121 +186,71 @@ public class WebSearchTool implements Tool<WebSearchTool.Input, WebSearchTool.Ou
     }
     
     /**
-     * 执行 DuckDuckGo 搜索
+     * 创建输出对象
      */
-    private List<SearchResult> performSearch(String query, int maxResults) throws Exception {
-        List<SearchResult> results = new ArrayList<>();
-        
-        String encodedQuery = URLEncoder.encode(query, StandardCharsets.UTF_8);
-        String searchUrl = DUCKDUCKGO_URL + encodedQuery;
-        
-        HttpURLConnection conn = null;
-        try {
-            URL url = new URL(searchUrl);
-            conn = (HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("GET");
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-            conn.setConnectTimeout(10000);
-            conn.setReadTimeout(10000);
-            
-            int responseCode = conn.getResponseCode();
-            if (responseCode != 200) {
-                throw new RuntimeException("搜索请求失败，HTTP 状态码: " + responseCode);
-            }
-            
-            // 读取响应
-            StringBuilder html = new StringBuilder();
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    html.append(line).append("\n");
-                }
-            }
-            
-            // 解析搜索结果
-            results = parseSearchResults(html.toString(), maxResults, query);
-            
-        } finally {
-            if (conn != null) {
-                conn.disconnect();
-            }
-        }
-        
-        return results;
+    private Output createOutput(String query, List<SearchResult> results, String engine, boolean fromCache) {
+        Output output = new Output();
+        output.success = true;
+        output.query = query;
+        output.engine = engine;
+        output.from_cache = fromCache;
+        output.result_count = results.size();
+        output.results = convertResults(results);
+        return output;
     }
     
     /**
-     * 解析 DuckDuckGo 搜索结果 HTML
+     * 转换搜索结果为工具输出格式
      */
-    private List<SearchResult> parseSearchResults(String html, int maxResults, String query) {
-        List<SearchResult> results = new ArrayList<>();
-        
-        // 简单解析 HTML 提取搜索结果
-        // DuckDuckGo HTML 搜索结果在 class="result" 的 div 中
-        String resultDiv = "class=\"result\"";
-        String[] parts = html.split(resultDiv);
-        
-        for (int i = 1; i < parts.length && results.size() < maxResults; i++) {
-            String part = parts[i];
-            
-            try {
-                // 提取标题和链接
-                String title = extractBetween(part, "class=\"result__a\"", "</a>");
-                if (title != null) {
-                    title = title.replaceAll("<.*?>", "").trim();
-                }
-                
-                // 提取 URL
-                String url = extractBetween(part, "href=\"", "\"");
-                if (url != null) {
-                    url = url.replace("//duckduckgo.com/l/?uddg=", "");
-                    url = java.net.URLDecoder.decode(url, StandardCharsets.UTF_8);
-                }
-                
-                // 提取摘要
-                String snippet = extractBetween(part, "class=\"result__snippet\"", "</a>");
-                if (snippet != null) {
-                    snippet = snippet.replaceAll("<.*?>", "").trim();
-                }
-                
-                if (title != null && !title.isEmpty()) {
-                    SearchResult result = new SearchResult();
-                    result.title = title;
-                    result.url = url != null ? url : "";
-                    result.snippet = snippet != null ? snippet : "";
-                    results.add(result);
-                }
-                
-            } catch (Exception e) {
-                logger.fine("解析搜索结果失败: " + e.getMessage());
-            }
+    private List<SearchResultItem> convertResults(List<SearchResult> results) {
+        List<SearchResultItem> items = new ArrayList<>();
+        for (SearchResult result : results) {
+            SearchResultItem item = new SearchResultItem();
+            item.title = result.getTitle();
+            item.url = result.getUrl();
+            item.snippet = result.getSnippet();
+            item.source = result.getSource();
+            item.published_time = result.getPublishedTime();
+            items.add(item);
         }
-        
-        // 如果没有解析到结果，返回一些模拟结果
-        if (results.isEmpty()) {
-            results.add(createMockResult("搜索: " + query, "https://duckduckgo.com/?q=" + URLEncoder.encode(query, StandardCharsets.UTF_8), 
-                "DuckDuckGo 搜索结果页面"));
-        }
-        
-        return results;
+        return items;
     }
     
-    private String extractBetween(String text, String start, String end) {
-        int startIndex = text.indexOf(start);
-        if (startIndex == -1) return null;
-        startIndex += start.length();
-        int endIndex = text.indexOf(end, startIndex);
-        if (endIndex == -1) return null;
-        return text.substring(startIndex, endIndex);
+    /**
+     * 配置 Google 搜索引擎
+     */
+    public void configureGoogle(String apiKey, String searchEngineId) {
+        engineFactory.configureGoogle(apiKey, searchEngineId);
+        logger.info("已配置 Google 搜索引擎");
     }
     
-    private SearchResult createMockResult(String title, String url, String snippet) {
-        SearchResult result = new SearchResult();
-        result.title = title;
-        result.url = url;
-        result.snippet = snippet;
-        return result;
+    /**
+     * 获取搜索缓存统计
+     */
+    public SearchCache.CacheStats getCacheStats() {
+        return cache.getStats();
+    }
+    
+    /**
+     * 清空搜索缓存
+     */
+    public void clearCache() {
+        cache.clear();
+        logger.info("搜索缓存已清空");
+    }
+    
+    /**
+     * 获取可用搜索引擎列表
+     */
+    public String[] getAvailableEngines() {
+        return engineFactory.getAvailableEngines();
+    }
+    
+    /**
+     * 设置默认搜索引擎
+     */
+    public void setDefaultEngine(String engine) {
+        engineFactory.setDefaultEngine(engine);
     }
     
     @Override
@@ -247,8 +261,22 @@ public class WebSearchTool implements Tool<WebSearchTool.Input, WebSearchTool.Ou
             builder.addError("query 是必需的");
         }
         
-        if (input.max_results != null && (input.max_results < 1 || input.max_results > 20)) {
-            builder.addError("max_results 必须在 1-20 之间");
+        if (input.max_results != null && (input.max_results < 1 || input.max_results > MAX_ALLOWED_RESULTS)) {
+            builder.addError("max_results 必须在 1-" + MAX_ALLOWED_RESULTS + " 之间");
+        }
+        
+        if (input.engine != null) {
+            String engine = input.engine.toLowerCase();
+            boolean valid = false;
+            for (String available : engineFactory.getAvailableEngines()) {
+                if (available.equals(engine)) {
+                    valid = true;
+                    break;
+                }
+            }
+            if (!valid) {
+                builder.addError("无效的搜索引擎: " + input.engine);
+            }
         }
         
         return builder.build();
@@ -265,26 +293,48 @@ public class WebSearchTool implements Tool<WebSearchTool.Input, WebSearchTool.Ou
     }
     
     /**
+     * 关闭工具（清理资源）
+     */
+    public void shutdown() {
+        cache.shutdown();
+    }
+    
+    /**
      * 输入类型
      */
     public static class Input {
         public String query;
         public Integer max_results;
+        public String engine;
+        public Boolean use_cache;
         
         public Input() {}
         
         public Input(String query) {
             this.query = query;
         }
+        
+        public Input(String query, Integer max_results) {
+            this.query = query;
+            this.max_results = max_results;
+        }
+        
+        public Input(String query, Integer max_results, String engine) {
+            this.query = query;
+            this.max_results = max_results;
+            this.engine = engine;
+        }
     }
     
     /**
-     * 搜索结果
+     * 搜索结果项（工具输出格式）
      */
-    public static class SearchResult {
+    public static class SearchResultItem {
         public String title;
         public String url;
         public String snippet;
+        public String source;
+        public String published_time;
     }
     
     /**
@@ -293,7 +343,10 @@ public class WebSearchTool implements Tool<WebSearchTool.Input, WebSearchTool.Ou
     public static class Output {
         public boolean success;
         public String query;
-        public List<SearchResult> results;
+        public String engine;
+        public boolean from_cache;
+        public int result_count;
+        public List<SearchResultItem> results;
         
         public Output() {}
     }
@@ -304,13 +357,16 @@ public class WebSearchTool implements Tool<WebSearchTool.Input, WebSearchTool.Ou
     public static class Progress {
         private final String query;
         private final int progress;
+        private final String stage;
         
-        public Progress(String query, int progress) {
+        public Progress(String query, int progress, String stage) {
             this.query = query;
             this.progress = progress;
+            this.stage = stage;
         }
         
         public String getQuery() { return query; }
         public int getProgress() { return progress; }
+        public String getStage() { return stage; }
     }
 }

@@ -63,6 +63,13 @@ public class JwcodeConfig {
     }
     
     /**
+     * 获取默认提供商名称
+     */
+    public String getDefaultProviderName() {
+        return defaultProvider;
+    }
+    
+    /**
      * 获取默认提供商配置
      */
     public ProviderConfig getDefaultProvider() {

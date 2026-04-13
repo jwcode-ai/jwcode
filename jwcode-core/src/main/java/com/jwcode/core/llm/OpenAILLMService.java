@@ -6,14 +6,20 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.java.Log;
 
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
+import java.util.logging.Level;
 
 /**
  * OpenAI 兼容的 LLM 服务实现
@@ -146,6 +152,292 @@ public class OpenAILLMService implements LLMService {
             
             return LLMResponse.error("Max retries exceeded");
         });
+    }
+    
+    @Override
+    public CompletableFuture<LLMResponse> chatStream(
+            List<LLMMessage> messages,
+            Consumer<String> contentConsumer) {
+        return chatStreamWithTools(messages, null, contentConsumer, null, null);
+    }
+    
+    @Override
+    public CompletableFuture<LLMResponse> chatStreamWithTools(
+            List<LLMMessage> messages,
+            List<LLMTool> tools,
+            Consumer<String> contentConsumer,
+            Consumer<String> thinkingConsumer,
+            Consumer<StreamToolCallEvent> toolCallConsumer) {
+        
+        return CompletableFuture.supplyAsync(() -> {
+            String apiKey = getNextApiKey();
+            if (apiKey == null || apiKey.isEmpty()) {
+                throw new IllegalStateException("No API key configured");
+            }
+            
+            String url = normalizeUrl(config.getBaseUrl());
+            log.info("[OpenAI Stream] Request: POST " + url);
+            log.info("[OpenAI Stream] Model: " + config.getModel());
+            log.info("[OpenAI Stream] Message count: " + messages.size());
+            
+            try {
+                // 构建流式请求体
+                ObjectNode requestBody = buildRequestBody(messages, tools);
+                requestBody.put("stream", true);
+                String requestJson = mapper.writeValueAsString(requestBody);
+                
+                // 发送请求
+                HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer " + apiKey)
+                    .POST(HttpRequest.BodyPublishers.ofString(requestJson))
+                    .timeout(Duration.ofSeconds(config.getTimeoutSeconds()))
+                    .build();
+                
+                // 使用 InputStream 获取流式响应
+                HttpResponse<InputStream> response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
+                
+                if (response.statusCode() != 200) {
+                    String errorBody = new String(response.body().readAllBytes(), StandardCharsets.UTF_8);
+                    log.severe("[OpenAI Stream] Error: " + errorBody);
+                    return LLMResponse.error("HTTP " + response.statusCode() + ": " + errorBody);
+                }
+                
+                // 处理流式响应
+                return processStreamResponse(
+                    response.body(), 
+                    contentConsumer, 
+                    thinkingConsumer, 
+                    toolCallConsumer
+                );
+                
+            } catch (Exception e) {
+                log.log(Level.SEVERE, "[OpenAI Stream] Request failed: " + e.getMessage(), e);
+                return LLMResponse.error("Stream request failed: " + e.getMessage());
+            }
+        });
+    }
+    
+    /**
+     * 处理流式响应
+     */
+    private LLMResponse processStreamResponse(
+            InputStream inputStream,
+            Consumer<String> contentConsumer,
+            Consumer<String> thinkingConsumer,
+            Consumer<StreamToolCallEvent> toolCallConsumer) throws Exception {
+        
+        StringBuilder contentBuffer = new StringBuilder();
+        StringBuilder thinkingBuffer = new StringBuilder();
+        List<LLMMessage.ToolCall> toolCalls = new ArrayList<>();
+        String finishReason = null;
+        String responseModel = null;
+        int promptTokens = 0;
+        int completionTokens = 0;
+        int totalTokens = 0;
+        
+        // 工具调用缓冲区（用于累积流式工具调用）
+        java.util.Map<String, StreamToolCallAccumulator> toolCallAccumulators = new java.util.HashMap<>();
+        
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
+            
+            String line;
+            while ((line = reader.readLine()) != null) {
+                // SSE 格式: data: {...}
+                if (line.startsWith("data: ")) {
+                    String data = line.substring(6).trim();
+                    
+                    // 流结束标记
+                    if ("[DONE]".equals(data)) {
+                        break;
+                    }
+                    
+                    try {
+                        JsonNode json = mapper.readTree(data);
+                        
+                        // 提取模型信息
+                        if (json.has("model") && responseModel == null) {
+                            responseModel = json.get("model").asText();
+                        }
+                        
+                        // 提取用量（通常在最后一个 chunk）
+                        if (json.has("usage")) {
+                            JsonNode usage = json.get("usage");
+                            if (usage.has("prompt_tokens")) {
+                                promptTokens = usage.get("prompt_tokens").asInt();
+                            }
+                            if (usage.has("completion_tokens")) {
+                                completionTokens = usage.get("completion_tokens").asInt();
+                            }
+                            if (usage.has("total_tokens")) {
+                                totalTokens = usage.get("total_tokens").asInt();
+                            }
+                        }
+                        
+                        // 处理 choices
+                        JsonNode choices = json.get("choices");
+                        if (choices == null || !choices.isArray() || choices.size() == 0) {
+                            continue;
+                        }
+                        
+                        JsonNode choice = choices.get(0);
+                        JsonNode delta = choice.get("delta");
+                        
+                        if (delta == null) {
+                            continue;
+                        }
+                        
+                        // 提取完成原因
+                        if (choice.has("finish_reason") && !choice.get("finish_reason").isNull()) {
+                            finishReason = choice.get("finish_reason").asText();
+                        }
+                        
+                        // 处理思考过程 (reasoning_content)
+                        JsonNode reasoningContent = delta.get("reasoning_content");
+                        if (reasoningContent != null && !reasoningContent.isNull()) {
+                            String thinking = reasoningContent.asText();
+                            thinkingBuffer.append(thinking);
+                            if (thinkingConsumer != null) {
+                                thinkingConsumer.accept(thinking);
+                            }
+                            continue;
+                        }
+                        
+                        // 处理普通内容
+                        JsonNode content = delta.get("content");
+                        if (content != null && !content.isNull()) {
+                            String text = content.asText();
+                            contentBuffer.append(text);
+                            if (contentConsumer != null) {
+                                contentConsumer.accept(text);
+                            }
+                        }
+                        
+                        // 处理工具调用
+                        JsonNode toolCallsDelta = delta.get("tool_calls");
+                        if (toolCallsDelta != null && toolCallsDelta.isArray()) {
+                            processStreamToolCalls(toolCallsDelta, toolCallAccumulators, toolCallConsumer);
+                        }
+                        
+                    } catch (Exception e) {
+                        log.fine("[OpenAI Stream] Failed to parse event: " + e.getMessage());
+                    }
+                }
+            }
+        }
+        
+        // 转换累积的工具调用为最终格式
+        for (StreamToolCallAccumulator acc : toolCallAccumulators.values()) {
+            if (acc.isComplete()) {
+                toolCalls.add(LLMMessage.ToolCall.builder()
+                    .id(acc.getId())
+                    .type(acc.getType())
+                    .function(acc.getName(), acc.getArguments())
+                    .build());
+            }
+        }
+        
+        log.info("[OpenAI Stream] Completed. Content length: " + contentBuffer.length());
+        log.info("[OpenAI Stream] Finish reason: " + finishReason);
+        
+        // 构建响应
+        LLMResponse.Builder builder = LLMResponse.builder()
+            .content(contentBuffer.toString())
+            .rawResponse(contentBuffer.toString());
+        
+        if (!toolCalls.isEmpty()) {
+            builder.toolCalls(toolCalls);
+        }
+        if (finishReason != null) {
+            builder.finishReason(finishReason);
+        }
+        if (responseModel != null) {
+            builder.model(responseModel);
+        }
+        builder.promptTokens(promptTokens)
+               .completionTokens(completionTokens)
+               .totalTokens(totalTokens);
+        
+        return builder.build();
+    }
+    
+    /**
+     * 处理流式工具调用
+     */
+    private void processStreamToolCalls(
+            JsonNode toolCallsDelta,
+            java.util.Map<String, StreamToolCallAccumulator> accumulators,
+            Consumer<StreamToolCallEvent> toolCallConsumer) {
+        
+        for (JsonNode toolCall : toolCallsDelta) {
+            String id = toolCall.has("id") ? toolCall.get("id").asText() : null;
+            int index = toolCall.has("index") ? toolCall.get("index").asInt() : 0;
+            
+            // 使用索引作为临时 ID
+            String key = id != null ? id : String.valueOf(index);
+            
+            StreamToolCallAccumulator acc = accumulators.computeIfAbsent(
+                key, 
+                k -> new StreamToolCallAccumulator(id, index)
+            );
+            
+            // 更新类型
+            if (toolCall.has("type")) {
+                acc.setType(toolCall.get("type").asText());
+            }
+            
+            // 更新函数信息
+            JsonNode function = toolCall.get("function");
+            if (function != null) {
+                if (function.has("name")) {
+                    acc.appendName(function.get("name").asText());
+                }
+                if (function.has("arguments")) {
+                    acc.appendArguments(function.get("arguments").asText());
+                }
+            }
+            
+            // 通知消费者
+            if (toolCallConsumer != null) {
+                toolCallConsumer.accept(new StreamToolCallEvent(
+                    acc.getId(),
+                    acc.getType(),
+                    acc.getName(),
+                    acc.getArguments(),
+                    false
+                ));
+            }
+        }
+    }
+    
+    /**
+     * 工具调用累积器（用于流式工具调用）
+     */
+    private static class StreamToolCallAccumulator {
+        private String id;
+        private final int index;
+        private String type = "function";
+        private final StringBuilder nameBuilder = new StringBuilder();
+        private final StringBuilder argumentsBuilder = new StringBuilder();
+        
+        StreamToolCallAccumulator(String id, int index) {
+            this.id = id;
+            this.index = index;
+        }
+        
+        void setType(String type) { this.type = type; }
+        void appendName(String name) { nameBuilder.append(name); }
+        void appendArguments(String args) { argumentsBuilder.append(args); }
+        
+        String getId() { return id != null ? id : String.valueOf(index); }
+        String getType() { return type; }
+        String getName() { return nameBuilder.toString(); }
+        String getArguments() { return argumentsBuilder.toString(); }
+        boolean isComplete() { 
+            return nameBuilder.length() > 0 && id != null; 
+        }
     }
     
     @Override

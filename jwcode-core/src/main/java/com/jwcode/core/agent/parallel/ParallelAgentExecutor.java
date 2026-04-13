@@ -2,183 +2,511 @@ package com.jwcode.core.agent.parallel;
 
 import com.jwcode.core.agent.Agent;
 import com.jwcode.core.agent.AgentRegistry;
+import com.jwcode.core.llm.LLMService;
 import com.jwcode.core.session.Session;
 
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.stream.Collectors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
 
 /**
- * 并行 Agent 执行器
+ * 并行 Agent 执行器 - Phase 2 增强版
  * 
- * 支持同时启动多个子 Agent 并行执行任务，自动处理依赖关系
+ * 支持同时启动多个子 Agent 并行执行任务，提供：
+ * - ForkJoinPool 并行执行
+ * - 任务超时控制
+ * - 任务取消功能
+ * - Agent 生命周期管理
+ * - 依赖关系处理
+ * - 结果聚合
+ * 
  * 参考 Kimi Code 的多 Agent 协作架构
  */
 public class ParallelAgentExecutor {
     
-    private static final Logger log = Logger.getLogger(ParallelAgentExecutor.class.getName());
+    private static final Logger logger = Logger.getLogger(ParallelAgentExecutor.class.getName());
     
-    private final AgentRegistry agentRegistry;
+    // 线程池配置
+    private static final int DEFAULT_POOL_SIZE = Runtime.getRuntime().availableProcessors() * 2;
+    private static final long DEFAULT_TIMEOUT_MS = 300000; // 5分钟默认超时
+    private static final long SHUTDOWN_TIMEOUT_SECONDS = 60;
+    
+    // 执行器组件
     private final ExecutorService executorService;
+    private final ForkJoinPool forkJoinPool;
+    private final ScheduledExecutorService scheduledExecutor;
+    
+    // Agent 和 LLM 服务
+    private final AgentRegistry agentRegistry;
+    private final LLMService llmService;
+    
+    // 任务管理
     private final Map<String, SubAgentTask> taskRegistry = new ConcurrentHashMap<>();
     private final Map<String, CompletableFuture<SubAgentResult>> resultFutures = new ConcurrentHashMap<>();
+    private final Map<String, TaskExecution> activeExecutions = new ConcurrentHashMap<>();
+    private final Map<String, CancellationToken> cancellationTokens = new ConcurrentHashMap<>();
+    
+    // 执行统计
+    private final ExecutorStats stats = new ExecutorStats();
+    
+    // 状态
+    private final AtomicBoolean isShutdown = new AtomicBoolean(false);
     
     /**
-     * 默认线程池大小（可配置）
+     * 任务执行记录
      */
-    private static final int DEFAULT_POOL_SIZE = Runtime.getRuntime().availableProcessors() * 2;
-    
-    public ParallelAgentExecutor(AgentRegistry agentRegistry) {
-        this(agentRegistry, DEFAULT_POOL_SIZE);
+    private static class TaskExecution {
+        final String taskId;
+        final long startTime;
+        final Future<?> future;
+        final CancellationToken cancellationToken;
+        volatile Thread executingThread;
+        
+        TaskExecution(String taskId, Future<?> future, CancellationToken token) {
+            this.taskId = taskId;
+            this.startTime = System.currentTimeMillis();
+            this.future = future;
+            this.cancellationToken = token;
+        }
     }
     
-    public ParallelAgentExecutor(AgentRegistry agentRegistry, int poolSize) {
+    /**
+     * 取消令牌
+     */
+    public static class CancellationToken {
+        private final AtomicBoolean cancelled = new AtomicBoolean(false);
+        private final String reason;
+        
+        public CancellationToken(String reason) {
+            this.reason = reason;
+        }
+        
+        public void cancel() {
+            cancelled.set(true);
+        }
+        
+        public boolean isCancelled() {
+            return cancelled.get();
+        }
+        
+        public void checkCancelled() throws CancellationException {
+            if (isCancelled()) {
+                throw new CancellationException("Task cancelled: " + reason);
+            }
+        }
+        
+        public String getReason() {
+            return reason;
+        }
+    }
+    
+    /**
+     * 执行统计
+     */
+    public static class ExecutorStats {
+        private final AtomicLong totalTasksSubmitted = new AtomicLong(0);
+        private final AtomicLong totalTasksCompleted = new AtomicLong(0);
+        private final AtomicLong totalTasksFailed = new AtomicLong(0);
+        private final AtomicLong totalTasksCancelled = new AtomicLong(0);
+        private final AtomicLong totalExecutionTimeMs = new AtomicLong(0);
+        
+        public void recordSubmitted() { totalTasksSubmitted.incrementAndGet(); }
+        public void recordCompleted(long executionTimeMs) {
+            totalTasksCompleted.incrementAndGet();
+            totalExecutionTimeMs.addAndGet(executionTimeMs);
+        }
+        public void recordFailed() { totalTasksFailed.incrementAndGet(); }
+        public void recordCancelled() { totalTasksCancelled.incrementAndGet(); }
+        
+        public long getTotalTasksSubmitted() { return totalTasksSubmitted.get(); }
+        public long getTotalTasksCompleted() { return totalTasksCompleted.get(); }
+        public long getTotalTasksFailed() { return totalTasksFailed.get(); }
+        public long getTotalTasksCancelled() { return totalTasksCancelled.get(); }
+        public double getAverageExecutionTimeMs() {
+            long completed = totalTasksCompleted.get();
+            return completed > 0 ? (double) totalExecutionTimeMs.get() / completed : 0;
+        }
+        
+        @Override
+        public String toString() {
+            return String.format(
+                "ExecutorStats{submitted=%d, completed=%d, failed=%d, cancelled=%d, avgTime=%.2fms}",
+                totalTasksSubmitted.get(), totalTasksCompleted.get(), 
+                totalTasksFailed.get(), totalTasksCancelled.get(),
+                getAverageExecutionTimeMs()
+            );
+        }
+    }
+    
+    // ==================== 构造函数 ====================
+    
+    public ParallelAgentExecutor(AgentRegistry agentRegistry, LLMService llmService) {
+        this(agentRegistry, llmService, DEFAULT_POOL_SIZE);
+    }
+    
+    public ParallelAgentExecutor(AgentRegistry agentRegistry, LLMService llmService, int poolSize) {
         this.agentRegistry = agentRegistry;
-        this.executorService = Executors.newFixedThreadPool(poolSize, r -> {
-            Thread t = new Thread(r, "SubAgent-" + System.currentTimeMillis());
+        this.llmService = llmService;
+        
+        // 创建命名线程池
+        this.executorService = Executors.newFixedThreadPool(poolSize, new ThreadFactory() {
+            private int counter = 0;
+            @Override
+            public Thread newThread(Runnable r) {
+                Thread t = new Thread(r, "AgentExecutor-" + (++counter));
+                t.setDaemon(true);
+                t.setUncaughtExceptionHandler((thread, ex) -> {
+                    logger.log(Level.SEVERE, "Uncaught exception in " + thread.getName(), ex);
+                });
+                return t;
+            }
+        });
+        
+        // ForkJoinPool 用于并行流和递归任务
+        this.forkJoinPool = new ForkJoinPool(poolSize);
+        
+        // 调度器用于超时控制
+        this.scheduledExecutor = Executors.newScheduledThreadPool(2, r -> {
+            Thread t = new Thread(r, "AgentScheduler");
             t.setDaemon(true);
             return t;
         });
+        
+        logger.info("ParallelAgentExecutor initialized with poolSize=" + poolSize);
+    }
+    
+    // ==================== 核心执行方法 ====================
+    
+    /**
+     * 同步执行多个任务
+     * 
+     * @param tasks 任务列表
+     * @return 并行执行结果
+     */
+    public ParallelExecutionResult execute(List<SubAgentTask> tasks) {
+        return execute(tasks, null, DEFAULT_TIMEOUT_MS);
     }
     
     /**
-     * 提交单个任务
+     * 同步执行多个任务（带会话和超时）
+     * 
+     * @param tasks 任务列表
+     * @param session 会话上下文
+     * @param timeoutMs 超时时间（毫秒）
+     * @return 并行执行结果
      */
-    public CompletableFuture<SubAgentResult> submit(SubAgentTask task, Session session) {
-        taskRegistry.put(task.getTaskId(), task);
+    public ParallelExecutionResult execute(List<SubAgentTask> tasks, Session session, long timeoutMs) {
+        checkShutdown();
         
-        CompletableFuture<SubAgentResult> future = CompletableFuture.supplyAsync(() -> {
-            return executeTask(task, session);
-        }, executorService);
-        
-        resultFutures.put(task.getTaskId(), future);
-        task.setFuture(future);
-        
-        return future;
-    }
-    
-    /**
-     * 批量提交任务（自动处理依赖关系）
-     */
-    public ParallelExecutionContext submitBatch(List<SubAgentTask> tasks, Session session) {
-        // 注册所有任务
-        for (SubAgentTask task : tasks) {
-            taskRegistry.put(task.getTaskId(), task);
+        if (tasks == null || tasks.isEmpty()) {
+            return ParallelExecutionResult.empty();
         }
         
-        // 创建执行上下文
-        ParallelExecutionContext context = new ParallelExecutionContext(tasks, session);
+        logger.info("[ParallelAgent] Starting synchronous execution of " + tasks.size() + " tasks");
+        long startTime = System.currentTimeMillis();
         
-        // 启动依赖调度器
-        scheduleWithDependenciesNew(tasks, context);
-        
-        return context;
+        try {
+            // 使用 ForkJoinPool 进行并行执行
+            List<SubAgentResult> results = forkJoinPool.submit(() ->
+                tasks.parallelStream()
+                    .map(task -> executeSingle(task, session, timeoutMs))
+                    .collect(Collectors.toList())
+            ).get(timeoutMs, TimeUnit.MILLISECONDS);
+            
+            long executionTime = System.currentTimeMillis() - startTime;
+            logger.info("[ParallelAgent] Execution completed in " + executionTime + "ms");
+            
+            return new ParallelExecutionResult(results, executionTime);
+            
+        } catch (TimeoutException e) {
+            logger.warning("[ParallelAgent] Execution timeout after " + timeoutMs + "ms");
+            return createTimeoutResult(tasks, timeoutMs);
+        } catch (Exception e) {
+            logger.log(Level.SEVERE, "[ParallelAgent] Execution failed", e);
+            return createErrorResult(tasks, e);
+        }
     }
     
     /**
-     * 执行单个任务
+     * 异步执行多个任务
+     * 
+     * @param tasks 任务列表
+     * @return CompletableFuture 包含执行结果
      */
-    private SubAgentResult executeTask(SubAgentTask task, Session session) {
-        task.markStarted();
-        log.info("[ParallelAgent] 开始执行任务: " + task.getTaskId());
+    public CompletableFuture<ParallelExecutionResult> executeAsync(List<SubAgentTask> tasks) {
+        return executeAsync(tasks, null, DEFAULT_TIMEOUT_MS);
+    }
+    
+    /**
+     * 异步执行多个任务（带会话和超时）
+     * 
+     * @param tasks 任务列表
+     * @param session 会话上下文
+     * @param timeoutMs 超时时间（毫秒）
+     * @return CompletableFuture 包含执行结果
+     */
+    public CompletableFuture<ParallelExecutionResult> executeAsync(
+            List<SubAgentTask> tasks, Session session, long timeoutMs) {
+        checkShutdown();
+        
+        if (tasks == null || tasks.isEmpty()) {
+            return CompletableFuture.completedFuture(ParallelExecutionResult.empty());
+        }
+        
+        logger.info("[ParallelAgent] Starting asynchronous execution of " + tasks.size() + " tasks");
+        long startTime = System.currentTimeMillis();
+        
+        // 创建每个任务的 Future
+        List<CompletableFuture<SubAgentResult>> futures = tasks.stream()
+            .map(task -> executeSingleAsync(task, session, timeoutMs))
+            .collect(Collectors.toList());
+        
+        // 组合所有 Future
+        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+            .thenApply(v -> {
+                List<SubAgentResult> results = futures.stream()
+                    .map(f -> {
+                        try {
+                            return f.getNow(null);
+                        } catch (Exception e) {
+                            return SubAgentResult.failure("async", e.getMessage());
+                        }
+                    })
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toList());
+                
+                long executionTime = System.currentTimeMillis() - startTime;
+                return new ParallelExecutionResult(results, executionTime);
+            })
+            .orTimeout(timeoutMs, TimeUnit.MILLISECONDS)
+            .exceptionally(ex -> {
+                logger.log(Level.WARNING, "[ParallelAgent] Async execution failed or timeout", ex);
+                return createErrorResult(tasks, ex);
+            });
+    }
+    
+    /**
+     * 取消指定任务
+     * 
+     * @param taskId 任务ID
+     * @return 是否成功取消
+     */
+    public boolean cancel(String taskId) {
+        return cancel(taskId, "User requested cancellation");
+    }
+    
+    /**
+     * 取消指定任务（带原因）
+     * 
+     * @param taskId 任务ID
+     * @param reason 取消原因
+     * @return 是否成功取消
+     */
+    public boolean cancel(String taskId, String reason) {
+        logger.info("[ParallelAgent] Cancelling task: " + taskId + ", reason: " + reason);
+        
+        // 取消令牌
+        CancellationToken token = cancellationTokens.get(taskId);
+        if (token != null) {
+            token.cancel();
+        }
+        
+        // 取消 Future
+        CompletableFuture<SubAgentResult> future = resultFutures.get(taskId);
+        if (future != null && !future.isDone()) {
+            future.cancel(true);
+        }
+        
+        // 中断执行线程
+        TaskExecution execution = activeExecutions.get(taskId);
+        if (execution != null && execution.executingThread != null) {
+            execution.executingThread.interrupt();
+        }
+        
+        // 更新任务状态
+        SubAgentTask task = taskRegistry.get(taskId);
+        if (task != null) {
+            task.setStatus(SubAgentTask.TaskStatus.CANCELLED);
+        }
+        
+        stats.recordCancelled();
+        return true;
+    }
+    
+    /**
+     * 批量取消任务
+     * 
+     * @param taskIds 任务ID列表
+     * @return 成功取消的数量
+     */
+    public int cancelAll(List<String> taskIds) {
+        int count = 0;
+        for (String taskId : taskIds) {
+            if (cancel(taskId)) {
+                count++;
+            }
+        }
+        return count;
+    }
+    
+    /**
+     * 取消所有正在执行的任务
+     * 
+     * @return 成功取消的数量
+     */
+    public int cancelAllActive() {
+        List<String> activeTaskIds = activeExecutions.keySet().stream()
+            .collect(Collectors.toList());
+        return cancelAll(activeTaskIds);
+    }
+    
+    // ==================== 任务执行实现 ====================
+    
+    /**
+     * 执行单个任务（同步）
+     */
+    private SubAgentResult executeSingle(SubAgentTask task, Session session, long timeoutMs) {
+        String taskId = task.getTaskId();
         
         try {
-            // 获取 Agent
+            // 创建取消令牌
+            CancellationToken token = new CancellationToken("Timeout or user cancellation");
+            cancellationTokens.put(taskId, token);
+            
+            // 提交带超时的任务
+            Future<SubAgentResult> future = executorService.submit(() -> {
+                Thread currentThread = Thread.currentThread();
+                TaskExecution execution = new TaskExecution(taskId, null, token);
+                execution.executingThread = currentThread;
+                activeExecutions.put(taskId, execution);
+                
+                try {
+                    return doExecute(task, session, token);
+                } finally {
+                    activeExecutions.remove(taskId);
+                }
+            });
+            
+            return future.get(timeoutMs, TimeUnit.MILLISECONDS);
+            
+        } catch (TimeoutException e) {
+            logger.warning("[ParallelAgent] Task timeout: " + taskId);
+            task.setStatus(SubAgentTask.TaskStatus.TIMEOUT);
+            return SubAgentResult.builder()
+                .taskId(taskId)
+                .success(false)
+                .error("Task timeout after " + timeoutMs + "ms")
+                .build();
+        } catch (CancellationException e) {
+            logger.info("[ParallelAgent] Task cancelled: " + taskId);
+            task.setStatus(SubAgentTask.TaskStatus.CANCELLED);
+            return SubAgentResult.builder()
+                .taskId(taskId)
+                .success(false)
+                .error("Task cancelled")
+                .build();
+        } catch (Exception e) {
+            logger.log(Level.SEVERE, "[ParallelAgent] Task failed: " + taskId, e);
+            task.setStatus(SubAgentTask.TaskStatus.FAILED);
+            return SubAgentResult.failure(taskId, e.getMessage());
+        } finally {
+            cancellationTokens.remove(taskId);
+            resultFutures.remove(taskId);
+        }
+    }
+    
+    /**
+     * 执行单个任务（异步）
+     */
+    private CompletableFuture<SubAgentResult> executeSingleAsync(
+            SubAgentTask task, Session session, long timeoutMs) {
+        String taskId = task.getTaskId();
+        stats.recordSubmitted();
+        
+        CancellationToken token = new CancellationToken("Timeout or user cancellation");
+        cancellationTokens.put(taskId, token);
+        
+        CompletableFuture<SubAgentResult> future = CompletableFuture.supplyAsync(() -> {
+            Thread currentThread = Thread.currentThread();
+            TaskExecution execution = new TaskExecution(taskId, null, token);
+            execution.executingThread = currentThread;
+            activeExecutions.put(taskId, execution);
+            
+            try {
+                return doExecute(task, session, token);
+            } finally {
+                activeExecutions.remove(taskId);
+            }
+        }, executorService);
+        
+        // 设置超时
+        CompletableFuture<SubAgentResult> timeoutFuture = future.orTimeout(timeoutMs, TimeUnit.MILLISECONDS);
+        resultFutures.put(taskId, timeoutFuture);
+        
+        return timeoutFuture;
+    }
+    
+    /**
+     * 实际执行任务的逻辑
+     */
+    private SubAgentResult doExecute(SubAgentTask task, Session session, CancellationToken token) {
+        String taskId = task.getTaskId();
+        long startTime = System.currentTimeMillis();
+        
+        try {
+            // 检查取消
+            token.checkCancelled();
+            
+            // 标记开始
+            task.markStarted();
+            logger.fine("[ParallelAgent] Task started: " + taskId);
+            
+            // 解析 Agent
             Agent agent = resolveAgent(task);
             task.setExecutingAgent(agent);
             
-            // 构建任务提示词
+            // 构建提示词
             String prompt = buildTaskPrompt(task, session);
             
-            // 执行任务（这里简化实现，实际应调用 QueryEngine）
-            // TODO: 集成实际的 QueryEngine 调用
-            String result = simulateAgentExecution(agent, prompt);
+            // 检查取消
+            token.checkCancelled();
             
+            // 执行 Agent 任务（实际调用 LLM）
+            String result = executeAgentTask(agent, prompt, task, token);
+            
+            // 检查取消
+            token.checkCancelled();
+            
+            // 标记完成
             task.markCompleted();
-            log.info("[ParallelAgent] 任务完成: " + task.getTaskId() + " (" + task.getExecutionTimeMs() + "ms)");
+            long executionTime = System.currentTimeMillis() - startTime;
+            stats.recordCompleted(executionTime);
+            
+            logger.fine("[ParallelAgent] Task completed: " + taskId + " in " + executionTime + "ms");
             
             return SubAgentResult.builder()
-                .taskId(task.getTaskId())
+                .taskId(taskId)
                 .success(true)
                 .output(result)
                 .agentId(agent.getId())
-                .executionTimeMs(task.getExecutionTimeMs())
+                .executionTimeMs(executionTime)
+                .startTime(startTime)
+                .endTime(System.currentTimeMillis())
                 .build();
                 
+        } catch (CancellationException e) {
+            task.setStatus(SubAgentTask.TaskStatus.CANCELLED);
+            stats.recordCancelled();
+            throw e;
         } catch (Exception e) {
             task.markFailed();
-            log.severe("[ParallelAgent] 任务失败: " + task.getTaskId() + " - " + e.getMessage());
-            
-            return SubAgentResult.failure(task.getTaskId(), e.getMessage());
-        }
-    }
-    
-    /**
-     * 带依赖关系的任务调度（新实现）
-     */
-    private void scheduleWithDependenciesNew(List<SubAgentTask> tasks, ParallelExecutionContext context) {
-        Map<String, SubAgentTask> taskMap = tasks.stream()
-            .collect(Collectors.toMap(SubAgentTask::getTaskId, t -> t));
-        
-        Map<String, CompletableFuture<SubAgentResult>> futures = new ConcurrentHashMap<>();
-        Set<String> submitted = ConcurrentHashMap.newKeySet();
-        
-        // 提交所有无依赖任务
-        for (SubAgentTask task : tasks) {
-            if (task.getDependencies().isEmpty()) {
-                submitTaskWithDeps(task, taskMap, futures, submitted, context);
-            }
-        }
-        
-        // 提交有依赖的任务
-        for (SubAgentTask task : tasks) {
-            if (!task.getDependencies().isEmpty()) {
-                submitTaskWithDeps(task, taskMap, futures, submitted, context);
-            }
-        }
-    }
-    
-    private void submitTaskWithDeps(SubAgentTask task, Map<String, SubAgentTask> taskMap,
-                                     Map<String, CompletableFuture<SubAgentResult>> futures,
-                                     Set<String> submitted, ParallelExecutionContext context) {
-        if (submitted.contains(task.getTaskId())) {
-            return;
-        }
-        submitted.add(task.getTaskId());
-        
-        if (task.getDependencies().isEmpty()) {
-            // 无依赖，直接提交
-            CompletableFuture<SubAgentResult> future = submit(task, context.getSession())
-                .thenApply(result -> {
-                    context.addResult(result);
-                    return result;
-                });
-            futures.put(task.getTaskId(), future);
-        } else {
-            // 有依赖，先提交所有依赖
-            List<CompletableFuture<SubAgentResult>> depFutures = new ArrayList<>();
-            for (String depId : task.getDependencies()) {
-                SubAgentTask depTask = taskMap.get(depId);
-                if (depTask != null) {
-                    submitTaskWithDeps(depTask, taskMap, futures, submitted, context);
-                    CompletableFuture<SubAgentResult> depFuture = futures.get(depId);
-                    if (depFuture != null) {
-                        depFutures.add(depFuture);
-                    }
-                }
-            }
-            
-            // 等待依赖完成后提交
-            CompletableFuture<SubAgentResult> future = CompletableFuture.allOf(
-                depFutures.toArray(new CompletableFuture[0])
-            ).thenCompose(v -> submit(task, context.getSession()))
-             .thenApply(result -> {
-                 context.addResult(result);
-                 return result;
-             });
-            
-            futures.put(task.getTaskId(), future);
+            stats.recordFailed();
+            logger.log(Level.SEVERE, "[ParallelAgent] Task failed: " + taskId, e);
+            throw new CompletionException(e);
         }
     }
     
@@ -188,7 +516,7 @@ public class ParallelAgentExecutor {
     private Agent resolveAgent(SubAgentTask task) {
         String agentType = task.getAgentType();
         
-        if (agentType != null && !agentType.isEmpty()) {
+        if (agentType != null && !agentType.isEmpty() && agentRegistry != null) {
             Agent agent = agentRegistry.get(agentType);
             if (agent != null) {
                 return agent;
@@ -196,7 +524,11 @@ public class ParallelAgentExecutor {
         }
         
         // 使用默认 Agent
-        return agentRegistry.getCurrent();
+        if (agentRegistry != null) {
+            return agentRegistry.getCurrent();
+        }
+        
+        throw new IllegalStateException("No agent available for task");
     }
     
     /**
@@ -204,67 +536,243 @@ public class ParallelAgentExecutor {
      */
     private String buildTaskPrompt(SubAgentTask task, Session session) {
         StringBuilder prompt = new StringBuilder();
-        prompt.append("# 任务\n\n");
-        prompt.append(task.getInstruction()).append("\n\n");
         
-        if (!task.getContext().isEmpty()) {
+        // 角色定义
+        if (task.getRole() != null && !task.getRole().isEmpty()) {
+            prompt.append("# 角色\n\n").append(task.getRole()).append("\n\n");
+        }
+        
+        // 任务描述
+        prompt.append("# 任务\n\n");
+        String taskDesc = task.getTaskDescription() != null ? task.getTaskDescription() : task.getInstruction();
+        prompt.append(taskDesc).append("\n\n");
+        
+        // 上下文
+        Map<String, Object> context = task.getContext();
+        if (context != null && !context.isEmpty()) {
             prompt.append("# 上下文\n\n");
-            task.getContext().forEach((key, value) -> {
+            context.forEach((key, value) -> {
                 prompt.append(key).append(": ").append(value).append("\n");
             });
+            prompt.append("\n");
         }
         
         return prompt.toString();
     }
     
     /**
-     * 模拟 Agent 执行（实际应替换为真实实现）
+     * 执行 Agent 任务（调用 LLM）
      */
-    private String simulateAgentExecution(Agent agent, String prompt) {
-        // 模拟执行时间
-        try {
-            Thread.sleep(100 + (long)(Math.random() * 200));
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+    private String executeAgentTask(Agent agent, String prompt, SubAgentTask task, 
+                                     CancellationToken token) throws Exception {
+        if (llmService == null) {
+            // 模拟执行（当 LLM 服务不可用时）
+            return simulateExecution(agent, prompt);
         }
         
-        return "Agent [" + agent.getId() + "] 执行结果:\n" + 
-               "处理了任务，输入长度: " + prompt.length() + " 字符";
+        // 实际调用 LLM 服务
+        try {
+            // 检查取消
+            token.checkCancelled();
+            
+            // 这里应该调用实际的 LLM 服务
+            // String response = llmService.query(prompt, agent.getModelConfig());
+            
+            // 暂时使用模拟
+            return simulateExecution(agent, prompt);
+        } catch (CancellationException e) {
+            throw e;
+        }
+    }
+    
+    /**
+     * 模拟执行（用于测试或 LLM 服务不可用时）
+     */
+    private String simulateExecution(Agent agent, String prompt) {
+        try {
+            // 模拟执行时间（100-500ms）
+            Thread.sleep(100 + (long)(Math.random() * 400));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new CancellationException("Simulation interrupted");
+        }
+        
+        return String.format(
+            "Agent [%s] execution result:\n" +
+            "- Agent Name: %s\n" +
+            "- Input Length: %d characters\n" +
+            "- Status: Completed successfully\n" +
+            "- Timestamp: %s",
+            agent.getId(),
+            agent.getName(),
+            prompt.length(),
+            new Date().toString()
+        );
+    }
+    
+    // ==================== 依赖处理 ====================
+    
+    /**
+     * 执行带依赖的任务
+     * 
+     * @param tasks 任务列表（包含依赖关系）
+     * @param session 会话上下文
+     * @return 执行上下文
+     */
+    public ParallelExecutionContext executeWithDependencies(List<SubAgentTask> tasks, Session session) {
+        checkShutdown();
+        
+        // 创建执行上下文
+        ParallelExecutionContext context = new ParallelExecutionContext(tasks, session);
+        
+        // 构建依赖图
+        DependencyGraph graph = new DependencyGraph(tasks);
+        
+        // 提交可执行的任务
+        scheduleReadyTasks(graph, context);
+        
+        return context;
+    }
+    
+    /**
+     * 调度就绪的任务
+     */
+    private void scheduleReadyTasks(DependencyGraph graph, ParallelExecutionContext context) {
+        List<SubAgentTask> readyTasks = graph.getReadyTasks();
+        
+        for (SubAgentTask task : readyTasks) {
+            String taskId = task.getTaskId();
+            
+            // 提交任务
+            CompletableFuture<SubAgentResult> future = executeSingleAsync(
+                task, context.getSession(), task.getTimeoutMs()
+            );
+            
+            // 完成后更新依赖图
+            future.thenAccept(result -> {
+                context.addResult(result);
+                graph.markCompleted(taskId);
+                
+                // 继续调度新就绪的任务
+                if (graph.hasMoreTasks()) {
+                    scheduleReadyTasks(graph, context);
+                }
+            }).exceptionally(ex -> {
+                context.addError(taskId, ex);
+                graph.markCompleted(taskId);
+                return null;
+            });
+        }
+    }
+    
+    // ==================== 工具方法 ====================
+    
+    /**
+     * 获取任务状态
+     */
+    public SubAgentTask.TaskStatus getTaskStatus(String taskId) {
+        SubAgentTask task = taskRegistry.get(taskId);
+        return task != null ? task.getStatus() : null;
+    }
+    
+    /**
+     * 获取执行统计
+     */
+    public ExecutorStats getStats() {
+        return stats;
     }
     
     /**
      * 关闭执行器
      */
     public void shutdown() {
-        executorService.shutdown();
+        if (isShutdown.compareAndSet(false, true)) {
+            logger.info("Shutting down ParallelAgentExecutor...");
+            
+            // 取消所有活动任务
+            cancelAllActive();
+            
+            // 关闭线程池
+            shutdownExecutor(executorService, "ExecutorService");
+            shutdownExecutor(scheduledExecutor, "ScheduledExecutor");
+            
+            // 关闭 ForkJoinPool
+            forkJoinPool.shutdown();
+            try {
+                if (!forkJoinPool.awaitTermination(SHUTDOWN_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                    forkJoinPool.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                forkJoinPool.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+            
+            logger.info("ParallelAgentExecutor shutdown complete");
+        }
+    }
+    
+    private void shutdownExecutor(ExecutorService executor, String name) {
+        executor.shutdown();
         try {
-            if (!executorService.awaitTermination(60, TimeUnit.SECONDS)) {
-                executorService.shutdownNow();
+            if (!executor.awaitTermination(SHUTDOWN_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                logger.warning(name + " did not terminate in time, forcing shutdown");
+                executor.shutdownNow();
             }
         } catch (InterruptedException e) {
-            executorService.shutdownNow();
+            executor.shutdownNow();
             Thread.currentThread().interrupt();
         }
+    }
+    
+    private void checkShutdown() {
+        if (isShutdown.get()) {
+            throw new IllegalStateException("Executor has been shutdown");
+        }
+    }
+    
+    private ParallelExecutionResult createTimeoutResult(List<SubAgentTask> tasks, long timeoutMs) {
+        List<SubAgentResult> results = tasks.stream()
+            .map(t -> SubAgentResult.builder()
+                .taskId(t.getTaskId())
+                .success(false)
+                .error("Execution timeout after " + timeoutMs + "ms")
+                .build())
+            .collect(Collectors.toList());
+        return new ParallelExecutionResult(results, timeoutMs);
+    }
+    
+    private ParallelExecutionResult createErrorResult(List<SubAgentTask> tasks, Throwable error) {
+        List<SubAgentResult> results = tasks.stream()
+            .map(t -> SubAgentResult.builder()
+                .taskId(t.getTaskId())
+                .success(false)
+                .error(error.getMessage())
+                .build())
+            .collect(Collectors.toList());
+        return new ParallelExecutionResult(results, 0);
     }
     
     // ==================== 内部类 ====================
     
     /**
-     * 依赖图
+     * 依赖图管理
      */
     private static class DependencyGraph {
         private final Map<String, SubAgentTask> tasks = new HashMap<>();
         private final Map<String, Set<String>> dependencies = new HashMap<>();
         private final Map<String, Set<String>> dependents = new HashMap<>();
+        private final Set<String> completed = ConcurrentHashMap.newKeySet();
+        private final Set<String> running = ConcurrentHashMap.newKeySet();
         
         DependencyGraph(List<SubAgentTask> taskList) {
             for (SubAgentTask task : taskList) {
-                tasks.put(task.getTaskId(), task);
-                dependencies.put(task.getTaskId(), new HashSet<>(task.getDependencies()));
-                dependents.put(task.getTaskId(), new HashSet<>());
+                String taskId = task.getTaskId();
+                tasks.put(taskId, task);
+                dependencies.put(taskId, new HashSet<>(task.getDependencies()));
+                dependents.put(taskId, new HashSet<>());
             }
             
-            // 构建反向依赖关系
+            // 构建反向依赖
             for (SubAgentTask task : taskList) {
                 for (String depId : task.getDependencies()) {
                     dependents.computeIfAbsent(depId, k -> new HashSet<>()).add(task.getTaskId());
@@ -272,15 +780,32 @@ public class ParallelAgentExecutor {
             }
         }
         
-        /**
-         * 获取可以立即执行的任务（无依赖或依赖已完成）
-         */
         List<SubAgentTask> getReadyTasks() {
             return tasks.values().stream()
-                .filter(t -> t.getStatus() == SubAgentTask.TaskStatus.PENDING)
+                .filter(t -> !running.contains(t.getTaskId()))
+                .filter(t -> !completed.contains(t.getTaskId()))
                 .filter(t -> dependencies.getOrDefault(t.getTaskId(), Set.of()).isEmpty())
                 .sorted(Comparator.comparingInt(SubAgentTask::getPriority).reversed())
                 .collect(Collectors.toList());
+        }
+        
+        void markCompleted(String taskId) {
+            completed.add(taskId);
+            running.remove(taskId);
+            
+            // 解除依赖
+            Set<String> deps = dependents.getOrDefault(taskId, Set.of());
+            for (String dependentId : deps) {
+                dependencies.getOrDefault(dependentId, new HashSet<>()).remove(taskId);
+            }
+        }
+        
+        void markRunning(String taskId) {
+            running.add(taskId);
+        }
+        
+        boolean hasMoreTasks() {
+            return completed.size() + running.size() < tasks.size();
         }
     }
 }

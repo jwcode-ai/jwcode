@@ -5,6 +5,9 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import java.util.stream.Collectors;
 
 /**
  * LspDiagnosticRegistry - LSP 诊断注册表
@@ -12,14 +15,15 @@ import java.util.function.Consumer;
  * 功能说明：
  * 管理 LSP（Language Server Protocol）诊断信息。
  * 处理语言服务器发送的诊断（错误、警告、提示等），
- * 支持诊断订阅、过滤和聚合。
+ * 支持诊断订阅、过滤、聚合和快速修复建议。
  * 
  * 核心特性：
  * - 诊断信息管理
  * - 按文件 URI 组织诊断
- * - 诊断严重性过滤
+ * - 诊断严重性过滤（错误/警告/信息/提示）
  * - 诊断订阅/发布
  * - 诊断历史记录
+ * - 快速修复建议
  * 
  * 上下文关系：
  * - 被 LspClient 用来接收诊断
@@ -30,6 +34,8 @@ import java.util.function.Consumer;
  * @since 1.0.0
  */
 public class LspDiagnosticRegistry {
+    
+    private static final Logger LOGGER = Logger.getLogger(LspDiagnosticRegistry.class.getName());
     
     /**
      * 诊断映射表（文件 URI -> 诊断列表）
@@ -52,12 +58,18 @@ public class LspDiagnosticRegistry {
     private static final int MAX_HISTORY_SIZE = 1000;
     
     /**
+     * 快速修复映射表
+     */
+    private final Map<String, List<QuickFix>> quickFixesByUri;
+    
+    /**
      * 构造函数
      */
     public LspDiagnosticRegistry() {
         this.diagnosticsByUri = new ConcurrentHashMap<>();
         this.subscribers = new CopyOnWriteArrayList<>();
         this.history = new ArrayList<>();
+        this.quickFixesByUri = new ConcurrentHashMap<>();
     }
     
     /**
@@ -118,6 +130,9 @@ public class LspDiagnosticRegistry {
         
         // 记录历史
         recordDiagnostics(uri, diagnostics);
+        
+        LOGGER.fine(String.format("Updated diagnostics for %s: %d total, %d added, %d removed",
+            uri, diagnostics.size(), added.size(), removed.size()));
     }
     
     /**
@@ -127,6 +142,7 @@ public class LspDiagnosticRegistry {
      */
     public void clearDiagnostics(String uri) {
         List<LspDiagnostic> removed = diagnosticsByUri.remove(uri);
+        quickFixesByUri.remove(uri);
         if (removed != null && !removed.isEmpty()) {
             notifySubscribers(new DiagnosticEvent(uri, DiagnosticEventType.CLEARED, removed));
         }
@@ -156,13 +172,50 @@ public class LspDiagnosticRegistry {
             return new ArrayList<>();
         }
         
-        List<LspDiagnostic> filtered = new ArrayList<>();
-        for (LspDiagnostic diag : diagnostics) {
-            if (diag.getSeverity() != null && diag.getSeverity().getValue() <= minSeverity.getValue()) {
-                filtered.add(diag);
-            }
+        return diagnostics.stream()
+            .filter(d -> d.getSeverity() != null && 
+                        d.getSeverity().getValue() <= minSeverity.getValue())
+            .collect(Collectors.toList());
+    }
+    
+    /**
+     * 获取文件的诊断（按范围过滤）
+     * 
+     * @param uri 文件 URI
+     * @param line 行号
+     * @return 诊断列表
+     */
+    public List<LspDiagnostic> getDiagnosticsAtLine(String uri, int line) {
+        List<LspDiagnostic> diagnostics = diagnosticsByUri.get(uri);
+        if (diagnostics == null) {
+            return new ArrayList<>();
         }
-        return filtered;
+        
+        return diagnostics.stream()
+            .filter(d -> d.getRange() != null &&
+                        d.getRange().getStart().getLine() <= line &&
+                        d.getRange().getEnd().getLine() >= line)
+            .collect(Collectors.toList());
+    }
+    
+    /**
+     * 获取指定位置的诊断
+     * 
+     * @param uri 文件 URI
+     * @param line 行号
+     * @param column 列号
+     * @return 诊断列表
+     */
+    public List<LspDiagnostic> getDiagnosticsAtPosition(String uri, int line, int column) {
+        List<LspDiagnostic> diagnostics = diagnosticsByUri.get(uri);
+        if (diagnostics == null) {
+            return new ArrayList<>();
+        }
+        
+        return diagnostics.stream()
+            .filter(d -> d.getRange() != null &&
+                        d.getRange().contains(line, column))
+            .collect(Collectors.toList());
     }
     
     /**
@@ -179,16 +232,34 @@ public class LspDiagnosticRegistry {
     }
     
     /**
+     * 获取所有诊断（按严重性过滤）
+     * 
+     * @param minSeverity 最小严重性
+     * @return 所有文件的诊断映射
+     */
+    public Map<String, List<LspDiagnostic>> getAllDiagnostics(LspDiagnosticSeverity minSeverity) {
+        Map<String, List<LspDiagnostic>> result = new HashMap<>();
+        for (Map.Entry<String, List<LspDiagnostic>> entry : diagnosticsByUri.entrySet()) {
+            List<LspDiagnostic> filtered = entry.getValue().stream()
+                .filter(d -> d.getSeverity() != null && 
+                            d.getSeverity().getValue() <= minSeverity.getValue())
+                .collect(Collectors.toList());
+            if (!filtered.isEmpty()) {
+                result.put(entry.getKey(), filtered);
+            }
+        }
+        return result;
+    }
+    
+    /**
      * 获取所有文件的诊断总数
      * 
      * @return 诊断总数
      */
     public int getTotalDiagnosticCount() {
-        int count = 0;
-        for (List<LspDiagnostic> diagnostics : diagnosticsByUri.values()) {
-            count += diagnostics.size();
-        }
-        return count;
+        return diagnosticsByUri.values().stream()
+            .mapToInt(List::size)
+            .sum();
     }
     
     /**
@@ -198,15 +269,11 @@ public class LspDiagnosticRegistry {
      * @return 诊断数量
      */
     public int getDiagnosticCountBySeverity(LspDiagnosticSeverity severity) {
-        int count = 0;
-        for (List<LspDiagnostic> diagnostics : diagnosticsByUri.values()) {
-            for (LspDiagnostic diag : diagnostics) {
-                if (diag.getSeverity() == severity) {
-                    count++;
-                }
-            }
-        }
-        return count;
+        return diagnosticsByUri.values().stream()
+            .flatMap(List::stream)
+            .filter(d -> d.getSeverity() == severity)
+            .mapToInt(d -> 1)
+            .sum();
     }
     
     /**
@@ -228,12 +295,36 @@ public class LspDiagnosticRegistry {
     }
     
     /**
+     * 获取信息数量
+     * 
+     * @return 信息数量
+     */
+    public int getInformationCount() {
+        return getDiagnosticCountBySeverity(LspDiagnosticSeverity.INFORMATION);
+    }
+    
+    /**
      * 获取提示数量
      * 
      * @return 提示数量
      */
-    public int getInformationCount() {
-        return getDiagnosticCountBySeverity(LspDiagnosticSeverity.INFORMATION);
+    public int getHintCount() {
+        return getDiagnosticCountBySeverity(LspDiagnosticSeverity.HINT);
+    }
+    
+    /**
+     * 获取诊断统计信息
+     * 
+     * @return 诊断统计
+     */
+    public DiagnosticStats getStats() {
+        return new DiagnosticStats(
+            getTotalDiagnosticCount(),
+            getErrorCount(),
+            getWarningCount(),
+            getInformationCount(),
+            getHintCount()
+        );
     }
     
     /**
@@ -262,7 +353,53 @@ public class LspDiagnosticRegistry {
      */
     public void clearAll() {
         diagnosticsByUri.clear();
+        quickFixesByUri.clear();
         notifySubscribers(new DiagnosticEvent(null, DiagnosticEventType.ALL_CLEARED, new ArrayList<>()));
+    }
+    
+    /**
+     * 添加快速修复
+     * 
+     * @param uri 文件 URI
+     * @param diagnosticId 诊断 ID
+     * @param quickFix 快速修复
+     */
+    public void addQuickFix(String uri, String diagnosticId, QuickFix quickFix) {
+        quickFixesByUri.computeIfAbsent(uri + "#" + diagnosticId, k -> new ArrayList<>())
+                       .add(quickFix);
+    }
+    
+    /**
+     * 获取快速修复
+     * 
+     * @param uri 文件 URI
+     * @param diagnosticId 诊断 ID
+     * @return 快速修复列表
+     */
+    public List<QuickFix> getQuickFixes(String uri, String diagnosticId) {
+        return quickFixesByUri.getOrDefault(uri + "#" + diagnosticId, new ArrayList<>());
+    }
+    
+    /**
+     * 获取诊断的快速修复
+     * 
+     * @param diagnostic 诊断
+     * @return 快速修复列表
+     */
+    public List<QuickFix> getQuickFixesForDiagnostic(LspDiagnostic diagnostic) {
+        if (diagnostic == null || diagnostic.getQuickFixes().isEmpty()) {
+            return new ArrayList<>();
+        }
+        return new ArrayList<>(diagnostic.getQuickFixes());
+    }
+    
+    /**
+     * 清除快速修复
+     * 
+     * @param uri 文件 URI
+     */
+    public void clearQuickFixes(String uri) {
+        quickFixesByUri.entrySet().removeIf(e -> e.getKey().startsWith(uri + "#"));
     }
     
     /**
@@ -273,7 +410,7 @@ public class LspDiagnosticRegistry {
             try {
                 subscriber.accept(event);
             } catch (Exception e) {
-                // 忽略订阅者异常
+                LOGGER.log(Level.WARNING, "Diagnostic subscriber error", e);
             }
         }
     }
@@ -283,13 +420,14 @@ public class LspDiagnosticRegistry {
      */
     private void recordDiagnostics(String uri, List<LspDiagnostic> diagnostics) {
         DiagnosticRecord record = new DiagnosticRecord(
-                UUID.randomUUID().toString(),
-                uri,
-                diagnostics.size(),
-                countBySeverity(diagnostics, LspDiagnosticSeverity.ERROR),
-                countBySeverity(diagnostics, LspDiagnosticSeverity.WARNING),
-                countBySeverity(diagnostics, LspDiagnosticSeverity.INFORMATION),
-                Instant.now()
+            UUID.randomUUID().toString(),
+            uri,
+            diagnostics.size(),
+            countBySeverity(diagnostics, LspDiagnosticSeverity.ERROR),
+            countBySeverity(diagnostics, LspDiagnosticSeverity.WARNING),
+            countBySeverity(diagnostics, LspDiagnosticSeverity.INFORMATION),
+            countBySeverity(diagnostics, LspDiagnosticSeverity.HINT),
+            Instant.now()
         );
         
         history.add(record);
@@ -304,16 +442,41 @@ public class LspDiagnosticRegistry {
      * 按严重性计数
      */
     private int countBySeverity(List<LspDiagnostic> diagnostics, LspDiagnosticSeverity severity) {
-        int count = 0;
-        for (LspDiagnostic diag : diagnostics) {
-            if (diag.getSeverity() == severity) {
-                count++;
-            }
-        }
-        return count;
+        return (int) diagnostics.stream()
+            .filter(d -> d.getSeverity() == severity)
+            .count();
     }
     
     // ==================== 内部类 ====================
+    
+    /**
+     * 诊断统计信息
+     */
+    public static class DiagnosticStats {
+        private final int total;
+        private final int errors;
+        private final int warnings;
+        private final int informations;
+        private final int hints;
+        
+        public DiagnosticStats(int total, int errors, int warnings, 
+                              int informations, int hints) {
+            this.total = total;
+            this.errors = errors;
+            this.warnings = warnings;
+            this.informations = informations;
+            this.hints = hints;
+        }
+        
+        public int getTotal() { return total; }
+        public int getErrors() { return errors; }
+        public int getWarnings() { return warnings; }
+        public int getInformations() { return informations; }
+        public int getHints() { return hints; }
+        
+        public boolean hasErrors() { return errors > 0; }
+        public boolean hasWarnings() { return warnings > 0; }
+    }
     
     /**
      * 诊断事件类型枚举
@@ -336,24 +499,19 @@ public class LspDiagnosticRegistry {
         private final String uri;
         private final DiagnosticEventType type;
         private final List<LspDiagnostic> diagnostics;
+        private final Instant timestamp;
         
         public DiagnosticEvent(String uri, DiagnosticEventType type, List<LspDiagnostic> diagnostics) {
             this.uri = uri;
             this.type = type;
             this.diagnostics = diagnostics;
+            this.timestamp = Instant.now();
         }
         
-        public String getUri() {
-            return uri;
-        }
-        
-        public DiagnosticEventType getType() {
-            return type;
-        }
-        
-        public List<LspDiagnostic> getDiagnostics() {
-            return diagnostics;
-        }
+        public String getUri() { return uri; }
+        public DiagnosticEventType getType() { return type; }
+        public List<LspDiagnostic> getDiagnostics() { return diagnostics; }
+        public Instant getTimestamp() { return timestamp; }
     }
     
     /**
@@ -366,46 +524,29 @@ public class LspDiagnosticRegistry {
         private final int errors;
         private final int warnings;
         private final int informations;
+        private final int hints;
         private final Instant timestamp;
         
         public DiagnosticRecord(String id, String uri, int total, int errors,
-                               int warnings, int informations, Instant timestamp) {
+                               int warnings, int informations, int hints, Instant timestamp) {
             this.id = id;
             this.uri = uri;
             this.total = total;
             this.errors = errors;
             this.warnings = warnings;
             this.informations = informations;
+            this.hints = hints;
             this.timestamp = timestamp;
         }
         
-        public String getId() {
-            return id;
-        }
-        
-        public String getUri() {
-            return uri;
-        }
-        
-        public int getTotal() {
-            return total;
-        }
-        
-        public int getErrors() {
-            return errors;
-        }
-        
-        public int getWarnings() {
-            return warnings;
-        }
-        
-        public int getInformations() {
-            return informations;
-        }
-        
-        public Instant getTimestamp() {
-            return timestamp;
-        }
+        public String getId() { return id; }
+        public String getUri() { return uri; }
+        public int getTotal() { return total; }
+        public int getErrors() { return errors; }
+        public int getWarnings() { return warnings; }
+        public int getInformations() { return informations; }
+        public int getHints() { return hints; }
+        public Instant getTimestamp() { return timestamp; }
     }
     
     /**
@@ -427,9 +568,7 @@ public class LspDiagnosticRegistry {
             this.value = value;
         }
         
-        public int getValue() {
-            return value;
-        }
+        public int getValue() { return value; }
         
         public static LspDiagnosticSeverity fromValue(int value) {
             for (LspDiagnosticSeverity severity : values()) {
@@ -445,39 +584,44 @@ public class LspDiagnosticRegistry {
      * LSP 诊断类
      */
     public static class LspDiagnostic {
+        private final String id;
         private final LspDiagnosticSeverity severity;
         private final LspRange range;
         private final String message;
         private final String source;
         private final String code;
+        private final List<QuickFix> quickFixes;
         
         public LspDiagnostic(LspDiagnosticSeverity severity, LspRange range,
                             String message, String source, String code) {
+            this(UUID.randomUUID().toString(), severity, range, message, source, code);
+        }
+        
+        public LspDiagnostic(String id, LspDiagnosticSeverity severity, LspRange range,
+                            String message, String source, String code) {
+            this.id = id;
             this.severity = severity;
             this.range = range;
             this.message = message;
             this.source = source;
             this.code = code;
+            this.quickFixes = new ArrayList<>();
         }
         
-        public LspDiagnosticSeverity getSeverity() {
-            return severity;
+        public String getId() { return id; }
+        public LspDiagnosticSeverity getSeverity() { return severity; }
+        public LspRange getRange() { return range; }
+        public String getMessage() { return message; }
+        public String getSource() { return source; }
+        public String getCode() { return code; }
+        public List<QuickFix> getQuickFixes() { return quickFixes; }
+        
+        public void addQuickFix(QuickFix quickFix) {
+            quickFixes.add(quickFix);
         }
         
-        public LspRange getRange() {
-            return range;
-        }
-        
-        public String getMessage() {
-            return message;
-        }
-        
-        public String getSource() {
-            return source;
-        }
-        
-        public String getCode() {
-            return code;
+        public boolean hasQuickFixes() {
+            return !quickFixes.isEmpty();
         }
         
         /**
@@ -486,10 +630,49 @@ public class LspDiagnosticRegistry {
         public boolean isSameAs(LspDiagnostic other) {
             if (other == null) return false;
             return this.severity == other.severity &&
-                   this.range != null && this.range.equals(other.range) &&
+                   Objects.equals(this.range, other.range) &&
                    Objects.equals(this.message, other.message) &&
-                   Objects.equals(this.source, other.source);
+                   Objects.equals(this.source, other.source) &&
+                   Objects.equals(this.code, other.code);
         }
+        
+        @Override
+        public String toString() {
+            return String.format("[%s] %s: %s", severity, source, message);
+        }
+    }
+    
+    /**
+     * 快速修复类
+     */
+    public static class QuickFix {
+        private final String id;
+        private final String title;
+        private final String kind;
+        private final List<LspTextEdit> edits;
+        private final boolean isPreferred;
+        private final String diagnosticId;
+        
+        public QuickFix(String title, String kind, List<LspTextEdit> edits) {
+            this(UUID.randomUUID().toString(), title, kind, edits, false, null);
+        }
+        
+        public QuickFix(String id, String title, String kind, List<LspTextEdit> edits,
+                       boolean isPreferred, String diagnosticId) {
+            this.id = id;
+            this.title = title;
+            this.kind = kind;
+            this.edits = edits != null ? edits : new ArrayList<>();
+            this.isPreferred = isPreferred;
+            this.diagnosticId = diagnosticId;
+        }
+        
+        public String getId() { return id; }
+        public String getTitle() { return title; }
+        public String getKind() { return kind; }
+        public List<LspTextEdit> getEdits() { return edits; }
+        public boolean isPreferred() { return isPreferred; }
+        public String getDiagnosticId() { return diagnosticId; }
     }
     
     /**
@@ -504,12 +687,23 @@ public class LspDiagnosticRegistry {
             this.end = end;
         }
         
-        public LspPosition getStart() {
-            return start;
-        }
+        public LspPosition getStart() { return start; }
+        public LspPosition getEnd() { return end; }
         
-        public LspPosition getEnd() {
-            return end;
+        /**
+         * 检查位置是否在范围内
+         */
+        public boolean contains(int line, int column) {
+            if (line < start.getLine() || line > end.getLine()) {
+                return false;
+            }
+            if (line == start.getLine() && column < start.getCharacter()) {
+                return false;
+            }
+            if (line == end.getLine() && column > end.getCharacter()) {
+                return false;
+            }
+            return true;
         }
         
         @Override
@@ -525,6 +719,13 @@ public class LspDiagnosticRegistry {
         public int hashCode() {
             return Objects.hash(start, end);
         }
+        
+        @Override
+        public String toString() {
+            return String.format("[%d:%d - %d:%d]", 
+                start.getLine(), start.getCharacter(),
+                end.getLine(), end.getCharacter());
+        }
     }
     
     /**
@@ -539,13 +740,8 @@ public class LspDiagnosticRegistry {
             this.character = character;
         }
         
-        public int getLine() {
-            return line;
-        }
-        
-        public int getCharacter() {
-            return character;
-        }
+        public int getLine() { return line; }
+        public int getCharacter() { return character; }
         
         @Override
         public boolean equals(Object o) {

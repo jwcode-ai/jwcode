@@ -210,6 +210,7 @@ public class ToolRegistry {
         registry.register(new ScheduleCronTool());
         registry.register(new TeamCreateTool());
         registry.register(new TeamDeleteTool());
+        registry.register(new TeamListTool());
         registry.register(new SendMessageTool());
         registry.register(new TaskCreateTool());
         registry.register(new TaskGetTool());
@@ -219,6 +220,7 @@ public class ToolRegistry {
         registry.register(new MultiPlanTool());
         registry.register(new EnterWorktreeTool());
         registry.register(new ExitWorktreeTool());
+        registry.register(new WorktreeListTool());
         registry.register(new SyntheticOutputTool());
         registry.register(new McpAuthTool());
         

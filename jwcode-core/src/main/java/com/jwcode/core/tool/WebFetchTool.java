@@ -3,6 +3,8 @@ package com.jwcode.core.tool;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jwcode.core.search.ContentExtractor;
+import com.jwcode.core.search.HtmlParser;
 import com.jwcode.core.tool.context.ToolExecutionContext;
 
 import java.io.BufferedReader;
@@ -13,13 +15,16 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
-import java.util.regex.Pattern;
 
 /**
- * WebFetch 工具 - 获取网页内容（重构后）
+ * WebFetch 工具 - 获取网页内容（增强版）
  * 
  * 支持抓取指定 URL 的网页文本内容
- * 自动提取正文、标题和元数据
+ * 使用 HtmlParser 和 ContentExtractor 智能提取正文
+ * 支持 User-Agent 设置、超时配置、跟随重定向
+ * 
+ * @author JWCode Team
+ * @since 1.0.0
  */
 public class WebFetchTool implements Tool<WebFetchTool.Input, WebFetchTool.Output, WebFetchTool.Progress> {
     
@@ -29,6 +34,28 @@ public class WebFetchTool implements Tool<WebFetchTool.Input, WebFetchTool.Outpu
     // 最大内容长度限制
     private static final int MAX_CONTENT_LENGTH = 100000; // 100KB
     
+    // 默认配置
+    private static final String DEFAULT_USER_AGENT = 
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+    private static final int DEFAULT_CONNECT_TIMEOUT = 15000;
+    private static final int DEFAULT_READ_TIMEOUT = 15000;
+    
+    // HTML 解析器和内容提取器
+    private final HtmlParser htmlParser;
+    private final ContentExtractor contentExtractor;
+    
+    // 配置
+    private String userAgent = DEFAULT_USER_AGENT;
+    private int connectTimeout = DEFAULT_CONNECT_TIMEOUT;
+    private int readTimeout = DEFAULT_READ_TIMEOUT;
+    private boolean followRedirects = true;
+    
+    public WebFetchTool() {
+        this.htmlParser = null; // 延迟初始化
+        this.contentExtractor = new ContentExtractor();
+    }
+    
     @Override
     public String getName() {
         return "WebFetch";
@@ -36,7 +63,7 @@ public class WebFetchTool implements Tool<WebFetchTool.Input, WebFetchTool.Outpu
     
     @Override
     public String getDescription() {
-        return "获取网页内容。用于抓取指定 URL 的网页文本内容。";
+        return "获取网页内容。用于抓取指定 URL 的网页文本内容，自动提取正文、标题和元数据。";
     }
     
     @Override
@@ -47,15 +74,17 @@ public class WebFetchTool implements Tool<WebFetchTool.Input, WebFetchTool.Outpu
                参数:
                - url: 要获取的网页 URL（必需）
                - max_length: 最大内容长度（可选，默认 50000 字符）
+               - extract_article: 是否智能提取文章正文（可选，默认 true）
                
                示例:
                - {"url": "https://docs.oracle.com/javase/21/docs/api/"}
                - {"url": "https://github.com/spring-projects/spring-boot/releases", "max_length": 10000}
+               - {"url": "https://example.com/article", "extract_article": true}
                
                注意:
                - URL 必须是完整的，包含协议（http:// 或 https://）
                - 某些网站可能会阻止抓取
-               - 返回的是网页的文本内容，已去除 HTML 标签
+               - 返回的是网页的文本内容，已去除 HTML 标签和广告
                """;
     }
     
@@ -67,7 +96,8 @@ public class WebFetchTool implements Tool<WebFetchTool.Input, WebFetchTool.Outpu
                     "type": "object",
                     "properties": {
                         "url": {"type": "string", "description": "要获取的网页 URL（包含 http:// 或 https://）"},
-                        "max_length": {"type": "integer", "description": "最大内容长度", "default": 50000}
+                        "max_length": {"type": "integer", "description": "最大内容长度", "default": 50000},
+                        "extract_article": {"type": "boolean", "description": "是否智能提取文章正文", "default": true}
                     },
                     "required": ["url"]
                 }
@@ -110,8 +140,10 @@ public class WebFetchTool implements Tool<WebFetchTool.Input, WebFetchTool.Outpu
                     maxLength = MAX_CONTENT_LENGTH;
                 }
                 
+                boolean extractArticle = input.extract_article != null ? input.extract_article : true;
+                
                 // 获取网页内容
-                FetchResult result = fetchWebPage(input.url, maxLength);
+                FetchResult result = fetchWebPage(input.url, maxLength, extractArticle);
                 
                 Output output = new Output();
                 output.success = true;
@@ -119,6 +151,7 @@ public class WebFetchTool implements Tool<WebFetchTool.Input, WebFetchTool.Outpu
                 output.title = result.title;
                 output.content = result.content;
                 output.content_type = result.contentType;
+                output.metadata = result.metadata;
                 
                 return ToolResult.success(output);
                 
@@ -139,20 +172,14 @@ public class WebFetchTool implements Tool<WebFetchTool.Input, WebFetchTool.Outpu
     /**
      * 获取网页内容
      */
-    private FetchResult fetchWebPage(String urlString, int maxLength) throws Exception {
+    private FetchResult fetchWebPage(String urlString, int maxLength, boolean extractArticle) throws Exception {
         FetchResult result = new FetchResult();
         
         HttpURLConnection conn = null;
         try {
             URL url = new URL(urlString);
             conn = (HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("GET");
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-            conn.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
-            conn.setRequestProperty("Accept-Language", "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7");
-            conn.setConnectTimeout(15000);
-            conn.setReadTimeout(15000);
-            conn.setInstanceFollowRedirects(true);
+            setupConnection(conn);
             
             int responseCode = conn.getResponseCode();
             if (responseCode != 200) {
@@ -177,11 +204,25 @@ public class WebFetchTool implements Tool<WebFetchTool.Input, WebFetchTool.Outpu
             
             String html = content.toString();
             
-            // 提取标题
-            result.title = extractTitle(html);
+            // 使用 HtmlParser 解析
+            HtmlParser parser = new HtmlParser(html);
+            result.title = parser.extractTitle();
+            result.metadata = parser.extractMetadata();
             
             // 提取正文内容
-            result.content = extractTextContent(html, maxLength);
+            if (extractArticle) {
+                // 使用 ContentExtractor 智能提取
+                result.content = contentExtractor.extractArticle(html);
+            } else {
+                // 简单文本提取
+                result.content = parser.extractText();
+            }
+            
+            // 限制长度
+            if (result.content.length() > maxLength) {
+                result.content = result.content.substring(0, maxLength) + 
+                    "\n\n[内容已截断，原始长度: " + result.content.length() + " 字符]";
+            }
             
         } finally {
             if (conn != null) {
@@ -193,75 +234,44 @@ public class WebFetchTool implements Tool<WebFetchTool.Input, WebFetchTool.Outpu
     }
     
     /**
-     * 提取标题
+     * 配置 HTTP 连接
      */
-    private String extractTitle(String html) {
+    private void setupConnection(HttpURLConnection conn) {
         try {
-            // 尝试提取 <title> 标签内容
-            int titleStart = html.indexOf("<title>");
-            int titleEnd = html.indexOf("</title>");
-            if (titleStart != -1 && titleEnd != -1 && titleEnd > titleStart) {
-                return html.substring(titleStart + 7, titleEnd).trim();
-            }
-            
-            // 尝试提取 h1 标签
-            int h1Start = html.toLowerCase().indexOf("<h1");
-            if (h1Start != -1) {
-                int h1Close = html.indexOf(">", h1Start);
-                int h1End = html.toLowerCase().indexOf("</h1>", h1Close);
-                if (h1Close != -1 && h1End != -1) {
-                    String h1 = html.substring(h1Close + 1, h1End);
-                    return h1.replaceAll("<.*?>", "").trim();
-                }
-            }
-            
+            conn.setRequestMethod("GET");
+            conn.setRequestProperty("User-Agent", userAgent);
+            conn.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+            conn.setRequestProperty("Accept-Language", "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7");
+            conn.setRequestProperty("Accept-Encoding", "gzip, deflate");
+            conn.setRequestProperty("Connection", "keep-alive");
+            conn.setConnectTimeout(connectTimeout);
+            conn.setReadTimeout(readTimeout);
+            conn.setInstanceFollowRedirects(followRedirects);
         } catch (Exception e) {
-            logger.fine("提取标题失败: " + e.getMessage());
+            logger.warning("配置连接失败: " + e.getMessage());
         }
-        return "";
     }
     
     /**
-     * 提取正文内容（去除 HTML 标签）
+     * 设置 User-Agent
      */
-    private String extractTextContent(String html, int maxLength) {
-        try {
-            // 移除 script 和 style 标签及其内容
-            String text = html;
-            text = text.replaceAll("(?is)<script.*?>.*?</script>", "");
-            text = text.replaceAll("(?is)<style.*?>.*?</style>", "");
-            text = text.replaceAll("(?is)<nav.*?>.*?</nav>", "");
-            text = text.replaceAll("(?is)<header.*?>.*?</header>", "");
-            text = text.replaceAll("(?is)<footer.*?>.*?</footer>", "");
-            
-            // 移除 HTML 标签
-            text = text.replaceAll("<.*?>", " ");
-            
-            // 解码 HTML 实体
-            text = text.replace("&nbsp;", " ");
-            text = text.replace("&lt;", "<");
-            text = text.replace("&gt;", ">");
-            text = text.replace("&amp;", "&");
-            text = text.replace("&quot;", "\"");
-            text = text.replace("&#39;", "'");
-            
-            // 规范化空白
-            text = text.replaceAll("\\s+", " ");
-            
-            // 去除首尾空白
-            text = text.trim();
-            
-            // 限制长度
-            if (text.length() > maxLength) {
-                text = text.substring(0, maxLength) + "\n\n[内容已截断，原始长度: " + text.length() + " 字符]";
-            }
-            
-            return text;
-            
-        } catch (Exception e) {
-            logger.warning("提取正文失败: " + e.getMessage());
-            return "[无法提取正文内容]";
-        }
+    public void setUserAgent(String userAgent) {
+        this.userAgent = userAgent != null ? userAgent : DEFAULT_USER_AGENT;
+    }
+    
+    /**
+     * 设置超时
+     */
+    public void setTimeout(int timeoutMs) {
+        this.connectTimeout = timeoutMs;
+        this.readTimeout = timeoutMs;
+    }
+    
+    /**
+     * 设置是否跟随重定向
+     */
+    public void setFollowRedirects(boolean follow) {
+        this.followRedirects = follow;
     }
     
     @Override
@@ -298,6 +308,7 @@ public class WebFetchTool implements Tool<WebFetchTool.Input, WebFetchTool.Outpu
         String title;
         String content;
         String contentType;
+        java.util.Map<String, String> metadata;
     }
     
     /**
@@ -306,11 +317,17 @@ public class WebFetchTool implements Tool<WebFetchTool.Input, WebFetchTool.Outpu
     public static class Input {
         public String url;
         public Integer max_length;
+        public Boolean extract_article;
         
         public Input() {}
         
         public Input(String url) {
             this.url = url;
+        }
+        
+        public Input(String url, Integer max_length) {
+            this.url = url;
+            this.max_length = max_length;
         }
     }
     
@@ -323,6 +340,7 @@ public class WebFetchTool implements Tool<WebFetchTool.Input, WebFetchTool.Outpu
         public String title;
         public String content;
         public String content_type;
+        public java.util.Map<String, String> metadata;
         
         public Output() {}
     }

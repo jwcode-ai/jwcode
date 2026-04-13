@@ -1,5 +1,9 @@
 package com.jwcode.core.session;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.jwcode.common.util.Preconditions;
 
 import java.io.IOException;
@@ -9,6 +13,9 @@ import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Stream;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * SessionManager - 会话管理器
@@ -27,7 +34,14 @@ import java.util.stream.Stream;
  */
 public class SessionManager {
     
+    private static final Logger logger = LoggerFactory.getLogger(SessionManager.class);
     private static final String SESSIONS_DIR = ".jwcode/sessions";
+    private static final String SESSION_EXTENSION = ".json";
+    
+    private static final ObjectMapper objectMapper = new ObjectMapper()
+            .registerModule(new JavaTimeModule())
+            .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
+            .enable(SerializationFeature.INDENT_OUTPUT);
     
     /**
      * 内存中的会话缓存
@@ -43,6 +57,21 @@ public class SessionManager {
      * 会话存储目录
      */
     private final Path sessionsDir;
+    
+    /**
+     * 单例实例
+     */
+    private static SessionManager instance;
+    
+    /**
+     * 获取单例实例
+     */
+    public static synchronized SessionManager getInstance() {
+        if (instance == null) {
+            instance = new SessionManager();
+        }
+        return instance;
+    }
     
     /**
      * 构造函数
@@ -70,6 +99,7 @@ public class SessionManager {
         try {
             if (!Files.exists(sessionsDir)) {
                 Files.createDirectories(sessionsDir);
+                logger.info("Created sessions directory: {}", sessionsDir);
             }
         } catch (IOException e) {
             throw new RuntimeException("Failed to create sessions directory", e);
@@ -88,7 +118,17 @@ public class SessionManager {
         sessions.put(sessionId, session);
         activeSessionId = sessionId;
         saveSession(session);
+        logger.info("Created new session: {}", sessionId);
         return session;
+    }
+    
+    /**
+     * 创建新会话（使用默认工作目录）
+     * 
+     * @return 新创建的会话
+     */
+    public Session createSession() {
+        return createSession(System.getProperty("user.dir"));
     }
     
     /**
@@ -98,22 +138,28 @@ public class SessionManager {
      * @return 会话，如果不存在则返回 null
      */
     public Session loadSession(String sessionId) {
+        // 首先检查内存缓存
         if (sessions.containsKey(sessionId)) {
             return sessions.get(sessionId);
         }
         
-        Path sessionFile = sessionsDir.resolve(sessionId + ".json");
+        // 从文件加载
+        Path sessionFile = sessionsDir.resolve(sessionId + SESSION_EXTENSION);
         if (!Files.exists(sessionFile)) {
+            logger.warn("Session file not found: {}", sessionFile);
             return null;
         }
         
         try {
             String content = Files.readString(sessionFile);
-            // TODO: 实现 JSON 反序列化
-            Session session = Session.fromMap(new HashMap<>());
+            // 使用 Map 方式反序列化，因为 Message 是抽象类
+            Map<String, Object> map = objectMapper.readValue(content, new TypeReference<Map<String, Object>>() {});
+            Session session = Session.fromMap(map);
             sessions.put(sessionId, session);
+            logger.info("Loaded session from file: {}", sessionId);
             return session;
         } catch (IOException e) {
+            logger.error("Failed to load session: {}", sessionId, e);
             throw new RuntimeException("Failed to load session: " + sessionId, e);
         }
     }
@@ -126,14 +172,27 @@ public class SessionManager {
     public void saveSession(Session session) {
         Preconditions.checkNotNull(session, "session cannot be null");
         
-        Path sessionFile = sessionsDir.resolve(session.getId() + ".json");
+        Path sessionFile = sessionsDir.resolve(session.getId() + SESSION_EXTENSION);
         try {
-            // TODO: 实现 JSON 序列化
-            String content = session.toMap().toString();
-            Files.writeString(sessionFile, content);
+            // 使用 Map 方式序列化，因为 Message 是抽象类
+            Map<String, Object> map = session.toMap();
+            String json = objectMapper.writeValueAsString(map);
+            Files.writeString(sessionFile, json);
+            logger.debug("Saved session: {}", session.getId());
         } catch (IOException e) {
+            logger.error("Failed to save session: {}", session.getId(), e);
             throw new RuntimeException("Failed to save session: " + session.getId(), e);
         }
+    }
+    
+    /**
+     * 保存所有会话
+     */
+    public void saveAllSessions() {
+        for (Session session : sessions.values()) {
+            saveSession(session);
+        }
+        logger.info("Saved all sessions ({} total)", sessions.size());
     }
     
     /**
@@ -145,11 +204,18 @@ public class SessionManager {
     public boolean deleteSession(String sessionId) {
         Session removed = sessions.remove(sessionId);
         if (removed != null) {
-            Path sessionFile = sessionsDir.resolve(sessionId + ".json");
+            Path sessionFile = sessionsDir.resolve(sessionId + SESSION_EXTENSION);
             try {
                 Files.deleteIfExists(sessionFile);
+                logger.info("Deleted session: {}", sessionId);
+                
+                // 如果删除的是当前活动会话，清空活动会话
+                if (sessionId.equals(activeSessionId)) {
+                    activeSessionId = null;
+                }
                 return true;
             } catch (IOException e) {
+                logger.error("Failed to delete session file: {}", sessionId, e);
                 throw new RuntimeException("Failed to delete session: " + sessionId, e);
             }
         }
@@ -198,9 +264,14 @@ public class SessionManager {
      */
     public SessionManager setActiveSession(String sessionId) {
         if (!sessions.containsKey(sessionId)) {
-            throw new IllegalArgumentException("Session not found: " + sessionId);
+            // 尝试从文件加载
+            Session session = loadSession(sessionId);
+            if (session == null) {
+                throw new IllegalArgumentException("Session not found: " + sessionId);
+            }
         }
         this.activeSessionId = sessionId;
+        logger.info("Set active session: {}", sessionId);
         return this;
     }
     
@@ -220,16 +291,17 @@ public class SessionManager {
         }
         
         try (Stream<Path> paths = Files.walk(sessionsDir)) {
-            paths.filter(p -> p.toString().endsWith(".json"))
+            paths.filter(p -> p.toString().endsWith(SESSION_EXTENSION))
                  .forEach(path -> {
                      String sessionId = path.getFileName().toString()
-                             .replace(".json", "");
+                             .replace(SESSION_EXTENSION, "");
                      try {
                          loadSession(sessionId);
                      } catch (Exception e) {
-                         System.err.println("Failed to load session: " + sessionId);
+                         logger.error("Failed to load session: {}", sessionId, e);
                      }
                  });
+            logger.info("Loaded {} sessions from {}", sessions.size(), sessionsDir);
         } catch (IOException e) {
             throw new RuntimeException("Failed to load sessions", e);
         }
@@ -265,6 +337,44 @@ public class SessionManager {
             deleteSession(sessionId);
         }
         
+        logger.info("Cleaned up {} old sessions", toRemove.size());
         return toRemove.size();
+    }
+    
+    /**
+     * 检查会话是否存在
+     * 
+     * @param sessionId 会话 ID
+     * @return true 如果存在
+     */
+    public boolean hasSession(String sessionId) {
+        return sessions.containsKey(sessionId) || 
+               Files.exists(sessionsDir.resolve(sessionId + SESSION_EXTENSION));
+    }
+    
+    /**
+     * 获取或创建会话
+     * 
+     * @param sessionId 会话 ID
+     * @return 会话
+     */
+    public Session getOrCreateSession(String sessionId) {
+        Session session = sessions.get(sessionId);
+        if (session == null) {
+            session = loadSession(sessionId);
+            if (session == null) {
+                session = new Session(sessionId, System.getProperty("user.dir"));
+                sessions.put(sessionId, session);
+                saveSession(session);
+            }
+        }
+        return session;
+    }
+    
+    /**
+     * 获取会话存储目录
+     */
+    public Path getSessionsDir() {
+        return sessionsDir;
     }
 }
