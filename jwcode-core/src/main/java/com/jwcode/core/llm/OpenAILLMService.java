@@ -230,6 +230,7 @@ public class OpenAILLMService implements LLMService {
         
         StringBuilder contentBuffer = new StringBuilder();
         StringBuilder thinkingBuffer = new StringBuilder();
+        StringBuilder reasoningBuffer = new StringBuilder();
         List<LLMMessage.ToolCall> toolCalls = new ArrayList<>();
         String finishReason = null;
         String responseModel = null;
@@ -299,6 +300,7 @@ public class OpenAILLMService implements LLMService {
                         if (reasoningContent != null && !reasoningContent.isNull()) {
                             String thinking = reasoningContent.asText();
                             thinkingBuffer.append(thinking);
+                            reasoningBuffer.append(thinking);
                             if (thinkingConsumer != null) {
                                 thinkingConsumer.accept(thinking);
                             }
@@ -345,6 +347,7 @@ public class OpenAILLMService implements LLMService {
         // 构建响应
         LLMResponse.Builder builder = LLMResponse.builder()
             .content(contentBuffer.toString())
+            .reasoningContent(reasoningBuffer.toString())
             .rawResponse(contentBuffer.toString());
         
         if (!toolCalls.isEmpty()) {
@@ -629,6 +632,13 @@ public class OpenAILLMService implements LLMService {
             } else {
                 builder.content("");
                 log.info("[OpenAI] No content in response");
+            }
+            
+            // 思考内容 (reasoning_content)
+            if (message.has("reasoning_content") && !message.get("reasoning_content").isNull()) {
+                String reasoningContent = message.get("reasoning_content").asText();
+                builder.reasoningContent(reasoningContent);
+                log.info("[OpenAI] Parsed reasoning_content length: " + reasoningContent.length());
             }
             
             // 工具调用

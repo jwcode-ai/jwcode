@@ -8,6 +8,7 @@ import java.util.List;
 public class LLMResponse {
     
     private String content;
+    private String reasoningContent;
     private List<LLMMessage.ToolCall> toolCalls;
     private String finishReason;
     private String model;
@@ -37,6 +38,9 @@ public class LLMResponse {
     // Getters and Setters
     public String getContent() { return content; }
     public void setContent(String content) { this.content = content; }
+    
+    public String getReasoningContent() { return reasoningContent; }
+    public void setReasoningContent(String reasoningContent) { this.reasoningContent = reasoningContent; }
     
     public List<LLMMessage.ToolCall> getToolCalls() { return toolCalls; }
     public void setToolCalls(List<LLMMessage.ToolCall> toolCalls) { this.toolCalls = toolCalls; }
@@ -76,7 +80,7 @@ public class LLMResponse {
     
     public LLMMessage toAssistantMessage() {
         if (hasToolCalls()) {
-            return LLMMessage.assistantWithTools(content, toolCalls);
+            return LLMMessage.assistantWithTools(content, toolCalls, reasoningContent);
         }
         return LLMMessage.assistant(content);
     }
@@ -89,6 +93,7 @@ public class LLMResponse {
     
     public static class Builder {
         private String content;
+        private String reasoningContent;
         private List<LLMMessage.ToolCall> toolCalls;
         private String finishReason;
         private String model;
@@ -100,6 +105,11 @@ public class LLMResponse {
         
         public Builder content(String content) {
             this.content = content;
+            return this;
+        }
+        
+        public Builder reasoningContent(String reasoningContent) {
+            this.reasoningContent = reasoningContent;
             return this;
         }
         
@@ -146,6 +156,7 @@ public class LLMResponse {
         public LLMResponse build() {
             LLMResponse response = new LLMResponse();
             response.content = this.content;
+            response.reasoningContent = this.reasoningContent;
             response.toolCalls = this.toolCalls;
             response.finishReason = this.finishReason;
             response.model = this.model;

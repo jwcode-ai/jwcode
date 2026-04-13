@@ -22,17 +22,23 @@ public abstract class Message {
     private final List<ContentBlock> content;
     private final Instant timestamp;
     private final List<ToolCallInfo> toolCalls; // 保留 tool_calls 信息用于 API 请求
+    private final String reasoningContent; // 保留 reasoning_content 用于 thinking 模式
     
     protected Message(String id, Role role, List<ContentBlock> content) {
-        this(id, role, content, null);
+        this(id, role, content, null, null);
     }
     
     protected Message(String id, Role role, List<ContentBlock> content, List<ToolCallInfo> toolCalls) {
+        this(id, role, content, toolCalls, null);
+    }
+    
+    protected Message(String id, Role role, List<ContentBlock> content, List<ToolCallInfo> toolCalls, String reasoningContent) {
         this.id = id != null ? id : UUID.randomUUID().toString();
         this.role = role;
         this.content = content;
         this.timestamp = Instant.now();
         this.toolCalls = toolCalls;
+        this.reasoningContent = reasoningContent;
     }
     
     public String getId() { return id; }
@@ -41,6 +47,7 @@ public abstract class Message {
     public Instant getTimestamp() { return timestamp; }
     public List<ToolCallInfo> getToolCalls() { return toolCalls; }
     public boolean hasToolCalls() { return toolCalls != null && !toolCalls.isEmpty(); }
+    public String getReasoningContent() { return reasoningContent; }
     
     /**
      * 获取消息的文本内容
@@ -112,21 +119,54 @@ public abstract class Message {
         return new Message(null, Role.TOOL, Arrays.asList(new ToolResultContent(toolUseId, toolName, result))) {};
     }
     
+    /**
+     * 创建工具结果消息（包含输入参数）
+     * @param toolUseId 工具调用ID
+     * @param toolName 工具名称
+     * @param inputArguments 工具输入参数（JSON格式）
+     * @param result 工具执行结果
+     */
+    public static Message createToolResultMessage(String toolUseId, String toolName, String inputArguments, Object result) {
+        return new Message(null, Role.TOOL, Arrays.asList(new ToolResultContent(toolUseId, toolName, inputArguments, result))) {};
+    }
+    
     public static class ToolResultContent extends ContentBlock {
         private final String toolUseId;
         private final String toolName;
+        private final String inputArguments;  // 新增：工具输入参数
         private final Object result;
         
-        public ToolResultContent(String toolUseId, String toolName, Object result) {
+        public ToolResultContent(String toolUseId, String toolName, String inputArguments, Object result) {
             super(ContentType.TOOL_RESULT);
             this.toolUseId = toolUseId;
             this.toolName = toolName;
+            this.inputArguments = inputArguments;
             this.result = result;
+        }
+        
+        // 兼容旧版本的构造方法
+        public ToolResultContent(String toolUseId, String toolName, Object result) {
+            this(toolUseId, toolName, null, result);
         }
         
         public String getToolUseId() { return toolUseId; }
         public String getToolName() { return toolName; }
+        public String getInputArguments() { return inputArguments; }
         public Object getResult() { return result; }
+        
+        /**
+         * 获取格式化的完整内容，包含输入和输出
+         * 格式：工具: xxx\n输入参数: {json}\n执行结果: {result}
+         */
+        public String getFormattedContent() {
+            StringBuilder sb = new StringBuilder();
+            sb.append("工具: ").append(toolName);
+            if (inputArguments != null && !inputArguments.isEmpty()) {
+                sb.append("\n输入参数: ").append(inputArguments);
+            }
+            sb.append("\n执行结果: ").append(result != null ? result.toString() : "null");
+            return sb.toString();
+        }
     }
     
     /**
@@ -157,9 +197,13 @@ public abstract class Message {
      * 因为某些 API（如 Moonshot/Kimi）要求 assistant 消息必须有 content 字段
      */
     public static Message createAssistantMessageWithToolCalls(String content, List<ToolCallInfo> toolCalls) {
+        return createAssistantMessageWithToolCalls(content, toolCalls, null);
+    }
+    
+    public static Message createAssistantMessageWithToolCalls(String content, List<ToolCallInfo> toolCalls, String reasoningContent) {
         List<ContentBlock> blocks = new ArrayList<>();
         // 必须添加 content，即使是空字符串
         blocks.add(new TextContent(content != null ? content : ""));
-        return new Message(null, Role.ASSISTANT, blocks, toolCalls) {};
+        return new Message(null, Role.ASSISTANT, blocks, toolCalls, reasoningContent) {};
     }
 }

@@ -7,6 +7,7 @@ import com.jwcode.cli.log.CliLogger;
 import com.jwcode.core.agent.AgentRegistry;
 import com.jwcode.core.agent.parallel.ParallelAgentExecutor;
 import com.jwcode.core.agent.parallel.ParallelExecutionContext;
+import com.jwcode.core.agent.parallel.ParallelExecutionResult;
 import com.jwcode.core.agent.parallel.SubAgentResult;
 import com.jwcode.core.agent.parallel.SubAgentTask;
 import com.jwcode.core.session.Session;
@@ -82,7 +83,7 @@ public class ParallelCmd implements Command {
         output.append("\n");
         
         // 创建执行器
-        ParallelAgentExecutor executor = new ParallelAgentExecutor(registry, 4);
+        ParallelAgentExecutor executor = new ParallelAgentExecutor(registry, null, 4);
         Session session = new Session(UUID.randomUUID().toString(), System.getProperty("user.dir"));
         
         // 创建 5 个独立任务
@@ -104,20 +105,18 @@ public class ParallelCmd implements Command {
         long startTime = System.currentTimeMillis();
         
         try {
-            ParallelExecutionContext ctx = executor.submitBatch(tasks, session);
-            ParallelExecutionContext.BatchResult result = ctx.awaitCompletion(30, TimeUnit.SECONDS)
-                .orElseThrow(() -> new RuntimeException("执行超时"));
+            ParallelExecutionResult result = executor.execute(tasks, session, 30000);
             
             long duration = System.currentTimeMillis() - startTime;
             
             output.append(CliLogger.GREEN + "✓ 执行完成!" + CliLogger.RESET).append("\n\n");
             output.append("统计:\n");
-            output.append(String.format("  总任务: %d%n", result.getTotalTasks()));
-            output.append(String.format("  成功: %d%n", result.getSuccessfulCount()));
-            output.append(String.format("  失败: %d%n", result.getFailedCount()));
+            output.append(String.format("  总任务: %d%n", result.getTotalCount()));
+            output.append(String.format("  成功: %d%n", result.getSuccessCount()));
+            output.append(String.format("  失败: %d%n", result.getFailureCount()));
             output.append(String.format("  成功率: %.1f%%%n", result.getSuccessRate()));
             output.append(String.format("  总耗时: %dms%n", duration));
-            output.append(String.format("  平均每个任务: %.1fms%n", (double) duration / result.getTotalTasks()));
+            output.append(String.format("  平均每个任务: %.1fms%n", (double) duration / result.getTotalCount()));
             
             output.append("\n详细结果:\n");
             for (SubAgentResult r : result.getResults()) {
@@ -148,7 +147,7 @@ public class ParallelCmd implements Command {
         output.append(CliLogger.CYAN + "╚════════════════════════════════════════════════════════╝" + CliLogger.RESET).append("\n");
         output.append("\n");
         
-        ParallelAgentExecutor executor = new ParallelAgentExecutor(registry, 4);
+        ParallelAgentExecutor executor = new ParallelAgentExecutor(registry, null, 4);
         Session session = new Session(UUID.randomUUID().toString(), System.getProperty("user.dir"));
         
         // 创建依赖链: A -> B -> C,  D -> E (C 和 E 都依赖完成后才执行 F)
@@ -205,7 +204,7 @@ public class ParallelCmd implements Command {
         long startTime = System.currentTimeMillis();
         
         try {
-            ParallelExecutionContext ctx = executor.submitBatch(tasks, session);
+            ParallelExecutionContext ctx = executor.executeWithDependencies(tasks, session);
             ParallelExecutionContext.BatchResult result = ctx.awaitCompletion(30, TimeUnit.SECONDS)
                 .orElseThrow(() -> new RuntimeException("执行超时"));
             
@@ -241,7 +240,7 @@ public class ParallelCmd implements Command {
             count = 50;
         }
         
-        ParallelAgentExecutor executor = new ParallelAgentExecutor(registry, 8);
+        ParallelAgentExecutor executor = new ParallelAgentExecutor(registry, null, 8);
         Session session = new Session(UUID.randomUUID().toString(), System.getProperty("user.dir"));
         
         // 创建大量任务
@@ -260,7 +259,7 @@ public class ParallelCmd implements Command {
         long startTime = System.currentTimeMillis();
         
         try {
-            ParallelExecutionContext ctx = executor.submitBatch(tasks, session);
+            ParallelExecutionContext ctx = executor.executeWithDependencies(tasks, session);
             
             // 显示进度
             while (ctx.getStatus() == ParallelExecutionContext.ExecutionStatus.RUNNING) {

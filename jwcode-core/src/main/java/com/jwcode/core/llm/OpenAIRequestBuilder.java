@@ -5,7 +5,9 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.logging.Logger;
 
 /**
@@ -48,6 +50,10 @@ public class OpenAIRequestBuilder {
         return this;
     }
     
+    // 用于汇总无效消息警告
+    private int invalidMessageCount = 0;
+    private String lastInvalidRole = null;
+    
     /**
      * 添加消息 - 自动处理消息顺序和验证
      */
@@ -55,12 +61,24 @@ public class OpenAIRequestBuilder {
         if (message == null) return this;
         
         if (!message.isValid()) {
-            logger.warning("[OpenAI] Skipping invalid message: role=" + message.getRole());
+            invalidMessageCount++;
+            lastInvalidRole = message.getRole().name();
             return this;
         }
         
         messages.add(message);
         return this;
+    }
+    
+    /**
+     * 获取无效消息统计（用于日志输出）
+     */
+    public String getInvalidMessageStats() {
+        if (invalidMessageCount == 0) {
+            return null;
+        }
+        return String.format("[OpenAI] Skipped %d invalid message(s), last role=%s", 
+            invalidMessageCount, lastInvalidRole);
     }
     
     /**
@@ -132,6 +150,12 @@ public class OpenAIRequestBuilder {
         
         logger.info("[OpenAI] Building request with " + validCount + " messages");
         
+        // 输出无效消息统计（如果有）
+        String invalidStats = getInvalidMessageStats();
+        if (invalidStats != null) {
+            logger.warning(invalidStats);
+        }
+        
         // 可选参数
         if (temperature != null) {
             body.put("temperature", temperature);
@@ -154,7 +178,10 @@ public class OpenAIRequestBuilder {
     }
     
     /**
-     * 处理消息列表 - 确保符合 OpenAI 规范
+     * 处理消息列表 - 智能截断，保留 tool_calls 上下文
+     * 
+     * 关键修复：TOOL 消息必须保留其对应的 ASSISTANT 消息（包含 tool_calls），
+     * 否则会导致 "tool_call_id is not found" 错误
      */
     private List<LLMMessage> processMessages(List<LLMMessage> originalMessages) {
         if (originalMessages.isEmpty()) {
@@ -180,14 +207,11 @@ public class OpenAIRequestBuilder {
             }
         }
         
-        // 3. 限制消息数量（保留系统消息 + 最近的消息）
+        // 3. 智能截断消息（保留 tool_calls 上下文）
         int keepCount = MAX_MESSAGES - (systemMsg != null ? 1 : 0);
         if (nonSystemMessages.size() > keepCount) {
-            logger.info("[OpenAI] Truncating messages from " + nonSystemMessages.size() + " to " + keepCount);
-            nonSystemMessages = nonSystemMessages.subList(
-                nonSystemMessages.size() - keepCount, 
-                nonSystemMessages.size()
-            );
+            logger.info("[OpenAI] Smart truncating messages from " + nonSystemMessages.size() + " to " + keepCount);
+            nonSystemMessages = smartTruncate(nonSystemMessages, keepCount);
         }
         
         // 4. 组装最终消息列表
@@ -200,6 +224,105 @@ public class OpenAIRequestBuilder {
         validateMessageSequence(result);
         
         return result;
+    }
+    
+    /**
+     * 智能截断消息列表 - 保留 tool_calls 上下文
+     * 
+     * 规则：
+     * 1. TOOL 消息必须保留其对应的 ASSISTANT 消息（包含 tool_calls）
+     * 2. 从后向前遍历，优先保留最近的消息
+     * 3. 超出限制时，丢弃最旧的消息（但保留必要的 tool_calls 上下文）
+     */
+    private List<LLMMessage> smartTruncate(List<LLMMessage> messages, int keepCount) {
+        if (messages.size() <= keepCount) {
+            return messages;
+        }
+        
+        // 收集所有需要保留的 tool_call_ids
+        Set<String> requiredToolCallIds = new HashSet<>();
+        
+        // 第一遍：从后向前收集所有 tool_call_ids
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            LLMMessage msg = messages.get(i);
+            if (msg.getRole() == LLMMessage.Role.ASSISTANT && msg.hasToolCalls()) {
+                for (LLMMessage.ToolCall tc : msg.getToolCalls()) {
+                    if (tc.getId() != null) {
+                        requiredToolCallIds.add(tc.getId());
+                    }
+                }
+            }
+        }
+        
+        // 第二遍：从后向前选择要保留的消息
+        List<LLMMessage> toKeep = new ArrayList<>();
+        Set<String> usedToolCallIds = new HashSet<>();
+        
+        for (int i = messages.size() - 1; i >= 0 && toKeep.size() < keepCount; i--) {
+            LLMMessage msg = messages.get(i);
+            
+            // ASSISTANT 消息：总是保留（可能包含 tool_calls）
+            if (msg.getRole() == LLMMessage.Role.ASSISTANT) {
+                toKeep.add(0, msg);
+                // 更新已使用的 tool_call_ids
+                if (msg.hasToolCalls()) {
+                    for (LLMMessage.ToolCall tc : msg.getToolCalls()) {
+                        if (tc.getId() != null) {
+                            usedToolCallIds.add(tc.getId());
+                        }
+                    }
+                }
+            }
+            // TOOL 消息：只保留有对应 ASSISTANT 的
+            else if (msg.getRole() == LLMMessage.Role.TOOL) {
+                String toolCallId = msg.getToolCallId();
+                if (toolCallId != null && usedToolCallIds.contains(toolCallId)) {
+                    toKeep.add(0, msg);
+                } else if (toolCallId == null || !requiredToolCallIds.contains(toolCallId)) {
+                    // 没有对应的 ASSISTANT 或不在需要列表中，跳过
+                    logger.fine("[OpenAI] Skipping orphaned TOOL message: " + toolCallId);
+                } else {
+                    // TOOL 有对应的 tool_call_id 但 ASSISTANT 还没添加
+                    // 先添加，后续循环会处理
+                    toKeep.add(0, msg);
+                }
+            }
+            // USER 消息：直接保留
+            else {
+                toKeep.add(0, msg);
+            }
+        }
+        
+        // 过滤掉孤立的 TOOL 消息（没有对应 ASSISTANT 的）
+        List<LLMMessage> filtered = new ArrayList<>();
+        usedToolCallIds.clear();
+        
+        for (LLMMessage msg : toKeep) {
+            if (msg.getRole() == LLMMessage.Role.ASSISTANT && msg.hasToolCalls()) {
+                filtered.add(msg);
+                for (LLMMessage.ToolCall tc : msg.getToolCalls()) {
+                    if (tc.getId() != null) {
+                        usedToolCallIds.add(tc.getId());
+                    }
+                }
+            } else if (msg.getRole() == LLMMessage.Role.TOOL) {
+                String toolCallId = msg.getToolCallId();
+                if (toolCallId != null && usedToolCallIds.contains(toolCallId)) {
+                    filtered.add(msg);
+                } else {
+                    logger.fine("[OpenAI] Removed orphaned TOOL message: " + toolCallId);
+                }
+            } else {
+                filtered.add(msg);
+            }
+        }
+        
+        int skipped = messages.size() - filtered.size();
+        if (skipped > 0) {
+            logger.info("[OpenAI] Smart truncate: kept " + filtered.size() + " messages, skipped " + skipped);
+        }
+        
+        return filtered;
     }
     
     /**

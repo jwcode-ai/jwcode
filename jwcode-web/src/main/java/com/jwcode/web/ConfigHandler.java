@@ -3,6 +3,7 @@ package com.jwcode.web;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jwcode.core.config.ConfigManager;
+import com.jwcode.core.config.ConfigScope;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 
@@ -104,11 +105,11 @@ public class ConfigHandler implements HttpHandler {
         
         // 用户配置
         ObjectNode userConfig = response.putObject("user");
-        configManager.getUserConfig().forEach(userConfig::put);
+        configManager.getAll(ConfigScope.USER).forEach(userConfig::put);
         
         // 项目配置
         ObjectNode projectConfig = response.putObject("project");
-        configManager.getProjectConfig().forEach(projectConfig::put);
+        configManager.getAll(ConfigScope.PROJECT).forEach(projectConfig::put);
         
         // 合并后的配置
         ObjectNode config = response.putObject("config");

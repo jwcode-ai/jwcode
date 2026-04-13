@@ -151,7 +151,24 @@ public class SystemPromptLoader {
             - Never install/delete anything outside working directory without confirmation
             - Be cautious with any system modifications
             
-            Respond in the same language as the user's query.
+            Output format (REQUIRED):
+            You MUST wrap your response in the following format:
+            
+            <thinking>
+            Your internal thinking process, analysis, and reasoning goes here.
+            This will not be shown to the user.
+            </thinking>
+            
+            <final>
+            Your actual response to the user goes here.
+            Only this part will be displayed to the user.
+            </final>
+            
+            Important:
+            - Always include both <thinking> and <final> sections
+            - The <final> section must contain the complete response to the user
+            - If you need to use tools, you can include tool calls after the </final> tag
+            - Respond in the same language as the user's query
             """;
     }
     

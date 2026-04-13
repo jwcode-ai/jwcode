@@ -2,6 +2,7 @@ package com.jwcode.core.llm;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jwcode.core.model.Message;
 import com.jwcode.core.session.Session;
 import com.jwcode.core.tool.*;
 import com.jwcode.core.tool.context.ToolExecutionContext;
@@ -9,6 +10,7 @@ import com.jwcode.core.tool.context.ToolExecutionContext;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -54,7 +56,7 @@ public class LLMQueryEngine {
         logger.info("[LLMQueryEngine] Query: " + prompt);
         
         // 添加用户消息到会话
-        session.addMessage(com.jwcode.core.model.Message.createUserMessage(prompt));
+        session.addMessage(Message.createUserMessage(prompt));
         
         // 开始对话循环
         return runConversationLoop(0);
@@ -114,12 +116,13 @@ public class LLMQueryEngine {
             (response.getContent() != null ? response.getContent().length() : 0));
         
         // 创建助手消息
-        com.jwcode.core.model.Message assistantMessage;
+        Message assistantMessage;
         if (response.hasToolCalls()) {
             // 有工具调用
-            assistantMessage = com.jwcode.core.model.Message.createAssistantMessageWithToolCalls(
+            assistantMessage = Message.createAssistantMessageWithToolCalls(
                 response.getContent(),
-                convertToolCalls(response.getToolCalls())
+                convertToolCalls(response.getToolCalls()),
+                response.getReasoningContent()
             );
             
             // 添加到会话
@@ -129,7 +132,7 @@ public class LLMQueryEngine {
             return executeToolCalls(response.getToolCalls(), iteration + 1);
         } else {
             // 没有工具调用，直接返回
-            assistantMessage = com.jwcode.core.model.Message.createAssistantMessage(
+            assistantMessage = Message.createAssistantMessage(
                 response.getContent()
             );
             session.addMessage(assistantMessage);
@@ -153,13 +156,18 @@ public class LLMQueryEngine {
             toolCallHistory.add(tc.getFunction().getName() + ":" + tc.getFunction().getArguments());
             
             // 查找并执行工具
-            com.jwcode.core.tool.Tool<?, ?, ?> tool = findTool(tc.getFunction().getName());
+            Tool<?, ?, ?> tool = findTool(tc.getFunction().getName());
             if (tool == null) {
                 logger.warning("[LLMQueryEngine] Tool not found: " + tc.getFunction().getName());
+                // 必须添加错误结果，否则 assistant 的 tool_calls 会缺少对应的 tool 消息
+                futures.add(CompletableFuture.completedFuture(
+                    new ToolExecutionResult(tc.getId(), tc.getFunction().getName(),
+                        tc.getFunction().getArguments(), "Error: Tool not found: " + tc.getFunction().getName())
+                ));
                 continue;
             }
             
-            // 异步执行工具
+            // 异步执行工具（传入输入参数）
             CompletableFuture<ToolExecutionResult> future = executeToolAsync(tool, tc);
             futures.add(future);
         }
@@ -172,13 +180,13 @@ public class LLMQueryEngine {
                     try {
                         ToolExecutionResult result = future.get();
                         
-                        // 添加工具结果消息
-                        com.jwcode.core.model.Message toolResultMsg = 
-                            com.jwcode.core.model.Message.createToolResultMessage(
-                                result.getToolCallId(),
-                                result.getToolName(),
-                                result.getResult()
-                            );
+                        // 添加工具结果消息（包含输入参数）
+                        Message toolResultMsg = Message.createToolResultMessage(
+                            result.getToolCallId(),
+                            result.getToolName(),
+                            result.getInputArguments(),  // 新增：传递输入参数
+                            result.getResult()
+                        );
                         session.addMessage(toolResultMsg);
                         
                     } catch (Exception e) {
@@ -195,22 +203,24 @@ public class LLMQueryEngine {
      * 异步执行工具
      */
     private CompletableFuture<ToolExecutionResult> executeToolAsync(
-            com.jwcode.core.tool.Tool<?, ?, ?> tool, 
+            Tool<?, ?, ?> tool, 
             LLMMessage.ToolCall tc) {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 String args = tc.getFunction().getArguments();
                 logger.info("[LLMQueryEngine] Executing tool: " + tc.getFunction().getName());
+                logger.info("[LLMQueryEngine] Tool input arguments: " + args);
                 
                 // TODO: 实际工具执行逻辑
                 String result = "Tool executed: " + tc.getFunction().getName();
                 
-                return new ToolExecutionResult(tc.getId(), tc.getFunction().getName(), result);
+                // 返回包含输入参数的结果
+                return new ToolExecutionResult(tc.getId(), tc.getFunction().getName(), args, result);
                 
             } catch (Exception e) {
                 logger.severe("[LLMQueryEngine] Tool execution failed: " + e.getMessage());
                 return new ToolExecutionResult(tc.getId(), tc.getFunction().getName(), 
-                    "Error: " + e.getMessage());
+                    tc.getFunction().getArguments(), "Error: " + e.getMessage());
             }
         });
     }
@@ -218,8 +228,8 @@ public class LLMQueryEngine {
     /**
      * 查找工具
      */
-    private com.jwcode.core.tool.Tool<?, ?, ?> findTool(String name) {
-        for (com.jwcode.core.tool.Tool<?, ?, ?> tool : toolExecutor.getEnabledTools()) {
+    private Tool<?, ?, ?> findTool(String name) {
+        for (Tool<?, ?, ?> tool : toolExecutor.getEnabledTools()) {
             if (tool.getName().equals(name)) {
                 return tool;
             }
@@ -233,7 +243,7 @@ public class LLMQueryEngine {
     private List<LLMMessage> convertSessionMessages(Session session) {
         List<LLMMessage> result = new ArrayList<>();
         
-        for (com.jwcode.core.model.Message msg : session.getMessages()) {
+        for (Message msg : session.getMessages()) {
             LLMMessage.Role role = convertRole(msg.getRole());
             
             if (role == null) continue;
@@ -258,7 +268,7 @@ public class LLMQueryEngine {
                 // 处理带有 tool_calls 的 assistant 消息
                 if (role == LLMMessage.Role.ASSISTANT && msg.hasToolCalls()) {
                     List<LLMMessage.ToolCall> toolCalls = convertToolCallInfoToLLM(msg.getToolCalls());
-                    LLMMessage llmMsg = LLMMessage.assistantWithTools(content, toolCalls);
+                    LLMMessage llmMsg = LLMMessage.assistantWithTools(content, toolCalls, msg.getReasoningContent());
                     result.add(llmMsg);
                 } else {
                     LLMMessage llmMsg = LLMMessage.builder()
@@ -276,29 +286,30 @@ public class LLMQueryEngine {
     /**
      * 从 TOOL 消息中提取 toolCallId
      */
-    private String extractToolCallId(com.jwcode.core.model.Message msg) {
+    private String extractToolCallId(Message msg) {
         if (msg.getContent() == null || msg.getContent().isEmpty()) {
             return null;
         }
-        for (com.jwcode.core.model.Message.ContentBlock block : msg.getContent()) {
-            if (block instanceof com.jwcode.core.model.Message.ToolResultContent) {
-                return ((com.jwcode.core.model.Message.ToolResultContent) block).getToolUseId();
+        for (Message.ContentBlock block : msg.getContent()) {
+            if (block instanceof Message.ToolResultContent) {
+                return ((Message.ToolResultContent) block).getToolUseId();
             }
         }
         return null;
     }
     
     /**
-     * 从 TOOL 消息中提取结果内容
+     * 从 TOOL 消息中提取结果内容（使用格式化的完整内容）
      */
-    private String extractToolResultContent(com.jwcode.core.model.Message msg) {
+    private String extractToolResultContent(Message msg) {
         if (msg.getContent() == null || msg.getContent().isEmpty()) {
             return "";
         }
-        for (com.jwcode.core.model.Message.ContentBlock block : msg.getContent()) {
-            if (block instanceof com.jwcode.core.model.Message.ToolResultContent) {
-                Object result = ((com.jwcode.core.model.Message.ToolResultContent) block).getResult();
-                return result != null ? result.toString() : "";
+        for (Message.ContentBlock block : msg.getContent()) {
+            if (block instanceof Message.ToolResultContent) {
+                Message.ToolResultContent trc = (Message.ToolResultContent) block;
+                // 使用格式化方法，包含输入和输出
+                return trc.getFormattedContent();
             }
         }
         return msg.getTextContent();
@@ -308,9 +319,9 @@ public class LLMQueryEngine {
      * 转换 ToolCallInfo 到 LLM ToolCall
      */
     private List<LLMMessage.ToolCall> convertToolCallInfoToLLM(
-            List<com.jwcode.core.model.Message.ToolCallInfo> toolCalls) {
+            List<Message.ToolCallInfo> toolCalls) {
         List<LLMMessage.ToolCall> result = new ArrayList<>();
-        for (com.jwcode.core.model.Message.ToolCallInfo info : toolCalls) {
+        for (Message.ToolCallInfo info : toolCalls) {
             LLMMessage.ToolCall tc = LLMMessage.ToolCall.builder()
                 .id(info.getId())
                 .function(info.getName(), info.getArguments())
@@ -323,7 +334,7 @@ public class LLMQueryEngine {
     /**
      * 转换角色
      */
-    private LLMMessage.Role convertRole(com.jwcode.core.model.Message.Role role) {
+    private LLMMessage.Role convertRole(Message.Role role) {
         return switch (role) {
             case SYSTEM -> LLMMessage.Role.SYSTEM;
             case USER -> LLMMessage.Role.USER;
@@ -335,9 +346,9 @@ public class LLMQueryEngine {
     /**
      * 转换工具
      */
-    private List<LLMTool> convertTools(List<com.jwcode.core.tool.Tool<?, ?, ?>> tools) {
+    private List<LLMTool> convertTools(List<Tool<?, ?, ?>> tools) {
         List<LLMTool> result = new ArrayList<>();
-        for (com.jwcode.core.tool.Tool<?, ?, ?> tool : tools) {
+        for (Tool<?, ?, ?> tool : tools) {
             LLMTool llmTool = new LLMTool();
             llmTool.setType("function");
             
@@ -363,15 +374,14 @@ public class LLMQueryEngine {
     /**
      * 转换工具调用
      */
-    private List<com.jwcode.core.model.Message.ToolCallInfo> convertToolCalls(List<LLMMessage.ToolCall> toolCalls) {
-        List<com.jwcode.core.model.Message.ToolCallInfo> result = new ArrayList<>();
+    private List<Message.ToolCallInfo> convertToolCalls(List<LLMMessage.ToolCall> toolCalls) {
+        List<Message.ToolCallInfo> result = new ArrayList<>();
         for (LLMMessage.ToolCall tc : toolCalls) {
-            com.jwcode.core.model.Message.ToolCallInfo info = 
-                new com.jwcode.core.model.Message.ToolCallInfo(
-                    tc.getId(),
-                    tc.getFunction().getName(),
-                    tc.getFunction().getArguments()
-                );
+            Message.ToolCallInfo info = new Message.ToolCallInfo(
+                tc.getId(),
+                tc.getFunction().getName(),
+                tc.getFunction().getArguments()
+            );
             result.add(info);
         }
         return result;
@@ -380,7 +390,7 @@ public class LLMQueryEngine {
     // ==================== 数据类 ====================
     
     public static class EngineConfig {
-        private int maxIterations = 10;
+        private int maxIterations = 100;
         private Duration timeout = Duration.ofMinutes(5);
         
         public int getMaxIterations() { return maxIterations; }
@@ -396,20 +406,20 @@ public class LLMQueryEngine {
     
     public static class QueryResult {
         private final boolean success;
-        private final com.jwcode.core.model.Message message;
+        private final Message message;
         private final String errorMessage;
         
-        public QueryResult(boolean success, com.jwcode.core.model.Message message, String errorMessage) {
+        public QueryResult(boolean success, Message message, String errorMessage) {
             this.success = success;
             this.message = message;
             this.errorMessage = errorMessage;
         }
         
         public boolean isSuccess() { return success; }
-        public com.jwcode.core.model.Message getMessage() { return message; }
+        public Message getMessage() { return message; }
         public String getErrorMessage() { return errorMessage; }
         
-        public static QueryResult success(com.jwcode.core.model.Message message) {
+        public static QueryResult success(Message message) {
             return new QueryResult(true, message, null);
         }
         
@@ -418,19 +428,25 @@ public class LLMQueryEngine {
         }
     }
     
+    /**
+     * 工具执行结果（包含输入参数）
+     */
     private static class ToolExecutionResult {
         private final String toolCallId;
         private final String toolName;
+        private final String inputArguments;  // 新增：工具输入参数
         private final String result;
         
-        public ToolExecutionResult(String toolCallId, String toolName, String result) {
+        public ToolExecutionResult(String toolCallId, String toolName, String inputArguments, String result) {
             this.toolCallId = toolCallId;
             this.toolName = toolName;
+            this.inputArguments = inputArguments;
             this.result = result;
         }
         
         public String getToolCallId() { return toolCallId; }
         public String getToolName() { return toolName; }
+        public String getInputArguments() { return inputArguments; }
         public String getResult() { return result; }
     }
     

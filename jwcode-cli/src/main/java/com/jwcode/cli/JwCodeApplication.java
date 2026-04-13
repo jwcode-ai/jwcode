@@ -318,14 +318,15 @@ public class JwCodeApplication implements AutoCloseable {
      * 处理自然语言查询（带思考过程和工具调用显示）
      */
     private void handleNaturalLanguageQuery(String input) {
-        System.out.println("\n" + CliLogger.CYAN + "🤔 思考中..." + CliLogger.RESET);
+        System.out.print("\n" + CliLogger.CYAN + "🤔 思考中..." + CliLogger.RESET);
+        System.out.flush();
         
         try {
             // 使用 LLMQueryEngine 执行查询
             Session session = llmQueryEngine.getSession();
             session.addMessage(Message.createUserMessage(input));
             
-            // 开始对话循环（带思考过程显示）
+            // 开始对话循环
             runConversationWithThinking(0);
             
         } catch (Exception e) {
@@ -367,20 +368,11 @@ public class JwCodeApplication implements AutoCloseable {
             return;
         }
         
-        // 显示思考过程（如果存在）
+        // 获取内容并提取最终回复（<final> 标签内的内容）
         String content = response.getContent();
         if (content != null && !content.isEmpty()) {
-            // 检查是否有 <thinking> 标签
-            if (content.contains("<thinking>") || content.contains("【思考】")) {
-                String thinking = extractThinking(content);
-                if (!thinking.isEmpty()) {
-                    System.out.println(CliLogger.CYAN + "💭 思考过程:" + CliLogger.RESET);
-                    System.out.println(CliLogger.DIM + thinking + CliLogger.RESET);
-                    System.out.println();
-                }
-                // 移除思考部分，只保留回复
-                content = removeThinking(content);
-            }
+            // 提取 <final> 标签内的内容作为正式回复
+            content = extractFinalContent(content);
         }
         
         // 创建助手消息
@@ -396,7 +388,8 @@ public class JwCodeApplication implements AutoCloseable {
             
             assistantMessage = Message.createAssistantMessageWithToolCalls(
                 content,
-                convertToolCalls(response.getToolCalls())
+                convertToolCalls(response.getToolCalls()),
+                response.getReasoningContent()
             );
             session.addMessage(assistantMessage);
             
@@ -411,39 +404,44 @@ public class JwCodeApplication implements AutoCloseable {
             session.addMessage(assistantMessage);
             
             if (content != null && !content.isEmpty()) {
-                System.out.println(CliLogger.GREEN + "💬 回复:" + CliLogger.RESET);
+                // 清除"思考中..."提示并输出回复
+                System.out.println("\r" + CliLogger.GREEN + "💬 回复:" + CliLogger.RESET);
                 System.out.println(content);
             }
         }
     }
     
     /**
-     * 提取思考内容
+     * 提取最终回复内容（<final> 标签内的内容）
+     * 
+     * 如果 AI 遵循格式要求，返回 <final> 标签内的内容
+     * 如果没有 <final> 标签，返回原始内容（兼容旧格式）
      */
-    private String extractThinking(String content) {
-        // 提取 <thinking> 标签内容
-        if (content.contains("<thinking>")) {
-            int start = content.indexOf("<thinking>") + "<thinking>".length();
-            int end = content.indexOf("</thinking>");
+    private String extractFinalContent(String content) {
+        if (content == null || content.isEmpty()) {
+            return content;
+        }
+        
+        // 提取 <final> 标签内容
+        if (content.contains("<final>")) {
+            int start = content.indexOf("<final>") + "<final>".length();
+            int end = content.indexOf("</final>");
             if (end > start) {
                 return content.substring(start, end).trim();
             }
         }
-        // 提取 【思考】 标记内容
-        if (content.contains("【思考】")) {
-            int start = content.indexOf("【思考】") + "【思考】".length();
-            int end = content.indexOf("【/思考】");
-            if (end > start) {
-                return content.substring(start, end).trim();
-            }
-        }
-        return "";
+        
+        // 兼容旧格式：如果没有 <final> 标签，移除 <thinking> 后返回
+        return removeThinking(content);
     }
     
     /**
      * 移除思考部分
      */
     private String removeThinking(String content) {
+        if (content == null) {
+            return "";
+        }
         content = content.replaceAll("(?s)<thinking>.*?</thinking>", "");
         content = content.replaceAll("(?s)【思考】.*?【/思考】", "");
         return content.trim();
@@ -462,6 +460,9 @@ public class JwCodeApplication implements AutoCloseable {
             com.jwcode.core.tool.Tool<?, ?, ?> tool = findTool(toolName);
             if (tool == null) {
                 System.out.println(CliLogger.RED + "  ❌ 工具未找到: " + toolName + CliLogger.RESET);
+                // 必须添加错误结果，否则 assistant 的 tool_calls 会缺少对应的 tool 消息
+                session.addMessage(Message.createToolResultMessage(
+                    tc.getId(), toolName, "Error: Tool not found: " + toolName));
                 continue;
             }
             
@@ -523,44 +524,86 @@ public class JwCodeApplication implements AutoCloseable {
      */
     private List<LLMMessage> convertSessionMessages(Session session) {
         List<LLMMessage> result = new ArrayList<>();
-        List<Message> messages = session.getMessages();
         
-        // 限制消息数量，保留最近的消息（保留系统消息+最近19条）
-        final int MAX_MESSAGES = 20;
-        int startIndex = 0;
-        
-        // 始终保留第一条系统消息（如果有）
-        boolean hasSystemMessage = !messages.isEmpty() && messages.get(0).getRole() == Message.Role.SYSTEM;
-        if (hasSystemMessage && messages.size() > MAX_MESSAGES) {
-            startIndex = messages.size() - (MAX_MESSAGES - 1); // 为系统消息留一个位置
-        } else if (messages.size() > MAX_MESSAGES) {
-            startIndex = messages.size() - MAX_MESSAGES;
-        }
-        
-        // 添加系统消息（如果有且被裁剪了）
-        if (hasSystemMessage && startIndex > 0) {
-            Message sysMsg = messages.get(0);
-            LLMMessage.Role role = convertRole(sysMsg.getRole());
-            String content = sysMsg.getTextContent();
-            if (role != null && content != null) {
-                result.add(LLMMessage.builder().role(role).content(content).build());
-            }
-        }
-        
-        // 添加剩余消息
-        for (int i = startIndex; i < messages.size(); i++) {
-            Message msg = messages.get(i);
+        for (Message msg : session.getMessages()) {
             LLMMessage.Role role = convertRole(msg.getRole());
-            String content = msg.getTextContent();
             
-            // 跳过无效消息
-            if (role == null || content == null) {
-                continue;
+            if (role == null) continue;
+            
+            // 处理 TOOL 消息 - 需要提取 toolUseId
+            if (role == LLMMessage.Role.TOOL) {
+                String toolCallId = extractToolCallId(msg);
+                String content = extractToolResultContent(msg);
+                
+                if (toolCallId == null || toolCallId.isEmpty()) {
+                    System.err.println("[WARN] TOOL message missing toolCallId, skipping");
+                    continue;
+                }
+                
+                result.add(LLMMessage.tool(toolCallId, content));
+            } 
+            // 处理带有 tool_calls 的 assistant 消息
+            else if (role == LLMMessage.Role.ASSISTANT && msg.hasToolCalls()) {
+                List<LLMMessage.ToolCall> toolCalls = convertToolCallInfoToLLM(msg.getToolCalls());
+                result.add(LLMMessage.assistantWithTools(msg.getTextContent(), toolCalls, msg.getReasoningContent()));
+            } 
+            // 处理其他消息类型
+            else {
+                String content = msg.getTextContent();
+                if (content == null) content = "";
+                result.add(LLMMessage.builder()
+                    .role(role)
+                    .content(content)
+                    .build());
             }
-            
-            result.add(LLMMessage.builder().role(role).content(content).build());
         }
         
+        return result;
+    }
+    
+    /**
+     * 从 TOOL 消息中提取 toolCallId
+     */
+    private String extractToolCallId(Message msg) {
+        if (msg.getContent() == null || msg.getContent().isEmpty()) {
+            return null;
+        }
+        
+        for (Message.ContentBlock block : msg.getContent()) {
+            if (block instanceof Message.ToolResultContent) {
+                return ((Message.ToolResultContent) block).getToolUseId();
+            }
+        }
+        return null;
+    }
+    
+    /**
+     * 从 TOOL 消息中提取结果内容
+     */
+    private String extractToolResultContent(Message msg) {
+        if (msg.getContent() == null || msg.getContent().isEmpty()) {
+            return msg.getTextContent() != null ? msg.getTextContent() : "";
+        }
+        
+        for (Message.ContentBlock block : msg.getContent()) {
+            if (block instanceof Message.ToolResultContent) {
+                return ((Message.ToolResultContent) block).getFormattedContent();
+            }
+        }
+        return msg.getTextContent() != null ? msg.getTextContent() : "";
+    }
+    
+    /**
+     * 转换 ToolCallInfo 到 LLM ToolCall
+     */
+    private List<LLMMessage.ToolCall> convertToolCallInfoToLLM(List<Message.ToolCallInfo> toolCalls) {
+        List<LLMMessage.ToolCall> result = new ArrayList<>();
+        for (Message.ToolCallInfo info : toolCalls) {
+            result.add(LLMMessage.ToolCall.builder()
+                .id(info.getId())
+                .function(info.getName(), info.getArguments())
+                .build());
+        }
         return result;
     }
     

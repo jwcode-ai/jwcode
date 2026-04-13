@@ -20,12 +20,14 @@ public class LLMMessage {
     private final String content;
     private final List<ToolCall> toolCalls;
     private final String toolCallId;
+    private final String reasoningContent;
     
     private LLMMessage(Builder builder) {
         this.role = builder.role;
         this.content = builder.content != null ? builder.content : "";
         this.toolCalls = builder.toolCalls;
         this.toolCallId = builder.toolCallId;
+        this.reasoningContent = builder.reasoningContent;
     }
     
     // Getters
@@ -33,6 +35,7 @@ public class LLMMessage {
     public String getContent() { return content; }
     public List<ToolCall> getToolCalls() { return toolCalls; }
     public String getToolCallId() { return toolCallId; }
+    public String getReasoningContent() { return reasoningContent; }
     
     public boolean hasToolCalls() {
         return toolCalls != null && !toolCalls.isEmpty();
@@ -67,8 +70,14 @@ public class LLMMessage {
         map.put("role", role.getValue());
         map.put("content", content.isEmpty() ? "" : content);
         
-        if (role == Role.TOOL && toolCallId != null) {
-            map.put("tool_call_id", toolCallId);
+        if (role == Role.TOOL) {
+            // tool 消息必须包含 tool_call_id，即使为空字符串也要添加
+            // 这样可以避免 API 报错 "tool_call_id is not found"
+            map.put("tool_call_id", toolCallId != null ? toolCallId : "");
+        }
+        
+        if (role == Role.ASSISTANT && reasoningContent != null && !reasoningContent.isEmpty()) {
+            map.put("reasoning_content", reasoningContent);
         }
         
         if (hasToolCalls()) {
@@ -111,6 +120,7 @@ public class LLMMessage {
         private String content;
         private List<ToolCall> toolCalls;
         private String toolCallId;
+        private String reasoningContent;
         
         public Builder role(Role role) {
             this.role = role;
@@ -129,6 +139,11 @@ public class LLMMessage {
         
         public Builder toolCallId(String toolCallId) {
             this.toolCallId = toolCallId;
+            return this;
+        }
+        
+        public Builder reasoningContent(String reasoningContent) {
+            this.reasoningContent = reasoningContent;
             return this;
         }
         
@@ -155,10 +170,15 @@ public class LLMMessage {
     }
     
     public static LLMMessage assistantWithTools(String content, List<ToolCall> toolCalls) {
+        return assistantWithTools(content, toolCalls, null);
+    }
+    
+    public static LLMMessage assistantWithTools(String content, List<ToolCall> toolCalls, String reasoningContent) {
         return builder()
             .role(Role.ASSISTANT)
             .content(content != null ? content : "")
             .toolCalls(toolCalls)
+            .reasoningContent(reasoningContent)
             .build();
     }
     
