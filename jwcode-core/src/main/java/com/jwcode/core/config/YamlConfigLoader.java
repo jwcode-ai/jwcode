@@ -260,6 +260,7 @@ public class YamlConfigLoader {
     }
     
     private void mergeSettings(JwcodeConfig.GlobalSettings target, JwcodeConfig.GlobalSettings source) {
+        // 合并基础设置
         if (source.getTimeoutSeconds() != 60) { // 非默认值
             target.setTimeoutSeconds(source.getTimeoutSeconds());
         }
@@ -270,6 +271,174 @@ public class YamlConfigLoader {
             target.setLogLevel(source.getLogLevel());
         }
         target.setDebug(source.isDebug());
+        
+        // 合并引擎配置
+        if (source.getEngine() != null) {
+            mergeEngineSettings(target.getEngine(), source.getEngine());
+        }
+        
+        // 合并权限配置
+        if (source.getPermissions() != null) {
+            mergePermissionSettings(target.getPermissions(), source.getPermissions());
+        }
+        
+        // 合并消息配置
+        if (source.getMessaging() != null) {
+            mergeMessagingSettings(target.getMessaging(), source.getMessaging());
+        }
+        
+        // 合并搜索配置
+        if (source.getSearch() != null) {
+            mergeSearchSettings(target.getSearch(), source.getSearch());
+        }
+        
+        // 合并思考模式配置
+        if (source.getThinking() != null) {
+            mergeThinkingSettings(target.getThinking(), source.getThinking());
+        }
+        
+        // 合并压缩配置
+        if (source.getCompression() != null) {
+            mergeCompressionSettings(target.getCompression(), source.getCompression());
+        }
+        
+        // 合并代理配置
+        if (source.getAgent() != null) {
+            mergeAgentSettings(target.getAgent(), source.getAgent());
+        }
+        
+        // 合并规划配置
+        if (source.getPlanning() != null) {
+            mergePlanningSettings(target.getPlanning(), source.getPlanning());
+        }
+        
+        // 合并高级配置
+        if (source.getAdvanced() != null) {
+            mergeAdvancedSettings(target.getAdvanced(), source.getAdvanced());
+        }
+    }
+    
+    private void mergeEngineSettings(JwcodeConfig.EngineSettings target, JwcodeConfig.EngineSettings source) {
+        if (source.getMaxIterations() != 100) {
+            target.setMaxIterations(source.getMaxIterations());
+        }
+        if (source.getTimeoutMinutes() != 5) {
+            target.setTimeoutMinutes(source.getTimeoutMinutes());
+        }
+    }
+    
+    private void mergePermissionSettings(JwcodeConfig.PermissionSettings target, JwcodeConfig.PermissionSettings source) {
+        target.setAutoApproveRead(source.isAutoApproveRead());
+        target.setAutoApproveWrite(source.isAutoApproveWrite());
+        target.setAutoApproveDelete(source.isAutoApproveDelete());
+        target.setAutoApproveDestructive(source.isAutoApproveDestructive());
+    }
+    
+    private void mergeMessagingSettings(JwcodeConfig.MessagingSettings target, JwcodeConfig.MessagingSettings source) {
+        target.setHistoryEnabled(source.isHistoryEnabled());
+        if (source.getMaxHistorySize() != 1000) {
+            target.setMaxHistorySize(source.getMaxHistorySize());
+        }
+        target.setShowTimestamp(source.isShowTimestamp());
+        target.setUseColor(source.isUseColor());
+    }
+    
+    private void mergeSearchSettings(JwcodeConfig.SearchSettings target, JwcodeConfig.SearchSettings source) {
+        if (source.getDefaultEngine() != null) {
+            target.setDefaultEngine(source.getDefaultEngine());
+        }
+        if (source.getDefaultSummaryLength() != 300) {
+            target.setDefaultSummaryLength(source.getDefaultSummaryLength());
+        }
+        if (source.getSimilarityThreshold() != 0.8) {
+            target.setSimilarityThreshold(source.getSimilarityThreshold());
+        }
+        if (source.getTimeoutMs() != 10000) {
+            target.setTimeoutMs(source.getTimeoutMs());
+        }
+        if (source.getConnectTimeout() != 10000) {
+            target.setConnectTimeout(source.getConnectTimeout());
+        }
+        if (source.getReadTimeout() != 10000) {
+            target.setReadTimeout(source.getReadTimeout());
+        }
+    }
+    
+    private void mergeThinkingSettings(JwcodeConfig.ThinkingSettings target, JwcodeConfig.ThinkingSettings source) {
+        if (source.getThinkingDelayMs() != 2000) {
+            target.setThinkingDelayMs(source.getThinkingDelayMs());
+        }
+        target.setShowThinkingTrace(source.isShowThinkingTrace());
+        if (source.getMaxThinkingDepth() != 3) {
+            target.setMaxThinkingDepth(source.getMaxThinkingDepth());
+        }
+        if (source.getMaxActionsPerMinute() != 30) {
+            target.setMaxActionsPerMinute(source.getMaxActionsPerMinute());
+        }
+        if (source.getDangerousCommands() != null && !source.getDangerousCommands().isEmpty()) {
+            target.setDangerousCommands(source.getDangerousCommands());
+        }
+    }
+    
+    private void mergeCompressionSettings(JwcodeConfig.CompressionSettings target, JwcodeConfig.CompressionSettings source) {
+        if (source.getMaxMessagesBeforeCompression() != 50) {
+            target.setMaxMessagesBeforeCompression(source.getMaxMessagesBeforeCompression());
+        }
+        if (source.getTokenThreshold() != 8000) {
+            target.setTokenThreshold(source.getTokenThreshold());
+        }
+    }
+    
+    private void mergeAgentSettings(JwcodeConfig.AgentSettings target, JwcodeConfig.AgentSettings source) {
+        if (source.getDefaultTimeout() != 60000) {
+            target.setDefaultTimeout(source.getDefaultTimeout());
+        }
+        if (source.getDefaultPriority() != 5) {
+            target.setDefaultPriority(source.getDefaultPriority());
+        }
+        if (source.getMaxAgentsPerType() != 5) {
+            target.setMaxAgentsPerType(source.getMaxAgentsPerType());
+        }
+        if (source.getMaxTotalAgents() != 50) {
+            target.setMaxTotalAgents(source.getMaxTotalAgents());
+        }
+        if (source.getDefaultQueueSize() != 1000) {
+            target.setDefaultQueueSize(source.getDefaultQueueSize());
+        }
+        if (source.getThreadPoolSize() != Runtime.getRuntime().availableProcessors()) {
+            target.setThreadPoolSize(source.getThreadPoolSize());
+        }
+        if (source.getMessageCleanupInterval() != 300000) {
+            target.setMessageCleanupInterval(source.getMessageCleanupInterval());
+        }
+        if (source.getMaxHistorySize() != 10000) {
+            target.setMaxHistorySize(source.getMaxHistorySize());
+        }
+        if (source.getDefaultMessageTTL() != 60000) {
+            target.setDefaultMessageTTL(source.getDefaultMessageTTL());
+        }
+    }
+    
+    private void mergePlanningSettings(JwcodeConfig.PlanningSettings target, JwcodeConfig.PlanningSettings source) {
+        if (source.getTokenBudget() != 10000) {
+            target.setTokenBudget(source.getTokenBudget());
+        }
+        if (source.getTimeBudgetMs() != 300000) {
+            target.setTimeBudgetMs(source.getTimeBudgetMs());
+        }
+        target.setAllowParallel(source.isAllowParallel());
+        if (source.getMaxParallelism() != 4) {
+            target.setMaxParallelism(source.getMaxParallelism());
+        }
+        target.setAiMode(source.isAiMode());
+    }
+    
+    private void mergeAdvancedSettings(JwcodeConfig.AdvancedSettings target, JwcodeConfig.AdvancedSettings source) {
+        target.setAutoSwarmEnabled(source.isAutoSwarmEnabled());
+        target.setYoloMode(source.isYoloMode());
+        target.setAutoCompactEnabled(source.isAutoCompactEnabled());
+        target.setAnalyticsEnabled(source.isAnalyticsEnabled());
+        target.setAnonymousMode(source.isAnonymousMode());
     }
     
     // ==================== 嵌套配置支持 ====================

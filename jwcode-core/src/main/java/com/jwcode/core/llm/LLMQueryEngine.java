@@ -2,6 +2,7 @@ package com.jwcode.core.llm;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jwcode.core.config.JwcodeConfig;
 import com.jwcode.core.model.Message;
 import com.jwcode.core.session.Session;
 import com.jwcode.core.tool.*;
@@ -392,6 +393,21 @@ public class LLMQueryEngine {
     public static class EngineConfig {
         private int maxIterations = 100;
         private Duration timeout = Duration.ofMinutes(5);
+        
+        /**
+         * 从 JwcodeConfig 创建 EngineConfig
+         */
+        public static EngineConfig fromJwcodeConfig(JwcodeConfig config) {
+            EngineConfig engineConfig = new EngineConfig();
+            if (config != null && config.getSettings() != null) {
+                JwcodeConfig.EngineSettings engine = config.getSettings().getEngine();
+                if (engine != null) {
+                    engineConfig.setMaxIterations(engine.getMaxIterations());
+                    engineConfig.setTimeout(Duration.ofMinutes(engine.getTimeoutMinutes()));
+                }
+            }
+            return engineConfig;
+        }
         
         public int getMaxIterations() { return maxIterations; }
         public void setMaxIterations(int maxIterations) { this.maxIterations = maxIterations; }

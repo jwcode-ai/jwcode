@@ -268,6 +268,240 @@ public class JwcodeConfig {
         
         @JsonProperty("log-level")
         private String logLevel = "INFO";
+        
+        // ========== 引擎配置 ==========
+        @JsonProperty("engine")
+        private EngineSettings engine = new EngineSettings();
+        
+        // ========== 权限配置 ==========
+        @JsonProperty("permissions")
+        private PermissionSettings permissions = new PermissionSettings();
+        
+        // ========== 消息配置 ==========
+        @JsonProperty("messaging")
+        private MessagingSettings messaging = new MessagingSettings();
+        
+        // ========== 搜索配置 ==========
+        @JsonProperty("search")
+        private SearchSettings search = new SearchSettings();
+        
+        // ========== 思考模式配置 ==========
+        @JsonProperty("thinking")
+        private ThinkingSettings thinking = new ThinkingSettings();
+        
+        // ========== 上下文压缩配置 ==========
+        @JsonProperty("compression")
+        private CompressionSettings compression = new CompressionSettings();
+        
+        // ========== 代理配置 ==========
+        @JsonProperty("agent")
+        private AgentSettings agent = new AgentSettings();
+        
+        // ========== 规划配置 ==========
+        @JsonProperty("planning")
+        private PlanningSettings planning = new PlanningSettings();
+        
+        // ========== 其他高级配置 ==========
+        @JsonProperty("advanced")
+        private AdvancedSettings advanced = new AdvancedSettings();
+    }
+    
+    /**
+     * 引擎设置
+     */
+    @Data
+    @NoArgsConstructor
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class EngineSettings {
+        @JsonProperty("max-iterations")
+        private int maxIterations = 100;  // 最大迭代次数
+        
+        @JsonProperty("timeout-minutes")
+        private int timeoutMinutes = 5;   // 超时时间（分钟）
+    }
+    
+    /**
+     * 权限设置
+     */
+    @Data
+    @NoArgsConstructor
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class PermissionSettings {
+        @JsonProperty("auto-approve-read")
+        private boolean autoApproveRead = true;
+        
+        @JsonProperty("auto-approve-write")
+        private boolean autoApproveWrite = false;
+        
+        @JsonProperty("auto-approve-delete")
+        private boolean autoApproveDelete = false;
+        
+        @JsonProperty("auto-approve-destructive")
+        private boolean autoApproveDestructive = false;
+    }
+    
+    /**
+     * 消息设置
+     */
+    @Data
+    @NoArgsConstructor
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class MessagingSettings {
+        @JsonProperty("history-enabled")
+        private boolean historyEnabled = true;
+        
+        @JsonProperty("max-history-size")
+        private int maxHistorySize = 1000;
+        
+        @JsonProperty("show-timestamp")
+        private boolean showTimestamp = true;
+        
+        @JsonProperty("use-color")
+        private boolean useColor = true;
+    }
+    
+    /**
+     * 搜索设置
+     */
+    @Data
+    @NoArgsConstructor
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class SearchSettings {
+        @JsonProperty("default-engine")
+        private String defaultEngine = "duckduckgo";
+        
+        @JsonProperty("default-summary-length")
+        private int defaultSummaryLength = 300;
+        
+        @JsonProperty("similarity-threshold")
+        private double similarityThreshold = 0.8;
+        
+        @JsonProperty("timeout-ms")
+        private int timeoutMs = 10000;
+        
+        @JsonProperty("connect-timeout")
+        private int connectTimeout = 10000;
+        
+        @JsonProperty("read-timeout")
+        private int readTimeout = 10000;
+    }
+    
+    /**
+     * 思考模式设置
+     */
+    @Data
+    @NoArgsConstructor
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class ThinkingSettings {
+        @JsonProperty("thinking-delay-ms")
+        private long thinkingDelayMs = 2000;  // 思考延迟（毫秒）
+        
+        @JsonProperty("show-thinking-trace")
+        private boolean showThinkingTrace = true;  // 是否显示思考轨迹
+        
+        @JsonProperty("max-thinking-depth")
+        private int maxThinkingDepth = 3;  // 最大思考深度
+        
+        @JsonProperty("max-actions-per-minute")
+        private int maxActionsPerMinute = 30;
+        
+        @JsonProperty("dangerous-commands")
+        private List<String> dangerousCommands = Arrays.asList("rm -rf", "format", "del /s /q");
+    }
+    
+    /**
+     * 上下文压缩设置
+     */
+    @Data
+    @NoArgsConstructor
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class CompressionSettings {
+        @JsonProperty("max-messages-before-compression")
+        private int maxMessagesBeforeCompression = 50;
+        
+        @JsonProperty("token-threshold")
+        private int tokenThreshold = 8000;
+    }
+    
+    /**
+     * 代理设置
+     */
+    @Data
+    @NoArgsConstructor
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class AgentSettings {
+        @JsonProperty("default-timeout")
+        private long defaultTimeout = 60000;  // 默认超时（毫秒）
+        
+        @JsonProperty("default-priority")
+        private int defaultPriority = 5;
+        
+        @JsonProperty("max-agents-per-type")
+        private int maxAgentsPerType = 5;
+        
+        @JsonProperty("max-total-agents")
+        private int maxTotalAgents = 50;
+        
+        @JsonProperty("default-queue-size")
+        private int defaultQueueSize = 1000;
+        
+        @JsonProperty("thread-pool-size")
+        private int threadPoolSize = Runtime.getRuntime().availableProcessors();
+        
+        @JsonProperty("message-cleanup-interval")
+        private long messageCleanupInterval = 300000;  // 5分钟
+        
+        @JsonProperty("max-history-size")
+        private int maxHistorySize = 10000;
+        
+        @JsonProperty("default-message-ttl")
+        private long defaultMessageTTL = 60000;  // 60秒
+    }
+    
+    /**
+     * 规划设置
+     */
+    @Data
+    @NoArgsConstructor
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class PlanningSettings {
+        @JsonProperty("token-budget")
+        private int tokenBudget = 10000;
+        
+        @JsonProperty("time-budget-ms")
+        private long timeBudgetMs = 300000;  // 5分钟
+        
+        @JsonProperty("allow-parallel")
+        private boolean allowParallel = true;
+        
+        @JsonProperty("max-parallelism")
+        private int maxParallelism = 4;
+        
+        @JsonProperty("ai-mode")
+        private boolean aiMode = true;  // 默认使用 AI 模式
+    }
+    
+    /**
+     * 高级设置
+     */
+    @Data
+    @NoArgsConstructor
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class AdvancedSettings {
+        @JsonProperty("auto-swarm-enabled")
+        private boolean autoSwarmEnabled = false;
+        
+        @JsonProperty("yolo-mode")
+        private boolean yoloMode = false;
+        
+        @JsonProperty("auto-compact-enabled")
+        private boolean autoCompactEnabled = true;
+        
+        @JsonProperty("analytics-enabled")
+        private boolean analyticsEnabled = true;
+        
+        @JsonProperty("anonymous-mode")
+        private boolean anonymousMode = true;
     }
     
     // ==================== 静态方法 ====================
