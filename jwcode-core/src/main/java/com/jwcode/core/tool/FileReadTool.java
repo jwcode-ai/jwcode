@@ -15,6 +15,11 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
+
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.text.PDFTextStripper;
 
 /**
  * 文件读取工具（重构后）
@@ -245,9 +250,55 @@ public class FileReadTool implements Tool<FileReadInput, FileReadOutput, FileRea
      * 读取 PDF 文件
      */
     private ToolResult<FileReadOutput> readPdfFile(Path filePath, FileReadInput input) {
-        // TODO: 实现 PDF 文件读取
-        // 可以使用 Apache PDFBox 或 iText 等库
-        return ToolResult.error("PDF 文件读取功能尚未实现");
+        try (PDDocument document = Loader.loadPDF(filePath.toFile())) {
+            PDFTextStripper stripper = new PDFTextStripper();
+            String text = stripper.getText(document);
+            
+            List<String> lines = text.lines().collect(Collectors.toList());
+            int totalLines = lines.size();
+            int startLine = 1;
+            int endLine = totalLines;
+            int linesToRead = totalLines;
+            boolean truncated = false;
+            String truncationReason = null;
+            
+            int estimatedTokens = estimateTokens(text);
+            if (estimatedTokens > MAX_TOKENS) {
+                truncated = true;
+                truncationReason = "超过 token 限制 (" + MAX_TOKENS + " tokens)";
+                int targetTokens = (int) (MAX_TOKENS * 0.8);
+                TruncationResult result = truncateSmartly(lines, startLine, targetTokens);
+                text = result.text;
+                endLine = result.endLine;
+                linesToRead = result.linesRead;
+            }
+            
+            FileReadOutput output;
+            if (truncated) {
+                output = FileReadOutput.truncated(
+                    filePath.toString(),
+                    text,
+                    totalLines,
+                    startLine,
+                    endLine,
+                    linesToRead,
+                    truncationReason
+                );
+            } else {
+                output = FileReadOutput.text(
+                    filePath.toString(),
+                    text,
+                    totalLines,
+                    startLine,
+                    endLine,
+                    linesToRead
+                );
+            }
+            return ToolResult.success(output);
+        } catch (Exception e) {
+            logger.severe("读取 PDF 失败: " + e.getMessage());
+            return ToolResult.error("读取 PDF 失败: " + e.getMessage());
+        }
     }
     
     /**
@@ -278,10 +329,13 @@ public class FileReadTool implements Tool<FileReadInput, FileReadOutput, FileRea
             truncationReason = "超过最大行数限制 (" + MAX_LINES + " 行)";
         }
         
+        // 提取选中的行
+        List<String> selectedLines = lines.subList(startLine - 1, endLine);
+        
         // 读取内容
         StringBuilder content = new StringBuilder();
-        for (int i = startLine - 1; i < endLine; i++) {
-            content.append(lines.get(i)).append("\n");
+        for (String line : selectedLines) {
+            content.append(line).append("\n");
         }
         
         // 检查 token 数量
@@ -290,7 +344,11 @@ public class FileReadTool implements Tool<FileReadInput, FileReadOutput, FileRea
         if (estimatedTokens > MAX_TOKENS) {
             truncated = true;
             truncationReason = "超过 token 限制 (" + MAX_TOKENS + " tokens)";
-            // TODO: 实现智能截断
+            int targetTokens = (int) (MAX_TOKENS * 0.8);
+            TruncationResult result = truncateSmartly(selectedLines, startLine, targetTokens);
+            text = result.text;
+            endLine = result.endLine;
+            linesToRead = result.linesRead;
         }
         
         // 构建输出
@@ -345,6 +403,107 @@ public class FileReadTool implements Tool<FileReadInput, FileReadOutput, FileRea
         int otherChars = text.length() - chineseChars;
         
         return (chineseChars / 2) + (otherChars / 4);
+    }
+    
+    /**
+     * 智能截断结果
+     */
+    private static class TruncationResult {
+        final String text;
+        final int endLine;
+        final int linesRead;
+        
+        TruncationResult(String text, int endLine, int linesRead) {
+            this.text = text;
+            this.endLine = endLine;
+            this.linesRead = linesRead;
+        }
+    }
+    
+    /**
+     * 边界类型
+     */
+    private enum BoundaryType {
+        PARAGRAPH, METHOD, LINE
+    }
+    
+    /**
+     * 智能截断内容
+     */
+    private TruncationResult truncateSmartly(List<String> lines, int startLine, int targetTokens) {
+        String marker = "\n\n[...内容已截断...]";
+        int markerTokens = estimateTokens(marker);
+        int budget = targetTokens - markerTokens;
+        
+        // 1. 尝试段落边界
+        int linesKept = truncateAtBoundaries(lines, budget, BoundaryType.PARAGRAPH);
+        if (linesKept > 0) {
+            String text = buildText(lines, linesKept);
+            return new TruncationResult(text + marker, startLine + linesKept - 1, linesKept);
+        }
+        
+        // 2. 尝试方法/作用域边界
+        linesKept = truncateAtBoundaries(lines, budget, BoundaryType.METHOD);
+        if (linesKept > 0) {
+            String text = buildText(lines, linesKept);
+            return new TruncationResult(text + marker, startLine + linesKept - 1, linesKept);
+        }
+        
+        // 3. 回退到行边界
+        linesKept = truncateAtBoundaries(lines, budget, BoundaryType.LINE);
+        String text = buildText(lines, linesKept);
+        return new TruncationResult(text + marker, startLine + linesKept - 1, linesKept);
+    }
+    
+    /**
+     * 在指定边界类型处截断
+     */
+    private int truncateAtBoundaries(List<String> lines, int budget, BoundaryType type) {
+        StringBuilder content = new StringBuilder();
+        int lastValid = 0;
+        
+        for (int i = 0; i < lines.size(); i++) {
+            content.append(lines.get(i)).append("\n");
+            
+            // 判断在此行之后是否可以截断
+            boolean canBreak = false;
+            if (i == lines.size() - 1) {
+                canBreak = true; // 文件末尾
+            } else if (type == BoundaryType.LINE) {
+                canBreak = true; // 每行之后都可以截断
+            } else if (type == BoundaryType.PARAGRAPH) {
+                canBreak = lines.get(i).trim().isEmpty(); // 空行之后可以截断
+            } else if (type == BoundaryType.METHOD) {
+                String nextLine = lines.get(i + 1).trim();
+                canBreak = lines.get(i).trim().isEmpty() ||
+                    nextLine.startsWith("public ") || nextLine.startsWith("private ") ||
+                    nextLine.startsWith("protected ") || nextLine.startsWith("def ") ||
+                    nextLine.startsWith("function ") || nextLine.startsWith("class ") ||
+                    nextLine.startsWith("interface ") || nextLine.contains("{") || nextLine.contains("}");
+            }
+            
+            if (canBreak) {
+                int tokens = estimateTokens(content.toString());
+                if (tokens <= budget) {
+                    lastValid = i + 1;
+                } else {
+                    break;
+                }
+            }
+        }
+        
+        return lastValid;
+    }
+    
+    /**
+     * 根据行数构建文本
+     */
+    private String buildText(List<String> lines, int linesKept) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < linesKept; i++) {
+            sb.append(lines.get(i)).append("\n");
+        }
+        return sb.toString();
     }
     
     /**

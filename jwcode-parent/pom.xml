@@ -62,6 +62,7 @@
         <commons.io.version>2.16.1</commons.io.version>
         <reactor.version>3.6.6</reactor.version>
         <jsonschema.version>4.35.0</jsonschema.version>
+        <pdfbox.version>3.0.2</pdfbox.version>
     </properties>
 
     <!-- 依赖管理 -->
@@ -231,6 +232,13 @@
                 <groupId>commons-io</groupId>
                 <artifactId>commons-io</artifactId>
                 <version>${commons.io.version}</version>
+            </dependency>
+
+            <!-- Apache PDFBox -->
+            <dependency>
+                <groupId>org.apache.pdfbox</groupId>
+                <artifactId>pdfbox</artifactId>
+                <version>${pdfbox.version}</version>
             </dependency>
 
             <!-- 响应式编程 -->

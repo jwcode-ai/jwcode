@@ -46,6 +46,7 @@ public class SubAgentFork {
     private Map<String, Object> contextData = new HashMap<>();
     private LLMQueryEngine.EngineConfig engineConfig;
     private long timeoutMs = 60000;
+    private LLMFactory llmFactory;
     
     public SubAgentFork(Agent parentAgent, Session parentSession, ToolRegistry toolRegistry) {
         this.parentAgent = parentAgent;
@@ -53,6 +54,14 @@ public class SubAgentFork {
         this.toolRegistry = toolRegistry;
         this.tools = new ArrayList<>();
         this.engineConfig = LLMQueryEngine.EngineConfig.defaultConfig();
+    }
+    
+    /**
+     * 设置 LLMFactory
+     */
+    public SubAgentFork withLLMFactory(LLMFactory llmFactory) {
+        this.llmFactory = llmFactory;
+        return this;
     }
     
     /**
@@ -148,9 +157,12 @@ public class SubAgentFork {
         );
         
         // 4. 创建 LLMQueryEngine
-        // TODO: 需要从配置创建 LLMFactory
-        LLMFactory llmFactory = LLMFactory.createDefault();
-        LLMQueryEngine engine = llmFactory.createQueryEngine(forkedSession);
+        // 优先使用传入的 LLMFactory，否则尝试从父 Agent 的模型配置创建
+        LLMFactory factory = this.llmFactory;
+        if (factory == null) {
+            factory = createLLMFactoryFromParent();
+        }
+        LLMQueryEngine engine = factory.createQueryEngine(forkedSession);
         
         // 5. 返回结果
         return new SubAgentResult(childAgent, forkedSession, engine, timeoutMs);
@@ -292,5 +304,37 @@ public class SubAgentFork {
      */
     public static SubAgentFork from(Agent parent, Session session, ToolRegistry registry) {
         return new SubAgentFork(parent, session, registry);
+    }
+    
+    /**
+     * 从父 Agent 的模型配置创建 LLMFactory
+     */
+    private LLMFactory createLLMFactoryFromParent() {
+        try {
+            Agent.ModelConfig modelConfig = parentAgent.getModelConfig();
+            if (modelConfig != null) {
+                com.jwcode.core.config.JwcodeConfig config = new com.jwcode.core.config.JwcodeConfig();
+                config.setDefaultProvider("moonshot");
+                
+                com.jwcode.core.config.JwcodeConfig.ProviderConfig provider = 
+                    new com.jwcode.core.config.JwcodeConfig.ProviderConfig();
+                provider.setBaseUrl("https://api.moonshot.cn/v1");
+                
+                com.jwcode.core.config.JwcodeConfig.ModelConfig model = 
+                    new com.jwcode.core.config.JwcodeConfig.ModelConfig();
+                model.setId(modelConfig.getModel());
+                model.setName(modelConfig.getModel());
+                model.setTemperature(modelConfig.getTemperature());
+                model.setMaxTokens(modelConfig.getMaxTokens());
+                
+                provider.setModels(java.util.List.of(model));
+                config.setProviders(java.util.Map.of(config.getDefaultProviderName(), provider));
+                
+                return LLMFactory.fromConfig(config);
+            }
+        } catch (Exception e) {
+            // 回退到默认配置
+        }
+        return LLMFactory.createDefault();
     }
 }

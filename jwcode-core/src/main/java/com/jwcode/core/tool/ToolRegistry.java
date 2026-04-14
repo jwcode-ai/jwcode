@@ -217,6 +217,7 @@ public class ToolRegistry {
         registry.register(new TaskUpdateTool());
         registry.register(new TaskListTool());
         registry.register(new PowerShellTool());
+        registry.register(new SmartAnalyzeTool());
         registry.register(new MultiPlanTool());
         registry.register(new EnterWorktreeTool());
         registry.register(new ExitWorktreeTool());

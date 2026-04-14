@@ -86,9 +86,16 @@ public class FileWriteTool implements Tool<FileWriteTool.Input, FileWriteTool.Ou
             if (json.has("file_path") && !json.has("path")) {
                 ObjectNode objNode = (ObjectNode) json;
                 JsonNode filePathNode = objNode.get("file_path");
-                objNode.put("path", filePathNode);
+                // 确保 file_path 是字符串类型
+                if (filePathNode != null && filePathNode.isTextual()) {
+                    objNode.put("path", filePathNode.asText());
+                } else {
+                    throw new IllegalArgumentException("file_path 必须是一个字符串值");
+                }
             }
             return ToolSchemaGenerator.parseJson(json, getInputType());
+        } catch (IllegalArgumentException e) {
+            throw e; // 直接重新抛出已知异常
         } catch (Exception e) {
             throw new IllegalArgumentException("无法解析 JSON: " + e.getMessage(), e);
         }

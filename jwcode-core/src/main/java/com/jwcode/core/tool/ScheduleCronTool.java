@@ -4,6 +4,9 @@ import com.jwcode.core.tool.input.CronInput;
 import com.jwcode.core.tool.output.CronOutput;
 import com.jwcode.core.tool.context.ToolExecutionContext;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -20,6 +23,7 @@ import java.util.concurrent.TimeUnit;
 public class ScheduleCronTool implements Tool<CronInput, CronOutput, CronOutput.CronJobInfo> {
     
     private static final String CRON_FILE = ".jwcode/crons.json";
+    private static final ObjectMapper MAPPER = new ObjectMapper();
     private final Path cronFilePath;
     private final Map<String, ScheduledExecutorService> scheduledTasks;
     private final ScheduledExecutorService scheduler;
@@ -150,28 +154,22 @@ public class ScheduleCronTool implements Tool<CronInput, CronOutput, CronOutput.
     }
     
     private List<CronOutput.CronJobInfo> parseJobsFromJson(String json) {
-        // 简化实现，实际应使用 Jackson
-        List<CronOutput.CronJobInfo> jobs = new ArrayList<>();
-        // TODO: 使用 Jackson 解析
-        return jobs;
+        try {
+            if (json == null || json.isBlank()) {
+                return new ArrayList<>();
+            }
+            return MAPPER.readValue(json, new TypeReference<List<CronOutput.CronJobInfo>>() {});
+        } catch (Exception e) {
+            return new ArrayList<>();
+        }
     }
     
     private String jobsToJson(List<CronOutput.CronJobInfo> jobs) {
-        // 简化实现，实际应使用 Jackson
-        StringBuilder sb = new StringBuilder();
-        sb.append("[");
-        for (int i = 0; i < jobs.size(); i++) {
-            CronOutput.CronJobInfo job = jobs.get(i);
-            sb.append("{");
-            sb.append("\"id\":\"").append(job.id()).append("\",");
-            sb.append("\"cronExpression\":\"").append(job.cronExpression()).append("\",");
-            sb.append("\"command\":\"").append(job.command().replace("\"", "\\\"")).append("\",");
-            sb.append("\"description\":\"").append(job.description().replace("\"", "\\\"")).append("\"");
-            sb.append("}");
-            if (i < jobs.size() - 1) sb.append(",");
+        try {
+            return MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(jobs);
+        } catch (Exception e) {
+            return "[]";
         }
-        sb.append("]");
-        return sb.toString();
     }
     
     @Override

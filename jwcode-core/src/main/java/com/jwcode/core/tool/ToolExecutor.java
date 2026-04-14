@@ -218,19 +218,22 @@ public class ToolExecutor {
             // 执行工具 - 使用原始类型执行
             CompletableFuture<?> future = execute(tool, input, context, (Consumer) onProgress);
             return future.thenApply(result -> {
-                // 记录工具执行成功 - 包含完整的输出结果
+                // 记录工具执行结果 - 包含完整的输出结果
                 ToolResult<?> toolResult = (ToolResult<?>) result;
-                logger.info("║ [工具执行成功] " + toolName);
-                if (toolResult != null) {
-                    if (toolResult.isSuccess() && toolResult.getData() != null) {
+                if (toolResult != null && toolResult.isSuccess()) {
+                    logger.info("║ [工具执行成功] " + toolName);
+                    if (toolResult.getData() != null) {
                         logger.info("║ 输出结果:");
                         String outputJson = tool.serializeOutput(toolResult.getData()).toString();
                             logger.info("║   " + outputJson);
-                    } else if (!toolResult.isSuccess()) {
-                        logger.info("║ 错误: " + toolResult.getContent());
                     }
+                    return ToolExecutionResult.success(toolName, toolResult);
+                } else {
+                    String errorMsg = toolResult != null ? toolResult.getContent() : "未知错误";
+                    logger.info("║ [工具执行失败] " + toolName);
+                    logger.info("║ 错误: " + errorMsg);
+                    return ToolExecutionResult.error(toolName, errorMsg);
                 }
-                return ToolExecutionResult.success(toolName, toolResult);
             });
                 
         } catch (Exception e) {

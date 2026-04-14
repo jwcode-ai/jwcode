@@ -200,6 +200,7 @@ public class JwCodeApplication implements AutoCloseable {
         registerCommand(new CostCommand());
         registerCommand(new DiffCommand());
         registerCommand(new DoctorCommand());
+        registerCommand(new AnalyzeCommand());
         registerCommand(new ExportCommand());
         registerCommand(new FilesCommand());
         registerCommand(new SummaryCommand());

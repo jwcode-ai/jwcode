@@ -256,22 +256,22 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
             String stderr = errorBuilder.toString();
             
             // 构建输出
-            BashOutput output;
             if (exitCode == 0) {
-                output = BashOutput.success(
+                BashOutput output = BashOutput.success(
                     truncateOutput(stdout),
                     input.command(),
                     processBuilder.directory() != null ? processBuilder.directory().getPath() : null
                 );
+                return ToolResult.success(output);
             } else {
-                output = BashOutput.error(
-                    truncateOutput(stderr),
-                    exitCode,
-                    input.command()
-                );
+                String errorMsg = truncateOutput(stderr);
+                if (errorMsg == null || errorMsg.isEmpty()) {
+                    errorMsg = "命令执行失败，退出码: " + exitCode;
+                } else {
+                    errorMsg = "命令执行失败 (exitCode=" + exitCode + "): " + errorMsg;
+                }
+                return ToolResult.error(errorMsg);
             }
-            
-            return ToolResult.success(output);
             
         } catch (TimeoutException e) {
             long executionTime = System.currentTimeMillis() - startTime;

@@ -43,7 +43,7 @@ public class ActivityTrackingToolExecutor {
     /**
      * 执行工具调用（带活动追踪）
      */
-    public CompletableFuture<ToolExecutionResult> execute(
+    public CompletableFuture<ToolExecutor.ToolExecutionResult> execute(
             String toolName,
             JsonNode inputJson,
             ToolExecutionContext context) {
@@ -54,8 +54,7 @@ public class ActivityTrackingToolExecutor {
     /**
      * 执行工具调用（带活动追踪和进度回调）
      */
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    public CompletableFuture<ToolExecutionResult> execute(
+    public CompletableFuture<ToolExecutor.ToolExecutionResult> execute(
             String toolName,
             JsonNode inputJson,
             ToolExecutionContext context,
@@ -72,18 +71,18 @@ public class ActivityTrackingToolExecutor {
             }
         };
         
-        // 3. 执行工具 - 使用内部返回类型
-        CompletableFuture future = delegate.execute(toolName, inputJson, context, wrappedProgress);
+        // 3. 执行工具
+        CompletableFuture<ToolExecutor.ToolExecutionResult> future = delegate.execute(toolName, inputJson, context, wrappedProgress);
         
         // 4. 处理结果
         return future.whenComplete((result, throwable) -> {
-            if (throwable instanceof Throwable t) {
-                failToolActivity(activityId, toolName, t.getMessage());
-            } else if (result instanceof ToolExecutionResult toolResult) {
-                if (toolResult.isSuccess()) {
-                    completeToolActivity(activityId, toolName, toolResult);
+            if (throwable != null) {
+                failToolActivity(activityId, toolName, throwable.getMessage());
+            } else if (result != null) {
+                if (result.isSuccess()) {
+                    completeToolActivity(activityId, toolName, result);
                 } else {
-                    failToolActivity(activityId, toolName, toolResult.getErrorMessage());
+                    failToolActivity(activityId, toolName, result.getErrorMessage());
                 }
             } else {
                 completeToolActivity(activityId, toolName, null);
@@ -94,7 +93,7 @@ public class ActivityTrackingToolExecutor {
     /**
      * 批量执行工具（带活动追踪）
      */
-    public List<CompletableFuture<ToolExecutionResult>> executeBatch(
+    public List<CompletableFuture<ToolExecutor.ToolExecutionResult>> executeBatch(
             List<ToolCallRequest> requests,
             ToolExecutionContext context) {
         
@@ -104,7 +103,7 @@ public class ActivityTrackingToolExecutor {
             "批量执行 " + requests.size() + " 个工具"
         );
         
-        List<CompletableFuture<ToolExecutionResult>> futures = new java.util.ArrayList<>();
+        List<CompletableFuture<ToolExecutor.ToolExecutionResult>> futures = new java.util.ArrayList<>();
         int total = requests.size();
         
         for (int i = 0; i < requests.size(); i++) {
@@ -115,7 +114,7 @@ public class ActivityTrackingToolExecutor {
             activityLogger.updateProgress(batchActivityId, (int)((double) index / total * 100),
                 "执行中: " + request.toolName());
             
-            CompletableFuture<ToolExecutionResult> future = execute(
+            CompletableFuture<ToolExecutor.ToolExecutionResult> future = execute(
                 request.toolName(),
                 request.input(),
                 context,
@@ -181,7 +180,7 @@ public class ActivityTrackingToolExecutor {
         }
     }
     
-    private void completeToolActivity(String activityId, String toolName, ToolExecutionResult result) {
+    private void completeToolActivity(String activityId, String toolName, ToolExecutor.ToolExecutionResult result) {
         String summary = buildResultSummary(toolName, result);
         activityLogger.completeActivity(activityId, summary);
     }
@@ -249,14 +248,20 @@ public class ActivityTrackingToolExecutor {
         return sb.toString();
     }
     
-    private String buildResultSummary(String toolName, ToolExecutionResult result) {
+    private String buildResultSummary(String toolName, ToolExecutor.ToolExecutionResult result) {
         if (result == null || !result.isSuccess()) {
-            return "失败";
+            return "失败" + (result != null && result.getErrorMessage() != null 
+                ? ": " + truncate(result.getErrorMessage(), 100) : "");
         }
         
         ToolResult<?> toolResult = result.getResult();
         if (toolResult == null) {
             return "完成";
+        }
+        
+        if (!toolResult.isSuccess()) {
+            return "失败" + (toolResult.getContent() != null 
+                ? ": " + truncate(toolResult.getContent(), 100) : "");
         }
         
         Object data = toolResult.getData();

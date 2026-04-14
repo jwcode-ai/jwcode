@@ -34,6 +34,7 @@ public class LLMQueryEngine {
     
     private final Instant startTime;
     private final List<String> toolCallHistory;
+    private static final ObjectMapper MAPPER = new ObjectMapper();
     
     public LLMQueryEngine(Session session, LLMService llmService, 
                           ToolExecutor toolExecutor, EngineConfig config) {
@@ -202,28 +203,65 @@ public class LLMQueryEngine {
     
     /**
      * 异步执行工具
+     * 
+     * 通过 ToolExecutor 真正执行工具调用，将 JSON 参数解析后委托给注册的工具实现，
+     * 并将执行结果序列化为字符串返回给 LLM。
      */
     private CompletableFuture<ToolExecutionResult> executeToolAsync(
             Tool<?, ?, ?> tool, 
             LLMMessage.ToolCall tc) {
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                String args = tc.getFunction().getArguments();
-                logger.info("[LLMQueryEngine] Executing tool: " + tc.getFunction().getName());
-                logger.info("[LLMQueryEngine] Tool input arguments: " + args);
-                
-                // TODO: 实际工具执行逻辑
-                String result = "Tool executed: " + tc.getFunction().getName();
-                
-                // 返回包含输入参数的结果
-                return new ToolExecutionResult(tc.getId(), tc.getFunction().getName(), args, result);
-                
-            } catch (Exception e) {
-                logger.severe("[LLMQueryEngine] Tool execution failed: " + e.getMessage());
-                return new ToolExecutionResult(tc.getId(), tc.getFunction().getName(), 
-                    tc.getFunction().getArguments(), "Error: " + e.getMessage());
-            }
-        });
+        
+        String toolCallId = tc.getId();
+        String toolName = tc.getFunction().getName();
+        String args = tc.getFunction().getArguments();
+        
+        logger.info("[LLMQueryEngine] Executing tool: " + toolName);
+        logger.info("[LLMQueryEngine] Tool input arguments: " + args);
+        
+        // 解析 JSON 参数
+        final JsonNode argsNode;
+        try {
+            argsNode = MAPPER.readTree(args);
+        } catch (Exception e) {
+            logger.warning("[LLMQueryEngine] Failed to parse tool arguments as JSON: " + e.getMessage());
+            return CompletableFuture.completedFuture(
+                new ToolExecutionResult(toolCallId, toolName, args,
+                    "Error: Invalid tool arguments - " + e.getMessage())
+            );
+        }
+        
+        // 通过 ToolExecutor 真正执行工具，保持 CompletableFuture 链式调用
+        return toolExecutor.execute(toolName, argsNode, toolContext)
+            .thenApply(execResult -> {
+                String resultContent;
+                if (execResult.isSuccess()) {
+                    ToolResult<?> toolResult = execResult.getResult();
+                    if (toolResult != null && toolResult.isSuccess()) {
+                        Object data = toolResult.getData();
+                        if (data != null) {
+                            try {
+                                resultContent = MAPPER.valueToTree(data).toString();
+                            } catch (Exception e) {
+                                resultContent = data.toString();
+                            }
+                        } else {
+                            resultContent = "Success";
+                        }
+                    } else {
+                        String error = toolResult != null ? toolResult.getContent() : "Tool execution failed";
+                        resultContent = "Error: " + error;
+                    }
+                } else {
+                    resultContent = "Error: " + execResult.getErrorMessage();
+                }
+                return new ToolExecutionResult(toolCallId, toolName, args, resultContent);
+            })
+            .exceptionally(e -> {
+                Throwable cause = e.getCause() != null ? e.getCause() : e;
+                logger.severe("[LLMQueryEngine] Tool execution failed: " + cause.getMessage());
+                return new ToolExecutionResult(toolCallId, toolName, args, 
+                    "Error: " + cause.getMessage());
+            });
     }
     
     /**

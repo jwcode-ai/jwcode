@@ -74,13 +74,22 @@ public class PowerShellTool implements Tool<PowerShellTool.Input, PowerShellTool
                 
                 int exitCode = process.waitFor();
                 
-                Output result = new Output();
-                result.success = (exitCode == 0);
-                result.output = output.toString();
-                result.error = error.toString();
-                result.exitCode = exitCode;
-                
-                return ToolResult.success(result);
+                if (exitCode == 0) {
+                    Output result = new Output();
+                    result.success = true;
+                    result.output = output.toString();
+                    result.error = error.toString();
+                    result.exitCode = exitCode;
+                    return ToolResult.success(result);
+                } else {
+                    String errorMsg = error.toString();
+                    if (errorMsg == null || errorMsg.isEmpty()) {
+                        errorMsg = "PowerShell 命令执行失败，退出码: " + exitCode;
+                    } else {
+                        errorMsg = "PowerShell 命令执行失败 (exitCode=" + exitCode + "): " + errorMsg;
+                    }
+                    return ToolResult.error(errorMsg);
+                }
                 
             } catch (Exception e) {
                 return ToolResult.error("执行 PowerShell 命令失败: " + e.getMessage());
