@@ -422,6 +422,14 @@ public class JwCodeApplication implements AutoCloseable {
                 logger.error("执行工具调用时发生异常", e);
                 System.out.println(CliLogger.RED + "❌ 执行工具时出错: " + e.getMessage() + CliLogger.RESET);
                 e.printStackTrace();
+                
+                // 添加错误提示消息到会话，让 AI 知道工具执行失败
+                // 注意：由于异常发生在 executeToolCallsWithDisplay 内部，我们添加一个通用错误
+                session.addMessage(Message.createSystemMessage(
+                    "[系统通知] 工具执行过程中发生异常: " + e.getMessage() + "，请尝试其他方法完成任务。"));
+                
+                // 继续对话循环，让 AI 处理错误并尝试恢复
+                runConversationWithThinking(iteration + 1);
             }
         } else {
             // 没有工具调用，直接显示回复
@@ -556,8 +564,8 @@ public class JwCodeApplication implements AutoCloseable {
                 logger.error("工具 " + toolName + " 抛出异常", e);
             }
             
-            // 添加工具结果到会话
-            logger.debug("添加工具结果到会话，toolCallId: " + tc.getId());
+            // 添加工具结果到会话（无论成功还是失败都要添加，确保 tool_calls 与 results 数量一致）
+            logger.debug("添加工具结果到会话，toolCallId: " + tc.getId() + ", result: " + (result != null ? result.substring(0, Math.min(100, result.length())) : "null"));
             session.addMessage(Message.createToolResultMessage(tc.getId(), toolName, result));
         }
         

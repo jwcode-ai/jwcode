@@ -32,13 +32,18 @@ import java.util.logging.Logger;
  * - 实时显示工具调用
  * - 实时显示后台日志/活动
  * - 心跳保活
+ * - 实时显示执行步骤（思考、规划、工具调用等）
  * 
  * 消息协议（JSON）：
  * - 客户端 -> 服务器: {"type": "chat", "sessionId": "xxx", "message": "..."}
  * - 服务器 -> 客户端: {"type": "content", "data": "..."}
  * - 服务器 -> 客户端: {"type": "thinking", "data": "..."}
  * - 服务器 -> 客户端: {"type": "tool_call", "data": {...}}
- * - 服务器 -> 客户端: {"type": "log", "data": {...}}  ← 新增：日志消息
+ * - 服务器 -> 客户端: {"type": "step_start", "data": {...}}
+ * - 服务器 -> 客户端: {"type": "step_thinking", "data": {...}}
+ * - 服务器 -> 客户端: {"type": "step_action", "data": {...}}
+ * - 服务器 -> 客户端: {"type": "step_complete", "data": {...}}
+ * - 服务器 -> 客户端: {"type": "log", "data": {...}}
  * - 服务器 -> 客户端: {"type": "complete"}
  * - 服务器 -> 客户端: {"type": "error", "data": "..."}
  * 
@@ -315,7 +320,6 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     
     /**
      * 转义 JSON 字符串中的控制字符
-     * 注意：只转义真正的换行符等控制字符，不要转义已经转义的字符
      */
     private String escapeJson(String str) {
         if (str == null) return "";
@@ -360,12 +364,35 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                 session.setModel(model);
             }
             
-            // 创建 LLM 步骤
-            sendStepAction(conn, "思考", "AI 正在思考...");
-            
             // 创建 LLMFactory 和 QueryEngine
             LLMFactory llmFactory = LLMFactory.fromConfig(config);
             LLMQueryEngine engine = llmFactory.createQueryEngine(session);
+            
+            // 创建步骤回调，将步骤信息通过 WebSocket 发送给前端
+            LLMQueryEngine.StepCallback stepCallback = new LLMQueryEngine.StepCallback() {
+                @Override
+                public void onStepStart(String stepName, String description) {
+                    sendStepStart(conn, stepName, description);
+                }
+                
+                @Override
+                public void onStepThinking(String stepName, String thought) {
+                    sendStepThinking(conn, stepName, thought);
+                }
+                
+                @Override
+                public void onStepAction(String stepName, String action) {
+                    sendStepAction(conn, stepName, action);
+                }
+                
+                @Override
+                public void onStepComplete(String stepName, String result) {
+                    sendStepComplete(conn, stepName, result);
+                }
+            };
+            
+            // 设置回调
+            engine.setStepCallback(stepCallback);
             
             // 执行查询
             LLMQueryEngine.QueryResult result = engine.query(message).join();
@@ -376,8 +403,6 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                 String response = extractMessageContent(aiMessage);
                 
                 if (response != null && !response.isEmpty()) {
-                    // 标记步骤完成，开始输出
-                    sendStepComplete(conn, "思考", "完成");
                     // 流式输出AI回复
                     simulateStreamOutput(conn, response);
                 }
@@ -462,17 +487,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     }
     
     /**
-     * 截断字符串
-     */
-    private String truncate(String str, int maxLength) {
-        if (str == null) return "";
-        if (str.length() <= maxLength) return str;
-        return str.substring(0, maxLength - 3) + "...";
-    }
-    
-    /**
      * 从 Message 对象中提取文本内容
-     * 过滤掉系统提示词和thinking内容，防止泄露
      */
     private String extractMessageContent(com.jwcode.core.model.Message message) {
         if (message == null || message.getContent() == null) {
@@ -483,7 +498,6 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         for (com.jwcode.core.model.Message.ContentBlock block : message.getContent()) {
             if (block instanceof com.jwcode.core.model.Message.TextContent) {
                 String text = ((com.jwcode.core.model.Message.TextContent) block).getText();
-                // 过滤系统提示词泄露（以"用户说"、"分析请求"等开头的内部思考）
                 text = filterInternalThinking(text);
                 sb.append(text);
             }
@@ -492,21 +506,19 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     }
     
     /**
-     * 过滤内部思考内容，防止系统提示词泄露
+     * 过滤内部思考内容
      */
     private String filterInternalThinking(String text) {
         if (text == null || text.isEmpty()) {
             return text;
         }
         
-        // 定义需要过滤的内部思考标记
         String[] thinkingMarkers = {
             "用户说", "分析请求", "正在分析用户输入", "💭", 
             "我已经找到了用户", "根据系统提示", "作为AI助手",
             "我需要", "我会", "让我", "思考过程："
         };
         
-        // 如果文本以这些标记开头，说明是内部思考，返回空
         for (String marker : thinkingMarkers) {
             if (text.trim().startsWith(marker)) {
                 logger.fine("过滤内部思考内容: " + truncate(text, 50));
@@ -514,7 +526,6 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             }
         }
         
-        // 移除 thinking XML 标签及其内容
         text = text.replaceAll("(?s)<thinking>.*?</thinking>", "");
         text = text.replaceAll("(?s)\\[思考\\].*?\\[/思考\\]", "");
         
@@ -527,7 +538,6 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     private ClientMessage parseMessage(String json) {
         ClientMessage msg = new ClientMessage();
         
-        // 简单解析（实际应该使用 JSON 库）
         msg.type = extractJsonValue(json, "type");
         msg.sessionId = extractJsonValue(json, "sessionId");
         msg.message = extractJsonValue(json, "message");
@@ -558,11 +568,19 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     }
     
     /**
+     * 截断字符串
+     */
+    private String truncate(String str, int maxLength) {
+        if (str == null) return "";
+        if (str.length() <= maxLength) return str;
+        return str.substring(0, maxLength - 3) + "...";
+    }
+    
+    /**
      * 关闭所有连接
      */
     public void shutdown() {
         try {
-            // 移除所有日志监听器
             for (Consumer<LogEntry> listener : logListeners.values()) {
                 WebSocketLogBroadcaster.getInstance().removeListener(listener);
             }
@@ -596,17 +614,17 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         COMPLETE,       // 完成
         ERROR,          // 错误
         PONG,           // 心跳响应
-        LOG             // 日志消息（新增）
+        LOG             // 日志消息
     }
     
     /**
      * 日志条目类
      */
     public static class LogEntry {
-        private final String level;   // info, warn, error, success, tool
-        private final String source;  // 日志来源
-        private final String message; // 消息内容
-        private final long timestamp; // 时间戳
+        private final String level;
+        private final String source;
+        private final String message;
+        private final long timestamp;
         
         public LogEntry(String level, String source, String message) {
             this.level = level;
@@ -650,7 +668,6 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                       .replace("\r", "\\r");
         }
         
-        // Getters
         public String getLevel() { return level; }
         public String getSource() { return source; }
         public String getMessage() { return message; }

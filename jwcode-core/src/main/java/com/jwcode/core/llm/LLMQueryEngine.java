@@ -15,7 +15,10 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 import java.util.logging.Logger;
+
+import com.jwcode.core.service.ContextWindowManager;
 
 /**
  * 基于 LLM 服务的查询引擎
@@ -31,6 +34,7 @@ public class LLMQueryEngine {
     private final ToolExecutor toolExecutor;
     private final ToolExecutionContext toolContext;
     private final EngineConfig config;
+    private StepCallback stepCallback;
     
     private final Instant startTime;
     private final List<String> toolCallHistory;
@@ -52,25 +56,56 @@ public class LLMQueryEngine {
     }
     
     /**
+     * 设置步骤回调，用于在执行过程中报告进度
+     */
+    public void setStepCallback(StepCallback callback) {
+        this.stepCallback = callback;
+    }
+    
+    /**
+     * 步骤回调接口
+     */
+    public interface StepCallback {
+        void onStepStart(String stepName, String description);
+        void onStepThinking(String stepName, String thought);
+        void onStepAction(String stepName, String action);
+        void onStepComplete(String stepName, String result);
+    }
+    
+    /**
      * 执行查询
      */
     public CompletableFuture<QueryResult> query(String prompt) {
         logger.info("[LLMQueryEngine] Query: " + prompt);
         
+        // 触发回调：开始查询
+        if (stepCallback != null) {
+            stepCallback.onStepStart("LLM查询", "正在分析问题并制定解决方案...");
+        }
+        
         // 添加用户消息到会话
         session.addMessage(Message.createUserMessage(prompt));
         
-        // 开始对话循环
-        return runConversationLoop(0);
+        // 开始对话循环，初始空回复计数为 0
+        return runConversationLoop(0, 0);
     }
+    
+    // 空回复限制次数
+    private static final int MAX_EMPTY_RESPONSES = 3;
+    // 结束标记
+    private static final String FINISH_MARKER = "[FINISH]";
     
     /**
      * 对话循环
+     * 
+     * @param iteration 当前迭代次数
+     * @param emptyResponseCount 连续空回复次数
      */
-    private CompletableFuture<QueryResult> runConversationLoop(int iteration) {
+    private CompletableFuture<QueryResult> runConversationLoop(int iteration, int emptyResponseCount) {
         // 检查迭代限制
         if (config.getMaxIterations() > 0 && iteration >= config.getMaxIterations()) {
             logger.warning("[LLMQueryEngine] Max iterations reached: " + config.getMaxIterations());
+            triggerStepComplete("LLM查询", "达到最大迭代次数限制");
             return CompletableFuture.completedFuture(
                 QueryResult.error("达到最大迭代次数限制")
             );
@@ -81,6 +116,7 @@ public class LLMQueryEngine {
             Duration elapsed = Duration.between(startTime, Instant.now());
             if (elapsed.compareTo(config.getTimeout()) > 0) {
                 logger.warning("[LLMQueryEngine] Timeout after " + elapsed);
+                triggerStepComplete("LLM查询", "查询超时");
                 return CompletableFuture.completedFuture(
                     QueryResult.error("查询超时")
                 );
@@ -95,20 +131,34 @@ public class LLMQueryEngine {
         // 获取可用工具
         List<LLMTool> tools = convertTools(toolExecutor.getEnabledTools());
         
+        // 触发回调：发送请求
+        if (stepCallback != null) {
+            if (iteration == 0) {
+                stepCallback.onStepThinking("思考", "正在构建请求，发送 " + llmMessages.size() + " 条消息给AI模型...");
+            } else {
+                stepCallback.onStepThinking("分析", "继续对话循环 (第 " + iteration + " 轮)");
+            }
+        }
+        
         // 发送请求
         CompletableFuture<LLMResponse> future = tools.isEmpty() 
             ? llmService.chat(llmMessages)
             : llmService.chatWithTools(llmMessages, tools);
         
-        return future.thenCompose(response -> handleResponse(response, iteration));
+        return future.thenCompose(response -> handleResponse(response, iteration, emptyResponseCount));
     }
     
     /**
      * 处理响应
+     * 
+     * @param response LLM 响应
+     * @param iteration 当前迭代次数
+     * @param emptyResponseCount 连续空回复次数
      */
-    private CompletableFuture<QueryResult> handleResponse(LLMResponse response, int iteration) {
+    private CompletableFuture<QueryResult> handleResponse(LLMResponse response, int iteration, int emptyResponseCount) {
         if (response.hasError()) {
             logger.severe("[LLMQueryEngine] API error: " + response.getErrorMessage());
+            triggerStepComplete("LLM查询", "API错误: " + response.getErrorMessage());
             return CompletableFuture.completedFuture(
                 QueryResult.error(response.getErrorMessage())
             );
@@ -130,63 +180,124 @@ public class LLMQueryEngine {
             // 添加到会话
             session.addMessage(assistantMessage);
             
+            // 触发回调：准备调用工具
+            if (stepCallback != null) {
+                stepCallback.onStepThinking("分析", "AI决定调用 " + response.getToolCalls().size() + " 个工具");
+            }
+            
             // 执行工具调用
-            return executeToolCalls(response.getToolCalls(), iteration + 1);
+            return executeToolCalls(response.getToolCalls(), iteration + 1, emptyResponseCount);
         } else {
             // 没有工具调用
-            assistantMessage = Message.createAssistantMessage(
-                response.getContent()
-            );
+            String content = response.getContent();
+            assistantMessage = Message.createAssistantMessage(content);
             session.addMessage(assistantMessage);
             
-            // 只有当有 finishReason 时才结束对话
+            // 检查是否有 finishReason
             if (response.getFinishReason() != null) {
+                triggerStepComplete("LLM查询", "完成回复");
                 return CompletableFuture.completedFuture(
                     QueryResult.success(assistantMessage)
                 );
-            } else {
-                // 没有 finishReason，继续对话循环
-                return runConversationLoop(iteration + 1);
             }
+            
+            // 检查回复内容是否包含结束标记
+            if (content != null && content.contains(FINISH_MARKER)) {
+                logger.info("[LLMQueryEngine] 检测到结束标记 " + FINISH_MARKER + "，结束对话");
+                triggerStepComplete("LLM查询", "完成回复");
+                return CompletableFuture.completedFuture(
+                    QueryResult.success(assistantMessage)
+                );
+            }
+            
+            // 检查是否为空回复
+            if (content == null || content.trim().isEmpty()) {
+                emptyResponseCount++;
+                logger.warning("[LLMQueryEngine] 空回复 (第 " + emptyResponseCount + "/" + MAX_EMPTY_RESPONSES + " 次)");
+                
+                if (emptyResponseCount >= MAX_EMPTY_RESPONSES) {
+                    logger.warning("[LLMQueryEngine] 空回复次数已达上限，强制结束对话");
+                    triggerStepComplete("LLM查询", "空回复过多，已自动结束");
+                    return CompletableFuture.completedFuture(
+                        QueryResult.error("对话无响应，已自动结束")
+                    );
+                }
+            } else {
+                // 有有效内容，重置空回复计数
+                emptyResponseCount = 0;
+                
+                // 添加提示消息，提醒 AI 使用结束标记
+                session.addMessage(Message.createSystemMessage(
+                    "提示：如果任务已完成，请在回复末尾添加 [FINISH] 标记以结束对话。例如：\"任务已完成。\n\n[FINISH]\""
+                ));
+            }
+            
+            // 没有 finishReason，继续对话循环
+            return runConversationLoop(iteration + 1, emptyResponseCount);
         }
     }
     
     /**
      * 执行工具调用
+     * 
+     * @param toolCalls 工具调用列表
+     * @param nextIteration 下一轮迭代次数
+     * @param emptyResponseCount 连续空回复次数
      */
-    private CompletableFuture<QueryResult> executeToolCalls(List<LLMMessage.ToolCall> toolCalls, int nextIteration) {
+    private CompletableFuture<QueryResult> executeToolCalls(List<LLMMessage.ToolCall> toolCalls, int nextIteration, int emptyResponseCount) {
         logger.info("[LLMQueryEngine] Executing " + toolCalls.size() + " tool calls");
         
         List<CompletableFuture<ToolExecutionResult>> futures = new ArrayList<>();
+        int toolIndex = 1;
         
         for (LLMMessage.ToolCall tc : toolCalls) {
+            String toolName = tc.getFunction().getName();
+            
+            // 触发回调：开始执行工具
+            if (stepCallback != null) {
+                stepCallback.onStepAction("工具调用", "执行 " + toolName + " (第 " + toolIndex + "/" + toolCalls.size() + " 个)");
+            }
+            
             // 记录工具调用历史
-            toolCallHistory.add(tc.getFunction().getName() + ":" + tc.getFunction().getArguments());
+            toolCallHistory.add(toolName + ":" + tc.getFunction().getArguments());
             
             // 查找并执行工具
-            Tool<?, ?, ?> tool = findTool(tc.getFunction().getName());
+            Tool<?, ?, ?> tool = findTool(toolName);
             if (tool == null) {
-                logger.warning("[LLMQueryEngine] Tool not found: " + tc.getFunction().getName());
+                logger.warning("[LLMQueryEngine] Tool not found: " + toolName);
+                // 触发回调：工具未找到
+                if (stepCallback != null) {
+                    stepCallback.onStepComplete("工具执行", "未找到工具: " + toolName);
+                }
                 // 必须添加错误结果，否则 assistant 的 tool_calls 会缺少对应的 tool 消息
                 futures.add(CompletableFuture.completedFuture(
-                    new ToolExecutionResult(tc.getId(), tc.getFunction().getName(),
-                        tc.getFunction().getArguments(), "Error: Tool not found: " + tc.getFunction().getName())
+                    new ToolExecutionResult(tc.getId(), toolName,
+                        tc.getFunction().getArguments(), "Error: Tool not found: " + toolName)
                 ));
+                toolIndex++;
                 continue;
             }
             
             // 异步执行工具（传入输入参数）
             CompletableFuture<ToolExecutionResult> future = executeToolAsync(tool, tc);
             futures.add(future);
+            toolIndex++;
         }
         
         // 等待所有工具执行完成
         return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
             .thenCompose(v -> {
                 // 添加工具结果到会话
+                int resultIndex = 1;
                 for (CompletableFuture<ToolExecutionResult> future : futures) {
                     try {
                         ToolExecutionResult result = future.get();
+                        
+                        // 触发回调：工具执行完成
+                        if (stepCallback != null) {
+                            String resultPreview = truncate(result.getResult(), 100);
+                            stepCallback.onStepComplete("工具执行", result.getToolName() + " → " + resultPreview);
+                        }
                         
                         // 添加工具结果消息（包含输入参数）
                         Message toolResultMsg = Message.createToolResultMessage(
@@ -199,12 +310,50 @@ public class LLMQueryEngine {
                         
                     } catch (Exception e) {
                         logger.severe("[LLMQueryEngine] Failed to get tool result: " + e.getMessage());
+                        if (stepCallback != null) {
+                            stepCallback.onStepComplete("工具执行", "执行失败: " + e.getMessage());
+                        }
+                        // 即使获取结果失败，也必须添加工具结果消息以保持 tool_calls 与 results 数量一致
+                        // 使用第一个工具调用的 ID 作为回退
+                        String fallbackToolCallId = "unknown";
+                        if (resultIndex <= futures.size() && toolCalls != null && resultIndex <= toolCalls.size()) {
+                            fallbackToolCallId = toolCalls.get(resultIndex - 1).getId();
+                        }
+                        Message errorMsg = Message.createToolResultMessage(
+                            fallbackToolCallId,
+                            "system",
+                            "Error: Failed to get tool result - " + e.getMessage()
+                        );
+                        session.addMessage(errorMsg);
                     }
                 }
                 
-                // 继续对话循环
-                return runConversationLoop(nextIteration);
+                // 触发回调：继续分析
+                if (stepCallback != null) {
+                    stepCallback.onStepThinking("分析", "工具执行完成，继续分析结果...");
+                }
+                
+                // 继续对话循环（重置空回复计数，因为工具执行可能有有效输出）
+                return runConversationLoop(nextIteration, 0);
             });
+    }
+    
+    /**
+     * 触发步骤完成回调
+     */
+    private void triggerStepComplete(String stepName, String result) {
+        if (stepCallback != null) {
+            stepCallback.onStepComplete(stepName, result);
+        }
+    }
+    
+    /**
+     * 截断字符串
+     */
+    private String truncate(String str, int maxLength) {
+        if (str == null) return "";
+        if (str.length() <= maxLength) return str;
+        return str.substring(0, maxLength - 3) + "...";
     }
     
     /**
@@ -283,12 +432,35 @@ public class LLMQueryEngine {
     }
     
     /**
+     * 上下文窗口管理器 - 用于自动压缩消息历史
+     * 默认限制 50 条消息，避免超出 LLM 的上下文窗口
+     */
+    private static final ContextWindowManager contextWindowManager = 
+        new ContextWindowManager(
+            ContextWindowManager.DEFAULT_CONTEXT_LIMIT,  // Token 限制
+            50,   // 最大消息数：降低到 50（原 100 导致问题）
+            4     // 最小保留消息数
+        );
+    
+    /**
      * 转换会话消息到 LLM 格式
+     * 
+     * 关键修复：自动使用 ContextWindowManager 压缩消息历史，
+     * 防止消息数量超出 LLM 的上下文窗口限制（100 条）
      */
     private List<LLMMessage> convertSessionMessages(Session session) {
+        List<Message> messages = session.getMessages();
+        
+        // 检查并自动压缩消息历史
+        if (messages.size() > 40) {  // 接近限制前就开始压缩
+            logger.info("[LLMQueryEngine] 消息数量 " + messages.size() + " 接近限制，使用 ContextWindowManager 压缩");
+            messages = contextWindowManager.prepareMessages(messages);
+            logger.info("[LLMQueryEngine] 压缩后消息数量: " + messages.size());
+        }
+        
         List<LLMMessage> result = new ArrayList<>();
         
-        for (Message msg : session.getMessages()) {
+        for (Message msg : messages) {
             LLMMessage.Role role = convertRole(msg.getRole());
             
             if (role == null) continue;

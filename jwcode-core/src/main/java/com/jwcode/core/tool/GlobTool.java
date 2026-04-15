@@ -10,7 +10,10 @@ import java.io.IOException;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
@@ -249,6 +252,22 @@ public class GlobTool implements Tool<GlobInput, GlobOutput, GlobTool.GlobProgre
             public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
                 String dirName = dir.getFileName().toString();
                 
+                // 默认忽略的目录模式（这些目录通常不包含用户代码）
+                Set<String> ignoredDirs = new HashSet<>(Arrays.asList(
+                    // 版本控制
+                    ".git", ".svn", ".hg", ".cvs",
+                    // 构建输出
+                    "target", "build", "dist", "out", "bin",
+                    // 依赖目录
+                    "node_modules", "bower_components", "vendor",
+                    // Python
+                    "__pycache__", ".venv", "venv", ".env",
+                    // Java
+                    ".gradle", ".idea",
+                    // 其他
+                    ".cache", ".temp", "tmp", ".tmp"
+                ));
+                
                 // 跳过隐藏目录和常见的大型无关目录
                 if (dirName.startsWith(".") && !dirName.equals("..")) {
                     // 但允许 .github, .vscode 等常见目录
@@ -259,15 +278,8 @@ public class GlobTool implements Tool<GlobInput, GlobOutput, GlobTool.GlobProgre
                 }
                 
                 // 跳过常见的依赖目录
-                if (dirName.equals("node_modules") || dirName.equals("target") || 
-                    dirName.equals("build") || dirName.equals("dist") ||
-                    dirName.equals(".git") || dirName.equals("__pycache__") ||
-                    dirName.equals("venv") || dirName.equals(".venv") ||
-                    dirName.equals("bin") || dirName.equals("out")) {
-                    // 但如果搜索路径就是这个目录，不要跳过
-                    if (!dir.startsWith(normalizedStartPath)) {
-                        return FileVisitResult.SKIP_SUBTREE;
-                    }
+                if (ignoredDirs.contains(dirName)) {
+                    return FileVisitResult.SKIP_SUBTREE;
                 }
                 
                 return FileVisitResult.CONTINUE;

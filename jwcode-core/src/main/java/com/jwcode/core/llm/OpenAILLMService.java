@@ -38,6 +38,9 @@ public class OpenAILLMService implements LLMService {
     private final ServiceConfig config;
     private int currentKeyIndex = 0;
     
+    // 消息数量限制：降低到 50（原 100 导致上下文窗口超限）
+    private static final int MAX_MESSAGE_COUNT = 500;
+    
     public OpenAILLMService(ServiceConfig config) {
         this.config = config;
         // 增加连接超时到60秒
@@ -531,48 +534,25 @@ public class OpenAILLMService implements LLMService {
     /**
      * 构建请求体 - 使用标准的 OpenAIRequestBuilder
      * 
-     * 消息截断策略：
-     * - 保留所有 assistant 消息（可能包含 tool_calls）
-     * - 保留所有 user 消息（安全的）
-     * - 只截断 tool 消息（可以丢弃，只要对应的 assistant 消息保留）
+     * 消息截断策略（修复 TOOL -> USER 无效序列问题）：
+     * - 按组截断：USER -> ASSISTANT -> TOOL* 为一组，不可拆分
+     * - TOOL 消息必须保留其对应的 ASSISTANT 消息（包含 tool_calls）
+     * - 如果截断会破坏序列，则整组丢弃
      * - 保留系统消息（总是在最前面）
      * 
-     * 这样确保消息序列总是 valid 的，不会出现 tool 消息没有对应 assistant 消息的问题
+     * 这样确保消息序列总是 valid 的，不会出现 TOOL -> USER 无效序列
      */
     private ObjectNode buildRequestBody(List<LLMMessage> messages, List<LLMTool> tools) {
         List<LLMMessage> filteredMessages = messages;
         
-        // 检查是否有需要截断的 tool 消息
-        if (messages.size() > 100) {
-            log.warning("[OpenAI] Too many messages (" + messages.size() + "), filtering tool messages");
+        // 检查是否有需要截断的消息
+        if (messages.size() > MAX_MESSAGE_COUNT) {
+            log.warning("[OpenAI] Too many messages (" + messages.size() + "), filtering to " + MAX_MESSAGE_COUNT);
             
-            filteredMessages = new ArrayList<>();
-            int toolCount = 0;
-            
-            for (LLMMessage msg : messages) {
-                // 保留系统消息
-                if (msg.getRole() == LLMMessage.Role.SYSTEM) {
-                    filteredMessages.add(msg);
-                }
-                // 保留 assistant 和 user 消息
-                else if (msg.getRole() == LLMMessage.Role.ASSISTANT || 
-                         msg.getRole() == LLMMessage.Role.USER) {
-                    filteredMessages.add(msg);
-                }
-                // 处理 tool 消息：只保留最近的 100 条
-                else if (msg.getRole() == LLMMessage.Role.TOOL) {
-                    toolCount++;
-                    // 只保留最近的 100 条 tool 消息（通常是最后一轮调用的结果）
-                    if (toolCount > 100) {
-                        log.fine("[OpenAI] Skipping old tool message: " + msg.getToolCallId());
-                        continue;
-                    }
-                    filteredMessages.add(msg);
-                }
-            }
+            filteredMessages = smartFilterMessages(messages, MAX_MESSAGE_COUNT);
             
             log.info("[OpenAI] Filtered to " + filteredMessages.size() + " messages (skipped " + 
-                     (messages.size() - filteredMessages.size()) + " old tool messages)");
+                     (messages.size() - filteredMessages.size()) + " old messages)");
         }
         
         OpenAIRequestBuilder builder = new OpenAIRequestBuilder(config.getModel())
@@ -660,6 +640,117 @@ public class OpenAILLMService implements LLMService {
         }
         
         return truncatedMessages;
+    }
+    
+    /**
+     * 智能过滤消息 - 确保不会出现 TOOL -> USER 无效序列
+     * 
+     * 策略：按组截断，每组 USER -> ASSISTANT -> TOOL* 为一组
+     * 从后向前保留最近的消息
+     */
+    private List<LLMMessage> smartFilterMessages(List<LLMMessage> messages, int maxCount) {
+        if (messages.size() <= maxCount) {
+            return messages;
+        }
+        
+        // 提取系统消息
+        LLMMessage systemMsg = null;
+        List<LLMMessage> nonSystemMessages = new ArrayList<>();
+        
+        for (LLMMessage msg : messages) {
+            if (msg.getRole() == LLMMessage.Role.SYSTEM) {
+                systemMsg = msg;
+            } else {
+                nonSystemMessages.add(msg);
+            }
+        }
+        
+        // 按组划分消息
+        List<List<LLMMessage>> groups = new ArrayList<>();
+        List<LLMMessage> currentGroup = new ArrayList<>();
+        LLMMessage.Role lastRole = null;
+        
+        for (LLMMessage msg : nonSystemMessages) {
+            // 新的 USER 消息开始新组
+            if (msg.getRole() == LLMMessage.Role.USER && lastRole != LLMMessage.Role.USER) {
+                if (!currentGroup.isEmpty()) {
+                    groups.add(currentGroup);
+                }
+                currentGroup = new ArrayList<>();
+            }
+            currentGroup.add(msg);
+            lastRole = msg.getRole();
+        }
+        
+        if (!currentGroup.isEmpty()) {
+            groups.add(currentGroup);
+        }
+        
+        // 从后向前选择要保留的组
+        List<LLMMessage> result = new ArrayList<>();
+        java.util.Set<String> validToolCallIds = new java.util.HashSet<>();
+        
+        // 收集所有有效的 tool_call_ids（来自保留的 ASSISTANT 消息）
+        for (int i = groups.size() - 1; i >= 0 && result.size() < maxCount; i--) {
+            List<LLMMessage> group = groups.get(i);
+            
+            // 检查这组是否会导致消息数量超限
+            int neededSlots = group.size();
+            int availableSlots = maxCount - result.size();
+            
+            if (neededSlots <= availableSlots) {
+                // 可以完整添加这组
+                for (LLMMessage msg : group) {
+                    result.add(0, msg);
+                    // 更新有效的 tool_call_ids
+                    if (msg.getRole() == LLMMessage.Role.ASSISTANT && msg.hasToolCalls()) {
+                        for (LLMMessage.ToolCall tc : msg.getToolCalls()) {
+                            if (tc.getId() != null) {
+                                validToolCallIds.add(tc.getId());
+                            }
+                        }
+                    }
+                }
+            } else {
+                // 需要部分添加 - 优先保留 USER + ASSISTANT
+                for (LLMMessage msg : group) {
+                    if (result.size() >= maxCount) break;
+                    
+                    // 跳过孤立的 TOOL 消息
+                    if (msg.getRole() == LLMMessage.Role.TOOL) {
+                        String toolCallId = msg.getToolCallId();
+                        if (toolCallId == null || !validToolCallIds.contains(toolCallId)) {
+                            log.fine("[OpenAI] Skipping orphaned TOOL in filter: " + toolCallId);
+                            continue;
+                        }
+                    }
+                    
+                    result.add(0, msg);
+                    
+                    // 更新有效的 tool_call_ids
+                    if (msg.getRole() == LLMMessage.Role.ASSISTANT && msg.hasToolCalls()) {
+                        for (LLMMessage.ToolCall tc : msg.getToolCalls()) {
+                            if (tc.getId() != null) {
+                                validToolCallIds.add(tc.getId());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // 验证最终序列：如果以 TOOL 开头，需要移除
+        while (!result.isEmpty() && result.get(0).getRole() == LLMMessage.Role.TOOL) {
+            log.warning("[OpenAI] Removing leading TOOL message to fix sequence");
+            result.remove(0);
+        }
+        
+        // 添加系统消息到最前面
+        if (systemMsg != null) {
+            result.add(0, systemMsg);
+        }
+        
+        return result;
     }
     
     /**

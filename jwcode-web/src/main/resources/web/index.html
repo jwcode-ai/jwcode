@@ -910,6 +910,7 @@
         // 步骤跟踪器
         let currentStepEl = null;
         let stepContainerEl = null;
+        let stepCounter = 0;
         
         // 处理 WebSocket 消息
         function handleMessage(msg) {
@@ -1048,10 +1049,11 @@
                 stepContainerEl = createStepContainer();
             }
             
+            stepCounter++;
             const stepEl = document.createElement('div');
             stepEl.className = 'step-item running';
-            stepEl.id = 'step-' + data.stepNumber;
-            stepEl.innerHTML = '<div class="step-icon running">⟳</div><div class="step-content"><div class="step-title">' + data.step + '</div><div class="step-desc">' + (data.description || '正在执行...') + '</div></div>';
+            stepEl.id = 'step-' + stepCounter;
+            stepEl.innerHTML = '<div class="step-icon running">⟳</div><div class="step-content"><div class="step-title">' + (data.step || '执行中') + '</div><div class="step-desc">' + (data.description || '正在执行...') + '</div></div>';
             stepContainerEl.stepBody.appendChild(stepEl);
             currentStepEl = stepEl;
             updateStepCount();

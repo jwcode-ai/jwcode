@@ -1,10 +1,13 @@
 package com.jwcode.core.skill;
 
+import com.jwcode.core.llm.LLMService;
+import com.jwcode.core.skill.executor.DefaultSkillExecutor;
 import lombok.Builder;
 import lombok.Data;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * 技能定义
@@ -122,13 +125,66 @@ public class Skill {
     }
     
     /**
-     * 执行技能
+     * 设置 LLM 服务，创建默认执行器
      */
-    public SkillResult execute(SkillContext context) {
+    public void setLLMService(LLMService llmService) {
+        this.executor = new DefaultSkillExecutor(llmService);
+    }
+    
+    /**
+     * 设置自定义执行器
+     */
+    public void setExecutor(SkillExecutor executor) {
+        this.executor = executor;
+    }
+    
+    /**
+     * 异步执行技能
+     * 
+     * @param context 执行上下文
+     * @return CompletableFuture 包含执行结果
+     */
+    public CompletableFuture<SkillResult> executeAsync(SkillContext context) {
         if (executor == null) {
-            return SkillResult.error("Skill 未配置执行器: " + id);
+            return CompletableFuture.completedFuture(
+                SkillResult.error("Skill 未配置执行器: " + id)
+            );
         }
         return executor.execute(this, context);
+    }
+    
+    /**
+     * 同步执行技能（阻塞调用）
+     * 
+     * @param context 执行上下文
+     * @return 执行结果
+     */
+    public SkillResult execute(SkillContext context) {
+        try {
+            return executeAsync(context).get();
+        } catch (Exception e) {
+            return SkillResult.error("执行失败: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * 同步执行技能（简化调用）
+     * 
+     * @param input 用户输入
+     * @return 执行结果
+     */
+    public SkillResult execute(String input) {
+        return execute(SkillContext.builder().input(input).build());
+    }
+    
+    /**
+     * 异步执行技能（简化调用）
+     * 
+     * @param input 用户输入
+     * @return CompletableFuture 包含执行结果
+     */
+    public CompletableFuture<SkillResult> executeAsync(String input) {
+        return executeAsync(SkillContext.builder().input(input).build());
     }
     
     /**

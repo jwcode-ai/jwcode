@@ -44,6 +44,22 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
         "chmod.*777.*/", "chown.*root.*/"
     ));
     
+    // 自动忽略的文件/目录模式（用于过滤文件列表输出）
+    private static final Set<String> IGNORED_PATTERNS = new HashSet<>(Arrays.asList(
+        "\\.git", "\\.gitignore", "\\.gitmodules",
+        "\\\\target\\\\", "/target/", "\\\\target\\\\",
+        "\\.class", "\\.jar", "\\.war",
+        "\\.iml", "\\.ipr", "\\.iws",
+        "node_modules", "\\.npm", "\\.yarn",
+        "__pycache__", "\\.pyc", "\\.pyo",
+        "\\.venv", "\\.env", "venv",
+        "\\.gradle", "\\.idea",
+        "\\.DS_Store", "Thumbs.db",
+        "\\.log$", "\\.tmp$", "\\.temp$",
+        "\\\\bin\\\\", "\\\\out\\\\", "/bin/", "/out/",
+        "\\.bak$", "\\.swp$", "\\.swo$"
+    ));
+    
     @Override
     public String getName() {
         return "BashTool";
@@ -257,8 +273,10 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
             
             // 构建输出
             if (exitCode == 0) {
+                // 对文件列举命令的输出进行过滤
+                String filteredOutput = filterFileListOutput(stdout, input.command());
                 BashOutput output = BashOutput.success(
-                    truncateOutput(stdout),
+                    truncateOutput(filteredOutput),
                     input.command(),
                     processBuilder.directory() != null ? processBuilder.directory().getPath() : null
                 );
@@ -370,6 +388,71 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
         }
         
         return output.substring(0, MAX_OUTPUT_CHARS) + "\n...[输出被截断，总长度: " + output.length() + " 字符]";
+    }
+    
+    /**
+     * 过滤文件列表输出，自动忽略无关文件
+     * 用于 dir、ls 等列举文件的命令
+     */
+    private String filterFileListOutput(String output, String command) {
+        // 检测是否是文件列举命令
+        String lowerCommand = command.toLowerCase();
+        boolean isFileListCommand = lowerCommand.contains("dir ") || 
+                                   lowerCommand.contains("ls ") ||
+                                   lowerCommand.contains("find ") ||
+                                   lowerCommand.contains("get-childitem");
+        
+        if (!isFileListCommand) {
+            return output;
+        }
+        
+        String[] lines = output.split("\n");
+        StringBuilder filtered = new StringBuilder();
+        int filteredCount = 0;
+        
+        for (String line : lines) {
+            if (shouldIgnoreLine(line)) {
+                filteredCount++;
+                continue;
+            }
+            filtered.append(line).append("\n");
+        }
+        
+        String result = filtered.toString();
+        if (filteredCount > 0) {
+            result = result.trim() + "\n\n[已自动过滤 " + filteredCount + " 个无关文件/目录，如 .git、target、.class 等]";
+        }
+        
+        return result;
+    }
+    
+    /**
+     * 检查行是否应该被忽略
+     */
+    private boolean shouldIgnoreLine(String line) {
+        if (line == null || line.trim().isEmpty()) {
+            return false;
+        }
+        
+        String normalizedLine = line.replace('\\', '/');
+        
+        for (String pattern : IGNORED_PATTERNS) {
+            try {
+                // 处理 Windows 路径模式
+                String regex = pattern;
+                if (pattern.contains("\\\\")) {
+                    regex = pattern.replace("\\\\", "/");
+                }
+                
+                if (normalizedLine.matches(".*" + regex + ".*")) {
+                    return true;
+                }
+            } catch (Exception e) {
+                // 正则表达式无效，跳过此模式
+            }
+        }
+        
+        return false;
     }
     
     /**
