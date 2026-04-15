@@ -162,7 +162,7 @@ public class FileWriteTool implements Tool<FileWriteTool.Input, FileWriteTool.Ou
                 output.success = true;
                 
                 return ToolResult.success(output);
-            } catch (IOException e) {
+            } catch (Exception e) {
                 return ToolResult.<Output>error("写入文件失败: " + e.getMessage());
             }
         });

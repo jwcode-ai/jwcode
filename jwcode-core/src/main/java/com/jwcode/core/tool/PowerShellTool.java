@@ -1,4 +1,5 @@
 package com.jwcode.core.tool;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -84,9 +85,10 @@ public class PowerShellTool implements Tool<PowerShellTool.Input, PowerShellTool
                 } else {
                     String errorMsg = error.toString();
                     if (errorMsg == null || errorMsg.isEmpty()) {
-                        errorMsg = "PowerShell 命令执行失败，退出码: " + exitCode;
-                    } else {
-                        errorMsg = "PowerShell 命令执行失败 (exitCode=" + exitCode + "): " + errorMsg;
+                        errorMsg = output.toString();
+                    }
+                    if (errorMsg == null || errorMsg.isEmpty()) {
+                        errorMsg = "PowerShell 命令执行失败，无输出";
                     }
                     return ToolResult.error(errorMsg);
                 }
@@ -130,6 +132,7 @@ public class PowerShellTool implements Tool<PowerShellTool.Input, PowerShellTool
         return cmd.startsWith("get-") || cmd.startsWith("test-") || cmd.startsWith("select-");
     }
     
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public static class Input { 
         public String command; 
         

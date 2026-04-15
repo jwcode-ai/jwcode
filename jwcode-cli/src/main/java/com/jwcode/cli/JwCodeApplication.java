@@ -322,16 +322,23 @@ public class JwCodeApplication implements AutoCloseable {
         System.out.print("\n" + CliLogger.CYAN + "🤔 思考中..." + CliLogger.RESET);
         System.out.flush();
         
+        CliLogger logger = CliLogger.getInstance();
+        logger.debug("=== handleNaturalLanguageQuery 开始 ===");
+        logger.debug("用户输入: " + input);
+        
         try {
             // 使用 LLMQueryEngine 执行查询
             Session session = llmQueryEngine.getSession();
             session.addMessage(Message.createUserMessage(input));
+            logger.debug("消息已添加到会话，当前消息数: " + session.getMessages().size());
             
             // 开始对话循环
+            logger.debug("开始 runConversationWithThinking...");
             runConversationWithThinking(0);
+            logger.debug("=== handleNaturalLanguageQuery 结束 ===");
             
         } catch (Exception e) {
-            terminal.printError("执行错误: " + e.getMessage());
+            logger.error("执行错误: " + e.getMessage());
             e.printStackTrace(System.err);
         }
         
@@ -342,6 +349,8 @@ public class JwCodeApplication implements AutoCloseable {
      * 带思考过程的对话循环
      */
     private void runConversationWithThinking(int iteration) throws Exception {
+        CliLogger logger = CliLogger.getInstance();
+        
         // 检查迭代限制
         LLMQueryEngine.EngineConfig config = llmQueryEngine.getConfig();
         if (config.getMaxIterations() > 0 && iteration >= config.getMaxIterations()) {
@@ -358,14 +367,20 @@ public class JwCodeApplication implements AutoCloseable {
         List<LLMTool> tools = convertTools(llmQueryEngine.getToolExecutor().getEnabledTools());
         
         // 发送请求
+        logger.info(">>> runConversationWithThinking 第 " + iteration + " 次迭代");
+        logger.debug("发送 LLM 请求，消息数: " + llmMessages.size() + ", 工具数: " + tools.size());
+        
         CompletableFuture<LLMResponse> future = tools.isEmpty() 
             ? llmQueryEngine.getLLMService().chat(llmMessages)
             : llmQueryEngine.getLLMService().chatWithTools(llmMessages, tools);
         
+        logger.debug("等待 LLM 响应...");
         LLMResponse response = future.get();
+        logger.debug("LLM 响应已收到");
         
         if (response.hasError()) {
             System.out.println(CliLogger.RED + "❌ API 错误: " + response.getErrorMessage() + CliLogger.RESET);
+            logger.error("LLM API 错误: " + response.getErrorMessage());
             return;
         }
         
@@ -394,11 +409,20 @@ public class JwCodeApplication implements AutoCloseable {
             );
             session.addMessage(assistantMessage);
             
-            // 执行工具调用
-            executeToolCallsWithDisplay(response.getToolCalls());
+            logger.info("准备执行 " + response.getToolCalls().size() + " 个工具调用");
             
-            // 继续对话循环
-            runConversationWithThinking(iteration + 1);
+            // 执行工具调用
+            try {
+                executeToolCallsWithDisplay(response.getToolCalls());
+                logger.info("工具调用执行完成，准备继续对话循环...");
+                
+                // 继续对话循环
+                runConversationWithThinking(iteration + 1);
+            } catch (Exception e) {
+                logger.error("执行工具调用时发生异常", e);
+                System.out.println(CliLogger.RED + "❌ 执行工具时出错: " + e.getMessage() + CliLogger.RESET);
+                e.printStackTrace();
+            }
         } else {
             // 没有工具调用，直接显示回复
             assistantMessage = Message.createAssistantMessage(content);
@@ -409,6 +433,7 @@ public class JwCodeApplication implements AutoCloseable {
                 System.out.println("\r" + CliLogger.GREEN + "💬 回复:" + CliLogger.RESET);
                 System.out.println(content);
             }
+            logger.info("对话完成，无工具调用");
         }
     }
     
@@ -452,15 +477,23 @@ public class JwCodeApplication implements AutoCloseable {
      * 执行工具调用并显示结果
      */
     private void executeToolCallsWithDisplay(List<LLMMessage.ToolCall> toolCalls) throws Exception {
+        CliLogger logger = CliLogger.getInstance();
         Session session = llmQueryEngine.getSession();
+        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        
+        logger.info("开始执行 " + toolCalls.size() + " 个工具调用");
         
         for (LLMMessage.ToolCall tc : toolCalls) {
             String toolName = tc.getFunction().getName();
             String args = tc.getFunction().getArguments();
             
+            logger.debug("工具调用 - 名称: " + toolName);
+            logger.debug("工具调用 - 参数: " + args);
+            
             com.jwcode.core.tool.Tool<?, ?, ?> tool = findTool(toolName);
             if (tool == null) {
                 System.out.println(CliLogger.RED + "  ❌ 工具未找到: " + toolName + CliLogger.RESET);
+                logger.error("工具未找到: " + toolName);
                 // 必须添加错误结果，否则 assistant 的 tool_calls 会缺少对应的 tool 消息
                 session.addMessage(Message.createToolResultMessage(
                     tc.getId(), toolName, "Error: Tool not found: " + toolName));
@@ -468,16 +501,67 @@ public class JwCodeApplication implements AutoCloseable {
             }
             
             System.out.println(CliLogger.YELLOW + "  ⏳ 执行 " + toolName + "..." + CliLogger.RESET);
+            logger.info("开始执行工具: " + toolName);
             
-            // 模拟工具执行（实际应该调用工具执行器）
-            Thread.sleep(500); // 模拟执行时间
-            String result = "工具执行完成: " + toolName;
-            
-            System.out.println(CliLogger.GREEN + "  ✅ 完成" + CliLogger.RESET);
+            String result;
+            try {
+                com.fasterxml.jackson.databind.JsonNode argsNode = mapper.readTree(args);
+                com.jwcode.core.tool.context.ToolExecutionContext toolContext =
+                    new com.jwcode.core.tool.context.ToolExecutionContext(
+                        session,
+                        java.nio.file.Path.of(System.getProperty("user.dir")),
+                        null
+                    );
+                
+                logger.debug("提交工具执行到线程池...");
+                java.util.concurrent.CompletableFuture<com.jwcode.core.tool.ToolExecutor.ToolExecutionResult> future =
+                    llmQueryEngine.getToolExecutor().execute(toolName, argsNode, toolContext);
+                
+                logger.debug("等待工具执行结果...");
+                com.jwcode.core.tool.ToolExecutor.ToolExecutionResult execResult = future.get();
+                
+                logger.debug("工具执行完成，检查结果...");
+                
+                if (execResult.isSuccess()) {
+                    com.jwcode.core.tool.ToolResult<?> toolResult = execResult.getResult();
+                    if (toolResult != null && toolResult.isSuccess()) {
+                        Object data = toolResult.getData();
+                        if (data != null) {
+                            result = mapper.valueToTree(data).toString();
+                            logger.debug("工具执行成功，结果长度: " + result.length());
+                        } else {
+                            result = "Success";
+                            logger.debug("工具执行成功，无返回数据");
+                        }
+                    } else {
+                        String error = toolResult != null ? toolResult.getContent() : "Tool execution failed";
+                        result = "Error: " + error;
+                        logger.warn("工具执行失败: " + error);
+                    }
+                } else {
+                    result = "Error: " + execResult.getErrorMessage();
+                    logger.error("工具执行错误: " + execResult.getErrorMessage());
+                }
+                
+                if (execResult.isSuccess()) {
+                    System.out.println(CliLogger.GREEN + "  ✅ 完成" + CliLogger.RESET);
+                    logger.info("工具 " + toolName + " 执行成功");
+                } else {
+                    System.out.println(CliLogger.RED + "  ❌ 失败: " + execResult.getErrorMessage() + CliLogger.RESET);
+                    logger.error("工具 " + toolName + " 执行失败");
+                }
+            } catch (Exception e) {
+                result = "Error: " + e.getMessage();
+                System.out.println(CliLogger.RED + "  ❌ 异常: " + e.getMessage() + CliLogger.RESET);
+                logger.error("工具 " + toolName + " 抛出异常", e);
+            }
             
             // 添加工具结果到会话
+            logger.debug("添加工具结果到会话，toolCallId: " + tc.getId());
             session.addMessage(Message.createToolResultMessage(tc.getId(), toolName, result));
         }
+        
+        logger.info("所有工具调用执行完成，当前会话消息数: " + session.getMessages().size());
     }
     
     /**

@@ -266,9 +266,10 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
             } else {
                 String errorMsg = truncateOutput(stderr);
                 if (errorMsg == null || errorMsg.isEmpty()) {
-                    errorMsg = "命令执行失败，退出码: " + exitCode;
-                } else {
-                    errorMsg = "命令执行失败 (exitCode=" + exitCode + "): " + errorMsg;
+                    errorMsg = truncateOutput(stdout);
+                }
+                if (errorMsg == null || errorMsg.isEmpty()) {
+                    errorMsg = "命令执行失败，无输出";
                 }
                 return ToolResult.error(errorMsg);
             }

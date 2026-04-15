@@ -69,8 +69,9 @@ public class OpenAILLMService implements LLMService {
             log.info("[OpenAI] Model: " + config.getModel());
             log.info("[OpenAI] Message count: " + messages.size());
             
-            int maxRetries = 2;
+            int maxRetries = 3;  // 增加重试次数到 3
             int attempt = 0;
+            int retryDelay = 2000; // 初始重试延迟 2 秒
             
             while (attempt <= maxRetries) {
                 try {
@@ -104,14 +105,38 @@ public class OpenAILLMService implements LLMService {
                         log.info("[OpenAI] ---------- End Response Body ----------");
                         return parseResponse(responseBody);
                     } else if (response.statusCode() == 429) {
-                        // Rate limit, retry
+                        // Rate limit, retry with exponential backoff
                         attempt++;
                         if (attempt <= maxRetries) {
-                            log.warning("[OpenAI] Rate limited, retrying (" + attempt + "/" + maxRetries + ")...");
-                            Thread.sleep(1000 * attempt);
+                            log.warning("[OpenAI] Rate limited, retrying (" + attempt + "/" + maxRetries + ") after " + retryDelay + "ms...");
+                            Thread.sleep(retryDelay);
+                            retryDelay *= 2; // 指数退避
+                            // 切换 API key
+                            apiKey = getNextApiKey();
                             continue;
                         }
                         return LLMResponse.error("Rate limited. Please try again later.");
+                    } else if (response.statusCode() >= 500) {
+                        // 服务器错误 (500, 502, 503, 504)，重试
+                        attempt++;
+                        if (attempt <= maxRetries) {
+                            log.warning("[OpenAI] Server error " + response.statusCode() + ", retrying (" + attempt + "/" + maxRetries + ") after " + retryDelay + "ms...");
+                            String errorBody = response.body();
+                            log.info("[OpenAI] Server error body: " + errorBody);
+                            Thread.sleep(retryDelay);
+                            retryDelay *= 2; // 指数退避
+                            // 切换 API key
+                            apiKey = getNextApiKey();
+                            continue;
+                        }
+                        String errorBody = response.body();
+                        log.severe("[OpenAI] ---------- Server Error Response ----------");
+                        log.severe("[OpenAI] Status: " + response.statusCode());
+                        log.severe("[OpenAI] Body: " + errorBody);
+                        log.severe("[OpenAI] ---------- End Server Error Response ----------");
+                        return LLMResponse.error("Server error (HTTP " + response.statusCode() + "). The API server encountered an internal error. " +
+                            "This is usually temporary. Please try again in a few moments. " +
+                            "Error: " + errorBody);
                     } else {
                         String errorBody = response.body();
                         log.severe("[OpenAI] ---------- Error Response ----------");
@@ -124,7 +149,9 @@ public class OpenAILLMService implements LLMService {
                 } catch (java.net.http.HttpTimeoutException e) {
                     attempt++;
                     if (attempt <= maxRetries) {
-                        log.warning("[OpenAI] Request timeout, retrying (" + attempt + "/" + maxRetries + ")...");
+                        log.warning("[OpenAI] Request timeout, retrying (" + attempt + "/" + maxRetries + ") after " + retryDelay + "ms...");
+                        try { Thread.sleep(retryDelay); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+                        retryDelay *= 2; // 指数退避
                         // 切换 API key
                         apiKey = getNextApiKey();
                     } else {
@@ -134,18 +161,42 @@ public class OpenAILLMService implements LLMService {
                             "Current timeout: " + config.getTimeoutSeconds() + " seconds");
                     }
                 } catch (java.net.ConnectException e) {
-                    // ConnectException 是 SocketException 的子类，必须先捕获
-                    log.severe("[OpenAI] Connection failed: " + e.getMessage());
+                    attempt++;
+                    if (attempt <= maxRetries) {
+                        log.warning("[OpenAI] Connection failed, retrying (" + attempt + "/" + maxRetries + ") after " + retryDelay + "ms...");
+                        try { Thread.sleep(retryDelay); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+                        retryDelay *= 2;
+                        continue;
+                    }
+                    log.severe("[OpenAI] Connection failed after " + (maxRetries + 1) + " attempts: " + e.getMessage());
                     return LLMResponse.error("Connection failed. Please check your network and API endpoint: " + url);
                 } catch (java.net.SocketException e) {
-                    log.severe("[OpenAI] Connection reset: " + e.getMessage());
+                    attempt++;
+                    if (attempt <= maxRetries) {
+                        log.warning("[OpenAI] Connection reset, retrying (" + attempt + "/" + maxRetries + ") after " + retryDelay + "ms...");
+                        try { Thread.sleep(retryDelay); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+                        retryDelay *= 2;
+                        continue;
+                    }
+                    log.severe("[OpenAI] Connection reset after " + (maxRetries + 1) + " attempts: " + e.getMessage());
                     return LLMResponse.error("Connection reset. Possible causes:\n" +
                         "1. Request too large (too many messages in history) - Try 'clear' command\n" +
                         "2. Network instability\n" +
                         "3. API server closed connection\n" +
                         "Current messages: " + messages.size());
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    log.severe("[OpenAI] Request interrupted");
+                    return LLMResponse.error("Request was interrupted. Please try again.");
                 } catch (Exception e) {
-                    log.severe("[OpenAI] Request failed: " + e.getMessage());
+                    attempt++;
+                    if (attempt <= maxRetries) {
+                        log.warning("[OpenAI] Request failed, retrying (" + attempt + "/" + maxRetries + ") after " + retryDelay + "ms...");
+                        try { Thread.sleep(retryDelay); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+                        retryDelay *= 2;
+                        continue;
+                    }
+                    log.severe("[OpenAI] Request failed after " + (maxRetries + 1) + " attempts: " + e.getMessage());
                     return LLMResponse.error("Request failed: " + e.getMessage());
                 }
             }

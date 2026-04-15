@@ -32,8 +32,8 @@ class BashToolErrorTest {
 
         assertFalse(result.isSuccess(), "非 0 退出码应该返回 isSuccess() == false");
         assertNotNull(result.getContent(), "错误信息不应为空");
-        assertTrue(result.getContent().contains("exitCode=1") || result.getContent().contains("退出码"),
-                "错误信息应包含退出码: " + result.getContent());
+        assertFalse(result.getContent().isEmpty(),
+                "错误信息不应为空: " + result.getContent());
     }
 
     @Test

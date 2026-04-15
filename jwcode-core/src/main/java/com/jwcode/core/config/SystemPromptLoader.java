@@ -4,6 +4,9 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -33,11 +36,22 @@ public class SystemPromptLoader {
     private static long lastModified = 0;
     
     /**
-     * 获取系统提示词
+     * 获取系统提示词（包含动态环境信息）
      * 
      * @return 系统提示词内容，如果无法加载则返回默认提示词
      */
     public static String getSystemPrompt() {
+        String basePrompt = getBasePrompt();
+        String envInfo = getEnvironmentInfo();
+        return envInfo + "\n\n" + basePrompt;
+    }
+    
+    /**
+     * 获取基础系统提示词（不含环境信息，用于缓存）
+     * 
+     * @return 基础提示词内容
+     */
+    private static String getBasePrompt() {
         Path promptPath = getPromptPath();
         
         // 检查缓存是否有效
@@ -69,6 +83,31 @@ public class SystemPromptLoader {
         cachedPrompt = getDefaultPrompt();
         logger.info("使用内置默认系统提示词 (" + cachedPrompt.length() + " 字符)");
         return cachedPrompt;
+    }
+    
+    /**
+     * 获取动态环境信息
+     * 
+     * @return 包含系统版本、当前时间、工作目录等的环境信息字符串
+     */
+    public static String getEnvironmentInfo() {
+        String osName = System.getProperty("os.name", "Unknown");
+        String osVersion = System.getProperty("os.version", "Unknown");
+        String osArch = System.getProperty("os.arch", "Unknown");
+        String workingDir = System.getProperty("user.dir", "Unknown");
+        
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+            .withZone(ZoneId.systemDefault());
+        String currentTime = formatter.format(Instant.now());
+        
+        return """
+            [Environment Information]
+            Operating System: %s %s (%s)
+            Current Time: %s
+            Working Directory: %s
+            
+            You are allowed to change the working directory when needed (e.g., via Shell/BashTool cwd parameter or cd commands).
+            """.formatted(osName, osVersion, osArch, currentTime, workingDir);
     }
     
     /**
@@ -179,11 +218,10 @@ public class SystemPromptLoader {
      */
     public static String getPromptInfo() {
         Path path = getPromptPath();
+        String prompt = getSystemPrompt();
         if (Files.exists(path)) {
-            String prompt = getSystemPrompt();
             return "Loaded from " + path + " (" + (prompt != null ? prompt.length() : 0) + " chars)";
         }
-        String prompt = getSystemPrompt();
         return "Using default prompt (" + (prompt != null ? prompt.length() : 0) + " chars)";
     }
 }

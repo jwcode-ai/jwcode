@@ -133,15 +133,21 @@ public class LLMQueryEngine {
             // 执行工具调用
             return executeToolCalls(response.getToolCalls(), iteration + 1);
         } else {
-            // 没有工具调用，直接返回
+            // 没有工具调用
             assistantMessage = Message.createAssistantMessage(
                 response.getContent()
             );
             session.addMessage(assistantMessage);
             
-            return CompletableFuture.completedFuture(
-                QueryResult.success(assistantMessage)
-            );
+            // 只有当有 finishReason 时才结束对话
+            if (response.getFinishReason() != null) {
+                return CompletableFuture.completedFuture(
+                    QueryResult.success(assistantMessage)
+                );
+            } else {
+                // 没有 finishReason，继续对话循环
+                return runConversationLoop(iteration + 1);
+            }
         }
     }
     

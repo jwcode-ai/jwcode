@@ -217,7 +217,14 @@ public class ToolExecutor {
             
             // 执行工具 - 使用原始类型执行
             CompletableFuture<?> future = execute(tool, input, context, (Consumer) onProgress);
-            return future.thenApply(result -> {
+            return future.handle((result, throwable) -> {
+                if (throwable != null) {
+                    String errorMsg = throwable.getMessage() != null ? throwable.getMessage() : throwable.getClass().getSimpleName();
+                    logger.severe("║ [工具执行异常] " + toolName);
+                    logger.severe("║ 错误: " + errorMsg);
+                    return ToolExecutionResult.error(toolName, errorMsg);
+                }
+                
                 // 记录工具执行结果 - 包含完整的输出结果
                 ToolResult<?> toolResult = (ToolResult<?>) result;
                 if (toolResult != null && toolResult.isSuccess()) {

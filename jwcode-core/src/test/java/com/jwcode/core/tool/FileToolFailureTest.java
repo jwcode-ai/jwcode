@@ -72,6 +72,40 @@ class FileToolFailureTest {
         System.out.println("result = " + result.getResult());
     }
 
+    @Test
+    void testFileWriteNullContent() throws Exception {
+        ToolExecutor executor = new ToolExecutor();
+        JsonNode input = MAPPER.readTree("{\"path\":\"C:/__jwcode_test_null_content.txt\"}");
+        ToolExecutionContext ctx = new ToolExecutionContext(null, Path.of(System.getProperty("user.dir")), null);
+
+        ToolExecutor.ToolExecutionResult result = executor.execute("FileWriteTool", input, ctx).get();
+
+        System.out.println("=== FileWrite NullContent ===");
+        System.out.println("isSuccess = " + result.isSuccess());
+        System.out.println("errorMessage = " + result.getErrorMessage());
+
+        assertFalse(result.isSuccess(), "content 为 null 应返回失败");
+        assertNotNull(result.getErrorMessage(), "应包含错误信息");
+    }
+
+    @Test
+    void testFileWriteInvalidPath() throws Exception {
+        ToolExecutor executor = new ToolExecutor();
+        // 使用 Windows 非法字符 > 在路径中，会导致 InvalidPathException 或 IOException
+        JsonNode input = MAPPER.readTree("{\"path\":\"C:/__jwcode_test_dir/>invalid.txt\",\"content\":\"test\"}");
+        ToolExecutionContext ctx = new ToolExecutionContext(null, Path.of(System.getProperty("user.dir")), null);
+
+        ToolExecutor.ToolExecutionResult result = executor.execute("FileWriteTool", input, ctx).get();
+
+        System.out.println("=== FileWrite InvalidPath ===");
+        System.out.println("isSuccess = " + result.isSuccess());
+        System.out.println("errorMessage = " + result.getErrorMessage());
+
+        // 非法路径应返回失败，且不应抛出未捕获的异常导致 future 异常完成
+        assertFalse(result.isSuccess(), "非法路径应返回失败");
+        assertNotNull(result.getErrorMessage(), "应包含错误信息");
+    }
+
     // ==================== FileReadTool 失败场景 ====================
 
     @Test
