@@ -131,6 +131,10 @@ public class ConfigManager {
     
     @SuppressWarnings("unchecked")
     private void loadFromFile(Path path, ConfigScopeConfig target) {
+        if (path == null) {
+            return;
+        }
+        
         if (!Files.exists(path)) {
             return;
         }
@@ -149,8 +153,14 @@ public class ConfigManager {
             Map<String, String> flatMap = flattenMap(map, "");
             target.putAll(flatMap);
             
+            System.out.println("配置已加载: " + path + " (" + flatMap.size() + " 项)");
+            
         } catch (IOException e) {
             System.err.println("加载配置失败: " + path + " - " + e.getMessage());
+            e.printStackTrace();
+        } catch (Exception e) {
+            System.err.println("解析配置失败: " + path + " - " + e.getMessage());
+            e.printStackTrace();
         }
     }
     

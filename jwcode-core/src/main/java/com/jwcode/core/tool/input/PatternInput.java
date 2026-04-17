@@ -1,11 +1,13 @@
 package com.jwcode.core.tool.input;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
  * Pattern 工具输入参数
  * 用于高级正则表达式模式匹配和替换
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 public record PatternInput(
     
     /** 搜索模式（正则表达式） */

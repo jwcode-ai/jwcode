@@ -564,14 +564,19 @@ public class LspServerManager {
     
     /**
      * 启动语言服务器（指定工作目录）
+     * 
+     * @param languageId 语言 ID（如 "java", "python", "typescript"）
+     * @param workspaceRoot 工作区根目录
+     * @return 服务器包装器的 CompletableFuture
      */
     public CompletableFuture<ServerWrapper> startServer(String languageId, String workspaceRoot) {
         CompletableFuture<ServerWrapper> future = new CompletableFuture<>();
         
         LspServerConfig config = serverConfigs.get(languageId);
         if (config == null) {
-            future.completeExceptionally(new IllegalArgumentException(
-                "Unknown language ID: " + languageId));
+            String errorMsg = "Unknown language ID: " + languageId + ". Supported languages: " 
+                + String.join(", ", serverConfigs.keySet());
+            future.completeExceptionally(new IllegalArgumentException(errorMsg));
             return future;
         }
         
@@ -587,11 +592,11 @@ public class LspServerManager {
         // 查找可用的服务器命令
         String command = findServerCommand(config.getCommands());
         if (command == null) {
-            notifyStatusListeners(new ServerStatusEvent(languageId, ServerStatus.ERROR,
-                "Language server not found: " + config.getName()));
-            future.completeExceptionally(new IllegalStateException(
-                "Language server not found: " + config.getName() + 
-                ". Please install: " + String.join(", ", config.getCommands())));
+            String installGuide = buildInstallGuide(languageId, config);
+            String errorMsg = "Language server not found: " + config.getName() + "\n\n" + installGuide;
+            
+            notifyStatusListeners(new ServerStatusEvent(languageId, ServerStatus.ERROR, errorMsg));
+            future.completeExceptionally(new IllegalStateException(errorMsg));
             return future;
         }
         
@@ -881,5 +886,58 @@ public class LspServerManager {
             scheduler.shutdownNow();
             Thread.currentThread().interrupt();
         }
+    }
+    
+    /**
+     * 生成语言服务器的安装指南
+     * 
+     * @param languageId 语言 ID
+     * @param config 服务器配置
+     * @return 安装指南字符串
+     */
+    private String buildInstallGuide(String languageId, LspServerConfig config) {
+        StringBuilder guide = new StringBuilder();
+        guide.append("╔══════════════════════════════════════════════════════════════╗\n");
+        guide.append("║                    安装指南                                     ║\n");
+        guide.append("╠══════════════════════════════════════════════════════════════╣\n");
+        guide.append("║  请安装以下语言服务器之一:                                      ║\n");
+        
+        for (String cmd : config.getCommands()) {
+            guide.append("║    • ").append(cmd).append("\n");
+        }
+        
+        guide.append("╠══════════════════════════════════════════════════════════════╣\n");
+        guide.append("║  安装方式:                                                     ║\n");
+        
+        switch (languageId) {
+            case "java":
+                guide.append("║    Windows: winget install Eclipse.jdtls                    ║\n");
+                guide.append("║    macOS:   brew install jdtls                              ║\n");
+                guide.append("║    Linux:   https://projects.eclipse.org/projects/eclipse.jdt.ls ║\n");
+                break;
+            case "python":
+                guide.append("║    pip install python-language-server[all]                  ║\n");
+                guide.append("║    或: npm install -g pyright                                ║\n");
+                break;
+            case "typescript":
+                guide.append("║    npm install -g typescript-language-server                ║\n");
+                break;
+            case "rust":
+                guide.append("║    rustup component add rust-analyzer                       ║\n");
+                break;
+            case "go":
+                guide.append("║    go install golang.org/x/tools/gopls@latest               ║\n");
+                break;
+            case "c":
+                guide.append("║    Windows: winget install LLVM                            ║\n");
+                guide.append("║    macOS:   brew install llvm                              ║\n");
+                guide.append("║    Linux:   apt install clangd                             ║\n");
+                break;
+            default:
+                guide.append("║    请查阅对应语言的官方文档                                 ║\n");
+        }
+        
+        guide.append("╚══════════════════════════════════════════════════════════════╝\n");
+        return guide.toString();
     }
 }

@@ -1,5 +1,6 @@
 package com.jwcode.core.tool;
 
+import com.jwcode.core.tool.input.TodoItem;
 import com.jwcode.core.tool.input.TodoWriteInput;
 import com.jwcode.core.tool.output.TodoWriteOutput;
 import com.jwcode.core.tool.context.ToolExecutionContext;
@@ -14,6 +15,8 @@ import java.util.concurrent.CompletableFuture;
 /**
  * TodoWrite 工具
  * 用于创建、更新或删除待办事项
+ * 
+ * 支持结构化的 TodoItem 格式
  */
 public class TodoWriteTool implements Tool<TodoWriteInput, TodoWriteOutput, Void> {
     
@@ -56,17 +59,22 @@ public class TodoWriteTool implements Tool<TodoWriteInput, TodoWriteOutput, Void
                 // 确保目录存在
                 Files.createDirectories(todoFilePath.getParent());
                 
-                // 读取当前待办事项
-                List<String> todos = readTodos();
+                // 读取当前待办事项（解析为 TodoItem）
+                List<TodoItem> todos = readTodos();
                 
                 // 执行操作
-                List<String> resultTodos = executeOperation(input, todos);
+                List<TodoItem> resultTodos = executeOperation(input, todos);
                 
-                // 保存待办事项
+                // 保存待办事项（转换为 Markdown）
                 saveTodos(resultTodos);
                 
+                // 转换回字符串列表用于输出
+                List<String> resultStrings = resultTodos.stream()
+                        .map(TodoItem::toMarkdown)
+                        .toList();
+                
                 String message = generateMessage(input);
-                return ToolResult.success(TodoWriteOutput.success(resultTodos, message));
+                return ToolResult.success(TodoWriteOutput.success(resultStrings, message));
                 
             } catch (Exception e) {
                 return ToolResult.error("操作失败: " + e.getMessage());
@@ -74,42 +82,77 @@ public class TodoWriteTool implements Tool<TodoWriteInput, TodoWriteOutput, Void
         });
     }
     
-    private List<String> readTodos() throws Exception {
+    /**
+     * 从文件读取待办事项，解析为 TodoItem 列表
+     */
+    private List<TodoItem> readTodos() throws Exception {
+        List<TodoItem> items = new ArrayList<>();
+        
         if (Files.exists(todoFilePath)) {
             List<String> lines = Files.readAllLines(todoFilePath);
-            return lines.stream()
-                    .map(String::trim)
-                    .filter(line -> !line.isEmpty())
-                    .toList();
+            for (String line : lines) {
+                String trimmed = line.trim();
+                if (trimmed.isEmpty()) {
+                    continue;
+                }
+                TodoItem item = TodoItem.fromMarkdown(trimmed);
+                if (item != null) {
+                    items.add(item);
+                } else {
+                    // 兼容旧格式：非 Markdown 格式的行作为普通待办事项
+                    items.add(TodoItem.of(trimmed));
+                }
+            }
         }
-        return new ArrayList<>();
+        
+        return items;
     }
     
-    private void saveTodos(List<String> todos) throws Exception {
-        Files.write(todoFilePath, todos);
+    /**
+     * 将 TodoItem 列表保存为 Markdown 格式
+     */
+    private void saveTodos(List<TodoItem> todos) throws Exception {
+        List<String> lines = todos.stream()
+                .map(TodoItem::toMarkdown)
+                .toList();
+        Files.write(todoFilePath, lines);
     }
     
-    private List<String> executeOperation(TodoWriteInput input, List<String> todos) {
+    /**
+     * 执行待办事项操作
+     */
+    private List<TodoItem> executeOperation(TodoWriteInput input, List<TodoItem> todos) {
         String operation = input.operation() != null ? input.operation() : "add";
         
         return switch (operation) {
             case "add" -> {
-                List<String> result = new ArrayList<>(todos);
-                if (input.todo() != null && !input.todo().isEmpty()) {
-                    result.add(input.todo());
+                List<TodoItem> result = new ArrayList<>(todos);
+                // 优先使用结构化的 todos，否则使用简单的 todo 字段
+                if (input.todos() != null && !input.todos().isEmpty()) {
+                    result.addAll(input.todos());
+                } else if (input.todo() != null && !input.todo().isEmpty()) {
+                    result.add(TodoItem.of(input.todo()));
                 }
                 yield result;
             }
             case "edit" -> {
-                List<String> result = new ArrayList<>(todos);
+                List<TodoItem> result = new ArrayList<>(todos);
                 int index = input.index() != null ? input.index() : 0;
-                if (index >= 0 && index < result.size() && input.newContent() != null) {
-                    result.set(index, input.newContent());
+                if (index >= 0 && index < result.size()) {
+                    TodoItem original = result.get(index);
+                    if (input.newContent() != null) {
+                        result.set(index, new TodoItem(
+                                original.id(),
+                                input.newContent(),
+                                original.status(),
+                                original.priority()
+                        ));
+                    }
                 }
                 yield result;
             }
             case "delete" -> {
-                List<String> result = new ArrayList<>(todos);
+                List<TodoItem> result = new ArrayList<>(todos);
                 int index = input.index() != null ? input.index() : 0;
                 if (index >= 0 && index < result.size()) {
                     result.remove(index);
@@ -117,10 +160,8 @@ public class TodoWriteTool implements Tool<TodoWriteInput, TodoWriteOutput, Void
                 yield result;
             }
             case "replace_all" -> {
-                if (input.todos() != null) {
-                    yield new ArrayList<>(input.todos());
-                }
-                yield todos;
+                List<TodoItem> newTodos = input.getTodosOrDefault();
+                yield new ArrayList<>(newTodos);
             }
             default -> todos;
         };
@@ -132,7 +173,8 @@ public class TodoWriteTool implements Tool<TodoWriteInput, TodoWriteOutput, Void
             case "add" -> "已添加待办事项: " + input.todo();
             case "edit" -> "已更新待办事项 #" + input.index();
             case "delete" -> "已删除待办事项 #" + input.index();
-            case "replace_all" -> "已更新所有待办事项";
+            case "replace_all" -> "已更新所有待办事项 (" + 
+                    (input.todos() != null ? input.todos().size() : 0) + " 项)";
             default -> "操作完成";
         };
     }

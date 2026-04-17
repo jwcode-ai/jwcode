@@ -1,10 +1,12 @@
 package com.jwcode.core.tool.input;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
  * Git 工具输入参数
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 public record GitInput(
     
     /** Git 操作类型: "status", "diff", "commit", "branch", "log", "push", "pull" */

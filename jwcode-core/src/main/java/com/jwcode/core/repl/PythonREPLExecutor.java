@@ -39,37 +39,60 @@ public class PythonREPLExecutor extends REPLExecutor {
     /**
      * 创建 Python REPL 执行器
      * 
-     * @param pythonCommand Python 命令（如 "python3", "python"）
+     * @param pythonCommand Python 命令（如 "python3", "python"），如果为 null 则不会启动进程
      * @param timeoutMillis 超时时间（毫秒）
      * @param maxMemoryMB 最大内存限制（MB）
      */
     public PythonREPLExecutor(String pythonCommand, long timeoutMillis, long maxMemoryMB) {
         super("python", timeoutMillis, maxMemoryMB);
-        this.pythonCommand = pythonCommand;
         this.outputQueue = new LinkedBlockingQueue<>();
+        
+        // 如果 Python 命令为 null（未检测到 Python），不尝试启动进程
+        if (pythonCommand == null) {
+            this.pythonCommand = "python3"; // 保存用于错误消息
+            this.pythonProcess = null;
+            logger.warning("Python not found. REPL will report as unavailable when used.");
+            return;
+        }
+        
+        this.pythonCommand = pythonCommand;
         initializeProcess();
     }
     
     /**
      * 检测可用的 Python 命令
+     * 
+     * @return 检测到的 Python 命令，如果未找到返回 null
      */
     private static String detectPythonCommand() {
         String[] candidates = {"python3", "python", "py"};
+        String foundCommand = null;
+        
         for (String cmd : candidates) {
             try {
-                Process process = new ProcessBuilder(cmd, "--version")
-                    .redirectErrorStream(true)
-                    .start();
+                ProcessBuilder pb = new ProcessBuilder(cmd, "--version");
+                pb.redirectErrorStream(true);
+                Process process = pb.start();
+                
                 boolean finished = process.waitFor(5, TimeUnit.SECONDS);
                 if (finished && process.exitValue() == 0) {
-                    return cmd;
+                    // 读取版本输出验证是真正的 Python
+                    String version = new String(process.getInputStream().readAllBytes());
+                    if (version.toLowerCase().contains("python")) {
+                        foundCommand = cmd;
+                        logger.info("Found Python command: " + cmd + " - " + version.trim());
+                        break;
+                    }
                 }
             } catch (Exception e) {
                 logger.fine("Python command not found: " + cmd);
             }
         }
-        logger.warning("No Python installation found. Python REPL will be unavailable.");
-        return "python3"; // 默认返回，后续会检测不可用
+        
+        if (foundCommand == null) {
+            logger.warning("No Python installation found. Python REPL will be unavailable.");
+        }
+        return foundCommand;
     }
     
     /**
@@ -162,22 +185,46 @@ public class PythonREPLExecutor extends REPLExecutor {
      * 初始化 Python 环境
      */
     private void initializePythonEnvironment() throws IOException {
-        // 设置输出编码
-        sendCommand("import sys");
-        sendCommand("sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1)");
-        sendCommand("sys.stderr = open(sys.stderr.fileno(), mode='w', encoding='utf-8', buffering=1)");
-        
-        // 清空初始输出
-        clearOutput();
+        try {
+            // 发送一个简单的测试命令验证进程存活
+            sendCommand("import sys");
+            
+            // 等待Python处理并清空输出
+            Thread.sleep(200);
+            clearOutput();
+            
+            // 验证进程是否正常响应
+            if (!isAvailable()) {
+                throw new IOException("Python process failed to initialize");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Python initialization interrupted", e);
+        }
     }
     
     /**
      * 发送命令到 Python 进程
      */
     private void sendCommand(String command) throws IOException {
-        processInput.write(command);
-        processInput.newLine();
-        processInput.flush();
+        // 检查进程是否存活
+        if (!isAvailable()) {
+            throw new IOException("Python process is not available");
+        }
+        
+        try {
+            processInput.write(command);
+            processInput.newLine();
+            processInput.flush();
+        } catch (IOException e) {
+            // 如果是管道关闭错误，标记进程不可用
+            if (e.getMessage() != null && 
+                (e.getMessage().contains("Pipe") || e.getMessage().contains("管道"))) {
+                logger.warning("Python process pipe closed unexpectedly");
+                running = false;
+            }
+            throw e;
+        }
     }
     
     /**

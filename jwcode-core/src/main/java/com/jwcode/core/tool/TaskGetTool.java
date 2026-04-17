@@ -3,6 +3,8 @@ package com.jwcode.core.tool;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.jwcode.core.task.Task;
 import com.jwcode.core.task.TaskStore;
 import com.jwcode.core.tool.context.ToolExecutionContext;
@@ -26,7 +28,9 @@ import java.util.function.Consumer;
 public class TaskGetTool implements Tool<TaskGetInput, TaskGetOutput, Void> {
     
     private static final Logger logger = LoggerFactory.getLogger(TaskGetTool.class);
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final ObjectMapper MAPPER = new ObjectMapper()
+            .registerModule(new JavaTimeModule())
+            .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
     
     private final TaskStore taskStore;
     

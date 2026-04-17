@@ -206,9 +206,25 @@ public class FileEditTool implements Tool<FileEditInput, FileEditOutput, FileEdi
             return new EditResult(true, fileContent, updatedContent, 1, null);
         }
         
-        // 替换内容
+        // 替换内容 - 增强错误诊断
         if (!fileContent.contains(oldContent)) {
-            return new EditResult(false, null, null, 0, "未找到要替换的内容");
+            // 提供更详细的诊断信息，帮助 AI 修正编辑
+            StringBuilder errorMsg = new StringBuilder("未找到要替换的内容。\n");
+            errorMsg.append("可能原因：\n");
+            errorMsg.append("1. 文件已被其他工具修改\n");
+            errorMsg.append("2. 你的 old_content 包含了文件实际内容中没有的内容（幻觉）\n");
+            errorMsg.append("3. 缩进或空白字符不匹配\n\n");
+            errorMsg.append("解决方案：\n");
+            errorMsg.append("- 先使用 FileReadTool 重新读取文件，获取最新内容\n");
+            errorMsg.append("- 基于实际文件内容重新构建编辑指令\n");
+            errorMsg.append("- 检查 old_content 是否与文件中内容完全匹配（包括缩进）\n");
+            
+            // 提供一些上下文信息
+            int snippetLength = Math.min(200, fileContent.length());
+            String snippet = fileContent.substring(0, snippetLength);
+            errorMsg.append("\n文件开头内容（仅供参考）：\n").append(snippet);
+            
+            return new EditResult(false, null, null, 0, errorMsg.toString());
         }
         
         String updatedContent = fileContent.replace(oldContent, newContent);

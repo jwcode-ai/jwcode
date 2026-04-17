@@ -139,6 +139,9 @@ public class OpenAIRequestBuilder {
         // 处理消息
         List<LLMMessage> processedMessages = processMessages(messages);
         
+        // 【关键修复】验证并修复 tool_calls 配对完整性
+        processedMessages = validateAndFixToolCalls(processedMessages);
+        
         // 构建 messages 数组
         ArrayNode messagesArray = body.putArray("messages");
         int validCount = 0;
@@ -175,6 +178,93 @@ public class OpenAIRequestBuilder {
         }
         
         return body;
+    }
+    
+    /**
+     * 【关键修复】验证并修复 tool_calls 配对完整性
+     * 
+     * 问题：当消息被截断或压缩时，ASSISTANT 消息中的 tool_calls 可能被保留，
+     * 但对应的 TOOL 消息被丢弃。这会导致 OpenAI API 报错：
+     * "an assistant message with 'tool_calls' must be followed by tool messages"
+     * 
+     * 解决方案：
+     * 1. 收集所有有效的 tool_call_id（来自 TOOL 消息）
+     * 2. 检查每个 ASSISTANT 消息的 tool_calls
+     * 3. 移除没有对应 TOOL 消息的 tool_call
+     * 
+     * @param messages 处理后的消息列表
+     * @return 修复后的消息列表
+     */
+    private List<LLMMessage> validateAndFixToolCalls(List<LLMMessage> messages) {
+        if (messages == null || messages.isEmpty()) {
+            return messages;
+        }
+        
+        // 步骤1：收集所有有效的 tool_call_id（来自 TOOL 消息）
+        Set<String> validToolCallIds = new HashSet<>();
+        for (LLMMessage msg : messages) {
+            if (msg.getRole() == LLMMessage.Role.TOOL) {
+                String toolCallId = msg.getToolCallId();
+                if (toolCallId != null && !toolCallId.isEmpty()) {
+                    validToolCallIds.add(toolCallId);
+                }
+            }
+        }
+        
+        if (validToolCallIds.isEmpty()) {
+            // 没有 TOOL 消息，不需要验证
+            return messages;
+        }
+        
+        logger.info("[OpenAI] Valid tool_call_ids found: " + validToolCallIds.size());
+        
+        // 步骤2：处理每个 ASSISTANT 消息，移除无效的 tool_calls
+        List<LLMMessage> result = new ArrayList<>();
+        int fixedAssistantCount = 0;
+        
+        for (LLMMessage msg : messages) {
+            if (msg.getRole() == LLMMessage.Role.ASSISTANT && msg.hasToolCalls()) {
+                List<LLMMessage.ToolCall> originalToolCalls = msg.getToolCalls();
+                List<LLMMessage.ToolCall> validToolCalls = new ArrayList<>();
+                
+                for (LLMMessage.ToolCall tc : originalToolCalls) {
+                    String tcId = tc.getId();
+                    if (tcId != null && validToolCallIds.contains(tcId)) {
+                        validToolCalls.add(tc);
+                    } else {
+                        logger.fine("[OpenAI] Removing orphaned tool_call: " + tcId + 
+                            " (no corresponding TOOL message)");
+                    }
+                }
+                
+                // 如果所有 tool_calls 都被移除，创建纯文本 assistant 消息
+                if (validToolCalls.isEmpty()) {
+                    logger.warning("[OpenAI] All tool_calls orphaned, converting to text-only message");
+                    result.add(LLMMessage.assistant(msg.getContent() != null ? msg.getContent() : ""));
+                } else if (validToolCalls.size() < originalToolCalls.size()) {
+                    // 部分 tool_calls 被移除
+                    logger.info("[OpenAI] Fixed assistant message: " + originalToolCalls.size() + 
+                        " -> " + validToolCalls.size() + " tool_calls");
+                    fixedAssistantCount++;
+                    result.add(LLMMessage.assistantWithTools(
+                        msg.getContent() != null ? msg.getContent() : "",
+                        validToolCalls,
+                        msg.getReasoningContent()
+                    ));
+                } else {
+                    // 所有 tool_calls 都有效
+                    result.add(msg);
+                }
+            } else {
+                result.add(msg);
+            }
+        }
+        
+        if (fixedAssistantCount > 0) {
+            logger.info("[OpenAI] Fixed " + fixedAssistantCount + " assistant messages with orphaned tool_calls");
+        }
+        
+        return result;
     }
     
     /**

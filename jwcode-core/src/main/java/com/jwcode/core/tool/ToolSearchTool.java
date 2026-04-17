@@ -10,6 +10,11 @@ public class ToolSearchTool implements Tool<ToolSearchTool.Input, ToolSearchTool
     @Override public String getDescription() { return "搜索可用工具。当你不确定使用哪个工具时使用。"; }
     
     @Override
+    public com.fasterxml.jackson.core.type.TypeReference<Input> getInputType() {
+        return new com.fasterxml.jackson.core.type.TypeReference<>() {};
+    }
+    
+    @Override
     public String getPrompt() {
         return """
                使用 ToolSearch 工具搜索可用的工具。

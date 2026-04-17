@@ -334,7 +334,7 @@ public class JwCodeApplication implements AutoCloseable {
             
             // 开始对话循环
             logger.debug("开始 runConversationWithThinking...");
-            runConversationWithThinking(0);
+            runConversationWithThinking(0, 0);
             logger.debug("=== handleNaturalLanguageQuery 结束 ===");
             
         } catch (Exception e) {
@@ -345,10 +345,15 @@ public class JwCodeApplication implements AutoCloseable {
         terminal.println();
     }
     
+    // 结束标记
+    private static final String FINISH_MARKER = "[FINISH]";
+    // 空回复限制次数
+    private static final int MAX_EMPTY_RESPONSES = 3;
+    
     /**
      * 带思考过程的对话循环
      */
-    private void runConversationWithThinking(int iteration) throws Exception {
+    private void runConversationWithThinking(int iteration, int emptyResponseCount) throws Exception {
         CliLogger logger = CliLogger.getInstance();
         
         // 检查迭代限制
@@ -359,6 +364,18 @@ public class JwCodeApplication implements AutoCloseable {
         }
         
         Session session = llmQueryEngine.getSession();
+        
+        // 接近迭代限制时发出警告（达到 80% 时）
+        int warningThreshold = (int)(config.getMaxIterations() * 0.8);
+        if (iteration > 0 && iteration >= warningThreshold) {
+            String warning = String.format(
+                CliLogger.YELLOW + "⚠️ 【警告】迭代次数已达到 %d/%d (%.0f%%)，接近限制！" + CliLogger.RESET + "\n" +
+                "请评估当前进度，如果任务无法完成，请添加 [FINISH] 标记结束对话。",
+                iteration, config.getMaxIterations(), (iteration * 100.0 / config.getMaxIterations())
+            );
+            System.out.println(warning);
+            session.addMessage(Message.createSystemMessage(warning));
+        }
         
         // 转换会话消息到 LLM 格式
         List<LLMMessage> llmMessages = convertSessionMessages(session);
@@ -416,32 +433,80 @@ public class JwCodeApplication implements AutoCloseable {
                 executeToolCallsWithDisplay(response.getToolCalls());
                 logger.info("工具调用执行完成，准备继续对话循环...");
                 
-                // 继续对话循环
-                runConversationWithThinking(iteration + 1);
+                // 继续对话循环（重置空回复计数，因为工具执行可能有有效输出）
+                runConversationWithThinking(iteration + 1, 0);
             } catch (Exception e) {
                 logger.error("执行工具调用时发生异常", e);
                 System.out.println(CliLogger.RED + "❌ 执行工具时出错: " + e.getMessage() + CliLogger.RESET);
                 e.printStackTrace();
                 
                 // 添加错误提示消息到会话，让 AI 知道工具执行失败
-                // 注意：由于异常发生在 executeToolCallsWithDisplay 内部，我们添加一个通用错误
                 session.addMessage(Message.createSystemMessage(
                     "[系统通知] 工具执行过程中发生异常: " + e.getMessage() + "，请尝试其他方法完成任务。"));
                 
                 // 继续对话循环，让 AI 处理错误并尝试恢复
-                runConversationWithThinking(iteration + 1);
+                runConversationWithThinking(iteration + 1, 0);
             }
         } else {
-            // 没有工具调用，直接显示回复
-            assistantMessage = Message.createAssistantMessage(content);
-            session.addMessage(assistantMessage);
+            // 没有工具调用，检查是否有 finishReason
+            if (response.getFinishReason() != null) {
+                logger.info("检测到 finishReason: " + response.getFinishReason() + "，结束对话");
+                assistantMessage = Message.createAssistantMessage(content);
+                session.addMessage(assistantMessage);
+                
+                if (content != null && !content.isEmpty()) {
+                    System.out.println("\r" + CliLogger.GREEN + "💬 回复:" + CliLogger.RESET);
+                    System.out.println(content);
+                }
+                return;
+            }
             
-            if (content != null && !content.isEmpty()) {
-                // 清除"思考中..."提示并输出回复
+            // 检查回复内容是否包含结束标记
+            if (content != null && content.contains(FINISH_MARKER)) {
+                logger.info("检测到结束标记 " + FINISH_MARKER + "，结束对话");
+                assistantMessage = Message.createAssistantMessage(content);
+                session.addMessage(assistantMessage);
+                
+                // 显示回复内容（不包含结束标记）
+                String displayContent = content.replace(FINISH_MARKER, "").trim();
+                if (!displayContent.isEmpty()) {
+                    System.out.println("\r" + CliLogger.GREEN + "💬 回复:" + CliLogger.RESET);
+                    System.out.println(displayContent);
+                }
+                return;
+            }
+            
+            // 检查是否为空回复
+            if (content == null || content.trim().isEmpty()) {
+                emptyResponseCount++;
+                System.out.println(CliLogger.YELLOW + "⚠️ 空回复 (第 " + emptyResponseCount + "/" + MAX_EMPTY_RESPONSES + " 次)" + CliLogger.RESET);
+                
+                if (emptyResponseCount >= MAX_EMPTY_RESPONSES) {
+                    System.out.println(CliLogger.YELLOW + "⚠️ 空回复次数已达上限，强制结束对话" + CliLogger.RESET);
+                    return;
+                }
+                
+                // 添加提示消息
+                session.addMessage(Message.createSystemMessage(
+                    "提示：如果任务已完成，请在回复末尾添加 [FINISH] 标记以结束对话。例如：\"任务已完成。\\n\\n[FINISH]\""));
+                
+                // 继续对话循环
+                runConversationWithThinking(iteration + 1, emptyResponseCount);
+            } else {
+                // 有有效内容，显示回复
+                assistantMessage = Message.createAssistantMessage(content);
+                session.addMessage(assistantMessage);
+                
                 System.out.println("\r" + CliLogger.GREEN + "💬 回复:" + CliLogger.RESET);
                 System.out.println(content);
+                
+                // 添加提示消息，提醒 AI 使用结束标记
+                session.addMessage(Message.createSystemMessage(
+                    "提示：如果任务已完成，请在回复末尾添加 [FINISH] 标记以结束对话。例如：\"任务已完成。\\n\\n[FINISH]\""));
+                
+                // 继续对话循环
+                runConversationWithThinking(iteration + 1, 0);
             }
-            logger.info("对话完成，无工具调用");
         }
     }
     

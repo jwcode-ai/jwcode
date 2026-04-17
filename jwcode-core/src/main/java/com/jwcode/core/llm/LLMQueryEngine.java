@@ -86,8 +86,30 @@ public class LLMQueryEngine {
         // 添加用户消息到会话
         session.addMessage(Message.createUserMessage(prompt));
         
+        // 添加系统提示，强调文件编辑前必须先读取
+        addFileEditGuidelines();
+        
         // 开始对话循环，初始空回复计数为 0
         return runConversationLoop(0, 0);
+    }
+    
+    /**
+     * 添加文件编辑指南到系统提示
+     */
+    private void addFileEditGuidelines() {
+        String guidelines = """
+            【重要】文件编辑规则：
+            
+            1. 编辑任何文件前，必须先使用 FileReadTool 读取文件最新内容
+            2. 禁止基于记忆或推测编辑文件，必须使用刚读取的实际内容
+            3. 如果工具执行失败，立即使用 FileReadTool 重新读取文件
+            4. 检查错误信息中的文件内容提示，修正编辑指令
+            5. 同一文件多次编辑失败时，考虑使用 GrepTool 搜索关键代码片段
+            
+            这些规则是为了避免"幻觉"问题 - 即 AI 基于不准确的文件内容生成编辑指令。
+            """;
+        
+        session.addMessage(Message.createSystemMessage(guidelines));
     }
     
     // 空回复限制次数
@@ -109,6 +131,18 @@ public class LLMQueryEngine {
             return CompletableFuture.completedFuture(
                 QueryResult.error("达到最大迭代次数限制")
             );
+        }
+        
+        // 接近迭代限制时发出警告（达到 80% 时）
+        int warningThreshold = (int)(config.getMaxIterations() * 0.8);
+        if (iteration > 0 && iteration >= warningThreshold) {
+            String warning = String.format(
+                "【警告】迭代次数已达到 %d/%d (%.0f%%)，接近限制！\n" +
+                "请评估当前进度，如果任务无法完成，请添加 [FINISH] 标记结束对话。",
+                iteration, config.getMaxIterations(), (iteration * 100.0 / config.getMaxIterations())
+            );
+            logger.warning("[LLMQueryEngine] " + warning);
+            session.addMessage(Message.createSystemMessage(warning));
         }
         
         // 检查超时
@@ -166,6 +200,13 @@ public class LLMQueryEngine {
         
         logger.info("[LLMQueryEngine] Response received, content length: " + 
             (response.getContent() != null ? response.getContent().length() : 0));
+        
+        // 打印 AI 思考内容
+        if (response.getReasoningContent() != null && !response.getReasoningContent().isEmpty()) {
+            String think = response.getReasoningContent();
+            logger.info("[LLMQueryEngine] AI思考内容: " + think);
+            System.out.println("🤔 AI思考: " + think);
+        }
         
         // 创建助手消息
         Message assistantMessage;
@@ -470,9 +511,12 @@ public class LLMQueryEngine {
                 String toolCallId = extractToolCallId(msg);
                 String content = extractToolResultContent(msg);
                 
+                // 修复: 如果 toolCallId 为空，生成临时 ID 而不是跳过
+                // 这样可以保证 tool_calls 和 tool 消息数量一致，避免 API 报错 "tool call and result not match"
                 if (toolCallId == null || toolCallId.isEmpty()) {
-                    logger.warning("[LLMQueryEngine] TOOL message missing toolCallId, skipping");
-                    continue;
+                    toolCallId = "temp_tool_" + System.nanoTime();
+                    logger.warning("[LLMQueryEngine] TOOL message missing toolCallId, generated temp ID: " + toolCallId + 
+                        ". This may indicate a data issue in the message history.");
                 }
                 
                 LLMMessage llmMsg = LLMMessage.tool(toolCallId, content);
@@ -607,7 +651,7 @@ public class LLMQueryEngine {
     // ==================== 数据类 ====================
     
     public static class EngineConfig {
-        private int maxIterations = 100;
+        private int maxIterations = 500;
         private Duration timeout = Duration.ofMinutes(5);
         
         /**
