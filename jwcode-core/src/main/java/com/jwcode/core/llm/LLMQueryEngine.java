@@ -2,6 +2,7 @@ package com.jwcode.core.llm;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.jwcode.core.config.JwcodeConfig;
 import com.jwcode.core.model.Message;
 import com.jwcode.core.session.Session;
@@ -38,7 +39,8 @@ public class LLMQueryEngine {
     
     private final Instant startTime;
     private final List<String> toolCallHistory;
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final ObjectMapper MAPPER = new ObjectMapper()
+            .registerModule(new JavaTimeModule());
     
     public LLMQueryEngine(Session session, LLMService llmService, 
                           ToolExecutor toolExecutor, EngineConfig config) {
@@ -107,6 +109,17 @@ public class LLMQueryEngine {
             5. 同一文件多次编辑失败时，考虑使用 GrepTool 搜索关键代码片段
             
             这些规则是为了避免"幻觉"问题 - 即 AI 基于不准确的文件内容生成编辑指令。
+            
+            【重要】任务结束规则：
+            
+            当任务完成时，你必须：
+            1. 在回复末尾添加 [FINISH] 标记
+            2. 简洁总结已完成的工作
+            3. 停止调用任何工具，直接返回结果
+            
+            例如："所有文件修改已完成。[FINISH]"
+            
+            不要再继续分析或提出建议，直接结束对话。
             """;
         
         session.addMessage(Message.createSystemMessage(guidelines));
@@ -164,6 +177,13 @@ public class LLMQueryEngine {
         
         // 获取可用工具
         List<LLMTool> tools = convertTools(toolExecutor.getEnabledTools());
+        
+        // 每次循环都提醒使用 [FINISH] 标记（只在迭代次数较少时提醒，避免干扰）
+        if (iteration < 20) {
+            session.addMessage(Message.createSystemMessage(
+                "提示：如果任务已完成，请在回复末尾添加 [FINISH] 标记以结束对话。"
+            ));
+        }
         
         // 触发回调：发送请求
         if (stepCallback != null) {
@@ -651,7 +671,7 @@ public class LLMQueryEngine {
     // ==================== 数据类 ====================
     
     public static class EngineConfig {
-        private int maxIterations = 500;
+        private int maxIterations = 200;
         private Duration timeout = Duration.ofMinutes(5);
         
         /**

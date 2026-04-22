@@ -180,10 +180,32 @@ public class ConfigTool implements Tool<ConfigTool.Input, ConfigTool.Output, Con
         
         return CompletableFuture.supplyAsync(() -> {
             Output output = new Output();
-            output.action = args.action;
+            
+            // 空输入检查
+            if (args == null) {
+                output.action = "unknown";
+                output.success = false;
+                output.message = "输入参数不能为空";
+                ToolResult<Output> result = new ToolResult<>(output);
+                result.setSuccess(false);
+                result.setContent(output.message);
+                return result;
+            }
+            
+            output.action = args.action != null ? args.action : "unknown";
             output.success = true;
             
             try {
+                // 确保 configManager 已初始化
+                if (configManager == null) {
+                    output.success = false;
+                    output.message = "配置管理器未初始化";
+                    ToolResult<Output> result = new ToolResult<>(output);
+                    result.setSuccess(false);
+                    result.setContent(output.message);
+                    return result;
+                }
+                
                 ConfigScope scope = parseScope(args.scope);
                 
                 switch (args.action) {
@@ -197,15 +219,27 @@ public class ConfigTool implements Tool<ConfigTool.Input, ConfigTool.Output, Con
                     case "template" -> handleTemplate(args, output);
                     default -> {
                         output.success = false;
-                        output.message = "未知操作: " + args.action;
+                        output.message = "未知操作: " + args.action + 
+                            "\n可用操作: get, set, delete, list, chain, validate, export, template";
                     }
                 }
+            } catch (NullPointerException e) {
+                output.success = false;
+                output.message = "配置管理器内部错误: " + e.getMessage();
+                e.printStackTrace();
+            } catch (IllegalArgumentException e) {
+                output.success = false;
+                output.message = "参数错误: " + e.getMessage();
             } catch (Exception e) {
                 output.success = false;
                 output.message = "操作失败: " + e.getMessage();
+                e.printStackTrace();
             }
             
-            return ToolResult.<Output>builder().data(output).build();
+            ToolResult<Output> result = new ToolResult<>(output);
+            result.setSuccess(output.success);
+            result.setContent(output.message);
+            return result;
         });
     }
     

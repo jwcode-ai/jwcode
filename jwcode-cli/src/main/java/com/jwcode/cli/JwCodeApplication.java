@@ -15,6 +15,7 @@ import com.jwcode.core.terminal.JLine3Terminal;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * JWCode 应用程序入口
@@ -577,6 +578,15 @@ public class JwCodeApplication implements AutoCloseable {
             logger.info("开始执行工具: " + toolName);
             
             String result;
+            
+            // 特殊处理：AskUserQuestionTool 需要交互式输入
+            if ("AskUserQuestion".equals(toolName)) {
+                result = handleAskUserQuestion(tc, args, mapper, session);
+                // 添加工具结果到会话
+                session.addMessage(Message.createToolResultMessage(tc.getId(), toolName, result));
+                continue;
+            }
+            
             try {
                 com.fasterxml.jackson.databind.JsonNode argsNode = mapper.readTree(args);
                 com.jwcode.core.tool.context.ToolExecutionContext toolContext =
@@ -635,6 +645,108 @@ public class JwCodeApplication implements AutoCloseable {
         }
         
         logger.info("所有工具调用执行完成，当前会话消息数: " + session.getMessages().size());
+    }
+    
+    /**
+     * 处理 AskUserQuestionTool 的交互式输入
+     */
+    private String handleAskUserQuestion(LLMMessage.ToolCall tc, String args, 
+            com.fasterxml.jackson.databind.ObjectMapper mapper, Session session) throws Exception {
+        
+        // 解析输入参数
+        com.fasterxml.jackson.databind.JsonNode argsNode = mapper.readTree(args);
+        String question = argsNode.has("question") ? argsNode.get("question").asText() : "请输入您的选择：";
+        String questionType = argsNode.has("questionType") ? argsNode.get("questionType").asText() : "open_ended";
+        
+        // 解析选项
+        List<String> options = new ArrayList<>();
+        if (argsNode.has("options") && argsNode.get("options").isArray()) {
+            for (com.fasterxml.jackson.databind.JsonNode opt : argsNode.get("options")) {
+                options.add(opt.asText());
+            }
+        }
+        
+        String userAnswer;
+        
+        // 根据问题类型处理输入
+        if ("selection".equals(questionType) && !options.isEmpty()) {
+            // 多选/单选类型，显示选项
+            System.out.println();
+            System.out.println(CliLogger.CYAN + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" + CliLogger.RESET);
+            System.out.println(CliLogger.BOLD + question + CliLogger.RESET);
+            System.out.println();
+            for (int i = 0; i < options.size(); i++) {
+                System.out.println(CliLogger.GREEN + "  " + (i + 1) + ". " + options.get(i) + CliLogger.RESET);
+            }
+            System.out.println(CliLogger.CYAN + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" + CliLogger.RESET);
+            System.out.println();
+            
+            // 读取用户输入
+            Scanner scanner = new Scanner(System.in);
+            while (true) {
+                System.out.print("请输入选项编号 (1-" + options.size() + "): ");
+                String input = scanner.nextLine().trim();
+                
+                try {
+                    int choice = Integer.parseInt(input);
+                    if (choice >= 1 && choice <= options.size()) {
+                        userAnswer = options.get(choice - 1);
+                        break;
+                    } else {
+                        System.out.println(CliLogger.YELLOW + "⚠️  请输入有效的编号 (1-" + options.size() + ")" + CliLogger.RESET);
+                    }
+                } catch (NumberFormatException e) {
+                    System.out.println(CliLogger.YELLOW + "⚠️  请输入数字编号" + CliLogger.RESET);
+                }
+            }
+        } else if ("yes_no".equals(questionType)) {
+            // 是/否类型
+            System.out.println();
+            System.out.println(CliLogger.CYAN + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" + CliLogger.RESET);
+            System.out.println(CliLogger.BOLD + question + CliLogger.RESET);
+            System.out.println(CliLogger.GREEN + "  1. 是" + CliLogger.RESET);
+            System.out.println(CliLogger.RED + "  2. 否" + CliLogger.RESET);
+            System.out.println(CliLogger.CYAN + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" + CliLogger.RESET);
+            System.out.println();
+            
+            Scanner scanner = new Scanner(System.in);
+            while (true) {
+                System.out.print("请选择 (1/2): ");
+                String input = scanner.nextLine().trim();
+                if ("1".equals(input) || "是".equals(input)) {
+                    userAnswer = "是";
+                    break;
+                } else if ("2".equals(input) || "否".equals(input)) {
+                    userAnswer = "否";
+                    break;
+                } else {
+                    System.out.println(CliLogger.YELLOW + "⚠️  请输入 1 或 2" + CliLogger.RESET);
+                }
+            }
+        } else {
+            // 开放类型，直接读取文本输入
+            System.out.println();
+            System.out.println(CliLogger.CYAN + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" + CliLogger.RESET);
+            System.out.println(CliLogger.BOLD + question + CliLogger.RESET);
+            System.out.println(CliLogger.CYAN + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" + CliLogger.RESET);
+            System.out.println();
+            
+            Scanner scanner = new Scanner(System.in);
+            System.out.print("请输入: ");
+            userAnswer = scanner.nextLine().trim();
+        }
+        
+        System.out.println(CliLogger.GREEN + "  ✅ 收到您的回答: " + userAnswer + CliLogger.RESET);
+        
+        // 构建返回结果
+        Map<String, Object> output = new HashMap<>();
+        output.put("question", question);
+        output.put("questionType", questionType);
+        output.put("answer", userAnswer);
+        output.put("status", "answered");
+        output.put("message", "用户已回答: " + userAnswer);
+        
+        return mapper.writeValueAsString(output);
     }
     
     /**

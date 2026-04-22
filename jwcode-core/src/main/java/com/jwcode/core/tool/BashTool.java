@@ -1,5 +1,3 @@
-package com.jwcode.core.tool;
-
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.jwcode.core.tool.context.ToolExecutionContext;
@@ -93,6 +91,69 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
                - 危险命令需要用户确认
                - 输出会被截断以避免过大
                - 超时命令会被终止
+               
+               ========================================
+               平台差异说明（重要！）
+               ========================================
+               
+               1. Windows 系统：
+                  - 默认使用 cmd.exe 执行命令
+                  - 常用命令: dir, type, copy, del, move, mkdir, rd
+                  - 注意: Unix 命令（ls, cat, grep, find 等）在 cmd.exe 中不存在！
+                  
+                  PowerShell 命令示例：
+                  - 文件列表: Get-ChildItem -Path . -Recurse -Depth 3
+                  - 搜索内容: Select-String -Pattern "keyword" -Recurse
+                  - 查找文件: Get-ChildItem -Filter "*.java" -Recurse
+                  - 读取文件: Get-Content -Path "file.txt"
+                  - 切换编码: chcp 65001  (解决中文乱码问题)
+                  
+                  ⚠️ PowerShell 编码问题解决：
+                  - 如果遇到 "'命令名' 无法识别" 错误，先执行: chcp 65001
+                  - 或使用 PowerShell 7+ (pwsh)，它默认使用 UTF-8
+               
+               2. Unix/Linux 系统：
+                  - 使用 /bin/bash 执行命令
+                  - 常用命令: ls, cat, grep, find, chmod, chown 等
+               
+               ========================================
+               智能推荐
+               ========================================
+               
+               如果需要以下操作，建议使用专门的工具而不是 BashTool：
+               
+               📁 文件搜索/列表：
+                  → 使用 GlobTool: {"pattern": "**/*.java"}
+                  
+               🔍 内容搜索：
+                  → 使用 GrepTool: {"pattern": "search term", "path": "."}
+                  
+               📖 读取文件：
+                  → 使用 FileReadTool: {"path": "file.txt"}
+                  
+               🔧 智能项目分析：
+                  → 使用 SmartAnalyzeTool: {"query": "项目结构"}
+               
+               ========================================
+               常见问题排查
+               ========================================
+               
+               ❌ "'Get-ChildItem' 无法识别"
+                  → 原因: PowerShell 编码问题
+                  → 解决: 先执行 "chcp 65001" 切换编码
+                  
+               ❌ "'ls' 不是内部或外部命令"
+                  → 原因: 在 Windows cmd.exe 中使用了 Unix 命令
+                  → 解决: 改用 "dir" 或使用 GlobTool
+                  
+               ❌ "'grep' 不是内部或外部命令"
+                  → 原因: 在 Windows 中使用了 Unix 命令
+                  → 解决: 使用 PowerShell 的 Select-String 或 GrepTool
+               
+               ✅ 推荐流程：
+                  1. 先考虑是否可以用专用工具（更快、更可靠）
+                  2. 如果必须用 BashTool，注意平台差异
+                  3. Windows 上优先使用 PowerShell 命令（更强大）
                """;
     }
     
@@ -159,6 +220,14 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
         
         if (input.command() == null || input.command().trim().isEmpty()) {
             builder.addError("command 是必需的");
+        } else {
+            // 【新增】Windows 平台 Unix 命令检测
+            if (isWindows()) {
+                String warning = detectUnixCommandWarning(input.command());
+                if (warning != null) {
+                    builder.addWarning(warning);
+                }
+            }
         }
         
         if (input.timeout() != null && input.timeout() < 100) {
@@ -170,6 +239,90 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
         }
         
         return builder.build();
+    }
+    
+    /**
+     * 检测命令是否使用了 Windows 上不存在的 Unix 命令
+     */
+    private String detectUnixCommandWarning(String command) {
+        String lower = command.toLowerCase();
+        String trimmed = command.trim();
+        
+        // find 命令检测（最常见的问题）
+        if (trimmed.startsWith("find ") || lower.contains(" find ") || 
+            lower.contains(" -type ") || lower.contains(" -name ") || 
+            lower.contains(" -path ") || lower.contains(" -regex ")) {
+            return "⚠️ find 命令在 Windows cmd.exe 中不存在！建议：\n" +
+                   "  1. 使用 GlobTool 工具搜索文件（跨平台）\n" +
+                   "  2. 使用 PowerShell: Get-ChildItem -Recurse -Filter '*.java' -File\n" +
+                   "  3. 使用 SmartAnalyzeTool 智能分析项目";
+        }
+        
+        // 其他 Unix 命令检测
+        if (trimmed.startsWith("grep ") || trimmed.startsWith("| grep")) {
+            return "⚠️ grep 在 Windows cmd.exe 中不存在！建议使用 PowerShell: Select-String -Pattern 'keyword'";
+        }
+        
+        if (trimmed.startsWith("tree ") || lower.contains(" tree ")) {
+            return "⚠️ tree 命令在 Windows cmd.exe 中不存在！建议使用 PowerShell: Get-ChildItem -Recurse";
+        }
+        
+        if (trimmed.startsWith("head ") || trimmed.contains(" | head")) {
+            return "⚠️ head 在 Windows cmd.exe 中不存在！建议使用 PowerShell: Get-Content | Select-Object -First N";
+        }
+        
+        if (trimmed.startsWith("tail ") || trimmed.contains(" | tail")) {
+            return "⚠️ tail 在 Windows cmd.exe 中不存在！建议使用 PowerShell: Get-Content -Tail N";
+        }
+        
+        if (trimmed.startsWith("cat ") || lower.startsWith("cat ")) {
+            return "⚠️ cat 在 Windows cmd.exe 中不存在！建议使用 PowerShell: Get-Content 或 FileReadTool";
+        }
+        
+        if (trimmed.startsWith("ls ") || trimmed.startsWith("ls$")) {
+            return "⚠️ ls 在 Windows cmd.exe 中不存在！建议使用 PowerShell: Get-ChildItem 或 GlobTool";
+        }
+        
+        if (trimmed.startsWith("rm ") || lower.startsWith("rm ")) {
+            return "⚠️ rm 在 Windows cmd.exe 中不存在！建议使用 PowerShell: Remove-Item";
+        }
+        
+        if (trimmed.startsWith("cp ") || lower.startsWith("cp ")) {
+            return "⚠️ cp 在 Windows cmd.exe 中不存在！建议使用 PowerShell: Copy-Item";
+        }
+        
+        if (trimmed.startsWith("mv ") || lower.startsWith("mv ")) {
+            return "⚠️ mv 在 Windows cmd.exe 中不存在！建议使用 PowerShell: Move-Item";
+        }
+        
+        if (trimmed.startsWith("chmod ") || lower.startsWith("chmod ")) {
+            return "⚠️ chmod 在 Windows 上不存在！Windows 使用 icacls 命令管理权限";
+        }
+        
+        if (trimmed.startsWith("pwd") || lower.startsWith("pwd ")) {
+            return "⚠️ pwd 在 Windows cmd.exe 中不存在！建议使用 PowerShell: Get-Location 或 echo %cd%";
+        }
+        
+        if (trimmed.startsWith("which ") || lower.startsWith("which ")) {
+            return "⚠️ which 在 Windows cmd.exe 中不存在！建议使用 PowerShell: Get-Command";
+        }
+        
+        if (trimmed.startsWith("touch ") || lower.startsWith("touch ")) {
+            return "⚠️ touch 在 Windows cmd.exe 中不存在！建议使用 PowerShell: New-Item -ItemType File";
+        }
+        
+        if (trimmed.startsWith("mkdir -p ") || lower.startsWith("mkdir -p ")) {
+            return "⚠️ mkdir -p 在 Windows cmd.exe 中不存在！建议使用 PowerShell: New-Item -ItemType Directory -Force";
+        }
+        
+        return null;
+    }
+    
+    /**
+     * 检测是否为 Windows 系统
+     */
+    private boolean isWindows() {
+        return System.getProperty("os.name").toLowerCase().contains("win");
     }
     
     @Override

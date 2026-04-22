@@ -70,6 +70,12 @@ public class SmartAnalyzeTool implements Tool<SmartAnalyzeInput, SmartAnalyzeOut
                - 不要再调用 BashTool、GlobTool、PowerShell 等工具做目录 listing 或文件存在性验证。
                - SmartAnalyzeTool 已经完成了排噪和验证，输出顶部的 🛑 STOP_LISTING 信号明确表示无需再做递归扫描。
                - 你的下一步动作应该是：从返回的关键文件列表中挑选优先级最高的文件，调用 FileReadTool 读取它们。
+               
+               ⚠️ 平台兼容性警告:
+               - 【Windows】不要使用 find、grep、tree、head、cat 等 Unix 命令，它们在 Windows cmd.exe 中不存在！
+               - 【Windows】不要使用 ls、tree 等命令，请使用 PowerShell 的 Get-ChildItem 或 GlobTool
+               - 【跨平台】统一使用 GlobTool 或 SmartAnalyzeTool 搜索文件，避免平台差异
+               - 如果需要搜索特定目录（如 */test/*），使用 GlobTool 工具，设置 pattern 为 "**/test/**/*.java"
                """;
     }
     

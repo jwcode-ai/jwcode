@@ -177,28 +177,35 @@ public class CommandRecoveryAdvisor {
         String lower = originalCommand.toLowerCase();
         List<String> alternatives = new ArrayList<>();
         
+        // 【新增】find 命令专项处理 - Windows 上 find 不存在
+        if (lower.contains("find ") || lower.contains("glob") || 
+            originalCommand.trim().startsWith("find ") || 
+            lower.contains(" -type ") || lower.contains(" -name ")) {
+            alternatives.add("【Windows 替代】使用 GlobTool 工具搜索文件（跨平台）");
+            alternatives.add("【Windows 替代】使用 PowerShell: Get-ChildItem -Path . -Recurse -Filter '*.java' -File");
+            alternatives.add("【Java API】Files.find(root, depth, (p, a) -> p.toString().contains(\"test\"))");
+            alternatives.add("【推荐】使用 SmartAnalyzeTool 智能分析项目，自动排除噪音目录");
+            return alternatives; // find 命令有专门建议，不再添加通用建议
+        }
+        
         if (lower.contains("head ") || lower.contains("| head")) {
-            alternatives.add("使用 PowerShell: Select-Object -First N");
+            alternatives.add("使用 PowerShell: Get-Content file.txt | Select-Object -First N");
             alternatives.add("使用 Java API: Files.readAllLines().subList(0, N)");
         }
         if (lower.contains("grep ") || lower.contains("| grep")) {
-            alternatives.add("使用 PowerShell: Select-String 或 findstr");
+            alternatives.add("使用 PowerShell: Select-String -Pattern 'keyword'");
             alternatives.add("使用 Java API: 读取文件后用 String.contains() 过滤");
         }
         if (lower.contains("tree ")) {
             alternatives.add("使用 PowerShell: Get-ChildItem -Recurse | Select-Object FullName");
             alternatives.add("使用 Java API: Files.walk().limit(N)");
         }
-        if (lower.contains("ls -la") || lower.contains("dir ")) {
-            alternatives.add("使用 PowerShell: Get-ChildItem | Select-Object Name, Mode, Length");
+        if (lower.contains("ls -la") || lower.contains("ls -l") || lower.contains("ls ")) {
+            alternatives.add("使用 PowerShell: Get-ChildItem -Force | Select-Object Name, Mode, Length");
         }
         if (lower.contains("cat ")) {
             alternatives.add("使用 PowerShell: Get-Content");
             alternatives.add("使用 Java API: Files.readString(path)");
-        }
-        if (lower.contains("find ") || lower.contains("glob")) {
-            alternatives.add("使用 Java API: Files.find(root, depth, matcher)");
-            alternatives.add("使用 PathMatcher: root.getFileSystem().getPathMatcher(\"glob:**/*.java\")");
         }
         
         if (alternatives.isEmpty()) {
