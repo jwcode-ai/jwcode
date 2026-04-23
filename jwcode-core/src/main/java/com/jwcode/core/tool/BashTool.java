@@ -1,5 +1,12 @@
+package com.jwcode.core.tool;
+
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.jwcode.core.tool.Tool;
+import com.jwcode.core.tool.ToolProgress;
+import com.jwcode.core.tool.ToolResult;
+import com.jwcode.core.tool.ToolSchemaGenerator;
+import com.jwcode.core.tool.ToolValidationResult;
 import com.jwcode.core.tool.context.ToolExecutionContext;
 import com.jwcode.core.tool.input.BashInput;
 import com.jwcode.core.tool.output.BashOutput;

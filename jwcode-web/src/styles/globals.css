@@ -1,0 +1,291 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-bg: #0d1117;
+  --color-surface: #161b22;
+  --color-border: #30363d;
+  --color-hover: #21262d;
+  --color-text: #c9d1d9;
+  --color-muted: #8b949e;
+  --color-accent-blue: #58a6ff;
+  --color-accent-green: #238636;
+  --color-accent-red: #f85149;
+  --color-accent-yellow: #d29922;
+}
+
+.light {
+  --color-bg: #ffffff;
+  --color-surface: #f6f8fa;
+  --color-border: #d0d7de;
+  --color-hover: #f3f4f6;
+  --color-text: #24292f;
+  --color-muted: #57606a;
+  --color-accent-blue: #0969da;
+  --color-accent-green: #1a7f37;
+  --color-accent-red: #cf222e;
+  --color-accent-yellow: #9a6700;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-muted);
+}
+
+/* Selection */
+::selection {
+  background-color: rgba(88, 166, 255, 0.3);
+}
+
+/* Focus styles */
+:focus-visible {
+  outline: 2px solid var(--color-accent-blue);
+  outline-offset: 2px;
+}
+
+/* Button base */
+.btn {
+  @apply inline-flex items-center justify-center px-4 py-2 rounded-md font-medium transition-colors;
+}
+
+.btn-primary {
+  @apply bg-accent-green text-white hover:bg-opacity-90;
+}
+
+.btn-secondary {
+  @apply bg-dark-surface border border-dark-border text-dark-text hover:bg-dark-hover;
+}
+
+/* Input base */
+.input {
+  @apply w-full px-3 py-2 bg-dark-bg border border-dark-border rounded-md text-dark-text placeholder-dark-muted focus:border-accent-blue focus:outline-none;
+}
+
+/* Card styles */
+.card {
+  @apply bg-dark-surface border border-dark-border rounded-lg p-4;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes pulse-soft {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+@keyframes blink {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+.animate-slide-in {
+  animation: slideIn 0.3s ease-out;
+}
+
+.animate-pulse-soft {
+  animation: pulse-soft 2s ease-in-out infinite;
+}
+
+.animate-blink {
+  animation: blink 1s infinite;
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+/* Markdown styles */
+.markdown-content h1 {
+  @apply text-2xl font-bold mt-4 mb-2 text-accent-blue;
+}
+
+.markdown-content h2 {
+  @apply text-xl font-semibold mt-4 mb-2 text-accent-blue;
+}
+
+.markdown-content h3 {
+  @apply text-lg font-semibold mt-3 mb-2 text-accent-blue;
+}
+
+.markdown-content p {
+  @apply my-2;
+}
+
+.markdown-content ul, .markdown-content ol {
+  @apply my-2 pl-6;
+}
+
+.markdown-content li {
+  @apply my-1;
+}
+
+.markdown-content code {
+  @apply bg-dark-hover px-1.5 py-0.5 rounded text-sm font-mono;
+}
+
+.markdown-content pre {
+  @apply bg-dark-bg p-3 rounded-lg overflow-x-auto my-3 border border-dark-border;
+}
+
+.markdown-content pre code {
+  @apply bg-transparent p-0;
+}
+
+.markdown-content blockquote {
+  @apply border-l-4 border-accent-blue pl-4 my-3 text-dark-muted;
+}
+
+.markdown-content a {
+  @apply text-accent-blue hover:underline;
+}
+
+.markdown-content table {
+  @apply w-full border-collapse my-3;
+}
+
+.markdown-content th, .markdown-content td {
+  @apply border border-dark-border px-3 py-2 text-left;
+}
+
+.markdown-content th {
+  @apply bg-dark-hover;
+}
+
+/* Prism.js theme overrides */
+code[class*="language-"],
+pre[class*="language-"] {
+  @apply font-mono text-sm;
+}
+
+.token.comment,
+.token.prolog,
+.token.doctype,
+.token.cdata {
+  @apply text-dark-muted;
+}
+
+.token.punctuation {
+  @apply text-dark-text;
+}
+
+.token.property,
+.token.tag,
+.token.boolean,
+.token.number,
+.token.constant,
+.token.symbol,
+.token.deleted {
+  @apply text-accent-red;
+}
+
+.token.selector,
+.token.attr-name,
+.token.string,
+.token.char,
+.token.builtin,
+.token.inserted {
+  @apply text-accent-green;
+}
+
+.token.operator,
+.token.entity,
+.token.url,
+.language-css .token.string,
+.style .token.string {
+  @apply text-accent-yellow;
+}
+
+.token.atrule,
+.token.attr-value,
+.token.keyword {
+  @apply text-accent-blue;
+}
+
+.token.function,
+.token.class-name {
+  @apply text-purple-400;
+}
+
+.token.regex,
+.token.important,
+.token.variable {
+  @apply text-accent-yellow;
+}

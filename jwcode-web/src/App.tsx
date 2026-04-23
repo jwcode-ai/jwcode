@@ -1,0 +1,941 @@
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { MessageSquare, Terminal, FolderTree, Settings, Brain, Wrench, Target, Users, FileText, ScrollText, LucideIcon, Menu, X, Send } from 'lucide-react';
+import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
+import { useChatStore } from './stores/chatStore';
+import { useSessionStore } from './stores/sessionStore';
+import { useTerminalStore } from './stores/terminalStore';
+import { useSettingsStore } from './stores/settingsStore';
+import wsService from './services/websocket';
+import { Message, TabId, Tab, Step, ToolCall, LogEntry } from './types';
+import { ModelsView } from './components/Models/ModelsView';
+import { ToolsView } from './components/Tools/ToolsView';
+import { SkillsView } from './components/Skills/SkillsView';
+import { AgentsView } from './components/Agents/AgentsView';
+import { FileTreeView } from './components/FileTree/FileTreeView';
+import { TerminalView } from './components/Terminal/TerminalView';
+import { MarkdownRenderer } from './components/common/MarkdownRenderer';
+
+// Tab configuration
+const TABS: Tab[] = [
+  { id: 'chat', title: '对话', icon: 'MessageSquare' },
+  { id: 'terminal', title: '终端', icon: 'Terminal' },
+  { id: 'files', title: '文件', icon: 'FolderTree' },
+  { id: 'models', title: '模型', icon: 'Brain' },
+  { id: 'tools', title: '工具', icon: 'Wrench' },
+  { id: 'skills', title: '技能', icon: 'Target' },
+  { id: 'agents', title: 'Agents', icon: 'Users' },
+  { id: 'settings', title: '设置', icon: 'Settings' },
+  { id: 'logs', title: '日志', icon: 'ScrollText' },
+];
+
+const ICON_MAP: Record<string, LucideIcon> = {
+  MessageSquare,
+  Terminal,
+  FolderTree,
+  Settings,
+  Brain,
+  Wrench,
+  Target,
+  Users,
+  FileText,
+  ScrollText,
+};
+
+function App() {
+  const [activeTab, setActiveTab] = useState<TabId>('chat');
+  const [isConnected, setIsConnected] = useState(false);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [unreadLogs, setUnreadLogs] = useState(0);
+  const [input, setInput] = useState('');
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  
+  const { 
+    messages, 
+    isGenerating, 
+    addMessage, 
+    appendToLastMessage, 
+    setThinking, 
+    addStep, 
+    updateStep,
+    addToolCall,
+    startGeneration,
+    endGeneration,
+    clearMessages
+  } = useChatStore();
+  
+  const { addSession, sessions, setActiveSession, activeSessionId } = useSessionStore();
+  const { isOpen: isTerminalOpen, toggleTerminal } = useTerminalStore();
+  const { theme, setTheme } = useSettingsStore();
+
+  // Auto-scroll to bottom when new messages arrive
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, isGenerating]);
+
+  // WebSocket connection
+  useEffect(() => {
+    wsService.connect();
+    
+    const unsubOpen = wsService.onOpen(() => setIsConnected(true));
+    const unsubClose = wsService.onClose(() => setIsConnected(false));
+    const unsubMessage = wsService.onMessage(handleWSMessage);
+    
+    return () => {
+      unsubOpen();
+      unsubClose();
+      unsubMessage();
+    };
+  }, []);
+
+  // Handle WebSocket messages
+  const handleWSMessage = useCallback((msg: { type: string; data?: string }) => {
+    switch (msg.type) {
+      case 'start':
+        startGeneration();
+        addMessage({
+          id: `msg-${Date.now()}`,
+          type: 'assistant',
+          content: '',
+          timestamp: Date.now(),
+        });
+        break;
+        
+      case 'content':
+        appendToLastMessage(msg.data || '');
+        break;
+        
+      case 'thinking':
+        setThinking(msg.data || '');
+        break;
+        
+      case 'tool_call':
+        try {
+          const toolData = JSON.parse(msg.data || '{}');
+          addToolCall({
+            id: `tool-${Date.now()}`,
+            name: toolData.name || 'Unknown',
+            args: toolData.args || {},
+            status: 'running',
+            timestamp: Date.now(),
+          });
+        } catch (e) {
+          console.error('Failed to parse tool call:', e);
+        }
+        break;
+        
+      case 'step_start':
+        try {
+          const stepData = JSON.parse(msg.data || '{}');
+          addStep({
+            id: `step-${Date.now()}`,
+            title: stepData.step || '执行中',
+            description: stepData.description || '正在执行...',
+            status: 'running',
+            timestamp: Date.now(),
+          });
+        } catch (e) {
+          console.error('Failed to parse step:', e);
+        }
+        break;
+        
+      case 'step_thinking':
+        try {
+          const stepData = JSON.parse(msg.data || '{}');
+          const lastMessage = messages[messages.length - 1];
+          if (lastMessage?.steps?.length) {
+            const lastStep = lastMessage.steps[lastMessage.steps.length - 1];
+            updateStep(lastStep.id, { thought: stepData.thought });
+          }
+        } catch (e) {
+          console.error('Failed to parse step thinking:', e);
+        }
+        break;
+        
+      case 'step_action':
+        try {
+          const stepData = JSON.parse(msg.data || '{}');
+          const lastMessage = messages[messages.length - 1];
+          if (lastMessage?.steps?.length) {
+            const lastStep = lastMessage.steps[lastMessage.steps.length - 1];
+            updateStep(lastStep.id, { action: stepData.action });
+          }
+        } catch (e) {
+          console.error('Failed to parse step action:', e);
+        }
+        break;
+        
+      case 'step_complete':
+        try {
+          const stepData = JSON.parse(msg.data || '{}');
+          const lastMessage = messages[messages.length - 1];
+          if (lastMessage?.steps?.length) {
+            const lastStep = lastMessage.steps[lastMessage.steps.length - 1];
+            updateStep(lastStep.id, { 
+              status: 'success', 
+              result: stepData.result 
+            });
+          }
+        } catch (e) {
+          console.error('Failed to parse step complete:', e);
+        }
+        break;
+        
+      case 'complete':
+        endGeneration();
+        break;
+        
+      case 'error':
+        endGeneration(msg.data || 'Unknown error');
+        addMessage({
+          id: `msg-${Date.now()}`,
+          type: 'assistant',
+          content: `❌ 错误: ${msg.data}`,
+          timestamp: Date.now(),
+        });
+        break;
+        
+      case 'log':
+        try {
+          const logData = typeof msg.data === 'string' ? JSON.parse(msg.data) : msg.data;
+          const newLog: LogEntry = {
+            id: `log-${Date.now()}`,
+            level: logData.level || 'info',
+            source: logData.source || 'System',
+            message: logData.message || '',
+            timestamp: logData.timestamp || Date.now(),
+          };
+          setLogs(prev => [...prev, newLog].slice(-500));
+          if (activeTab !== 'logs') {
+            setUnreadLogs(prev => prev + 1);
+          }
+        } catch (e) {
+          console.error('Failed to parse log:', e);
+        }
+        break;
+    }
+  }, [messages, activeTab, startGeneration, addMessage, appendToLastMessage, setThinking, addStep, updateStep, addToolCall, endGeneration]);
+
+  // Send message
+  const sendMessage = useCallback((content: string) => {
+    if (!content.trim() || isGenerating) return;
+    
+    addMessage({
+      id: `msg-${Date.now()}`,
+      type: 'user',
+      content: content.trim(),
+      timestamp: Date.now(),
+    });
+    
+    wsService.send({
+      type: 'chat',
+      sessionId: activeSessionId || `session-${Date.now()}`,
+      message: content,
+    });
+  }, [isGenerating, addMessage, activeSessionId]);
+
+  // Create new session
+  const createNewSession = useCallback(() => {
+    const newSession = {
+      id: `session-${Date.now()}`,
+      title: '新会话',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      messageCount: 0,
+    };
+    addSession(newSession);
+    clearMessages();
+  }, [addSession, clearMessages]);
+
+  // Icon component renderer
+  const renderIcon = (iconName: string) => {
+    const Icon = ICON_MAP[iconName];
+    return Icon ? <Icon size={18} /> : null;
+  };
+
+  // Handle keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl/Cmd + Enter to send message
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && input.trim()) {
+        e.preventDefault();
+        sendMessage(input);
+        setInput('');
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [input, sendMessage]);
+
+  // Main render content based on active tab
+  const renderMainContent = () => {
+    switch (activeTab) {
+      case 'chat':
+        return <ChatPanel messages={messages} isGenerating={isGenerating} onSend={sendMessage} input={input} setInput={setInput} messagesEndRef={messagesEndRef} />;
+      case 'logs':
+        return <LogsPanel logs={logs} onClear={() => setLogs([])} />;
+      case 'settings':
+        return <SettingsPanel />;
+      case 'terminal':
+        return (
+          <div className="h-full flex flex-col">
+            <div className="p-3 border-b border-dark-border bg-dark-surface flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Terminal size={16} className="text-accent-blue" />
+                <span className="font-medium text-sm">终端</span>
+              </div>
+              <button
+                onClick={toggleTerminal}
+                className="text-xs px-2 py-1 rounded hover:bg-dark-hover transition-colors"
+              >
+                关闭
+              </button>
+            </div>
+            <div className="flex-1 min-h-0">
+              <TerminalView />
+            </div>
+          </div>
+        );
+      default:
+        return renderTabContent(activeTab);
+    }
+  };
+
+  return (
+    <div className="h-full flex flex-col bg-dark-bg">
+      {/* Header */}
+      <header className="h-12 bg-dark-surface border-b border-dark-border flex items-center justify-between px-4 shrink-0">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+            className="md:hidden p-1.5 rounded hover:bg-dark-hover transition-colors"
+          >
+            {isMobileMenuOpen ? <X size={18} /> : <Menu size={18} />}
+          </button>
+          <div className="flex items-center gap-2">
+            <span className="text-accent-blue font-semibold text-lg">JwCode</span>
+            <span className="text-dark-muted text-xs hidden sm:inline">v1.0.0</span>
+          </div>
+        </div>
+        
+        <div className="flex items-center gap-2">
+          <div className={`hidden sm:flex items-center gap-1.5 px-2 py-1 rounded-full text-xs ${
+            isConnected ? 'bg-accent-green/10 text-accent-green' : 'bg-accent-red/10 text-accent-red'
+          }`}>
+            <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-accent-green' : 'bg-accent-red'}`} />
+            <span>{isConnected ? '已连接' : '已断开'}</span>
+          </div>
+          
+          <button
+            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+            className="p-1.5 rounded hover:bg-dark-hover transition-colors"
+            title={theme === 'dark' ? '切换到浅色模式' : '切换到深色模式'}
+          >
+            {theme === 'dark' ? '🌙' : '☀️'}
+          </button>
+          
+          <button
+            onClick={toggleTerminal}
+            className={`p-1.5 rounded hover:bg-dark-hover transition-colors ${isTerminalOpen ? 'bg-dark-hover text-accent-blue' : ''}`}
+            title="终端"
+          >
+            <Terminal size={18} />
+          </button>
+          
+          <button
+            onClick={() => setActiveTab('logs')}
+            className="relative p-1.5 rounded hover:bg-dark-hover transition-colors"
+            title="日志"
+          >
+            <ScrollText size={18} />
+            {unreadLogs > 0 && (
+              <span className="absolute -top-1 -right-1 w-4 h-4 bg-accent-red text-white text-[10px] rounded-full flex items-center justify-center font-medium">
+                {unreadLogs > 9 ? '9+' : unreadLogs}
+              </span>
+            )}
+          </button>
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Sidebar - Desktop */}
+        <aside className="hidden md:flex w-56 bg-dark-surface border-r border-dark-border flex-col shrink-0">
+            {/* New Chat Button */}
+            <div className="p-3 border-b border-dark-border">
+              <button
+                onClick={createNewSession}
+                className="w-full py-2 px-3 bg-accent-green text-white rounded-md flex items-center justify-center gap-2 hover:opacity-90 transition-opacity"
+              >
+                <span>+</span>
+                <span>新会话</span>
+              </button>
+            </div>
+            
+            {/* Session List */}
+            <div className="flex-1 overflow-y-auto p-2 max-h-48">
+              {sessions.length === 0 ? (
+                <div className="text-center text-dark-muted text-xs py-3">
+                  暂无会话
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {sessions.slice(0, 5).map(session => (
+                    <button
+                      key={session.id}
+                      onClick={() => setActiveSession(session.id)}
+                      className={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors truncate ${
+                        activeSessionId === session.id
+                          ? 'bg-accent-blue text-white'
+                          : 'hover:bg-dark-hover text-dark-text'
+                      }`}
+                    >
+                      {session.title}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            
+            {/* Tab Navigation */}
+            <div className="p-2 border-t border-dark-border">
+              <div className="grid grid-cols-3 gap-1">
+                {TABS.slice(0, 6).map(tab => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setActiveTab(tab.id)}
+                    className={`p-2 rounded flex flex-col items-center gap-1 transition-colors ${
+                      activeTab === tab.id
+                        ? 'bg-accent-blue text-white'
+                        : 'text-dark-muted hover:bg-dark-hover hover:text-dark-text'
+                    }`}
+                    title={tab.title}
+                  >
+                    {renderIcon(tab.icon || '')}
+                    <span className="text-[10px]">{tab.title}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </aside>
+        )
+
+        {/* Mobile Menu Overlay */}
+        {isMobileMenuOpen && (
+          <div className="fixed inset-0 z-50 md:hidden">
+            <div className="absolute inset-0 bg-black/50" onClick={() => setIsMobileMenuOpen(false)} />
+            <aside className="absolute left-0 top-12 bottom-0 w-64 bg-dark-surface border-r border-dark-border flex flex-col">
+              <div className="p-3 border-b border-dark-border">
+                <button
+                  onClick={() => { createNewSession(); setIsMobileMenuOpen(false); }}
+                  className="w-full py-2 px-3 bg-accent-green text-white rounded-md flex items-center justify-center gap-2"
+                >
+                  <span>+</span>
+                  <span>新会话</span>
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-2">
+                <div className="space-y-1">
+                  {TABS.map(tab => (
+                    <button
+                      key={tab.id}
+                      onClick={() => { setActiveTab(tab.id); setIsMobileMenuOpen(false); }}
+                      className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors ${
+                        activeTab === tab.id
+                          ? 'bg-accent-blue text-white'
+                          : 'hover:bg-dark-hover text-dark-text'
+                      }`}
+                    >
+                      {renderIcon(tab.icon || '')}
+                      <span>{tab.title}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </aside>
+          </div>
+        )}
+
+        {/* Main Panel */}
+        <main className="flex-1 flex flex-col overflow-hidden">
+          {/* Show terminal at bottom if open */}
+          {isTerminalOpen && activeTab === 'chat' ? (
+            <PanelGroup direction="vertical">
+              <Panel className="min-h-0">
+                {renderMainContent()}
+              </Panel>
+              <PanelResizeHandle className="h-1 bg-dark-border hover:bg-accent-blue transition-colors cursor-row-resize" />
+              <Panel defaultSize={30} minSize={15} maxSize={50} className="min-h-[150px]">
+                <TerminalView />
+              </Panel>
+            </PanelGroup>
+          ) : (
+            renderMainContent()
+          )}
+        </main>
+      </div>
+    </div>
+  );
+}
+
+// Chat Panel Component
+interface ChatPanelProps {
+  messages: Message[];
+  isGenerating: boolean;
+  onSend: (content: string) => void;
+  input: string;
+  setInput: (input: string) => void;
+  messagesEndRef: React.MutableRefObject<HTMLDivElement | null>;
+}
+
+function ChatPanel({ messages, isGenerating, onSend, input, setInput, messagesEndRef }: ChatPanelProps) {
+  const handleSend = () => {
+    if (input.trim()) {
+      onSend(input);
+      setInput('');
+    }
+  };
+  
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+  };
+  
+  return (
+    <div className="flex-1 flex flex-col overflow-hidden">
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {messages.length === 0 ? (
+          <div className="flex items-center justify-center h-full">
+            <div className="text-center max-w-md px-4">
+              <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-accent-blue/10 flex items-center justify-center">
+                <MessageSquare size={32} className="text-accent-blue" />
+              </div>
+              <h2 className="text-xl font-semibold mb-2">欢迎使用 JwCode</h2>
+              <p className="text-dark-muted text-sm">我可以帮你编写代码、分析项目、自动化任务。试试发送一条消息吧！</p>
+              <div className="mt-6 flex flex-wrap justify-center gap-2">
+                <span className="text-xs px-3 py-1.5 bg-dark-surface rounded-full text-dark-muted">💡 代码编写</span>
+                <span className="text-xs px-3 py-1.5 bg-dark-surface rounded-full text-dark-muted">🔍 代码分析</span>
+                <span className="text-xs px-3 py-1.5 bg-dark-surface rounded-full text-dark-muted">⚡ 自动化任务</span>
+              </div>
+            </div>
+          </div>
+        ) : (
+          messages.map(message => (
+            <MessageBubble key={message.id} message={message} />
+          ))
+        )}
+        
+        {isGenerating && (
+          <div className="flex items-center gap-3 text-dark-muted">
+            <div className="flex gap-1">
+              <span className="w-2 h-2 bg-accent-blue rounded-full animate-bounce" />
+              <span className="w-2 h-2 bg-accent-blue rounded-full animate-bounce" style={{ animationDelay: '0.1s' }} />
+              <span className="w-2 h-2 bg-accent-blue rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
+            </div>
+            <span className="text-sm">AI 正在思考...</span>
+          </div>
+        )}
+        
+        <div ref={messagesEndRef} />
+      </div>
+      
+      {/* Input Area */}
+      <div className="p-4 border-t border-dark-border bg-dark-surface">
+        <div className="flex gap-3 items-end">
+          <textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
+            className="flex-1 bg-dark-bg border border-dark-border rounded-lg px-4 py-3 text-dark-text placeholder-dark-muted resize-none focus:border-accent-blue focus:outline-none text-sm"
+            rows={2}
+          />
+          <button
+            onClick={handleSend}
+            disabled={!input.trim() || isGenerating}
+            className="px-4 py-3 bg-accent-green text-white rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2"
+          >
+            <Send size={16} />
+            <span className="hidden sm:inline">发送</span>
+          </button>
+        </div>
+        <div className="mt-2 text-xs text-dark-muted text-center">
+          <kbd className="px-1.5 py-0.5 bg-dark-bg rounded border border-dark-border">Ctrl</kbd>
+          {' + '}
+          <kbd className="px-1.5 py-0.5 bg-dark-bg rounded border border-dark-border">Enter</kbd>
+          {' 快速发送'}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Message Bubble Component
+function MessageBubble({ message }: { message: Message }) {
+  const isUser = message.type === 'user';
+  
+  return (
+    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} animate-fade-in`}>
+      <div
+        className={`max-w-[85%] md:max-w-[75%] px-4 py-3 rounded-2xl ${
+          isUser
+            ? 'bg-accent-blue text-white rounded-br-md'
+            : 'bg-dark-surface border border-dark-border text-dark-text rounded-bl-md'
+        }`}
+      >
+        {/* Thinking */}
+        {message.thinking && (
+          <div className="mb-3 p-3 bg-dark-bg border border-dark-border rounded-lg">
+            <div className="text-xs text-accent-blue mb-1 flex items-center gap-1">
+              <span>💭</span>
+              <span>思考过程</span>
+            </div>
+            <div className="text-sm text-dark-muted italic">{message.thinking}</div>
+          </div>
+        )}
+        
+        {/* Steps */}
+        {message.steps && message.steps.length > 0 && (
+          <div className="mb-3 space-y-2">
+            {message.steps.map(step => (
+              <StepItem key={step.id} step={step} />
+            ))}
+          </div>
+        )}
+        
+        {/* Tool Calls */}
+        {message.toolCalls && message.toolCalls.length > 0 && (
+          <div className="mb-3 space-y-2">
+            {message.toolCalls.map(toolCall => (
+              <ToolCallItem key={toolCall.id} toolCall={toolCall} />
+            ))}
+          </div>
+        )}
+        
+        {/* Content with Markdown */}
+        {message.content && (
+          <div className="whitespace-pre-wrap break-words">
+            {isUser ? (
+              <span>{message.content}</span>
+            ) : (
+              <MarkdownRenderer content={message.content} />
+            )}
+          </div>
+        )}
+        
+        {/* Timestamp */}
+        <div className={`text-[10px] mt-2 ${isUser ? 'text-white/70' : 'text-dark-muted'}`}>
+          {new Date(message.timestamp).toLocaleTimeString('zh-CN', { 
+            hour: '2-digit', 
+            minute: '2-digit' 
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Step Item Component
+function StepItem({ step }: { step: Step }) {
+  const statusColors = {
+    pending: 'bg-dark-hover text-dark-muted',
+    running: 'bg-accent-blue text-white animate-pulse-soft',
+    success: 'bg-accent-green text-white',
+    error: 'bg-accent-red text-white',
+    warning: 'bg-accent-yellow text-white',
+  };
+  
+  const statusIcons = {
+    pending: '○',
+    running: '⟳',
+    success: '✓',
+    error: '✗',
+    warning: '⚠',
+  };
+  
+  return (
+    <div className={`p-3 bg-dark-bg border-l-4 rounded-r-lg text-sm ${
+      step.status === 'running' ? 'border-accent-blue' :
+      step.status === 'success' ? 'border-accent-green' :
+      step.status === 'error' ? 'border-accent-red' :
+      step.status === 'warning' ? 'border-accent-yellow' :
+      'border-dark-border'
+    }`}>
+      <div className="flex items-center gap-2 mb-1">
+        <span className={`w-5 h-5 rounded-full flex items-center justify-center text-xs ${statusColors[step.status]}`}>
+          {statusIcons[step.status]}
+        </span>
+        <span className="font-medium">{step.title}</span>
+      </div>
+      <div className="text-dark-muted ml-7">{step.description}</div>
+      {step.thought && (
+        <div className="mt-2 ml-7 text-xs text-dark-muted italic border-l-2 border-accent-blue pl-2">
+          💭 {step.thought}
+        </div>
+      )}
+      {step.result && (
+        <div className="mt-2 ml-7 text-xs text-accent-green">
+          ✓ {step.result}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Tool Call Item Component
+function ToolCallItem({ toolCall }: { toolCall: ToolCall }) {
+  const isRunning = toolCall.status === 'running';
+  
+  return (
+    <div className="bg-dark-bg border border-dark-border rounded-lg overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-2 bg-dark-surface border-b border-dark-border">
+        <div className="flex items-center gap-2">
+          <span className="text-accent-blue">🔧</span>
+          <span className="font-medium text-sm">{toolCall.name}</span>
+        </div>
+        <span className={`text-xs px-2 py-0.5 rounded ${
+          isRunning ? 'bg-accent-blue text-white' : 'bg-accent-green text-white'
+        }`}>
+          {isRunning ? '运行中' : '完成'}
+        </span>
+      </div>
+      <div className="p-3">
+        <div className="text-xs text-dark-muted mb-1">参数</div>
+        <pre className="text-xs font-mono bg-dark-bg p-2 rounded overflow-x-auto">
+          {JSON.stringify(toolCall.args, null, 2)}
+        </pre>
+        {toolCall.result !== undefined && toolCall.result !== null && (
+          <>
+            <div className="text-xs text-dark-muted mb-1 mt-2">结果</div>
+            <pre className="text-xs font-mono bg-dark-bg p-2 rounded overflow-x-auto text-accent-green">
+              {typeof toolCall.result === 'object' ? JSON.stringify(toolCall.result, null, 2) : String(toolCall.result)}
+            </pre>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Logs Panel Component
+function LogsPanel({ logs, onClear }: { logs: LogEntry[]; onClear: () => void }) {
+  const levelColors = {
+    info: 'bg-accent-blue',
+    warn: 'bg-accent-yellow',
+    error: 'bg-accent-red',
+    success: 'bg-accent-green',
+    tool: 'bg-accent-purple',
+  };
+  
+  const levelIcons = {
+    info: 'ℹ️',
+    warn: '⚠️',
+    error: '❌',
+    success: '✅',
+    tool: '🔧',
+  };
+  
+  return (
+    <div className="flex-1 flex flex-col overflow-hidden p-4">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-lg font-semibold flex items-center gap-2">
+          <ScrollText size={18} className="text-accent-blue" />
+          后台日志
+          <span className="text-sm font-normal text-dark-muted">({logs.length})</span>
+        </h2>
+        <button
+          onClick={onClear}
+          className="px-3 py-1.5 text-sm bg-dark-surface border border-dark-border rounded hover:bg-dark-hover transition-colors"
+        >
+          清空
+        </button>
+      </div>
+      
+      <div className="flex-1 overflow-y-auto font-mono text-sm space-y-1">
+        {logs.length === 0 ? (
+          <div className="text-center text-dark-muted py-12">
+            <ScrollText size={48} className="mx-auto mb-2 opacity-50" />
+            <p>暂无日志</p>
+          </div>
+        ) : (
+          logs.map(log => (
+            <div
+              key={log.id}
+              className={`flex gap-2 p-2 rounded hover:bg-dark-surface transition-colors ${
+                log.level === 'error' ? 'bg-accent-red/10' :
+                log.level === 'warn' ? 'bg-accent-yellow/10' :
+                log.level === 'success' ? 'bg-accent-green/10' : ''
+              }`}
+            >
+              <span className="text-dark-muted shrink-0 text-xs">
+                {new Date(log.timestamp).toLocaleTimeString('zh-CN', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  second: '2-digit',
+                })}
+              </span>
+              <span className="text-lg shrink-0">{levelIcons[log.level]}</span>
+              <span className={`px-1.5 py-0.5 rounded text-white text-xs shrink-0 ${levelColors[log.level]}`}>
+                {log.level.toUpperCase()}
+              </span>
+              <span className="text-dark-muted shrink-0 text-xs">[{log.source}]</span>
+              <span className="text-dark-text break-all">{log.message}</span>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Settings Panel Component
+function SettingsPanel() {
+  const { 
+    theme, setTheme,
+    thinking, setThinkingEnabled,
+    yolo, setYoloEnabled,
+    autoSwarm, setAutoSwarmEnabled,
+    autoAI, setAutoAIEnabled,
+    compression, setCompressionEnabled
+  } = useSettingsStore();
+  
+  return (
+    <div className="flex-1 overflow-y-auto p-4">
+      <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+        <Settings size={18} className="text-accent-blue" />
+        设置
+      </h2>
+      
+      <div className="space-y-6 max-w-2xl">
+        {/* Theme */}
+        <div className="bg-dark-surface border border-dark-border rounded-lg p-4">
+          <h3 className="font-medium mb-3 flex items-center gap-2">
+            <span>🎨</span> 主题
+          </h3>
+          <div className="flex gap-2">
+            {(['dark', 'light', 'auto'] as const).map(t => (
+              <button
+                key={t}
+                onClick={() => setTheme(t)}
+                className={`px-4 py-2 rounded-lg transition-all ${
+                  theme === t 
+                    ? 'bg-accent-blue text-white' 
+                    : 'bg-dark-hover text-dark-text hover:bg-dark-border'
+                }`}
+              >
+                {t === 'dark' ? '🌙 深色' : t === 'light' ? '☀️ 浅色' : '🔄 自动'}
+              </button>
+            ))}
+          </div>
+        </div>
+        
+        {/* Advanced Features */}
+        <div className="bg-dark-surface border border-dark-border rounded-lg p-4">
+          <h3 className="font-medium mb-3 flex items-center gap-2">
+            <span>🚀</span> 高级功能
+          </h3>
+          <div className="space-y-3">
+            <FeatureToggle
+              title="🧠 Thinking Mode"
+              subtitle="深度推理模式 - 让 AI 进行更详细的思考"
+              enabled={thinking.enabled}
+              onChange={setThinkingEnabled}
+            />
+            <FeatureToggle
+              title="⚡ YOLO Mode"
+              subtitle="全自动模式 - 无需确认直接执行"
+              enabled={yolo.enabled}
+              onChange={setYoloEnabled}
+            />
+            <FeatureToggle
+              title="🐝 Auto Swarm"
+              subtitle="自动智能体集群 - 多 Agent 协同工作"
+              enabled={autoSwarm.enabled}
+              onChange={setAutoSwarmEnabled}
+            />
+            <FeatureToggle
+              title="🤖 Auto AI"
+              subtitle="自动 AI 规划 - 智能任务分解与执行"
+              enabled={autoAI.enabled}
+              onChange={setAutoAIEnabled}
+            />
+            <FeatureToggle
+              title="📦 Context Compression"
+              subtitle="上下文压缩 - 自动管理对话长度"
+              enabled={compression.enabled}
+              onChange={setCompressionEnabled}
+            />
+          </div>
+        </div>
+        
+        {/* About */}
+        <div className="bg-dark-surface border border-dark-border rounded-lg p-4">
+          <h3 className="font-medium mb-3 flex items-center gap-2">
+            <span>ℹ️</span> 关于
+          </h3>
+          <div className="text-sm text-dark-muted space-y-2">
+            <p><span className="text-dark-text">JwCode Web</span> v1.0.0</p>
+            <p>基于 Web 的 AI 编码助手界面</p>
+            <p className="text-xs">Powered by React + TypeScript + TailwindCSS</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Feature Toggle Component
+interface FeatureToggleProps {
+  title: string;
+  subtitle: string;
+  enabled: boolean;
+  onChange: (enabled: boolean) => void;
+}
+
+function FeatureToggle({ title, subtitle, enabled, onChange }: FeatureToggleProps) {
+  return (
+    <div className="flex items-center justify-between p-3 bg-dark-bg rounded-lg">
+      <div>
+        <div className="font-medium text-sm">{title}</div>
+        <div className="text-xs text-dark-muted">{subtitle}</div>
+      </div>
+      <button
+        onClick={() => onChange(!enabled)}
+        className={`relative w-12 h-6 rounded-full transition-colors ${
+          enabled ? 'bg-accent-green' : 'bg-dark-border'
+        }`}
+      >
+        <span
+          className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${
+            enabled ? 'left-7' : 'left-1'
+          }`}
+        />
+      </button>
+    </div>
+  );
+}
+
+// Render tab content
+function renderTabContent(tabId: TabId) {
+  switch (tabId) {
+    case 'models':
+      return <ModelsView />;
+    case 'tools':
+      return <ToolsView />;
+    case 'skills':
+      return <SkillsView />;
+    case 'agents':
+      return <AgentsView />;
+    case 'files':
+      return <FileTreeView />;
+    default:
+      return null;
+  }
+}
+
+export default App;

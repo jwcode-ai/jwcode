@@ -1,0 +1,13 @@
+/* xterm.js CSS - Minimal styles for terminal */
+.xterm {
+  height: 100%;
+  padding: 8px;
+}
+
+.xterm-viewport {
+  overflow-y: auto;
+}
+
+.xterm-screen {
+  height: 100%;
+}

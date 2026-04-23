@@ -1,5 +1,6 @@
 package com.jwcode.web;
 
+import com.jwcode.core.task.TaskStore;
 import com.jwcode.core.tool.ToolRegistry;
 import com.jwcode.web.stream.StreamingWebSocketHandler;
 import com.sun.net.httpserver.HttpServer;
@@ -66,6 +67,8 @@ public class WebServer {
         server.createContext("/api/agents", new AgentsHandler());
         server.createContext("/api/templates", new TemplatesHandler());
         server.createContext("/api/models", new ModelInfoHandler());
+        // 任务管理 API
+        server.createContext("/api/tasks", new TaskHandler(TaskStore.getInstance()));
         server.createContext("/static", new StaticHandler());
         
         server.setExecutor(Executors.newFixedThreadPool(10));
