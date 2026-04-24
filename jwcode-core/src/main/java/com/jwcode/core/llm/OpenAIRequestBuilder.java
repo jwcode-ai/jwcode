@@ -181,16 +181,18 @@ public class OpenAIRequestBuilder {
     }
     
     /**
-     * 【关键修复】验证并修复 tool_calls 配对完整性
+     * 【关键修复】验证并修复 tool_calls 配对完整性（双向验证）
      * 
-     * 问题：当消息被截断或压缩时，ASSISTANT 消息中的 tool_calls 可能被保留，
-     * 但对应的 TOOL 消息被丢弃。这会导致 OpenAI API 报错：
-     * "an assistant message with 'tool_calls' must be followed by tool messages"
+     * 问题：当消息被截断或压缩时，可能出现两种不匹配：
+     * 1. ASSISTANT 消息中的 tool_calls 被保留，但对应的 TOOL 消息被丢弃
+     *    -> API 报错："an assistant message with 'tool_calls' must be followed by tool messages"
+     * 2. TOOL 消息被保留，但对应的 ASSISTANT 消息（包含 tool_calls）被丢弃
+     *    -> API 报错："tool result's tool id ... not found"
      * 
-     * 解决方案：
-     * 1. 收集所有有效的 tool_call_id（来自 TOOL 消息）
-     * 2. 检查每个 ASSISTANT 消息的 tool_calls
-     * 3. 移除没有对应 TOOL 消息的 tool_call
+     * 解决方案（双向验证）：
+     * 1. 收集所有 ASSISTANT 消息中的 tool_call_id
+     * 2. 移除没有对应 ASSISTANT 的孤立 TOOL 消息
+     * 3. 基于清理后的 TOOL 消息，移除 ASSISTANT 中孤立的 tool_calls
      * 
      * @param messages 处理后的消息列表
      * @return 修复后的消息列表
@@ -200,9 +202,43 @@ public class OpenAIRequestBuilder {
             return messages;
         }
         
-        // 步骤1：收集所有有效的 tool_call_id（来自 TOOL 消息）
-        Set<String> validToolCallIds = new HashSet<>();
+        // ========== 第一轮：收集所有 ASSISTANT 消息中的 tool_call_id ==========
+        Set<String> assistantToolCallIds = new HashSet<>();
         for (LLMMessage msg : messages) {
+            if (msg.getRole() == LLMMessage.Role.ASSISTANT && msg.hasToolCalls()) {
+                for (LLMMessage.ToolCall tc : msg.getToolCalls()) {
+                    if (tc.getId() != null) {
+                        assistantToolCallIds.add(tc.getId());
+                    }
+                }
+            }
+        }
+        
+        // ========== 第二轮：移除孤立的 TOOL 消息（没有对应 ASSISTANT） ==========
+        List<LLMMessage> afterToolCleanup = new ArrayList<>();
+        int removedToolCount = 0;
+        
+        for (LLMMessage msg : messages) {
+            if (msg.getRole() == LLMMessage.Role.TOOL) {
+                String toolCallId = msg.getToolCallId();
+                if (toolCallId == null || !assistantToolCallIds.contains(toolCallId)) {
+                    logger.warning("[OpenAI] Removing orphaned TOOL message: tool_call_id=" + toolCallId + 
+                        " (no corresponding ASSISTANT tool_calls)");
+                    removedToolCount++;
+                    continue;
+                }
+            }
+            afterToolCleanup.add(msg);
+        }
+        
+        if (removedToolCount > 0) {
+            logger.warning("[OpenAI] Removed " + removedToolCount + " orphaned TOOL message(s)");
+        }
+        
+        // 如果没有 TOOL 消息了，直接返回（ASSISTANT 中的 tool_calls 将在下一轮被清理）
+        // ========== 第三轮：收集清理后的 TOOL 消息中的 tool_call_id ==========
+        Set<String> validToolCallIds = new HashSet<>();
+        for (LLMMessage msg : afterToolCleanup) {
             if (msg.getRole() == LLMMessage.Role.TOOL) {
                 String toolCallId = msg.getToolCallId();
                 if (toolCallId != null && !toolCallId.isEmpty()) {
@@ -211,18 +247,18 @@ public class OpenAIRequestBuilder {
             }
         }
         
-        if (validToolCallIds.isEmpty()) {
-            // 没有 TOOL 消息，不需要验证
-            return messages;
+        if (validToolCallIds.isEmpty() && assistantToolCallIds.isEmpty()) {
+            // 没有 tool_calls，不需要验证
+            return afterToolCleanup;
         }
         
         logger.info("[OpenAI] Valid tool_call_ids found: " + validToolCallIds.size());
         
-        // 步骤2：处理每个 ASSISTANT 消息，移除无效的 tool_calls
-        List<LLMMessage> result = new ArrayList<>();
+        // ========== 第四轮：处理每个 ASSISTANT 消息，移除孤立的 tool_calls ==========
+        List<LLMMessage> finalResult = new ArrayList<>();
         int fixedAssistantCount = 0;
         
-        for (LLMMessage msg : messages) {
+        for (LLMMessage msg : afterToolCleanup) {
             if (msg.getRole() == LLMMessage.Role.ASSISTANT && msg.hasToolCalls()) {
                 List<LLMMessage.ToolCall> originalToolCalls = msg.getToolCalls();
                 List<LLMMessage.ToolCall> validToolCalls = new ArrayList<>();
@@ -240,23 +276,23 @@ public class OpenAIRequestBuilder {
                 // 如果所有 tool_calls 都被移除，创建纯文本 assistant 消息
                 if (validToolCalls.isEmpty()) {
                     logger.warning("[OpenAI] All tool_calls orphaned, converting to text-only message");
-                    result.add(LLMMessage.assistant(msg.getContent() != null ? msg.getContent() : ""));
+                    finalResult.add(LLMMessage.assistant(msg.getContent() != null ? msg.getContent() : ""));
                 } else if (validToolCalls.size() < originalToolCalls.size()) {
                     // 部分 tool_calls 被移除
                     logger.info("[OpenAI] Fixed assistant message: " + originalToolCalls.size() + 
                         " -> " + validToolCalls.size() + " tool_calls");
                     fixedAssistantCount++;
-                    result.add(LLMMessage.assistantWithTools(
+                    finalResult.add(LLMMessage.assistantWithTools(
                         msg.getContent() != null ? msg.getContent() : "",
                         validToolCalls,
                         msg.getReasoningContent()
                     ));
                 } else {
                     // 所有 tool_calls 都有效
-                    result.add(msg);
+                    finalResult.add(msg);
                 }
             } else {
-                result.add(msg);
+                finalResult.add(msg);
             }
         }
         
@@ -264,7 +300,7 @@ public class OpenAIRequestBuilder {
             logger.info("[OpenAI] Fixed " + fixedAssistantCount + " assistant messages with orphaned tool_calls");
         }
         
-        return result;
+        return finalResult;
     }
     
     /**
@@ -499,9 +535,11 @@ public class OpenAIRequestBuilder {
             if (lastRole != null) {
                 // TOOL 消息后面必须是 ASSISTANT 或另一个 TOOL（多个工具结果）
                 // 不允许 TOOL -> USER 或 TOOL -> SYSTEM
-                if (lastRole == LLMMessage.Role.TOOL && 
+                if (lastRole == LLMMessage.Role.TOOL &&
                     (role == LLMMessage.Role.USER || role == LLMMessage.Role.SYSTEM)) {
-                    logger.warning("[OpenAI] Invalid sequence: TOOL should be followed by ASSISTANT/TOOL, found " + role);
+                    // 【修复】TOOL 后跟 USER 是允许的（用户可以中断工具执行并发送新消息）
+                    // 不再输出警告，因为这是有效的使用场景
+                    logger.info("[OpenAI] Valid sequence: TOOL followed by " + role + " (user interrupt)");
                 }
             }
             

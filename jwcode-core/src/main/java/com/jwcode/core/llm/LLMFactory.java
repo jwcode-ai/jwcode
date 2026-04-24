@@ -128,9 +128,18 @@ public class LLMFactory {
      * 创建新的 LLMQueryEngine
      */
     public LLMQueryEngine createQueryEngine(com.jwcode.core.session.Session session) {
+        LLMQueryEngine.EngineConfig engineConfig = LLMQueryEngine.EngineConfig.fromJwcodeConfig(config);
+        // 根据模型特性自动调整空回复阈值等参数
+        String modelId = session.getModel();
+        if (modelId == null || modelId.isEmpty()) {
+            modelId = config != null && config.getDefaultModel() != null ? config.getDefaultModel().getId() : null;
+        }
+        engineConfig.applyModelTraits(modelId);
+        
         return LLMQueryEngine.builder()
             .session(session)
             .llmService(getLLMService())
+            .config(engineConfig)
             .build();
     }
     

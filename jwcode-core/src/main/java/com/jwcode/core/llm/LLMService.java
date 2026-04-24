@@ -72,13 +72,19 @@ public interface LLMService {
         private final String name;
         private final String arguments;
         private final boolean isComplete;
+        private final int index;
         
-        public StreamToolCallEvent(String id, String type, String name, String arguments, boolean isComplete) {
+        public StreamToolCallEvent(String id, String type, String name, String arguments, boolean isComplete, int index) {
             this.id = id;
             this.type = type;
             this.name = name;
             this.arguments = arguments;
             this.isComplete = isComplete;
+            this.index = index;
+        }
+        
+        public StreamToolCallEvent(String id, String type, String name, String arguments, boolean isComplete) {
+            this(id, type, name, arguments, isComplete, 0);
         }
         
         public String getId() { return id; }
@@ -86,10 +92,11 @@ public interface LLMService {
         public String getName() { return name; }
         public String getArguments() { return arguments; }
         public boolean isComplete() { return isComplete; }
+        public int getIndex() { return index; }
         
         @Override
         public String toString() {
-            return "StreamToolCallEvent{id='" + id + "', name='" + name + "', isComplete=" + isComplete + "}";
+            return "StreamToolCallEvent{id='" + id + "', name='" + name + "', isComplete=" + isComplete + ", index=" + index + "}";
         }
     }
 }

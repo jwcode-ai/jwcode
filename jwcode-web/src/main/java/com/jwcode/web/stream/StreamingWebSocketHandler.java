@@ -389,24 +389,64 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                 public void onStepComplete(String stepName, String result) {
                     sendStepComplete(conn, stepName, result);
                 }
+                
+                @Override
+                public void onToolResult(String toolName, String result) {
+                    sendToolResult(conn, toolName, result);
+                }
+                
+                @Override
+                public void onContentChunk(String chunk) {
+                    sendMessage(conn, MessageType.CONTENT, escapeJson(chunk));
+                }
+                
+                @Override
+                public void onThinkingChunk(String chunk) {
+                    sendMessage(conn, MessageType.THINKING, escapeJson(chunk));
+                }
+                
+                @Override
+                public void onToolCallChunk(LLMService.StreamToolCallEvent event) {
+                    String json = String.format(
+                        "{\"id\":\"%s\",\"name\":\"%s\",\"args\":\"%s\",\"complete\":%b,\"index\":%d}",
+                        escapeJson(event.getId()),
+                        escapeJson(event.getName()),
+                        escapeJson(event.getArguments()),
+                        event.isComplete(),
+                        event.getIndex()
+                    );
+                    sendMessage(conn, MessageType.TOOL_CALL, json);
+                }
             };
             
             // 设置回调
             engine.setStepCallback(stepCallback);
             
-            // 执行查询
-            LLMQueryEngine.QueryResult result = engine.query(message).join();
+            // 定义流式消费者
+            java.util.function.Consumer<String> contentConsumer = chunk -> {
+                sendMessage(conn, MessageType.CONTENT, escapeJson(chunk));
+            };
+            
+            java.util.function.Consumer<String> thinkingConsumer = chunk -> {
+                sendMessage(conn, MessageType.THINKING, escapeJson(chunk));
+            };
+            
+            java.util.function.Consumer<LLMService.StreamToolCallEvent> toolCallConsumer = event -> {
+                String json = String.format(
+                    "{\"id\":\"%s\",\"name\":\"%s\",\"args\":\"%s\",\"complete\":%b,\"index\":%d}",
+                    escapeJson(event.getId()),
+                    escapeJson(event.getName()),
+                    escapeJson(event.getArguments()),
+                    event.isComplete(),
+                    event.getIndex()
+                );
+                sendMessage(conn, MessageType.TOOL_CALL, json);
+            };
+            
+            // 执行流式查询
+            LLMQueryEngine.QueryResult result = engine.queryStream(message, contentConsumer, thinkingConsumer, toolCallConsumer).join();
             
             if (result.isSuccess()) {
-                // 获取 AI 的完整响应
-                com.jwcode.core.model.Message aiMessage = result.getMessage();
-                String response = extractMessageContent(aiMessage);
-                
-                if (response != null && !response.isEmpty()) {
-                    // 流式输出AI回复
-                    simulateStreamOutput(conn, response);
-                }
-                
                 sendMessage(conn, MessageType.COMPLETE, null);
                 WebSocketLogBroadcaster.getInstance().broadcast(
                     LogEntry.success("查询完成")
@@ -483,6 +523,20 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         sendMessage(conn, MessageType.STEP_COMPLETE, json);
         WebSocketLogBroadcaster.getInstance().broadcast(
             LogEntry.success("[完成] " + stepName + ": " + result)
+        );
+    }
+    
+    /**
+     * 发送工具结果事件（完整结果，供前端展示）
+     */
+    private void sendToolResult(WebSocket conn, String toolName, String result) {
+        String json = String.format(
+            "{\"toolName\":\"%s\",\"result\":\"%s\"}",
+            escapeJson(toolName), escapeJson(result)
+        );
+        sendMessage(conn, MessageType.TOOL_RESULT, json);
+        WebSocketLogBroadcaster.getInstance().broadcast(
+            LogEntry.tool("[工具结果] " + toolName + ": " + truncate(result, 50))
         );
     }
     

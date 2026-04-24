@@ -29,6 +29,7 @@ export interface Step {
 // Tool call types
 export interface ToolCall {
   id: string;
+  index?: number;
   name: string;
   args: Record<string, unknown> | string;
   result?: unknown;
@@ -150,6 +151,7 @@ export type WSMessageType =
   | 'content'
   | 'thinking'
   | 'tool_call'
+  | 'tool_result'
   | 'step_start'
   | 'step_thinking'
   | 'step_action'

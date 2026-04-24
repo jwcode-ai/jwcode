@@ -1,7 +1,10 @@
 package com.jwcode.ui;
 
+import com.jwcode.cli.log.ActivityEntry;
+import com.jwcode.cli.log.ActivityLogger;
 import com.jwcode.core.model.Message;
 import com.jwcode.core.session.Session;
+import com.jwcode.core.session.SessionManager;
 import com.jwcode.ui.components.*;
 
 import org.jline.reader.*;
@@ -19,13 +22,15 @@ import java.util.function.Consumer;
  * 实现 prompt/transcript 双屏幕模式，参照 Claude Code 的 REPL 架构
  * - prompt 屏幕：活动对话、流式传输、权限对话框
  * - transcript 屏幕：只读历史审查、搜索功能
+ * - sessions 屏幕：会话管理
  */
 public class REPL implements AutoCloseable {
     
     // 屏幕类型
     public enum Screen {
-        PROMPT,  // 活动对话屏幕
-        TRANSCRIPT  // 历史记录屏幕
+        PROMPT,     // 活动对话屏幕
+        TRANSCRIPT, // 历史记录屏幕
+        SESSIONS    // 会话管理屏幕
     }
     
     // 状态
@@ -34,9 +39,13 @@ public class REPL implements AutoCloseable {
     private Screen currentScreen;
     private Screen previousScreen;
     
+    // 会话管理
+    private final SessionManager sessionManager;
+    private Session currentSession;
+    
     // 消息历史
     private final List<Message> messages;
-    private final List<Message> frozenMessages; // transcript 模式使用的冻结快照
+    private final List<Message> frozenMessages;
     
     // 组件
     private MessageList messageList;
@@ -55,6 +64,9 @@ public class REPL implements AutoCloseable {
     private int scrollOffset;
     private boolean autoScroll;
     
+    // 活动日志
+    private final ActivityLogger activityLogger;
+    
     // ANSI 颜色
     private static final String RESET = "\u001B[0m";
     private static final String BOLD = "\u001B[1m";
@@ -63,6 +75,7 @@ public class REPL implements AutoCloseable {
     private static final String GREEN = "\u001B[32m";
     private static final String YELLOW = "\u001B[33m";
     private static final String RED = "\u001B[31m";
+    private static final String MAGENTA = "\u001B[35m";
     
     public REPL() throws IOException {
         this.terminal = TerminalBuilder.builder()
@@ -80,6 +93,17 @@ public class REPL implements AutoCloseable {
         this.isStreaming = false;
         this.autoScroll = true;
         this.scrollOffset = 0;
+        
+        // 初始化会话管理
+        this.sessionManager = SessionManager.getInstance();
+        this.currentSession = sessionManager.getActiveSession();
+        if (currentSession == null) {
+            currentSession = sessionManager.createSession(System.getProperty("user.dir"));
+            currentSession.setTitle("新会话");
+        }
+        
+        // 初始化活动日志
+        this.activityLogger = ActivityLogger.getInstance();
         
         initializeComponents();
     }
@@ -113,7 +137,12 @@ public class REPL implements AutoCloseable {
      * 添加用户消息
      */
     public void addUserMessage(String content) {
-        messages.add(Message.createUserMessage(content));
+        Message msg = Message.createUserMessage(content);
+        messages.add(msg);
+        if (currentSession != null) {
+            currentSession.addMessage(msg);
+            sessionManager.saveSession(currentSession);
+        }
         if (autoScroll) {
             scrollOffset = 0;
         }
@@ -123,7 +152,12 @@ public class REPL implements AutoCloseable {
      * 添加助手消息
      */
     public void addAssistantMessage(String content) {
-        messages.add(Message.createAssistantMessage(content));
+        Message msg = Message.createAssistantMessage(content);
+        messages.add(msg);
+        if (currentSession != null) {
+            currentSession.addMessage(msg);
+            sessionManager.saveSession(currentSession);
+        }
         if (autoScroll) {
             scrollOffset = 0;
         }
@@ -133,7 +167,11 @@ public class REPL implements AutoCloseable {
      * 添加系统消息
      */
     public void addSystemMessage(String content) {
-        messages.add(Message.createSystemMessage(content));
+        Message msg = Message.createSystemMessage(content);
+        messages.add(msg);
+        if (currentSession != null) {
+            currentSession.addMessage(msg);
+        }
     }
     
     /**
@@ -142,7 +180,7 @@ public class REPL implements AutoCloseable {
     public void startStreaming() {
         isStreaming = true;
         streamingContent.setLength(0);
-        messages.add(Message.createAssistantMessage("")); // 添加空消息占位
+        messages.add(Message.createAssistantMessage(""));
     }
     
     /**
@@ -152,12 +190,6 @@ public class REPL implements AutoCloseable {
         if (!isStreaming) return;
         
         streamingContent.append(content);
-        if (!messages.isEmpty()) {
-            Message last = messages.get(messages.size() - 1);
-            // 更新最后一条消息
-        }
-        
-        // 实时渲染（限流）
         if (streamingContent.length() % 20 == 0) {
             render();
         }
@@ -168,9 +200,6 @@ public class REPL implements AutoCloseable {
      */
     public void endStreaming() {
         isStreaming = false;
-        if (!streamingContent.isEmpty()) {
-            // 更新最后一条消息
-        }
     }
     
     /**
@@ -191,17 +220,14 @@ public class REPL implements AutoCloseable {
                 String input;
                 
                 if (currentScreen == Screen.PROMPT) {
-                    // PROMPT 屏幕：显示输入框
                     render();
                     input = lineReader.readLine(getPrompt());
                 } else {
-                    // TRANSCRIPT 屏幕：只读模式，监听导航键
                     renderTranscript();
                     input = lineReader.readLine("");
                 }
                 
                 if (input == null) {
-                    // EOF
                     break;
                 }
                 
@@ -210,12 +236,10 @@ public class REPL implements AutoCloseable {
                     continue;
                 }
                 
-                // 处理全局快捷键
                 if (handleGlobalKey(input)) {
                     continue;
                 }
                 
-                // 处理命令
                 if (currentScreen == Screen.PROMPT) {
                     if (input.startsWith("/")) {
                         if (onCommand != null) {
@@ -229,7 +253,6 @@ public class REPL implements AutoCloseable {
                 }
                 
             } catch (UserInterruptException e) {
-                // Ctrl+C
                 if (isStreaming) {
                     endStreaming();
                     terminal.writer().println("\n" + YELLOW + "已取消" + RESET);
@@ -252,24 +275,26 @@ public class REPL implements AutoCloseable {
                 toggleScreen();
                 return true;
                 
+            case "ctrl+s":
+            case "^s":
+                showSessionSelector();
+                return true;
+                
             case "ctrl+c":
-                // 取消当前操作
                 return false;
                 
             case "ctrl+b":
-                // 后台任务
                 terminal.writer().println(DIM + "后台任务模式 (Ctrl+B)" + RESET);
                 return true;
                 
             case "ctrl+r":
-                // 历史搜索
                 String search = lineReader.readLine("搜索历史: ");
                 searchHistory(search);
                 return true;
                 
             case "/exit":
             case "/quit":
-                return false; // 退出循环
+                return false;
         }
         
         return false;
@@ -280,7 +305,6 @@ public class REPL implements AutoCloseable {
      */
     private void toggleScreen() {
         if (currentScreen == Screen.PROMPT) {
-            // 冻结当前消息
             frozenMessages.clear();
             frozenMessages.addAll(messages);
             previousScreen = Screen.PROMPT;
@@ -290,6 +314,84 @@ public class REPL implements AutoCloseable {
             currentScreen = Screen.PROMPT;
             terminal.writer().println(DIM + "[返回对话视图]" + RESET);
         }
+    }
+    
+    /**
+     * 显示会话选择器
+     */
+    private void showSessionSelector() {
+        List<Session> sessions = sessionManager.getAllSessions();
+        
+        if (sessions.isEmpty()) {
+            terminal.writer().println(YELLOW + "暂无会话" + RESET);
+            return;
+        }
+        
+        terminal.writer().println();
+        terminal.writer().println(CYAN + "┌─ 选择会话 (Ctrl+S) " + "─".repeat(40) + "┐" + RESET);
+        
+        for (int i = 0; i < sessions.size(); i++) {
+            Session s = sessions.get(i);
+            boolean isActive = currentSession != null && s.getId().equals(currentSession.getId());
+            String marker = isActive ? GREEN + "●" + RESET : "○";
+            String title = s.getTitle() != null ? s.getTitle() : "未命名";
+            String shortId = s.getId().substring(0, Math.min(8, s.getId().length()));
+            
+            terminal.writer().println(CYAN + "│" + RESET + " " + marker + " " + (i + 1) + ". " + 
+                BOLD + title + RESET + " [" + shortId + "] (" + s.getMessageCount() + " 条消息)");
+        }
+        
+        terminal.writer().println(CYAN + "└" + "─".repeat(60) + "┘" + RESET);
+        
+        String input = lineReader.readLine("选择会话 (输入编号，或按 Enter 取消): ");
+        
+        if (input == null || input.trim().isEmpty()) {
+            return;
+        }
+        
+        try {
+            int index = Integer.parseInt(input.trim()) - 1;
+            if (index >= 0 && index < sessions.size()) {
+                switchToSession(sessions.get(index));
+            } else {
+                terminal.writer().println(RED + "无效选择" + RESET);
+            }
+        } catch (NumberFormatException e) {
+            terminal.writer().println(RED + "请输入有效编号" + RESET);
+        }
+    }
+    
+    /**
+     * 切换到指定会话
+     */
+    private void switchToSession(Session session) {
+        if (currentSession != null) {
+            sessionManager.saveSession(currentSession);
+        }
+        
+        sessionManager.setActiveSession(session.getId());
+        this.currentSession = session;
+        
+        messages.clear();
+        messages.addAll(currentSession.getMessages());
+        
+        terminal.writer().println(GREEN + "✓ 已切换到会话: " + session.getTitle() + RESET);
+    }
+    
+    /**
+     * 创建新会话
+     */
+    public void createNewSession() {
+        if (currentSession != null) {
+            sessionManager.saveSession(currentSession);
+        }
+        
+        currentSession = sessionManager.createSession(System.getProperty("user.dir"));
+        currentSession.setTitle("会话 " + currentSession.getId().substring(0, 8));
+        
+        messages.clear();
+        
+        terminal.writer().println(GREEN + "✓ 已创建新会话" + RESET);
     }
     
     /**
@@ -354,11 +456,9 @@ public class REPL implements AutoCloseable {
         
         StringBuilder sb = new StringBuilder();
         
-        // 状态栏
         sb.append(renderStatusBar(width));
         sb.append("\n");
         
-        // 消息列表
         MessageList ml = new MessageList().maxWidth(width);
         for (Message msg : messages) {
             ml.addMessage(msg);
@@ -368,7 +468,6 @@ public class REPL implements AutoCloseable {
         }
         sb.append(ml.render());
         
-        // 清屏并输出
         try {
             terminal.puts(InfoCmp.Capability.clear_screen);
         } catch (Exception e) {
@@ -387,24 +486,20 @@ public class REPL implements AutoCloseable {
         
         StringBuilder sb = new StringBuilder();
         
-        // 标题栏
         sb.append(CYAN).append("┌─ 历史记录 ").append(RESET);
         sb.append(DIM).append("(Ctrl+O 返回对话)").append(RESET);
         sb.append(" ".repeat(Math.max(0, width - 30)));
         sb.append(CYAN).append("┐").append(RESET).append("\n");
         
-        // 消息列表（只读）
         MessageList ml = new MessageList().maxWidth(width).compact(true);
         for (Message msg : frozenMessages) {
             ml.addMessage(msg);
         }
         sb.append(ml.render());
         
-        // 底部导航提示
         sb.append("\n").append(DIM);
         sb.append("j/k 或 ↑↓ 导航，/ 搜索，Ctrl+O 返回").append(RESET);
         
-        // 清屏并输出
         try {
             terminal.puts(InfoCmp.Capability.clear_screen);
         } catch (Exception e) {
@@ -425,15 +520,18 @@ public class REPL implements AutoCloseable {
         sb.append(RESET).append("\n");
         
         sb.append(DIM).append("[Ctrl+O] 历史").append(RESET).append(" ");
+        sb.append(DIM).append("[Ctrl+S] 会话").append(RESET).append(" ");
         sb.append(DIM).append("[Ctrl+R] 搜索").append(RESET).append(" ");
         sb.append(DIM).append("[Ctrl+C] 取消").append(RESET).append(" ");
         sb.append(DIM).append("[/help] 帮助").append(RESET);
         
-        // 右对齐信息
-        String info = "消息: " + messages.size();
+        String sessionTitle = currentSession != null && currentSession.getTitle() != null 
+            ? currentSession.getTitle().substring(0, Math.min(15, currentSession.getTitle().length())) 
+            : "新会话";
+        String info = sessionTitle + " | 消息: " + messages.size();
         int infoLen = info.length();
-        sb.append(" ".repeat(Math.max(0, width - 60 - infoLen)));
-        sb.append(DIM).append(info).append(RESET);
+        sb.append(" ".repeat(Math.max(0, width - 90 - infoLen)));
+        sb.append(MAGENTA).append(info).append(RESET);
         
         sb.append("\n").append(CYAN);
         sb.append("─".repeat(Math.max(0, width)));
@@ -457,7 +555,6 @@ public class REPL implements AutoCloseable {
         terminal.writer().println(CYAN + "└" + "─".repeat(60) + "┘" + RESET);
         
         String input = lineReader.readLine("请选择 (1-" + options.length + "): ");
-        // 处理输入...
     }
     
     /**
@@ -475,7 +572,7 @@ public class REPL implements AutoCloseable {
     }
     
     /**
-     * 获取会话
+     * 获取消息
      */
     public List<Message> getMessages() {
         return new ArrayList<>(messages);

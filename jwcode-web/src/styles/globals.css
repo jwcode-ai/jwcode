@@ -125,6 +125,15 @@ body {
   }
 }
 
+@keyframes slideInRight {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
 @keyframes pulse-soft {
   0%, 100% {
     opacity: 1;
@@ -160,6 +169,10 @@ body {
   animation: slideIn 0.3s ease-out;
 }
 
+.animate-slide-in-right {
+  animation: slideInRight 0.3s ease-out;
+}
+
 .animate-pulse-soft {
   animation: pulse-soft 2s ease-in-out infinite;
 }
@@ -172,7 +185,13 @@ body {
   animation: spin 1s linear infinite;
 }
 
-/* Markdown styles */
+/* Markdown styles - Base container styles for proper line breaks */
+.markdown-content {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Ensure all child elements inherit proper line breaking */
 .markdown-content h1 {
   @apply text-2xl font-bold mt-4 mb-2 text-accent-blue;
 }

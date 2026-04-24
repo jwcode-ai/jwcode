@@ -117,6 +117,21 @@ public class TaskWebSocketServer extends WebSocketServer {
     }
     
     /**
+     * Broadcast log message to all connected clients
+     */
+    public void broadcastLog(String level, String source, String message) {
+        broadcast(Map.of(
+            "type", "log",
+            "data", Map.of(
+                "level", level,
+                "source", source,
+                "message", message,
+                "timestamp", System.currentTimeMillis()
+            )
+        ));
+    }
+    
+    /**
      * Get number of connected clients
      */
     public int getConnectionCount() {

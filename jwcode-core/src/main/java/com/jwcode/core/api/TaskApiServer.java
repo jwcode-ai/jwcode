@@ -81,6 +81,22 @@ public class TaskApiServer {
     }
     
     /**
+     * 获取 WebSocket 服务器实例（用于发送日志）
+     */
+    public TaskWebSocketServer getWsServer() {
+        return wsServer;
+    }
+    
+    /**
+     * 发送日志到所有 WebSocket 客户端
+     */
+    public void sendLog(String level, String source, String message) {
+        if (wsServer != null) {
+            wsServer.broadcastLog(level, source, message);
+        }
+    }
+    
+    /**
      * 任务处理器
      */
     private class TaskHandler implements HttpHandler {

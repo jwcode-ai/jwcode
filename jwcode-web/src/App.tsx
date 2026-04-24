@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { MessageSquare, Terminal, FolderTree, Settings, Brain, Wrench, Target, Users, FileText, ScrollText, LucideIcon, Menu, X, Send } from 'lucide-react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { useChatStore } from './stores/chatStore';
@@ -46,6 +47,7 @@ function App() {
   const [isConnected, setIsConnected] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [unreadLogs, setUnreadLogs] = useState(0);
+  const [isLogDrawerOpen, setIsLogDrawerOpen] = useState(false);
   const [input, setInput] = useState('');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   
@@ -57,9 +59,12 @@ function App() {
     addMessage, 
     appendToLastMessage, 
     setThinking, 
+    appendToLastMessageThinking,
     addStep, 
     updateStep,
     addToolCall,
+    updateToolCall,
+    appendToLastToolCallArgs,
     startGeneration,
     endGeneration,
     clearMessages
@@ -68,6 +73,23 @@ function App() {
   const { addSession, sessions, setActiveSession, activeSessionId } = useSessionStore();
   const { isOpen: isTerminalOpen, toggleTerminal } = useTerminalStore();
   const { theme, setTheme } = useSettingsStore();
+
+  // Log level configurations (used by drawer)
+  const levelColors = {
+    info: 'bg-accent-blue',
+    warn: 'bg-accent-yellow',
+    error: 'bg-accent-red',
+    success: 'bg-accent-green',
+    tool: 'bg-accent-purple',
+  };
+  
+  const levelIcons = {
+    info: 'ℹ️',
+    warn: '⚠️',
+    error: '❌',
+    success: '✅',
+    tool: '🔧',
+  };
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
@@ -89,8 +111,87 @@ function App() {
     };
   }, []);
 
+  // 辅助函数：从 store 获取最新的 step
+  const getLatestStep = useCallback(() => {
+    const state = useChatStore.getState();
+    const messages = state.messages;
+    const lastMessage = messages[messages.length - 1];
+    return lastMessage?.steps?.[lastMessage.steps.length - 1];
+  }, []);
+
+  // 辅助函数：确保有可写的 step 存在。如果最后一步已完成且当前不是 complete 事件，则创建新 step
+  const ensureStep = useCallback((type: string, stepData: any) => {
+    const lastStep = getLatestStep();
+    const isCompleteEvent = type === 'step_complete';
+    const stepFinished = lastStep && (lastStep.status === 'success' || lastStep.status === 'error');
+    
+    if (!lastStep || (stepFinished && !isCompleteEvent)) {
+      if (stepFinished) {
+        console.log(`[${type}] Last step already finished (${lastStep!.status}), creating new step`);
+      } else {
+        console.warn(`[${type}] No steps found, creating new step`);
+      }
+      const stepTitle = stepData?.step || type.replace('step_', '').replace('_', ' ');
+      addStep({
+        id: `step-${Date.now()}`,
+        title: stepTitle,
+        description: stepData?.description || '执行中...',
+        status: 'running',
+        timestamp: Date.now(),
+      });
+      // 返回新创建的 step
+      return getLatestStep();
+    }
+    return lastStep;
+  }, [getLatestStep, addStep]);
+
   // Handle WebSocket messages
   const handleWSMessage = useCallback((msg: { type: string; data?: string }) => {
+    console.log('[WS] Received message:', msg.type, msg.data);
+    
+    // 支持原始消息格式："step_thinking {...}" 而不是 { type: "step_thinking", data: "..." }
+    const rawType = msg.type;
+    const rawData = msg.data;
+    
+    // 处理 step_* 类型的消息（支持原始格式）
+    if (rawType.startsWith('step_')) {
+      try {
+        // 尝试解析原始 JSON 数据
+        const stepData = JSON.parse(rawData || '{}');
+        
+        // 使用辅助函数获取最新 step（从 store 直接获取，避免闭包陷阱）
+        const lastStep = ensureStep(rawType, stepData);
+        
+        if (lastStep) {
+          switch (rawType) {
+            case 'step_start':
+              updateStep(lastStep.id, {
+                title: stepData.step || lastStep.title,
+                description: stepData.description || lastStep.description,
+                status: stepData.status || 'running'
+              });
+              break;
+            case 'step_thinking':
+              updateStep(lastStep.id, { thought: stepData.thought });
+              break;
+            case 'step_action':
+              updateStep(lastStep.id, { action: stepData.action });
+              break;
+            case 'step_complete':
+              updateStep(lastStep.id, { 
+                status: stepData.status || 'success', 
+                result: stepData.result 
+              });
+              break;
+          }
+        }
+      } catch (e) {
+        console.error(`Failed to parse ${rawType}:`, e);
+      }
+      return;
+    }
+    
+    // 标准消息类型处理
     switch (msg.type) {
       case 'start':
         startGeneration();
@@ -107,21 +208,61 @@ function App() {
         break;
         
       case 'thinking':
-        setThinking(msg.data || '');
+        appendToLastMessageThinking(msg.data || '');
         break;
         
       case 'tool_call':
         try {
           const toolData = JSON.parse(msg.data || '{}');
-          addToolCall({
-            id: `tool-${Date.now()}`,
-            name: toolData.name || 'Unknown',
-            args: toolData.args || {},
-            status: 'running',
-            timestamp: Date.now(),
-          });
+          const toolId = toolData.id || `tool-${Date.now()}`;
+          const toolIndex = typeof toolData.index === 'number' ? toolData.index : undefined;
+          
+          // 检查是否已存在相同 index 或 id 的 toolCall（流式增量合并）
+          const state = useChatStore.getState();
+          const lastMsg = state.messages[state.messages.length - 1];
+          const existing = lastMsg?.toolCalls?.find((tc) =>
+            (toolIndex !== undefined && tc.index === toolIndex) || tc.id === toolId
+          );
+          
+          if (existing) {
+            appendToLastToolCallArgs(toolId, toolData.args || '', toolIndex);
+          } else {
+            addToolCall({
+              id: toolId,
+              index: toolIndex,
+              name: toolData.name || 'Unknown',
+              args: toolData.args || {},
+              status: 'running',
+              timestamp: Date.now(),
+            });
+          }
         } catch (e) {
           console.error('Failed to parse tool call:', e);
+        }
+        break;
+        
+      case 'tool_result':
+        try {
+          const toolData = JSON.parse(msg.data || '{}');
+          // 使用 ensureStep 确保 step 存在
+          const lastStep = ensureStep('tool_result', { step: '工具结果', description: toolData.toolName || '工具执行' });
+          if (lastStep) {
+            updateStep(lastStep.id, { 
+              status: 'success',
+              result: toolData.result || '执行完成'
+            });
+          }
+          // 同时更新 toolCall 状态
+          const toolCallMessages = messages[messages.length - 1];
+          if (toolCallMessages?.toolCalls?.length) {
+            const lastToolCall = toolCallMessages.toolCalls[toolCallMessages.toolCalls.length - 1];
+            updateToolCall(lastToolCall.id, { 
+              status: 'completed',
+              result: toolData.result 
+            });
+          }
+        } catch (e) {
+          console.error('Failed to parse tool result:', e);
         }
         break;
         
@@ -143,10 +284,15 @@ function App() {
       case 'step_thinking':
         try {
           const stepData = JSON.parse(msg.data || '{}');
+          console.log('[step_thinking] Parsed data:', stepData);
           const lastMessage = messages[messages.length - 1];
+          console.log('[step_thinking] Last message:', lastMessage?.id, 'steps:', lastMessage?.steps?.length);
           if (lastMessage?.steps?.length) {
             const lastStep = lastMessage.steps[lastMessage.steps.length - 1];
+            console.log('[step_thinking] Updating step:', lastStep.id, 'with thought:', stepData.thought);
             updateStep(lastStep.id, { thought: stepData.thought });
+          } else {
+            console.warn('[step_thinking] No steps found in last message!');
           }
         } catch (e) {
           console.error('Failed to parse step thinking:', e);
@@ -215,7 +361,7 @@ function App() {
         }
         break;
     }
-  }, [messages, activeTab, startGeneration, addMessage, appendToLastMessage, setThinking, addStep, updateStep, addToolCall, endGeneration]);
+  }, [activeTab, startGeneration, addMessage, appendToLastMessage, setThinking, addStep, updateStep, addToolCall, endGeneration]);
 
   // Send message
   const sendMessage = useCallback((content: string) => {
@@ -345,7 +491,7 @@ function App() {
           </button>
           
           <button
-            onClick={() => setActiveTab('logs')}
+            onClick={() => { setIsLogDrawerOpen(true); setUnreadLogs(0); }}
             className="relative p-1.5 rounded hover:bg-dark-hover transition-colors"
             title="日志"
           >
@@ -475,6 +621,77 @@ function App() {
             renderMainContent()
           )}
         </main>
+
+        {/* Log Drawer - Slides from right */}
+        {isLogDrawerOpen && (
+          <>
+            {/* Backdrop */}
+            <div 
+              className="fixed inset-0 bg-black/50 z-40 transition-opacity"
+              onClick={() => setIsLogDrawerOpen(false)}
+            />
+            {/* Drawer Panel */}
+            <div className="fixed right-0 top-12 bottom-0 w-full max-w-md bg-dark-surface border-l border-dark-border z-50 flex flex-col animate-slide-in-right">
+              {/* Drawer Header */}
+              <div className="flex items-center justify-between p-4 border-b border-dark-border shrink-0">
+                <h2 className="text-lg font-semibold flex items-center gap-2">
+                  <ScrollText size={18} className="text-accent-blue" />
+                  后台日志
+                  <span className="text-sm font-normal text-dark-muted">({logs.length})</span>
+                </h2>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setLogs([])}
+                    className="px-3 py-1.5 text-sm bg-dark-bg border border-dark-border rounded hover:bg-dark-hover transition-colors"
+                  >
+                    清空
+                  </button>
+                  <button
+                    onClick={() => setIsLogDrawerOpen(false)}
+                    className="p-1.5 rounded hover:bg-dark-hover transition-colors"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+              </div>
+              
+              {/* Drawer Content */}
+              <div className="flex-1 overflow-y-auto p-4 font-mono text-sm space-y-1">
+                {logs.length === 0 ? (
+                  <div className="text-center text-dark-muted py-12">
+                    <ScrollText size={48} className="mx-auto mb-2 opacity-50" />
+                    <p>暂无日志</p>
+                  </div>
+                ) : (
+                  logs.map(log => (
+                    <div
+                      key={log.id}
+                      className={`flex gap-2 p-2 rounded hover:bg-dark-bg transition-colors ${
+                        log.level === 'error' ? 'bg-accent-red/10' :
+                        log.level === 'warn' ? 'bg-accent-yellow/10' :
+                        log.level === 'success' ? 'bg-accent-green/10' : ''
+                      }`}
+                    >
+                      <span className="text-dark-muted shrink-0 text-xs">
+                        {new Date(log.timestamp).toLocaleTimeString('zh-CN', {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                          second: '2-digit',
+                        })}
+                      </span>
+                      <span className="text-lg shrink-0">{levelIcons[log.level]}</span>
+                      <span className={`px-1.5 py-0.5 rounded text-white text-xs shrink-0 ${levelColors[log.level]}`}>
+                        {log.level.toUpperCase()}
+                      </span>
+                      <span className="text-dark-muted shrink-0 text-xs">[{log.source}]</span>
+                      <span className="text-dark-text break-all">{log.message}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -599,34 +816,43 @@ function MessageBubble({ message }: { message: Message }) {
           </div>
         )}
         
-        {/* Steps */}
+        {/* Steps - Collapsible */}
         {message.steps && message.steps.length > 0 && (
           <div className="mb-3 space-y-2">
             {message.steps.map(step => (
-              <StepItem key={step.id} step={step} />
+              <StepItem key={step.id} step={step} defaultCollapsed={step.status !== 'running'} />
             ))}
           </div>
         )}
         
-        {/* Tool Calls */}
+        {/* Tool Calls - Collapsible */}
         {message.toolCalls && message.toolCalls.length > 0 && (
           <div className="mb-3 space-y-2">
             {message.toolCalls.map(toolCall => (
-              <ToolCallItem key={toolCall.id} toolCall={toolCall} />
+              <ToolCallItem key={toolCall.id} toolCall={toolCall} defaultCollapsed={toolCall.status !== 'running'} />
             ))}
           </div>
         )}
         
-        {/* Content with Markdown */}
-        {message.content && (
-          <div className="whitespace-pre-wrap break-words">
+        {/* Content with Markdown - Fixed line breaks */}
+        {message.content ? (
+          <div className="whitespace-pre-wrap break-words leading-relaxed">
             {isUser ? (
               <span>{message.content}</span>
             ) : (
-              <MarkdownRenderer content={message.content} />
+              <MarkdownRenderer content={message.content} className="whitespace-pre-wrap" />
             )}
           </div>
-        )}
+        ) : !isUser && message.thinking ? (
+          <div className="whitespace-pre-wrap break-words leading-relaxed text-dark-muted italic">
+            <span className="inline-flex items-center gap-2">
+              <span className="w-2 h-2 bg-accent-blue rounded-full animate-bounce" />
+              <span className="w-2 h-2 bg-accent-blue rounded-full animate-bounce" style={{ animationDelay: '0.1s' }} />
+              <span className="w-2 h-2 bg-accent-blue rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
+              💭 正在思考...
+            </span>
+          </div>
+        ) : null}
         
         {/* Timestamp */}
         <div className={`text-[10px] mt-2 ${isUser ? 'text-white/70' : 'text-dark-muted'}`}>
@@ -640,8 +866,10 @@ function MessageBubble({ message }: { message: Message }) {
   );
 }
 
-// Step Item Component
-function StepItem({ step }: { step: Step }) {
+// Step Item Component - Collapsible
+function StepItem({ step, defaultCollapsed = false }: { step: Step; defaultCollapsed?: boolean }) {
+  const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
+  
   const statusColors = {
     pending: 'bg-dark-hover text-dark-muted',
     running: 'bg-accent-blue text-white animate-pulse-soft',
@@ -658,43 +886,80 @@ function StepItem({ step }: { step: Step }) {
     warning: '⚠',
   };
   
+  const hasDetails = step.thought || step.result || step.action;
+  
   return (
-    <div className={`p-3 bg-dark-bg border-l-4 rounded-r-lg text-sm ${
+    <div className={`bg-dark-bg border-l-4 rounded-r-lg text-sm overflow-hidden ${
       step.status === 'running' ? 'border-accent-blue' :
       step.status === 'success' ? 'border-accent-green' :
       step.status === 'error' ? 'border-accent-red' :
       step.status === 'warning' ? 'border-accent-yellow' :
       'border-dark-border'
     }`}>
-      <div className="flex items-center gap-2 mb-1">
+      {/* Header - Always visible */}
+      <div 
+        className="flex items-center gap-2 p-3 cursor-pointer hover:bg-dark-surface/50"
+        onClick={() => hasDetails && setIsCollapsed(!isCollapsed)}
+      >
+        {hasDetails ? (
+          isCollapsed ? <ChevronRight size={14} className="text-dark-muted" /> : <ChevronDown size={14} className="text-dark-muted" />
+        ) : <span className="w-3.5" />}
         <span className={`w-5 h-5 rounded-full flex items-center justify-center text-xs ${statusColors[step.status]}`}>
           {statusIcons[step.status]}
         </span>
         <span className="font-medium">{step.title}</span>
+        {step.status === 'running' && <span className="text-xs text-accent-blue animate-pulse">运行中...</span>}
       </div>
-      <div className="text-dark-muted ml-7">{step.description}</div>
-      {step.thought && (
-        <div className="mt-2 ml-7 text-xs text-dark-muted italic border-l-2 border-accent-blue pl-2">
-          💭 {step.thought}
-        </div>
+      
+      {/* Collapsible content */}
+      {!isCollapsed && (
+        <>
+          <div className="text-dark-muted ml-7 pb-2 px-3">{step.description}</div>
+          {step.action && (
+            <div className="ml-7 pb-2 px-3 text-xs text-accent-yellow border-l-2 border-accent-yellow pl-2">
+              ⚡ {step.action}
+            </div>
+          )}
+          {step.thought && (
+            <div className="ml-7 pb-2 px-3 text-xs text-dark-muted italic border-l-2 border-accent-blue pl-2">
+              💭 {step.thought}
+            </div>
+          )}
+          {step.result && (
+            <div className="ml-7 pb-2 px-3 text-xs text-accent-green border-l-2 border-accent-green pl-2">
+              ✓ {step.result}
+            </div>
+          )}
+        </>
       )}
-      {step.result && (
-        <div className="mt-2 ml-7 text-xs text-accent-green">
-          ✓ {step.result}
+      
+      {/* Show hint if collapsed but has content */}
+      {isCollapsed && hasDetails && (
+        <div className="ml-7 pb-2 px-3 text-xs text-dark-muted">
+          {step.thought && <span>💭 有思考过程 </span>}
+          {step.action && <span>⚡ 有执行操作 </span>}
+          {step.result && <span>✓ 已完成</span>}
         </div>
       )}
     </div>
   );
 }
 
-// Tool Call Item Component
-function ToolCallItem({ toolCall }: { toolCall: ToolCall }) {
+// Tool Call Item Component - Collapsible
+function ToolCallItem({ toolCall, defaultCollapsed = false }: { toolCall: ToolCall; defaultCollapsed?: boolean }) {
+  const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
   const isRunning = toolCall.status === 'running';
+  const hasResult = toolCall.result !== undefined && toolCall.result !== null;
   
   return (
     <div className="bg-dark-bg border border-dark-border rounded-lg overflow-hidden">
-      <div className="flex items-center justify-between px-3 py-2 bg-dark-surface border-b border-dark-border">
+      {/* Header - Always visible, clickable to collapse/expand */}
+      <div 
+        className="flex items-center justify-between px-3 py-2 bg-dark-surface border-b border-dark-border cursor-pointer hover:bg-dark-hover"
+        onClick={() => setIsCollapsed(!isCollapsed)}
+      >
         <div className="flex items-center gap-2">
+          {isCollapsed ? <ChevronRight size={14} className="text-dark-muted" /> : <ChevronDown size={14} className="text-dark-muted" />}
           <span className="text-accent-blue">🔧</span>
           <span className="font-medium text-sm">{toolCall.name}</span>
         </div>
@@ -704,20 +969,33 @@ function ToolCallItem({ toolCall }: { toolCall: ToolCall }) {
           {isRunning ? '运行中' : '完成'}
         </span>
       </div>
-      <div className="p-3">
-        <div className="text-xs text-dark-muted mb-1">参数</div>
-        <pre className="text-xs font-mono bg-dark-bg p-2 rounded overflow-x-auto">
-          {JSON.stringify(toolCall.args, null, 2)}
-        </pre>
-        {toolCall.result !== undefined && toolCall.result !== null && (
-          <>
-            <div className="text-xs text-dark-muted mb-1 mt-2">结果</div>
-            <pre className="text-xs font-mono bg-dark-bg p-2 rounded overflow-x-auto text-accent-green">
-              {typeof toolCall.result === 'object' ? JSON.stringify(toolCall.result, null, 2) : String(toolCall.result)}
-            </pre>
-          </>
-        )}
-      </div>
+      
+      {/* Collapsible content */}
+      {!isCollapsed && (
+        <div className="p-3">
+          <div className="text-xs text-dark-muted mb-1">参数</div>
+          <pre className="text-xs font-mono bg-dark-bg p-2 rounded overflow-x-auto">
+            {typeof toolCall.args === 'string'
+              ? toolCall.args
+              : JSON.stringify(toolCall.args, null, 2)}
+          </pre>
+          {hasResult && (
+            <>
+              <div className="text-xs text-dark-muted mb-1 mt-2">结果</div>
+              <pre className="text-xs font-mono bg-dark-bg p-2 rounded overflow-x-auto text-accent-green">
+                {typeof toolCall.result === 'object' ? JSON.stringify(toolCall.result, null, 2) : String(toolCall.result)}
+              </pre>
+            </>
+          )}
+        </div>
+      )}
+      
+      {/* Show hint if collapsed */}
+      {isCollapsed && hasResult && (
+        <div className="px-3 py-2 text-xs text-dark-muted">
+          ✓ 有返回结果
+        </div>
+      )}
     </div>
   );
 }

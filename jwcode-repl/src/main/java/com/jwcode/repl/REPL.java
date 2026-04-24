@@ -2,6 +2,7 @@ package com.jwcode.repl;
 
 import com.jwcode.core.model.Message;
 import com.jwcode.core.session.Session;
+import com.jwcode.core.session.SessionManager;
 import com.jwcode.repl.components.*;
 
 import org.jline.reader.*;
@@ -19,13 +20,15 @@ import java.util.function.Consumer;
  * 实现 prompt/transcript 双屏幕模式，参照 Claude Code 的 REPL 架构
  * - prompt 屏幕：活动对话、流式传输、权限对话框
  * - transcript 屏幕：只读历史审查、搜索功能
+ * - sessions 屏幕：会话管理
  */
 public class REPL implements AutoCloseable {
     
     // 屏幕类型
     public enum Screen {
-        PROMPT,  // 活动对话屏幕
-        TRANSCRIPT  // 历史记录屏幕
+        PROMPT,     // 活动对话屏幕
+        TRANSCRIPT, // 历史记录屏幕
+        SESSIONS    // 会话管理屏幕
     }
     
     // 状态
@@ -34,9 +37,13 @@ public class REPL implements AutoCloseable {
     private Screen currentScreen;
     private Screen previousScreen;
     
+    // 会话管理
+    private final SessionManager sessionManager;
+    private Session currentSession;
+    
     // 消息历史
     private final List<Message> messages;
-    private final List<Message> frozenMessages; // transcript 模式使用的冻结快照
+    private final List<Message> frozenMessages;
     
     // 组件
     private MessageList messageList;
@@ -62,6 +69,7 @@ public class REPL implements AutoCloseable {
     private static final String GREEN = "\u001B[32m";
     private static final String YELLOW = "\u001B[33m";
     private static final String RED = "\u001B[31m";
+    private static final String MAGENTA = "\u001B[35m";
     
     public REPL() throws IOException {
         this.terminal = TerminalBuilder.builder()
@@ -79,6 +87,14 @@ public class REPL implements AutoCloseable {
         this.isStreaming = false;
         this.autoScroll = true;
         this.scrollOffset = 0;
+        
+        // 初始化会话管理
+        this.sessionManager = SessionManager.getInstance();
+        this.currentSession = sessionManager.getActiveSession();
+        if (currentSession == null) {
+            currentSession = sessionManager.createSession(System.getProperty("user.dir"));
+            currentSession.setTitle("新会话");
+        }
         
         initializeComponents();
     }
@@ -108,7 +124,13 @@ public class REPL implements AutoCloseable {
      * 添加用户消息
      */
     public void addUserMessage(String content) {
-        messages.add(Message.createUserMessage(content));
+        Message msg = Message.createUserMessage(content);
+        messages.add(msg);
+        // 同步到会话
+        if (currentSession != null) {
+            currentSession.addMessage(msg);
+            sessionManager.saveSession(currentSession);
+        }
         if (autoScroll) {
             scrollOffset = 0;
         }
@@ -118,7 +140,13 @@ public class REPL implements AutoCloseable {
      * 添加助手消息
      */
     public void addAssistantMessage(String content) {
-        messages.add(Message.createAssistantMessage(content));
+        Message msg = Message.createAssistantMessage(content);
+        messages.add(msg);
+        // 同步到会话
+        if (currentSession != null) {
+            currentSession.addMessage(msg);
+            sessionManager.saveSession(currentSession);
+        }
         if (autoScroll) {
             scrollOffset = 0;
         }
@@ -128,7 +156,12 @@ public class REPL implements AutoCloseable {
      * 添加系统消息
      */
     public void addSystemMessage(String content) {
-        messages.add(Message.createSystemMessage(content));
+        Message msg = Message.createSystemMessage(content);
+        messages.add(msg);
+        // 同步到会话
+        if (currentSession != null) {
+            currentSession.addMessage(msg);
+        }
     }
     
     /**
@@ -247,6 +280,12 @@ public class REPL implements AutoCloseable {
                 toggleScreen();
                 return true;
                 
+            case "ctrl+s":
+            case "^s":
+                // 切换会话
+                showSessionSelector();
+                return true;
+                
             case "ctrl+c":
                 // 取消当前操作
                 return false;
@@ -285,6 +324,90 @@ public class REPL implements AutoCloseable {
             currentScreen = Screen.PROMPT;
             terminal.writer().println(DIM + "[返回对话视图]" + RESET);
         }
+    }
+    
+    /**
+     * 显示会话选择器
+     */
+    private void showSessionSelector() {
+        List<Session> sessions = sessionManager.getAllSessions();
+        
+        if (sessions.isEmpty()) {
+            terminal.writer().println(YELLOW + "暂无会话" + RESET);
+            return;
+        }
+        
+        terminal.writer().println();
+        terminal.writer().println(CYAN + "┌─ 选择会话 (Ctrl+S) " + "─".repeat(40) + "┐" + RESET);
+        
+        for (int i = 0; i < sessions.size(); i++) {
+            Session s = sessions.get(i);
+            boolean isActive = currentSession != null && s.getId().equals(currentSession.getId());
+            String marker = isActive ? GREEN + "●" + RESET : "○";
+            String title = s.getTitle() != null ? s.getTitle() : "未命名";
+            String shortId = s.getId().substring(0, Math.min(8, s.getId().length()));
+            
+            terminal.writer().println(CYAN + "│" + RESET + " " + marker + " " + (i + 1) + ". " + 
+                BOLD + title + RESET + " [" + shortId + "] (" + s.getMessageCount() + " 条消息)");
+        }
+        
+        terminal.writer().println(CYAN + "└" + "─".repeat(60) + "┘" + RESET);
+        
+        String input = lineReader.readLine("选择会话 (输入编号，或按 Enter 取消): ");
+        
+        if (input == null || input.trim().isEmpty()) {
+            return;
+        }
+        
+        try {
+            int index = Integer.parseInt(input.trim()) - 1;
+            if (index >= 0 && index < sessions.size()) {
+                switchToSession(sessions.get(index));
+            } else {
+                terminal.writer().println(RED + "无效选择" + RESET);
+            }
+        } catch (NumberFormatException e) {
+            terminal.writer().println(RED + "请输入有效编号" + RESET);
+        }
+    }
+    
+    /**
+     * 切换到指定会话
+     */
+    private void switchToSession(Session session) {
+        // 保存当前会话
+        if (currentSession != null) {
+            sessionManager.saveSession(currentSession);
+        }
+        
+        // 切换会话
+        sessionManager.setActiveSession(session.getId());
+        this.currentSession = session;
+        
+        // 加载会话消息到 UI
+        messages.clear();
+        messages.addAll(currentSession.getMessages());
+        
+        terminal.writer().println(GREEN + "✓ 已切换到会话: " + session.getTitle() + RESET);
+    }
+    
+    /**
+     * 创建新会话
+     */
+    public void createNewSession() {
+        // 保存当前会话
+        if (currentSession != null) {
+            sessionManager.saveSession(currentSession);
+        }
+        
+        // 创建新会话
+        currentSession = sessionManager.createSession(System.getProperty("user.dir"));
+        currentSession.setTitle("会话 " + currentSession.getId().substring(0, 8));
+        
+        // 清空消息
+        messages.clear();
+        
+        terminal.writer().println(GREEN + "✓ 已创建新会话" + RESET);
     }
     
     /**
@@ -420,15 +543,19 @@ public class REPL implements AutoCloseable {
         sb.append(RESET).append("\n");
         
         sb.append(DIM).append("[Ctrl+O] 历史").append(RESET).append(" ");
+        sb.append(DIM).append("[Ctrl+S] 会话").append(RESET).append(" ");
         sb.append(DIM).append("[Ctrl+R] 搜索").append(RESET).append(" ");
         sb.append(DIM).append("[Ctrl+C] 取消").append(RESET).append(" ");
         sb.append(DIM).append("[/help] 帮助").append(RESET);
         
         // 右对齐信息
-        String info = "消息: " + messages.size();
+        String sessionTitle = currentSession != null && currentSession.getTitle() != null 
+            ? currentSession.getTitle().substring(0, Math.min(15, currentSession.getTitle().length())) 
+            : "新会话";
+        String info = sessionTitle + " | 消息: " + messages.size();
         int infoLen = info.length();
-        sb.append(" ".repeat(Math.max(0, width - 60 - infoLen)));
-        sb.append(DIM).append(info).append(RESET);
+        sb.append(" ".repeat(Math.max(0, width - 90 - infoLen)));
+        sb.append(MAGENTA).append(info).append(RESET);
         
         sb.append("\n").append(CYAN);
         sb.append("─".repeat(Math.max(0, width)));

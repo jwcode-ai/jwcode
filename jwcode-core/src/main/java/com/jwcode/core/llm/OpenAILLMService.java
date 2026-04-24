@@ -432,13 +432,18 @@ public class OpenAILLMService implements LLMService {
             String id = toolCall.has("id") ? toolCall.get("id").asText() : null;
             int index = toolCall.has("index") ? toolCall.get("index").asInt() : 0;
             
-            // 使用索引作为临时 ID
-            String key = id != null ? id : String.valueOf(index);
+            // FIX: 始终使用 index 作为 key，避免同一 tool call 因 id 从无到有而被拆成两个 accumulator
+            String key = String.valueOf(index);
             
             StreamToolCallAccumulator acc = accumulators.computeIfAbsent(
                 key, 
                 k -> new StreamToolCallAccumulator(id, index)
             );
+            
+            // 如果后续 delta 提供了真实 id，更新 accumulator
+            if (id != null && acc.getRawId() == null) {
+                acc.setId(id);
+            }
             
             // 更新类型
             if (toolCall.has("type")) {
@@ -456,14 +461,15 @@ public class OpenAILLMService implements LLMService {
                 }
             }
             
-            // 通知消费者
+            // 通知消费者（isComplete 反映当前 accumulator 的完整度）
             if (toolCallConsumer != null) {
                 toolCallConsumer.accept(new StreamToolCallEvent(
                     acc.getId(),
                     acc.getType(),
                     acc.getName(),
                     acc.getArguments(),
-                    false
+                    acc.isComplete(),
+                    index
                 ));
             }
         }
@@ -484,16 +490,20 @@ public class OpenAILLMService implements LLMService {
             this.index = index;
         }
         
+        void setId(String id) { this.id = id; }
         void setType(String type) { this.type = type; }
         void appendName(String name) { nameBuilder.append(name); }
         void appendArguments(String args) { argumentsBuilder.append(args); }
         
+        String getRawId() { return id; }
         String getId() { return id != null ? id : String.valueOf(index); }
+        int getIndex() { return index; }
         String getType() { return type; }
         String getName() { return nameBuilder.toString(); }
         String getArguments() { return argumentsBuilder.toString(); }
         boolean isComplete() { 
-            return nameBuilder.length() > 0 && id != null; 
+            // FIX: 放宽完成条件，不强制要求 id 非空（某些 provider 可能不给 id）
+            return nameBuilder.length() > 0 && argumentsBuilder.length() > 0; 
         }
     }
     
@@ -700,8 +710,9 @@ public class OpenAILLMService implements LLMService {
             
             if (neededSlots <= availableSlots) {
                 // 可以完整添加这组
+                List<LLMMessage> groupToAdd = new ArrayList<>();
                 for (LLMMessage msg : group) {
-                    result.add(0, msg);
+                    groupToAdd.add(msg);
                     // 更新有效的 tool_call_ids
                     if (msg.getRole() == LLMMessage.Role.ASSISTANT && msg.hasToolCalls()) {
                         for (LLMMessage.ToolCall tc : msg.getToolCalls()) {
@@ -711,10 +722,12 @@ public class OpenAILLMService implements LLMService {
                         }
                     }
                 }
+                result.addAll(0, groupToAdd);
             } else {
                 // 需要部分添加 - 优先保留 USER + ASSISTANT
+                List<LLMMessage> groupToAdd = new ArrayList<>();
                 for (LLMMessage msg : group) {
-                    if (result.size() >= maxCount) break;
+                    if (result.size() + groupToAdd.size() >= maxCount) break;
                     
                     // 跳过孤立的 TOOL 消息
                     if (msg.getRole() == LLMMessage.Role.TOOL) {
@@ -725,7 +738,7 @@ public class OpenAILLMService implements LLMService {
                         }
                     }
                     
-                    result.add(0, msg);
+                    groupToAdd.add(msg);
                     
                     // 更新有效的 tool_call_ids
                     if (msg.getRole() == LLMMessage.Role.ASSISTANT && msg.hasToolCalls()) {
@@ -736,6 +749,7 @@ public class OpenAILLMService implements LLMService {
                         }
                     }
                 }
+                result.addAll(0, groupToAdd);
             }
         }
         

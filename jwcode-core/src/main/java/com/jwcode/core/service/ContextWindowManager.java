@@ -123,10 +123,13 @@ public class ContextWindowManager {
         
         // 保留最近的消息
         int recentCount = Math.min(minMessages, historicalMessages.size());
-        recentMessages = historicalMessages.subList(
-            historicalMessages.size() - recentCount, 
-            historicalMessages.size()
-        );
+        int startIndex = historicalMessages.size() - recentCount;
+        
+        // 【关键修复】确保截断点不破坏 tool_calls 配对
+        // 如果从截断点开始的第一个消息是 TOOL，需要向前包含对应的 ASSISTANT
+        startIndex = fixTruncationBoundary(historicalMessages, startIndex);
+        
+        recentMessages = historicalMessages.subList(startIndex, historicalMessages.size());
         
         // 对旧消息进行摘要
         List<Message> oldMessages = historicalMessages.subList(0, historicalMessages.size() - recentCount);
@@ -280,6 +283,88 @@ public class ContextWindowManager {
         int englishWords = text.split("\\s+").length;
         
         return (int) (chineseChars * 1.5 + englishWords * 1.3);
+    }
+    
+    // ==================== Tool Calls 配对修复 ====================
+    
+    /**
+     * 修复截断边界，确保不破坏 tool_calls 配对
+     * 
+     * 问题：当消息历史被截断时，如果截断边界落在 ASSISTANT-TOOL 序列中间，
+     * 会导致 TOOL 消息被保留而对应的 ASSISTANT 消息（包含 tool_calls）被丢弃。
+     * 这会导致 API 报错 "tool result's tool id ... not found"。
+     * 
+     * 解决方案：
+     * 1. 如果从截断点开始的第一个消息是 TOOL，向前查找对应的 ASSISTANT
+     * 2. 将截断点移动到该 ASSISTANT 的位置，确保配对完整
+     * 3. 如果找不到对应的 ASSISTANT，跳过这条孤立的 TOOL 消息
+     */
+    private int fixTruncationBoundary(List<Message> messages, int startIndex) {
+        while (startIndex > 0 && startIndex < messages.size()) {
+            Message msg = messages.get(startIndex);
+            if (msg.getRole() != Message.Role.TOOL) {
+                break;
+            }
+            
+            String toolUseId = extractToolUseId(msg);
+            if (toolUseId == null) {
+                startIndex++;
+                continue;
+            }
+            
+            // 向前查找对应的 ASSISTANT 消息
+            int assistantIndex = findAssistantWithToolCall(messages, toolUseId, startIndex - 1);
+            if (assistantIndex >= 0) {
+                startIndex = assistantIndex;
+                // 继续循环，因为新的 startIndex 可能也是 TOOL（多个连续 TOOL 的情况）
+            } else {
+                // 找不到对应的 ASSISTANT，跳过这条孤立的 TOOL 消息
+                logger.warning(String.format(
+                    "[ContextWindowManager] 跳过孤立 TOOL 消息: toolUseId=%s 无对应 ASSISTANT", 
+                    toolUseId
+                ));
+                startIndex++;
+                break;
+            }
+        }
+        return startIndex;
+    }
+    
+    /**
+     * 从 TOOL 消息中提取 toolUseId
+     */
+    private String extractToolUseId(Message msg) {
+        if (msg.getContent() == null || msg.getContent().isEmpty()) {
+            return null;
+        }
+        for (Message.ContentBlock block : msg.getContent()) {
+            if (block instanceof Message.ToolResultContent) {
+                return ((Message.ToolResultContent) block).getToolUseId();
+            }
+        }
+        return null;
+    }
+    
+    /**
+     * 向前查找包含指定 tool_call_id 的 ASSISTANT 消息
+     * 
+     * @param messages 消息列表
+     * @param toolUseId 要查找的 tool_call_id
+     * @param endIndex 搜索结束位置（包含）
+     * @return ASSISTANT 消息的索引，如果找不到则返回 -1
+     */
+    private int findAssistantWithToolCall(List<Message> messages, String toolUseId, int endIndex) {
+        for (int i = endIndex; i >= 0; i--) {
+            Message msg = messages.get(i);
+            if (msg.getRole() == Message.Role.ASSISTANT && msg.hasToolCalls()) {
+                for (Message.ToolCallInfo tc : msg.getToolCalls()) {
+                    if (toolUseId.equals(tc.getId())) {
+                        return i;
+                    }
+                }
+            }
+        }
+        return -1;
     }
     
     // Getters

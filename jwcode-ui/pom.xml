@@ -16,6 +16,17 @@
     <description>JWCode Terminal UI Framework</description>
     
     <dependencies>
+        <!-- JWCode Core -->
+        <dependency>
+            <groupId>com.jwcode</groupId>
+            <artifactId>jwcode-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.jwcode</groupId>
+            <artifactId>jwcode-cli</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        
         <!-- Lanterna - 终端 UI 库 -->
         <dependency>
             <groupId>com.googlecode.lanterna</groupId>

@@ -100,8 +100,11 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
 }
 
 export function MarkdownRenderer({ content, className = '' }: MarkdownRendererProps) {
+  // Ensure line breaks are preserved - process escaped newlines first
+  const processedContent = (content || '').replace(/\\n/g, '\n');
+  
   return (
-    <div className={`markdown-content ${className}`}>
+    <div className={`markdown-content ${className}`} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
       <ReactMarkdown
         components={{
           // Custom code block renderer
@@ -198,7 +201,7 @@ export function MarkdownRenderer({ content, className = '' }: MarkdownRendererPr
           },
         }}
       >
-        {content}
+        {processedContent}
       </ReactMarkdown>
     </div>
   );
