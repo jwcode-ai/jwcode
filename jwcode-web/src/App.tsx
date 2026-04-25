@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { Plus, Minus } from 'lucide-react';
 import { MessageSquare, Terminal, FolderTree, Settings, Brain, Wrench, Target, Users, FileText, ScrollText, LucideIcon, Menu, X, Send } from 'lucide-react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { useChatStore } from './stores/chatStore';
@@ -179,7 +179,7 @@ function App() {
               break;
             case 'step_complete':
               updateStep(lastStep.id, { 
-                status: stepData.status || 'success', 
+                status: 'success', 
                 result: stepData.result 
               });
               break;
@@ -216,14 +216,18 @@ function App() {
           const toolData = JSON.parse(msg.data || '{}');
           const toolId = toolData.id || `tool-${Date.now()}`;
           const toolIndex = typeof toolData.index === 'number' ? toolData.index : undefined;
-          
-          // 检查是否已存在相同 index 或 id 的 toolCall（流式增量合并）
+
+          // 检查是否已存在相同 index 或 id 的 toolCall（在 steps 和 message.toolCalls 中都查找）
           const state = useChatStore.getState();
           const lastMsg = state.messages[state.messages.length - 1];
-          const existing = lastMsg?.toolCalls?.find((tc) =>
+          const allToolCalls = [
+            ...(lastMsg?.steps?.flatMap(s => s.toolCalls || []) || []),
+            ...(lastMsg?.toolCalls || [])
+          ];
+          const existing = allToolCalls.find((tc) =>
             (toolIndex !== undefined && tc.index === toolIndex) || tc.id === toolId
           );
-          
+
           if (existing) {
             appendToLastToolCallArgs(toolId, toolData.args || '', toolIndex);
           } else {
@@ -247,18 +251,23 @@ function App() {
           // 使用 ensureStep 确保 step 存在
           const lastStep = ensureStep('tool_result', { step: '工具结果', description: toolData.toolName || '工具执行' });
           if (lastStep) {
-            updateStep(lastStep.id, { 
+            updateStep(lastStep.id, {
               status: 'success',
               result: toolData.result || '执行完成'
             });
           }
-          // 同时更新 toolCall 状态
-          const toolCallMessages = messages[messages.length - 1];
-          if (toolCallMessages?.toolCalls?.length) {
-            const lastToolCall = toolCallMessages.toolCalls[toolCallMessages.toolCalls.length - 1];
-            updateToolCall(lastToolCall.id, { 
+          // 更新 toolCall 状态：从 store 获取最新状态，按 toolName 匹配
+          const tcState = useChatStore.getState();
+          const tcLastMsg = tcState.messages[tcState.messages.length - 1];
+          const allToolCalls = [
+            ...(tcLastMsg?.steps?.flatMap(s => s.toolCalls || []) || []),
+            ...(tcLastMsg?.toolCalls || [])
+          ];
+          const matchedToolCall = allToolCalls.find(tc => tc.name === toolData.toolName);
+          if (matchedToolCall) {
+            updateToolCall(matchedToolCall.id, {
               status: 'completed',
-              result: toolData.result 
+              result: toolData.result
             });
           }
         } catch (e) {
@@ -725,7 +734,7 @@ function ChatPanel({ messages, isGenerating, onSend, input, setInput, messagesEn
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4 space-y-2">
         {messages.length === 0 ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-center max-w-md px-4">
@@ -805,42 +814,46 @@ function MessageBubble({ message }: { message: Message }) {
             : 'bg-dark-surface border border-dark-border text-dark-text rounded-bl-md'
         }`}
       >
-        {/* Thinking */}
-        {message.thinking && (
-          <div className="mb-3 p-3 bg-dark-bg border border-dark-border rounded-lg">
-            <div className="text-xs text-accent-blue mb-1 flex items-center gap-1">
-              <span>💭</span>
-              <span>思考过程</span>
-            </div>
-            <div className="text-sm text-dark-muted italic">{message.thinking}</div>
-          </div>
-        )}
-        
-        {/* Steps - Collapsible */}
+        {/* Steps - Collapsible with ToolCalls */}
         {message.steps && message.steps.length > 0 && (
-          <div className="mb-3 space-y-2">
-            {message.steps.map(step => (
-              <StepItem key={step.id} step={step} defaultCollapsed={step.status !== 'running'} />
+          <div className="mb-1 space-y-0.5">
+            {message.steps.map((step) => (
+              <StepItem key={step.id} step={step} defaultCollapsed={false} />
             ))}
           </div>
         )}
         
-        {/* Tool Calls - Collapsible */}
-        {message.toolCalls && message.toolCalls.length > 0 && (
-          <div className="mb-3 space-y-2">
+        {/* Fallback: 没有 steps 时才独立展示 thinking / toolCalls */}
+        {!message.steps?.length && message.thinking && (
+          <div className="mb-1 p-1.5 bg-dark-bg border border-dark-border rounded-lg">
+            <div className="text-xs text-accent-blue mb-0.5 flex items-center gap-1">
+              <span>💭</span>
+              <span>思考过程</span>
+            </div>
+            <div className="text-sm text-dark-muted italic">{message.thinking.replace(/\n\s*\n+/g, '\n')}</div>
+          </div>
+        )}
+        
+        {!message.steps?.length && message.toolCalls && message.toolCalls.length > 0 && (
+          <div className="mb-1 space-y-0.5">
             {message.toolCalls.map(toolCall => (
-              <ToolCallItem key={toolCall.id} toolCall={toolCall} defaultCollapsed={toolCall.status !== 'running'} />
+              <ToolCallItem key={toolCall.id} toolCall={toolCall} defaultCollapsed={true} />
             ))}
           </div>
         )}
         
         {/* Content with Markdown - Fixed line breaks */}
+        {/* 如果 steps 存在，只显示最后一个段落（避免多轮 content 累积重复） */}
         {message.content ? (
-          <div className="whitespace-pre-wrap break-words leading-relaxed">
+            <div className="whitespace-pre-wrap break-words leading-relaxed">
             {isUser ? (
-              <span>{message.content}</span>
+              <span>{message.content.replace(/\n\s*\n+/g, '\n')}</span>
             ) : (
-              <MarkdownRenderer content={message.content} className="whitespace-pre-wrap" />
+              <MarkdownRenderer content={(
+                message.steps?.length
+                  ? (message.content.split(/\n\s*\n/).filter(Boolean).pop() || message.content)
+                  : message.content
+              ).replace(/\n\s*\n+/g, '\n')} className="whitespace-pre-wrap" />
             )}
           </div>
         ) : !isUser && message.thinking ? (
@@ -866,7 +879,7 @@ function MessageBubble({ message }: { message: Message }) {
   );
 }
 
-// Step Item Component - Collapsible
+// Step Item Component - 树形结构
 function StepItem({ step, defaultCollapsed = false }: { step: Step; defaultCollapsed?: boolean }) {
   const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
   
@@ -886,7 +899,7 @@ function StepItem({ step, defaultCollapsed = false }: { step: Step; defaultColla
     warning: '⚠',
   };
   
-  const hasDetails = step.thought || step.result || step.action;
+  const hasDetails = step.thought || step.result || step.action || (step.toolCalls && step.toolCalls.length > 0);
   
   return (
     <div className={`bg-dark-bg border-l-4 rounded-r-lg text-sm overflow-hidden ${
@@ -902,7 +915,7 @@ function StepItem({ step, defaultCollapsed = false }: { step: Step; defaultColla
         onClick={() => hasDetails && setIsCollapsed(!isCollapsed)}
       >
         {hasDetails ? (
-          isCollapsed ? <ChevronRight size={14} className="text-dark-muted" /> : <ChevronDown size={14} className="text-dark-muted" />
+          isCollapsed ? <Plus size={14} className="text-accent-blue" /> : <Minus size={14} className="text-accent-blue" />
         ) : <span className="w-3.5" />}
         <span className={`w-5 h-5 rounded-full flex items-center justify-center text-xs ${statusColors[step.status]}`}>
           {statusIcons[step.status]}
@@ -911,34 +924,87 @@ function StepItem({ step, defaultCollapsed = false }: { step: Step; defaultColla
         {step.status === 'running' && <span className="text-xs text-accent-blue animate-pulse">运行中...</span>}
       </div>
       
-      {/* Collapsible content */}
+      {/* Collapsible content - 树形结构 */}
       {!isCollapsed && (
-        <>
-          <div className="text-dark-muted ml-7 pb-2 px-3">{step.description}</div>
-          {step.action && (
-            <div className="ml-7 pb-2 px-3 text-xs text-accent-yellow border-l-2 border-accent-yellow pl-2">
-              ⚡ {step.action}
+        <div className="ml-4 space-y-1">
+          {/* Step Description */}
+          {step.description && (
+            <div className="text-dark-muted py-1 px-3 text-xs border-l-2 border-dark-border">
+              {step.description}
             </div>
           )}
+          
+          {/* 1. Thought - 💭 思考过程 */}
           {step.thought && (
-            <div className="ml-7 pb-2 px-3 text-xs text-dark-muted italic border-l-2 border-accent-blue pl-2">
-              💭 {step.thought}
+            <div className="py-1 px-3 text-xs border-l-2 border-accent-blue pl-2 bg-accent-blue/5 rounded-r">
+              <div className="flex items-center gap-1 text-accent-blue mb-0.5">
+                <span>💭</span>
+                <span>思考</span>
+              </div>
+              <div className="text-dark-muted italic whitespace-pre-wrap leading-snug">
+                {step.thought.replace(/\n\s*\n+/g, '\n')}
+              </div>
             </div>
           )}
+          
+          {/* 2. Action - ⚡ 执行动作 */}
+          {step.action && (
+            <div className="py-1 px-3 text-xs border-l-2 border-accent-yellow pl-2 bg-accent-yellow/5 rounded-r">
+              <div className="flex items-center gap-1 text-accent-yellow mb-0.5">
+                <span>⚡</span>
+                <span>执行</span>
+              </div>
+              <div className="text-dark-text leading-snug">
+                {step.action}
+              </div>
+            </div>
+          )}
+          
+          {/* 3. Tool Calls - 🔧 请求+结果（树形子节点） */}
+          {step.toolCalls && step.toolCalls.length > 0 && step.toolCalls.map((toolCall, index) => (
+            <div key={toolCall.id} className="py-1 px-3 text-xs border-l-2 border-accent-purple pl-2 bg-accent-purple/5 rounded-r">
+              <div className="flex items-center gap-1 text-accent-purple mb-0.5">
+                <span>🔧</span>
+                <span>工具调用 {index + 1}</span>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                  toolCall.status === 'running' ? 'bg-accent-blue text-white' : 'bg-accent-green text-white'
+                }`}>
+                  {toolCall.status === 'running' ? '运行中' : '完成'}
+                </span>
+              </div>
+              {/* 请求参数 */}
+              <div className="ml-2 text-dark-muted mb-0.5">
+                <span className="text-accent-purple/70">请求:</span>
+                <pre className="text-xs font-mono bg-dark-bg p-1.5 rounded overflow-x-auto mt-1">
+                  {typeof toolCall.args === 'string'
+                    ? toolCall.args
+                    : JSON.stringify(toolCall.args, null, 2)}
+                </pre>
+              </div>
+              {/* 返回结果 */}
+              {toolCall.result !== undefined && toolCall.result !== null && (
+                <div className="ml-2 text-dark-muted">
+                  <span className="text-accent-green/70">结果:</span>
+                  <pre className="text-xs font-mono bg-dark-bg p-1.5 rounded overflow-x-auto mt-1 text-accent-green">
+                    {typeof toolCall.result === 'object' ? JSON.stringify(toolCall.result, null, 2) : String(toolCall.result)}
+                  </pre>
+                </div>
+              )}
+            </div>
+          ))}
+          
+          {/* 4. Result - ✓ 完成结果 */}
           {step.result && (
-            <div className="ml-7 pb-2 px-3 text-xs text-accent-green border-l-2 border-accent-green pl-2">
-              ✓ {step.result}
+            <div className="py-1 px-3 text-xs border-l-2 border-accent-green pl-2 bg-accent-green/5 rounded-r">
+              <div className="flex items-center gap-1 text-accent-green mb-0.5">
+                <span>✓</span>
+                <span>结果</span>
+              </div>
+              <div className="text-dark-text leading-snug">
+                {step.result}
+              </div>
             </div>
           )}
-        </>
-      )}
-      
-      {/* Show hint if collapsed but has content */}
-      {isCollapsed && hasDetails && (
-        <div className="ml-7 pb-2 px-3 text-xs text-dark-muted">
-          {step.thought && <span>💭 有思考过程 </span>}
-          {step.action && <span>⚡ 有执行操作 </span>}
-          {step.result && <span>✓ 已完成</span>}
         </div>
       )}
     </div>
@@ -959,7 +1025,7 @@ function ToolCallItem({ toolCall, defaultCollapsed = false }: { toolCall: ToolCa
         onClick={() => setIsCollapsed(!isCollapsed)}
       >
         <div className="flex items-center gap-2">
-          {isCollapsed ? <ChevronRight size={14} className="text-dark-muted" /> : <ChevronDown size={14} className="text-dark-muted" />}
+          {isCollapsed ? <Plus size={14} className="text-accent-blue" /> : <Minus size={14} className="text-accent-blue" />}
           <span className="text-accent-blue">🔧</span>
           <span className="font-medium text-sm">{toolCall.name}</span>
         </div>

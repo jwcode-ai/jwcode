@@ -67,7 +67,7 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
   const langDisplay = LANG_NAMES[language] || language.toUpperCase();
 
   return (
-    <div className="relative group rounded-lg overflow-hidden border border-dark-border my-3">
+    <div className="relative group rounded-lg overflow-hidden border border-dark-border my-2">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-1.5 bg-dark-surface border-b border-dark-border">
         <span className="text-xs text-dark-muted font-mono">{langDisplay}</span>
@@ -101,7 +101,9 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
 
 export function MarkdownRenderer({ content, className = '' }: MarkdownRendererProps) {
   // Ensure line breaks are preserved - process escaped newlines first
-  const processedContent = (content || '').replace(/\\n/g, '\n');
+  const processedContent = (content || '')
+    .replace(/\\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n');
   
   return (
     <div className={`markdown-content ${className}`} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
@@ -142,7 +144,7 @@ export function MarkdownRenderer({ content, className = '' }: MarkdownRendererPr
           // Custom table renderer
           table({ children }) {
             return (
-              <div className="overflow-x-auto my-3">
+              <div className="overflow-x-auto my-2">
                 <table className="w-full border-collapse border border-dark-border">
                   {children}
                 </table>
@@ -166,10 +168,19 @@ export function MarkdownRenderer({ content, className = '' }: MarkdownRendererPr
             );
           },
           
+          // Custom paragraph - compact spacing
+          p({ children }) {
+            return (
+              <p className="mb-0.5 leading-snug last:mb-0">
+                {children}
+              </p>
+            );
+          },
+          
           // Custom blockquote
           blockquote({ children }) {
             return (
-              <blockquote className="border-l-4 border-accent-blue pl-4 my-3 text-dark-muted italic">
+              <blockquote className="border-l-4 border-accent-blue pl-3 my-1 text-dark-muted italic">
                 {children}
               </blockquote>
             );
@@ -178,7 +189,7 @@ export function MarkdownRenderer({ content, className = '' }: MarkdownRendererPr
           // Custom heading with anchor
           h1({ children }) {
             return (
-              <h1 className="text-2xl font-bold mt-4 mb-2 text-dark-text border-b border-dark-border pb-2">
+              <h1 className="text-2xl font-bold mt-3 mb-1 text-dark-text border-b border-dark-border pb-1">
                 {children}
               </h1>
             );
@@ -186,7 +197,7 @@ export function MarkdownRenderer({ content, className = '' }: MarkdownRendererPr
           
           h2({ children }) {
             return (
-              <h2 className="text-xl font-semibold mt-4 mb-2 text-dark-text border-b border-dark-border pb-1">
+              <h2 className="text-xl font-semibold mt-3 mb-1 text-dark-text border-b border-dark-border pb-1">
                 {children}
               </h2>
             );
@@ -194,7 +205,7 @@ export function MarkdownRenderer({ content, className = '' }: MarkdownRendererPr
           
           h3({ children }) {
             return (
-              <h3 className="text-lg font-semibold mt-3 mb-2 text-dark-text">
+              <h3 className="text-lg font-semibold mt-2 mb-1 text-dark-text">
                 {children}
               </h3>
             );

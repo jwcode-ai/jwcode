@@ -61,7 +61,7 @@ public class WebServer {
         server.createContext("/", new IndexHandler());
         server.createContext("/api/chat", new ChatHandler(sessionManager));
         server.createContext("/api/sessions", new SessionsHandler(sessionManager));
-        server.createContext("/api/tools", new ToolsHandler());
+        server.createContext("/api/tools", new ToolsHandler(toolRegistry));
         server.createContext("/api/config", new ConfigHandler());
         server.createContext("/api/skills", new SkillsHandler());
         server.createContext("/api/agents", new AgentsHandler());

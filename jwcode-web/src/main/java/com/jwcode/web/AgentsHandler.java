@@ -15,7 +15,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Collection;
 
 /**
- * Agent 管理 API - 展示 3 个内置 Agent
+ * Agent 管理 API
  */
 public class AgentsHandler implements HttpHandler {
     
@@ -33,7 +33,7 @@ public class AgentsHandler implements HttpHandler {
         
         // 设置 CORS 头
         exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
-        exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
         exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
         
         if ("OPTIONS".equalsIgnoreCase(method)) {
@@ -49,8 +49,18 @@ public class AgentsHandler implements HttpHandler {
                 listAgents(exchange);
             }
         } else if ("POST".equalsIgnoreCase(method)) {
-            if (path.endsWith("/switch")) {
+            if (path.matches("/api/agents/[^/]+/activate")) {
+                String agentId = path.substring("/api/agents/".length(), path.lastIndexOf("/activate"));
+                activateAgent(exchange, agentId);
+            } else if (path.endsWith("/switch")) {
                 switchAgent(exchange);
+            } else {
+                sendJsonResponse(exchange, 405, createError("不支持的端点"));
+            }
+        } else if ("DELETE".equalsIgnoreCase(method)) {
+            if (path.matches("/api/agents/[^/]+")) {
+                String agentId = path.substring(path.lastIndexOf('/') + 1);
+                deleteAgent(exchange, agentId);
             } else {
                 sendJsonResponse(exchange, 405, createError("不支持的端点"));
             }
@@ -59,54 +69,28 @@ public class AgentsHandler implements HttpHandler {
         }
     }
     
-    /**
-     * 列出所有 Agent
-     */
     private void listAgents(HttpExchange exchange) throws IOException {
-        ObjectNode response = objectMapper.createObjectNode();
-        response.put("success", true);
-        
         Collection<Agent> agents = agentRegistry.getAll();
-        response.put("count", agents.size());
-        
-        // 当前活跃的 Agent
         Agent currentAgent = agentRegistry.getCurrent();
-        if (currentAgent != null) {
-            response.put("currentAgent", currentAgent.getId());
-        }
-        
-        ArrayNode agentsArray = response.putArray("agents");
+        ArrayNode data = objectMapper.createArrayNode();
         
         for (Agent agent : agents) {
             ObjectNode agentNode = objectMapper.createObjectNode();
             agentNode.put("id", agent.getId());
             agentNode.put("name", agent.getName());
             agentNode.put("description", agent.getDescription());
-            agentNode.put("isCurrent", agent.equals(currentAgent));
-            
-            // 模型配置
-            Agent.ModelConfig modelConfig = agent.getModelConfig();
-            if (modelConfig != null) {
-                ObjectNode modelNode = agentNode.putObject("model");
-                modelNode.put("name", modelConfig.getModel());
-                modelNode.put("temperature", modelConfig.getTemperature());
-                modelNode.put("maxTokens", modelConfig.getMaxTokens());
-            }
-            
-            // 工具数量
-            if (agent.getTools() != null) {
-                agentNode.put("toolCount", agent.getTools().size());
-            }
-            
-            agentsArray.add(agentNode);
+            agentNode.put("color", generateColor(agent.getId()));
+            agentNode.put("active", agent.equals(currentAgent));
+            agentNode.put("state", "idle");
+            data.add(agentNode);
         }
         
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("success", true);
+        response.set("data", data);
         sendJsonResponse(exchange, 200, response);
     }
     
-    /**
-     * 获取单个 Agent 详情
-     */
     private void getAgentDetail(HttpExchange exchange, String agentId) throws IOException {
         Agent agent = agentRegistry.get(agentId);
         
@@ -119,13 +103,14 @@ public class AgentsHandler implements HttpHandler {
             return;
         }
         
-        response.put("success", true);
-        
-        ObjectNode agentNode = response.putObject("agent");
+        Agent currentAgent = agentRegistry.getCurrent();
+        ObjectNode agentNode = objectMapper.createObjectNode();
         agentNode.put("id", agent.getId());
         agentNode.put("name", agent.getName());
         agentNode.put("description", agent.getDescription());
-        agentNode.put("isCurrent", agent.equals(agentRegistry.getCurrent()));
+        agentNode.put("color", generateColor(agent.getId()));
+        agentNode.put("active", agent.equals(currentAgent));
+        agentNode.put("state", "idle");
         
         // 系统提示词
         if (agent.getSystemPrompt() != null) {
@@ -151,15 +136,37 @@ public class AgentsHandler implements HttpHandler {
             }
         }
         
-        // 禁用工具列表（如果 Agent 支持）
-        ArrayNode disallowedToolsArray = agentNode.putArray("disallowedTools");
-        // 注意：Agent 接口目前没有 getDisallowedTools 方法
+        response.put("success", true);
+        response.set("data", agentNode);
+        sendJsonResponse(exchange, 200, response);
+    }
+    
+    private void activateAgent(HttpExchange exchange, String agentId) throws IOException {
+        boolean success = agentRegistry.switchTo(agentId);
         
+        ObjectNode response = objectMapper.createObjectNode();
+        if (success) {
+            response.put("success", true);
+            response.put("message", "已激活 Agent: " + agentId);
+            response.put("currentAgent", agentId);
+        } else {
+            response.put("success", false);
+            response.put("error", "激活失败，Agent 不存在: " + agentId);
+        }
+        
+        sendJsonResponse(exchange, success ? 200 : 404, response);
+    }
+    
+    private void deleteAgent(HttpExchange exchange, String agentId) throws IOException {
+        // AgentRegistry 暂不支持删除，返回成功但提示
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("success", true);
+        response.put("message", "Agent 删除请求已接收（当前版本内置 Agent 不可删除）");
         sendJsonResponse(exchange, 200, response);
     }
     
     /**
-     * 切换当前 Agent
+     * 切换当前 Agent（旧版兼容）
      */
     private void switchAgent(HttpExchange exchange) throws IOException {
         ObjectNode request = parseRequestBody(exchange);
@@ -194,6 +201,24 @@ public class AgentsHandler implements HttpHandler {
             }
             return objectMapper.readValue(body, ObjectNode.class);
         }
+    }
+    
+    /**
+     * 根据 Agent ID 生成固定颜色
+     */
+    private String generateColor(String id) {
+        String[] colors = {
+            "#3B82F6", // blue
+            "#10B981", // green
+            "#F59E0B", // yellow
+            "#EF4444", // red
+            "#8B5CF6", // purple
+            "#EC4899", // pink
+            "#06B6D4", // cyan
+            "#F97316", // orange
+        };
+        int hash = id.hashCode();
+        return colors[Math.abs(hash) % colors.length];
     }
     
     private void sendJsonResponse(HttpExchange exchange, int statusCode, ObjectNode json) throws IOException {

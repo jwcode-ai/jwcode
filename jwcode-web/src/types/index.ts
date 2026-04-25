@@ -22,6 +22,7 @@ export interface Step {
   thought?: string;
   action?: string;
   result?: string;
+  toolCalls?: ToolCall[];
   timestamp: number;
   duration?: number;
 }

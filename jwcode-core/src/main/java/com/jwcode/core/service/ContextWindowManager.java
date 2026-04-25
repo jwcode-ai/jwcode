@@ -26,7 +26,7 @@ public class ContextWindowManager {
     private static final Logger logger = Logger.getLogger(ContextWindowManager.class.getName());
     
     // 默认上下文窗口限制（Token 数）
-    public static final int DEFAULT_CONTEXT_LIMIT = 204800;
+    public static final int DEFAULT_CONTEXT_LIMIT = 1000000;
     // 安全余量，留出一些空间给响应
     public static final int SAFETY_MARGIN = 1000;
     // 默认最大消息数

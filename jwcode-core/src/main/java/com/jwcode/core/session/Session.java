@@ -166,6 +166,7 @@ public class Session {
             Map<String, Object> msgMap = new HashMap<>();
             msgMap.put("role", msg.getRole().name());
             msgMap.put("content", msg.getTextContent());
+            msgMap.put("reasoningContent", msg.getReasoningContent());
             msgMap.put("timestamp", msg.getTimestamp().toString());
             messagesList.add(msgMap);
         }
@@ -198,7 +199,8 @@ public class Session {
                             message = Message.createUserMessage(content);
                             break;
                         case "ASSISTANT":
-                            message = Message.createAssistantMessage(content);
+                            String reasoningContent = (String) msgMap.get("reasoningContent");
+                            message = Message.createAssistantMessage(content, reasoningContent);
                             break;
                         case "SYSTEM":
                             message = Message.createSystemMessage(content);

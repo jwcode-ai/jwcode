@@ -31,7 +31,7 @@ public class OpenAIRequestBuilder {
     private final List<LLMTool> tools = new ArrayList<>();
     
     // 常量配置
-    private static final int MAX_MESSAGES = 20; // 限制消息数量防止请求过大
+    private static final int MAX_MESSAGES = Integer.MAX_VALUE; // 不限制消息数量，由上下文窗口管理器处理 token 超限
     
     public OpenAIRequestBuilder(String model) {
         if (model == null || model.isEmpty()) {
@@ -275,8 +275,13 @@ public class OpenAIRequestBuilder {
                 
                 // 如果所有 tool_calls 都被移除，创建纯文本 assistant 消息
                 if (validToolCalls.isEmpty()) {
-                    logger.warning("[OpenAI] All tool_calls orphaned, converting to text-only message");
-                    finalResult.add(LLMMessage.assistant(msg.getContent() != null ? msg.getContent() : ""));
+                    logger.warning("[OpenAI] All tool_calls orphaned, converting to text-only message. " +
+                        "Original tool_calls=" + originalToolCalls.stream().map(LLMMessage.ToolCall::getId).toList() + 
+                        ", validToolCallIds=" + validToolCallIds);
+                    finalResult.add(LLMMessage.assistant(
+                        msg.getContent() != null ? msg.getContent() : "",
+                        msg.getReasoningContent()
+                    ));
                 } else if (validToolCalls.size() < originalToolCalls.size()) {
                     // 部分 tool_calls 被移除
                     logger.info("[OpenAI] Fixed assistant message: " + originalToolCalls.size() + 
@@ -483,8 +488,35 @@ public class OpenAIRequestBuilder {
     /**
      * 获取部分保留的组
      * 优先保留 USER + ASSISTANT，丢弃 TOOL（如果超限）
+     * 
+     * FIX: 如果组内 ASSISTANT 带有 tool_calls，必须整组（含所有 TOOL）保留或整组丢弃，
+     *      不允许出现 "保留 ASSISTANT 但丢弃其 TOOL 结果" 的半吊子状态，否则会导致
+     *      API 报错 "an assistant message with 'tool_calls' must be followed by tool messages"。
      */
     private List<LLMMessage> getPartialGroup(List<LLMMessage> group, Set<String> validToolCallIds, int maxSlots) {
+        // 先检查组内是否包含带 tool_calls 的 ASSISTANT
+        boolean hasToolCallsInGroup = group.stream()
+            .anyMatch(m -> m.getRole() == LLMMessage.Role.ASSISTANT && m.hasToolCalls());
+        
+        // 如果包含 tool_calls，预判整组（含 TOOL）是否能完整容纳
+        if (hasToolCallsInGroup) {
+            long toolCount = group.stream()
+                .filter(m -> m.getRole() == LLMMessage.Role.TOOL)
+                .filter(m -> {
+                    String tid = m.getToolCallId();
+                    return tid != null && validToolCallIds.contains(tid);
+                })
+                .count();
+            long nonToolCount = group.size() - toolCount;
+            
+            // 如果完整组（含有效 TOOL）超出容量，直接放弃该组，防止 orphaned tool_calls
+            if (nonToolCount + toolCount > maxSlots) {
+                logger.warning("[OpenAI] Dropping entire group with tool_calls (size=" + 
+                    group.size() + ") to preserve sequence integrity. maxSlots=" + maxSlots);
+                return new ArrayList<>();
+            }
+        }
+        
         List<LLMMessage> result = new ArrayList<>();
         
         for (LLMMessage msg : group) {

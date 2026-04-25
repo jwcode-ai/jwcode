@@ -59,6 +59,13 @@ public interface LLMService {
     String getModelName();
     
     /**
+     * 获取模型上下文窗口大小（tokens）
+     */
+    default int getContextWindow() {
+        return 1000000; // 默认 1M tokens
+    }
+    
+    /**
      * 关闭服务
      */
     void close();

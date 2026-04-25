@@ -82,7 +82,7 @@ public class LLMResponse {
         if (hasToolCalls()) {
             return LLMMessage.assistantWithTools(content, toolCalls, reasoningContent);
         }
-        return LLMMessage.assistant(content);
+        return LLMMessage.assistant(content, reasoningContent);
     }
     
     // ==================== Builder ====================

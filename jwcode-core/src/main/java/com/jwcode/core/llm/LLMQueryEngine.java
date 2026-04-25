@@ -272,7 +272,7 @@ public class LLMQueryEngine {
         } else {
             // 没有工具调用
             String content = response.getContent();
-            assistantMessage = Message.createAssistantMessage(content);
+            assistantMessage = Message.createAssistantMessage(content, response.getReasoningContent());
             session.addMessage(assistantMessage);
             
             // 检查是否有 finishReason
@@ -491,7 +491,7 @@ public class LLMQueryEngine {
         } else {
             // 没有工具调用
             String content = response.getContent();
-            assistantMessage = Message.createAssistantMessage(content);
+            assistantMessage = Message.createAssistantMessage(content, response.getReasoningContent());
             session.addMessage(assistantMessage);
             
             // 检查是否有 finishReason
@@ -768,30 +768,33 @@ public class LLMQueryEngine {
     }
     
     /**
-     * 上下文窗口管理器 - 用于自动压缩消息历史
-     * 默认限制 50 条消息，避免超出 LLM 的上下文窗口
+     * 创建上下文窗口管理器 - 根据模型实际支持的上下文窗口动态配置
      */
-    private static final ContextWindowManager contextWindowManager = 
-        new ContextWindowManager(
-            ContextWindowManager.DEFAULT_CONTEXT_LIMIT,  // Token 限制
-            50,   // 最大消息数：降低到 50（原 100 导致问题）
-            4     // 最小保留消息数
+    private ContextWindowManager createContextWindowManager() {
+        int contextLimit = llmService.getContextWindow();
+        return new ContextWindowManager(
+            contextLimit,       // 模型实际支持的上下文窗口
+            Integer.MAX_VALUE,  // 最大消息数：不限制，由 token 控制
+            6                   // 最小保留消息数，确保工具调用链完整
         );
+    }
     
     /**
      * 转换会话消息到 LLM 格式
      * 
      * 关键修复：自动使用 ContextWindowManager 压缩消息历史，
-     * 防止消息数量超出 LLM 的上下文窗口限制（100 条）
+     * 根据模型实际支持的上下文窗口动态限制 token 数量，防止 API 报错。
      */
     private List<LLMMessage> convertSessionMessages(Session session) {
         List<Message> messages = session.getMessages();
         
-        // 检查并自动压缩消息历史
-        if (messages.size() > 40) {  // 接近限制前就开始压缩
-            logger.info("[LLMQueryEngine] 消息数量 " + messages.size() + " 接近限制，使用 ContextWindowManager 压缩");
-            messages = contextWindowManager.prepareMessages(messages);
-            logger.info("[LLMQueryEngine] 压缩后消息数量: " + messages.size());
+        // 根据当前模型动态创建 ContextWindowManager 并执行压缩
+        ContextWindowManager windowManager = createContextWindowManager();
+        int originalCount = messages.size();
+        messages = windowManager.prepareMessages(messages);
+        if (messages.size() < originalCount) {
+            logger.info("[LLMQueryEngine] 上下文压缩: " + originalCount + " -> " + messages.size() + 
+                " 条消息 (限制=" + windowManager.getContextLimit() + ")");
         }
         
         List<LLMMessage> result = new ArrayList<>();
@@ -834,6 +837,7 @@ public class LLMQueryEngine {
                     LLMMessage llmMsg = LLMMessage.builder()
                         .role(role)
                         .content(content)
+                        .reasoningContent(msg.getReasoningContent())
                         .build();
                     result.add(llmMsg);
                 }

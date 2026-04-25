@@ -169,6 +169,10 @@ public class LLMMessage {
         return builder().role(Role.ASSISTANT).content(content).build();
     }
     
+    public static LLMMessage assistant(String content, String reasoningContent) {
+        return builder().role(Role.ASSISTANT).content(content).reasoningContent(reasoningContent).build();
+    }
+    
     public static LLMMessage assistantWithTools(String content, List<ToolCall> toolCalls) {
         return assistantWithTools(content, toolCalls, null);
     }

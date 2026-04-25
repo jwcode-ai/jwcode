@@ -121,6 +121,7 @@ public class LLMFactory {
             .temperature(model != null ? model.getTemperature() : null)
             .maxTokens(model != null ? model.getMaxTokens() : 4096)
             .timeoutSeconds(300)
+            .contextWindow(model != null ? model.getContextWindow() : 1000000)
             .build();
     }
     

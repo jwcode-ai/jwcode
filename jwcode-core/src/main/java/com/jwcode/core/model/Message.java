@@ -107,6 +107,10 @@ public abstract class Message {
         return new Message(null, Role.ASSISTANT, Arrays.asList(new TextContent(content))) {};
     }
     
+    public static Message createAssistantMessage(String content, String reasoningContent) {
+        return new Message(null, Role.ASSISTANT, Arrays.asList(new TextContent(content)), null, reasoningContent) {};
+    }
+    
     public static Message createSystemMessage(String content) {
         return new Message(null, Role.SYSTEM, Arrays.asList(new TextContent(content))) {};
     }

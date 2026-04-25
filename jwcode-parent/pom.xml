@@ -11,9 +11,9 @@
     <packaging>pom</packaging>
     <name>JWCode Parent</name>
     <description>JWCode - Java 终端 AI 编码工具（父 POM）</description>
-    <url>https://github.com/your-org/jwcode</url>
+    <url>https://github.com/jwcode-project/jwcode</url>
 
-    <!-- 开发者信息 -->
+    <!-- 开发者信�?-->
     <developers>
         <developer>
             <name>JWCode Team</name>
@@ -22,7 +22,7 @@
         </developer>
     </developers>
 
-    <!-- 许可证 -->
+    <!-- 许可�?-->
     <licenses>
         <license>
             <name>Apache License 2.0</name>
@@ -32,12 +32,12 @@
 
     <!-- SCM 配置 -->
     <scm>
-        <connection>scm:git:git://github.com/your-org/jwcode.git</connection>
-        <developerConnection>scm:git:ssh://github.com:your-org/jwcode.git</developerConnection>
-        <url>https://github.com/your-org/jwcode/tree/main</url>
+        <connection>scm:git:git://github.com/jwcode-project/jwcode.git</connection>
+        <developerConnection>scm:git:ssh://github.com:jwcode-project/jwcode.git</developerConnection>
+        <url>https://github.com/jwcode-project/jwcode/tree/main</url>
     </scm>
 
-    <!-- 属性定义 -->
+    <!-- 属性定�?-->
     <properties>
         <!-- Java 版本 -->
         <java.version>17</java.version>
@@ -167,7 +167,7 @@
                 <scope>provided</scope>
             </dependency>
 
-            <!-- 命令行解析 -->
+            <!-- 命令行解�?-->
             <dependency>
                 <groupId>info.picocli</groupId>
                 <artifactId>picocli</artifactId>
@@ -196,7 +196,7 @@
                 <version>${jline.version}</version>
             </dependency>
 
-            <!-- HTTP 客户端 -->
+            <!-- HTTP 客户�?-->
             <dependency>
                 <groupId>com.squareup.okhttp3</groupId>
                 <artifactId>okhttp</artifactId>
@@ -241,7 +241,7 @@
                 <version>${pdfbox.version}</version>
             </dependency>
 
-            <!-- 响应式编程 -->
+            <!-- 响应式编�?-->
             <dependency>
                 <groupId>io.projectreactor</groupId>
                 <artifactId>reactor-core</artifactId>
@@ -298,7 +298,7 @@
     <build>
         <pluginManagement>
             <plugins>
-                <!-- Maven 编译器插件 -->
+                <!-- Maven 编译器插�?-->
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-compiler-plugin</artifactId>
@@ -395,7 +395,7 @@
                     <version>3.7.1</version>
                 </plugin>
 
-                <!-- Spring Boot Maven 插件（可执行 JAR） -->
+                <!-- Spring Boot Maven 插件（可执行 JAR�?-->
                 <plugin>
                     <groupId>org.springframework.boot</groupId>
                     <artifactId>spring-boot-maven-plugin</artifactId>
@@ -416,14 +416,14 @@
                     <version>3.4.1</version>
                 </plugin>
 
-                <!-- Jacoco 代码覆盖率 -->
+                <!-- Jacoco 代码覆盖�?-->
                 <plugin>
                     <groupId>org.jacoco</groupId>
                     <artifactId>jacoco-maven-plugin</artifactId>
                     <version>0.8.12</version>
                 </plugin>
 
-                <!-- Spotless 代码格式化 -->
+                <!-- Spotless 代码格式�?-->
                 <plugin>
                     <groupId>com.diffplug.spotless</groupId>
                     <artifactId>spotless-maven-plugin</artifactId>
@@ -450,11 +450,11 @@
         <repository>
             <id>github</id>
             <name>GitHub Packages</name>
-            <url>https://maven.pkg.github.com/your-org/jwcode</url>
+            <url>https://maven.pkg.github.com/jwcode-project/jwcode</url>
         </repository>
     </distributionManagement>
 
-    <!-- 子模块 -->
+    <!-- 子模�?-->
     <modules>
         <module>../jwcode-common</module>
         <module>../jwcode-core</module>

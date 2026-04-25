@@ -63,7 +63,13 @@ export const useChatStore = create<ChatState>()(
           const messages = [...state.messages];
           const lastMessage = messages[messages.length - 1];
           if (lastMessage && lastMessage.type === 'assistant') {
-            lastMessage.thinking = thinking;
+            // 优先写入最后一条 running Step 的 thought
+            const runningStep = lastMessage.steps?.find((s) => s.status === 'running');
+            if (runningStep) {
+              runningStep.thought = thinking;
+            } else {
+              lastMessage.thinking = thinking;
+            }
           }
           return { messages };
         }),
@@ -73,7 +79,16 @@ export const useChatStore = create<ChatState>()(
           const messages = [...state.messages];
           const lastMessage = messages[messages.length - 1];
           if (lastMessage && lastMessage.type === 'assistant') {
-            lastMessage.thinking = (lastMessage.thinking || '') + chunk;
+            const runningStep = lastMessage.steps?.find((s) => s.status === 'running');
+            if (runningStep) {
+              runningStep.thought = (runningStep.thought || '') + chunk;
+            } else if (lastMessage.steps && lastMessage.steps.length > 0) {
+              // 没有 running step 时，追加到最后一个 step
+              const lastStep = lastMessage.steps[lastMessage.steps.length - 1];
+              lastStep.thought = (lastStep.thought || '') + chunk;
+            } else {
+              lastMessage.thinking = (lastMessage.thinking || '') + chunk;
+            }
           }
           return { messages };
         }),
@@ -83,7 +98,26 @@ export const useChatStore = create<ChatState>()(
           const messages = [...state.messages];
           const lastMessage = messages[messages.length - 1];
           if (lastMessage && lastMessage.type === 'assistant') {
-            lastMessage.steps = [...(lastMessage.steps || []), step];
+            // 将未被任何 step 引用的 toolCalls 转移到新 step
+            const orphanedToolCalls = lastMessage.toolCalls?.filter(tc =>
+              !lastMessage.steps?.some(s => s.toolCalls?.some(stc => stc.id === tc.id))
+            );
+
+            const newStep = { ...step };
+            if (orphanedToolCalls?.length) {
+              newStep.toolCalls = [...(newStep.toolCalls || []), ...orphanedToolCalls];
+              lastMessage.toolCalls = lastMessage.toolCalls?.filter(tc =>
+                !orphanedToolCalls.some(otc => otc.id === tc.id)
+              );
+            }
+
+            // 将孤儿的 thinking 转移到新 step 的 thought
+            if (lastMessage.thinking && lastMessage.thinking.trim().length > 0) {
+              newStep.thought = (newStep.thought || '') + lastMessage.thinking;
+              lastMessage.thinking = '';
+            }
+
+            lastMessage.steps = [...(lastMessage.steps || []), newStep];
           }
           return { messages };
         }),
@@ -106,7 +140,17 @@ export const useChatStore = create<ChatState>()(
           const messages = [...state.messages];
           const lastMessage = messages[messages.length - 1];
           if (lastMessage && lastMessage.type === 'assistant') {
-            lastMessage.toolCalls = [...(lastMessage.toolCalls || []), toolCall];
+            // 优先写入最后一条 running Step 的 toolCalls
+            const runningStep = lastMessage.steps?.find((s) => s.status === 'running');
+            if (runningStep) {
+              runningStep.toolCalls = [...(runningStep.toolCalls || []), toolCall];
+            } else if (lastMessage.steps && lastMessage.steps.length > 0) {
+              // 没有 running step 时，追加到最后一个 step
+              const lastStep = lastMessage.steps[lastMessage.steps.length - 1];
+              lastStep.toolCalls = [...(lastStep.toolCalls || []), toolCall];
+            } else {
+              lastMessage.toolCalls = [...(lastMessage.toolCalls || []), toolCall];
+            }
           }
           return { messages };
         }),
@@ -115,15 +159,31 @@ export const useChatStore = create<ChatState>()(
         set((state) => {
           const messages = [...state.messages];
           const lastMessage = messages[messages.length - 1];
-          if (lastMessage && lastMessage.toolCalls) {
-            const toolCallIndex = lastMessage.toolCalls.findIndex((tc) => tc.id === toolCallId);
-            if (toolCallIndex !== -1) {
-              lastMessage.toolCalls[toolCallIndex] = {
-                ...lastMessage.toolCalls[toolCallIndex],
-                ...updates,
-              };
-            }
+          if (!lastMessage || lastMessage.type !== 'assistant') return { messages };
+
+          // 辅助函数：更新 toolCalls 数组中的指定 toolCall
+          const doUpdate = (toolCalls: ToolCall[] | undefined): boolean => {
+            if (!toolCalls) return false;
+            const toolCallIndex = toolCalls.findIndex((tc) => tc.id === toolCallId);
+            if (toolCallIndex === -1) return false;
+            toolCalls[toolCallIndex] = {
+              ...toolCalls[toolCallIndex],
+              ...updates,
+            };
+            return true;
+          };
+
+          // 优先在 running Step 的 toolCalls 中查找
+          const runningStep = lastMessage.steps?.find((s) => s.status === 'running');
+          if (runningStep && doUpdate(runningStep.toolCalls)) {
+            return { messages };
           }
+
+          // Fallback 到 message.toolCalls
+          if (doUpdate(lastMessage.toolCalls)) {
+            return { messages };
+          }
+
           return { messages };
         }),
 
@@ -131,32 +191,44 @@ export const useChatStore = create<ChatState>()(
         set((state) => {
           const messages = [...state.messages];
           const lastMessage = messages[messages.length - 1];
-          if (lastMessage && lastMessage.toolCalls) {
-            // FIX: 优先按 index 查找（流式 delta 的 id 可能变化，但 index 稳定）
-            const toolCallIndex = lastMessage.toolCalls.findIndex((tc) =>
+          if (!lastMessage || lastMessage.type !== 'assistant') return { messages };
+
+          // 辅助函数：更新 toolCalls 数组中的指定 toolCall
+          const updateToolCall = (toolCalls: ToolCall[] | undefined): boolean => {
+            if (!toolCalls) return false;
+            const toolCallIndex = toolCalls.findIndex((tc) =>
               (index !== undefined && tc.index === index) || tc.id === toolCallId
             );
-            if (toolCallIndex !== -1) {
-              const existing = lastMessage.toolCalls[toolCallIndex];
-              let mergedArgs = existing.args;
-              if (typeof mergedArgs === 'string') {
-                mergedArgs = mergedArgs + argsPartial;
-              } else if (typeof mergedArgs === 'object' && mergedArgs !== null) {
-                try {
-                  const parsed = JSON.parse(argsPartial);
-                  mergedArgs = { ...(mergedArgs as Record<string, unknown>), ...parsed };
-                } catch {
-                  mergedArgs = JSON.stringify(mergedArgs) + argsPartial;
-                }
-              } else {
-                mergedArgs = argsPartial;
+            if (toolCallIndex === -1) return false;
+            const existing = toolCalls[toolCallIndex];
+            let mergedArgs = existing.args;
+            if (typeof mergedArgs === 'string') {
+              mergedArgs = mergedArgs + argsPartial;
+            } else if (typeof mergedArgs === 'object' && mergedArgs !== null) {
+              try {
+                const parsed = JSON.parse(argsPartial);
+                mergedArgs = { ...(mergedArgs as Record<string, unknown>), ...parsed };
+              } catch {
+                mergedArgs = JSON.stringify(mergedArgs) + argsPartial;
               }
-              lastMessage.toolCalls[toolCallIndex] = {
-                ...existing,
-                args: mergedArgs,
-              };
+            } else {
+              mergedArgs = argsPartial;
             }
+            toolCalls[toolCallIndex] = { ...existing, args: mergedArgs };
+            return true;
+          };
+
+          // 优先在 running Step 的 toolCalls 中查找
+          const runningStep = lastMessage.steps?.find((s) => s.status === 'running');
+          if (runningStep && updateToolCall(runningStep.toolCalls)) {
+            return { messages };
           }
+
+          // Fallback 到 message.toolCalls
+          if (updateToolCall(lastMessage.toolCalls)) {
+            return { messages };
+          }
+
           return { messages };
         }),
 

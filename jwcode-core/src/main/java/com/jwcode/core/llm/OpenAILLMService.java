@@ -38,8 +38,8 @@ public class OpenAILLMService implements LLMService {
     private final ServiceConfig config;
     private int currentKeyIndex = 0;
     
-    // 消息数量限制：降低到 50（原 100 导致上下文窗口超限）
-    private static final int MAX_MESSAGE_COUNT = 500;
+    // 消息数量限制：不限制数量，由上下文窗口管理器处理 token 超限
+    private static final int MAX_MESSAGE_COUNT = Integer.MAX_VALUE;
     
     public OpenAILLMService(ServiceConfig config) {
         this.config = config;
@@ -291,6 +291,7 @@ public class OpenAILLMService implements LLMService {
         int promptTokens = 0;
         int completionTokens = 0;
         int totalTokens = 0;
+        boolean inThinkingTag = false;
         
         // 工具调用缓冲区（用于累积流式工具调用）
         java.util.Map<String, StreamToolCallAccumulator> toolCallAccumulators = new java.util.HashMap<>();
@@ -361,14 +362,13 @@ public class OpenAILLMService implements LLMService {
                             continue;
                         }
                         
-                        // 处理普通内容
+                        // 处理普通内容（含 <think> 标签提取）
                         JsonNode content = delta.get("content");
                         if (content != null && !content.isNull()) {
                             String text = content.asText();
-                            contentBuffer.append(text);
-                            if (contentConsumer != null) {
-                                contentConsumer.accept(text);
-                            }
+                            inThinkingTag = processThinkTagChunk(text, inThinkingTag,
+                                contentBuffer, thinkingBuffer, reasoningBuffer,
+                                contentConsumer, thinkingConsumer);
                         }
                         
                         // 处理工具调用
@@ -534,6 +534,11 @@ public class OpenAILLMService implements LLMService {
     @Override
     public String getModelName() {
         return config.getModel();
+    }
+    
+    @Override
+    public int getContextWindow() {
+        return config.getContextWindow();
     }
     
     @Override
@@ -780,9 +785,14 @@ public class OpenAILLMService implements LLMService {
             JsonNode choice = json.get("choices").get(0);
             JsonNode message = choice.get("message");
             
-            // 内容
+            // 内容（含 <think> 标签提取）
+            String reasoningContentFromTag = null;
             if (message.has("content") && !message.get("content").isNull()) {
                 String content = message.get("content").asText();
+                reasoningContentFromTag = extractThinkingFromContent(content);
+                if (reasoningContentFromTag != null) {
+                    content = content.replace("<think>" + reasoningContentFromTag + "</think>", "").trim();
+                }
                 builder.content(content);
                 log.info("[OpenAI] Parsed content length: " + content.length());
             } else {
@@ -795,6 +805,9 @@ public class OpenAILLMService implements LLMService {
                 String reasoningContent = message.get("reasoning_content").asText();
                 builder.reasoningContent(reasoningContent);
                 log.info("[OpenAI] Parsed reasoning_content length: " + reasoningContent.length());
+            } else if (reasoningContentFromTag != null) {
+                builder.reasoningContent(reasoningContentFromTag);
+                log.info("[OpenAI] Parsed thinking from <think> tag length: " + reasoningContentFromTag.length());
             }
             
             // 工具调用
@@ -844,6 +857,91 @@ public class OpenAILLMService implements LLMService {
         LLMResponse response = builder.build();
         log.info("[OpenAI] ==========================================");
         return response;
+    }
+    
+    /**
+     * 从 content 中提取 <think> 标签内的思考内容（非流式）
+     */
+    private String extractThinkingFromContent(String content) {
+        if (content == null) return null;
+        int start = content.indexOf("<think>");
+        int end = content.indexOf("</think>");
+        if (start != -1 && end != -1 && end > start) {
+            return content.substring(start + "<think>".length(), end).trim();
+        }
+        return null;
+    }
+    
+    /**
+     * 处理流式 content chunk 中的 <think> 标签提取
+     * 返回更新后的 inThinkingTag 状态
+     */
+    private boolean processThinkTagChunk(String text, boolean inThinkingTag,
+            StringBuilder contentBuffer, StringBuilder thinkingBuffer, StringBuilder reasoningBuffer,
+            java.util.function.Consumer<String> contentConsumer,
+            java.util.function.Consumer<String> thinkingConsumer) {
+        if (inThinkingTag) {
+            int endIndex = text.indexOf("</think>");
+            if (endIndex != -1) {
+                String thinkingPart = text.substring(0, endIndex);
+                thinkingBuffer.append(thinkingPart);
+                reasoningBuffer.append(thinkingPart);
+                if (thinkingConsumer != null) {
+                    thinkingConsumer.accept(thinkingPart);
+                }
+                String remaining = text.substring(endIndex + "</think>".length());
+                contentBuffer.append(remaining);
+                if (contentConsumer != null && !remaining.isEmpty()) {
+                    contentConsumer.accept(remaining);
+                }
+                return false;
+            } else {
+                thinkingBuffer.append(text);
+                reasoningBuffer.append(text);
+                if (thinkingConsumer != null) {
+                    thinkingConsumer.accept(text);
+                }
+                return true;
+            }
+        } else {
+            int startIndex = text.indexOf("<think>");
+            if (startIndex != -1) {
+                String contentPart = text.substring(0, startIndex);
+                contentBuffer.append(contentPart);
+                if (contentConsumer != null && !contentPart.isEmpty()) {
+                    contentConsumer.accept(contentPart);
+                }
+                String afterThink = text.substring(startIndex + "<think>".length());
+                int endIndex = afterThink.indexOf("</think>");
+                if (endIndex != -1) {
+                    String thinkingPart = afterThink.substring(0, endIndex);
+                    thinkingBuffer.append(thinkingPart);
+                    reasoningBuffer.append(thinkingPart);
+                    if (thinkingConsumer != null) {
+                        thinkingConsumer.accept(thinkingPart);
+                    }
+                    String remaining = afterThink.substring(endIndex + "</think>".length());
+                    contentBuffer.append(remaining);
+                    if (contentConsumer != null && !remaining.isEmpty()) {
+                        contentConsumer.accept(remaining);
+                    }
+                    return false;
+                } else {
+                    thinkingBuffer.append(afterThink);
+                    reasoningBuffer.append(afterThink);
+                    if (thinkingConsumer != null) {
+                        thinkingConsumer.accept(afterThink);
+                    }
+                    return true;
+                }
+            } else {
+                contentBuffer.append(text);
+                if (contentConsumer != null) {
+                    contentConsumer.accept(text);
+                }
+                return false;
+            }
+        }
     }
     
     /**
@@ -901,5 +999,6 @@ public class OpenAILLMService implements LLMService {
         private Double temperature;
         private Integer maxTokens;
         private int timeoutSeconds = 300;  // 默认5分钟超时
+        private int contextWindow = 1000000; // 默认上下文窗口 1M tokens
     }
 }

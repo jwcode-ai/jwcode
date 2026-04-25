@@ -4,7 +4,7 @@
  * 负责与后端 REST API 交互
  */
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8084';
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
 const WS_BASE_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8081';
 
 // ============ Task 类型 ============

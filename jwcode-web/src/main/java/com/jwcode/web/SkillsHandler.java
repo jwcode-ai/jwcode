@@ -14,7 +14,7 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * 技能管理 API - 展示 6 个内置技能
+ * 技能管理 API
  */
 public class SkillsHandler implements HttpHandler {
     
@@ -32,7 +32,7 @@ public class SkillsHandler implements HttpHandler {
         
         // 设置 CORS 头
         exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
-        exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, OPTIONS");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
         exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
         
         if ("OPTIONS".equalsIgnoreCase(method)) {
@@ -42,59 +42,44 @@ public class SkillsHandler implements HttpHandler {
         
         if ("GET".equalsIgnoreCase(method)) {
             if (path.matches("/api/skills/[^/]+")) {
-                // 获取单个技能详情
                 String skillId = path.substring(path.lastIndexOf('/') + 1);
                 getSkillDetail(exchange, skillId);
             } else {
-                // 获取所有技能列表
                 listSkills(exchange);
+            }
+        } else if ("POST".equalsIgnoreCase(method)) {
+            if (path.matches("/api/skills/[^/]+/toggle")) {
+                String skillId = path.substring("/api/skills/".length(), path.lastIndexOf("/toggle"));
+                toggleSkill(exchange, skillId);
+            } else {
+                sendJsonResponse(exchange, 405, createError("不支持的端点"));
             }
         } else {
             sendJsonResponse(exchange, 405, createError("Method not allowed"));
         }
     }
     
-    /**
-     * 列出所有技能
-     */
     private void listSkills(HttpExchange exchange) throws IOException {
-        ObjectNode response = objectMapper.createObjectNode();
-        response.put("success", true);
-        
         List<Skill> skills = skillRegistry.getAll();
-        response.put("count", skills.size());
-        
-        ArrayNode skillsArray = response.putArray("skills");
+        ArrayNode data = objectMapper.createArrayNode();
         
         for (Skill skill : skills) {
             ObjectNode skillNode = objectMapper.createObjectNode();
             skillNode.put("id", skill.getId());
             skillNode.put("name", skill.getName());
             skillNode.put("description", skill.getDescription());
-            skillNode.put("category", skill.getCategory() != null ? skill.getCategory().name() : "UNKNOWN");
-            
-            // 添加标签
-            ArrayNode tagsArray = skillNode.putArray("tags");
-            if (skill.getTags() != null) {
-                skill.getTags().forEach(tagsArray::add);
-            }
-            
-            skillsArray.add(skillNode);
+            skillNode.put("category", skill.getCategory() != null ? skill.getCategory().name().toLowerCase() : "unknown");
+            skillNode.put("enabled", true);
+            skillNode.put("icon", getCategoryIcon(skill.getCategory()));
+            data.add(skillNode);
         }
         
-        // 添加分类统计
-        ObjectNode categories = response.putObject("categories");
-        for (Skill.Category category : Skill.Category.values()) {
-            List<Skill> categorySkills = skillRegistry.getByCategory(category);
-            categories.put(category.name(), categorySkills.size());
-        }
-        
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("success", true);
+        response.set("data", data);
         sendJsonResponse(exchange, 200, response);
     }
     
-    /**
-     * 获取单个技能详情
-     */
     private void getSkillDetail(HttpExchange exchange, String skillId) throws IOException {
         Optional<Skill> skillOpt = skillRegistry.get(skillId);
         
@@ -108,13 +93,13 @@ public class SkillsHandler implements HttpHandler {
         }
         
         Skill skill = skillOpt.get();
-        response.put("success", true);
-        
-        ObjectNode skillNode = response.putObject("skill");
+        ObjectNode skillNode = objectMapper.createObjectNode();
         skillNode.put("id", skill.getId());
         skillNode.put("name", skill.getName());
         skillNode.put("description", skill.getDescription());
-        skillNode.put("category", skill.getCategory() != null ? skill.getCategory().name() : "UNKNOWN");
+        skillNode.put("category", skill.getCategory() != null ? skill.getCategory().name().toLowerCase() : "unknown");
+        skillNode.put("enabled", true);
+        skillNode.put("icon", getCategoryIcon(skill.getCategory()));
         
         // 标签
         ArrayNode tagsArray = skillNode.putArray("tags");
@@ -122,7 +107,7 @@ public class SkillsHandler implements HttpHandler {
             skill.getTags().forEach(tagsArray::add);
         }
         
-        // 系统提示词（可选，可能较长）
+        // 系统提示词
         if (skill.getSystemPrompt() != null) {
             skillNode.put("systemPrompt", skill.getSystemPrompt());
         }
@@ -137,7 +122,28 @@ public class SkillsHandler implements HttpHandler {
             }
         }
         
+        response.put("success", true);
+        response.set("data", skillNode);
         sendJsonResponse(exchange, 200, response);
+    }
+    
+    private void toggleSkill(HttpExchange exchange, String skillId) throws IOException {
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("success", true);
+        response.put("message", "技能状态切换请求已接收（当前版本技能始终启用）");
+        sendJsonResponse(exchange, 200, response);
+    }
+    
+    private String getCategoryIcon(Skill.Category category) {
+        if (category == null) return "⭐";
+        switch (category) {
+            case CODE: return "💻";
+            case ANALYSIS: return "🔍";
+            case DOCUMENT: return "📄";
+            case TEST: return "🧪";
+            case DEVOPS: return "🚀";
+            default: return "⭐";
+        }
     }
     
     private void sendJsonResponse(HttpExchange exchange, int statusCode, ObjectNode json) throws IOException {
