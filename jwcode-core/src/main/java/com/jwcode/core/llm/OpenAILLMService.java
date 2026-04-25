@@ -17,6 +17,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import java.util.logging.Level;
@@ -46,6 +47,7 @@ public class OpenAILLMService implements LLMService {
         // 增加连接超时到60秒
         this.httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(60))
+            .version(HttpClient.Version.HTTP_1_1)
             .build();
         
         log.info("[OpenAILLMService] Initialized with model: " + config.getModel());
@@ -234,42 +236,83 @@ public class OpenAILLMService implements LLMService {
             log.info("[OpenAI Stream] Model: " + config.getModel());
             log.info("[OpenAI Stream] Message count: " + messages.size());
             
-            try {
-                // 构建流式请求体
-                ObjectNode requestBody = buildRequestBody(messages, tools);
-                requestBody.put("stream", true);
-                String requestJson = mapper.writeValueAsString(requestBody);
-                
-                // 发送请求
-                HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(url))
-                    .header("Content-Type", "application/json")
-                    .header("Authorization", "Bearer " + apiKey)
-                    .POST(HttpRequest.BodyPublishers.ofString(requestJson))
-                    .timeout(Duration.ofSeconds(config.getTimeoutSeconds()))
-                    .build();
-                
-                // 使用 InputStream 获取流式响应
-                HttpResponse<InputStream> response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
-                
-                if (response.statusCode() != 200) {
-                    String errorBody = new String(response.body().readAllBytes(), StandardCharsets.UTF_8);
-                    log.severe("[OpenAI Stream] Error: " + errorBody);
-                    return LLMResponse.error("HTTP " + response.statusCode() + ": " + errorBody);
+            int maxRetries = 3;
+            int attempt = 0;
+            int retryDelay = 2000;
+            
+            while (attempt <= maxRetries) {
+                try {
+                    // 构建流式请求体
+                    ObjectNode requestBody = buildRequestBody(messages, tools);
+                    requestBody.put("stream", true);
+                    String requestJson = mapper.writeValueAsString(requestBody);
+                    
+                    // 打印请求参数
+                    log.info("[OpenAI Stream] ---------- Request Body ----------");
+                    log.info("[OpenAI Stream] " + requestJson);
+                    log.info("[OpenAI Stream] ---------- End Request Body ----------");
+                    
+                    // 诊断：逐条确认消息中 reasoning_content 的携带情况
+                    log.warning("[OpenAI Stream] Messages detail:");
+                    for (LLMMessage msg : messages) {
+                        Map<String, Object> fmt = msg.toOpenAIFormat();
+                        log.warning("  role=" + msg.getRole() + ", hasReasoning=" + fmt.containsKey("reasoning_content"));
+                    }
+                    
+                    // 发送请求
+                    HttpRequest request = HttpRequest.newBuilder()
+                        .uri(URI.create(url))
+                        .header("Content-Type", "application/json")
+                        .header("Authorization", "Bearer " + apiKey)
+                        .POST(HttpRequest.BodyPublishers.ofString(requestJson))
+                        .timeout(Duration.ofSeconds(config.getTimeoutSeconds()))
+                        .build();
+                    
+                    // 使用 InputStream 获取流式响应
+                    HttpResponse<InputStream> response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
+                    
+                    if (response.statusCode() != 200) {
+                        String errorBody = new String(response.body().readAllBytes(), StandardCharsets.UTF_8);
+                        log.severe("[OpenAI Stream] Error: " + errorBody);
+                        return LLMResponse.error("HTTP " + response.statusCode() + ": " + errorBody);
+                    }
+                    
+                    // 处理流式响应
+                    return processStreamResponse(
+                        response.body(), 
+                        contentConsumer, 
+                        thinkingConsumer, 
+                        toolCallConsumer
+                    );
+                    
+                } catch (java.io.IOException e) {
+                    String errMsg = e.getMessage();
+                    if (errMsg != null && (errMsg.contains("header parser received no bytes") ||
+                                        errMsg.contains("connection abort") ||
+                                        errMsg.contains("Software caused connection abort") ||
+                                        errMsg.contains("Connection reset"))) {
+                        attempt++;
+                        if (attempt <= maxRetries) {
+                            log.warning("[OpenAI Stream] Connection interrupted: " + errMsg + ", retrying (" + attempt + "/" + maxRetries + ") after " + retryDelay + "ms...");
+                            try {
+                                Thread.sleep(retryDelay);
+                            } catch (InterruptedException ie) {
+                                Thread.currentThread().interrupt();
+                            }
+                            retryDelay *= 2;
+                            apiKey = getNextApiKey();
+                            continue;
+                        }
+                    }
+                    log.log(Level.SEVERE, "[OpenAI Stream] Request failed: " + e.getMessage(), e);
+                    return LLMResponse.error("Stream request failed: " + e.getMessage());
+                } catch (Exception e) {
+                    log.log(Level.SEVERE, "[OpenAI Stream] Request failed: " + e.getMessage(), e);
+                    return LLMResponse.error("Stream request failed: " + e.getMessage());
                 }
-                
-                // 处理流式响应
-                return processStreamResponse(
-                    response.body(), 
-                    contentConsumer, 
-                    thinkingConsumer, 
-                    toolCallConsumer
-                );
-                
-            } catch (Exception e) {
-                log.log(Level.SEVERE, "[OpenAI Stream] Request failed: " + e.getMessage(), e);
-                return LLMResponse.error("Stream request failed: " + e.getMessage());
             }
+            
+            return LLMResponse.error("Stream request failed after " + maxRetries + " retries");
         });
     }
     
@@ -354,12 +397,13 @@ public class OpenAILLMService implements LLMService {
                         JsonNode reasoningContent = delta.get("reasoning_content");
                         if (reasoningContent != null && !reasoningContent.isNull()) {
                             String thinking = reasoningContent.asText();
-                            thinkingBuffer.append(thinking);
-                            reasoningBuffer.append(thinking);
-                            if (thinkingConsumer != null) {
-                                thinkingConsumer.accept(thinking);
+                            if (!thinking.isEmpty()) {
+                                thinkingBuffer.append(thinking);
+                                reasoningBuffer.append(thinking);
+                                if (thinkingConsumer != null) {
+                                    thinkingConsumer.accept(thinking);
+                                }
                             }
-                            continue;
                         }
                         
                         // 处理普通内容（含 <think> 标签提取）
@@ -401,8 +445,11 @@ public class OpenAILLMService implements LLMService {
         // 构建响应
         LLMResponse.Builder builder = LLMResponse.builder()
             .content(contentBuffer.toString())
-            .reasoningContent(reasoningBuffer.toString())
             .rawResponse(contentBuffer.toString());
+        
+        if (reasoningBuffer.length() > 0) {
+            builder.reasoningContent(reasoningBuffer.toString());
+        }
         
         if (!toolCalls.isEmpty()) {
             builder.toolCalls(toolCalls);

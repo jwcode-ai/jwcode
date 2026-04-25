@@ -9,6 +9,7 @@ import com.jwcode.core.config.SystemPromptLoader;
 import com.jwcode.core.llm.*;
 import com.jwcode.core.model.Message;
 import com.jwcode.core.session.Session;
+import com.jwcode.core.session.SessionManager;
 import com.jwcode.core.skill.SkillLoader;
 import com.jwcode.core.skill.SkillRegistry;
 import com.jwcode.core.terminal.JLine3Terminal;
@@ -214,6 +215,7 @@ public class JwCodeApplication implements AutoCloseable {
         registerCommand(new TestModelCommand());
         registerCommand(new WebCommand());
         registerCommand(new WhoamiCommand());
+        registerCommand(new NewCommand());
         
         // 其他实现了 Command 接口的命令
         registerCommand(new AdvancedCmd());
@@ -322,27 +324,41 @@ public class JwCodeApplication implements AutoCloseable {
     private void handleNaturalLanguageQuery(String input) {
         System.out.print("\n" + CliLogger.CYAN + "🤔 思考中..." + CliLogger.RESET);
         System.out.flush();
-        
+
         CliLogger logger = CliLogger.getInstance();
         logger.debug("=== handleNaturalLanguageQuery 开始 ===");
         logger.debug("用户输入: " + input);
-        
+
         try {
-            // 使用 LLMQueryEngine 执行查询
-            Session session = llmQueryEngine.getSession();
-            session.addMessage(Message.createUserMessage(input));
-            logger.debug("消息已添加到会话，当前消息数: " + session.getMessages().size());
-            
-            // 开始对话循环
-            logger.debug("开始 runConversationWithThinking...");
-            runConversationWithThinking(0, 0);
+            TerminalStepRenderer renderer = new TerminalStepRenderer();
+            llmQueryEngine.setStepCallback(renderer);
+
+            // 调用流式查询（内部已包含多轮循环）
+            LLMQueryEngine.QueryResult result = llmQueryEngine.queryStream(
+                input,
+                null,  // contentConsumer — 由 StepCallback.onContentChunk 处理
+                null,  // thinkingConsumer — 由 StepCallback.onThinkingChunk 处理
+                null   // toolCallConsumer — 由 StepCallback.onToolCallChunk 处理
+            ).join();
+
+            llmQueryEngine.setStepCallback(null);
+
+            if (result.isSuccess()) {
+                String content = renderer.getContent();
+                if (content != null && !content.trim().isEmpty()) {
+                    System.out.println("\n" + CliLogger.GREEN + "💬 回复:" + CliLogger.RESET);
+                    System.out.println(content);
+                }
+            } else {
+                System.out.println(CliLogger.RED + "❌ " + result.getErrorMessage() + CliLogger.RESET);
+            }
+
             logger.debug("=== handleNaturalLanguageQuery 结束 ===");
-            
         } catch (Exception e) {
             logger.error("执行错误: " + e.getMessage());
             e.printStackTrace(System.err);
         }
-        
+
         terminal.println();
     }
     
@@ -352,8 +368,9 @@ public class JwCodeApplication implements AutoCloseable {
     private static final int MAX_EMPTY_RESPONSES = 3;
     
     /**
-     * 带思考过程的对话循环
+     * 带思考过程的对话循环（已废弃，由 queryStream 替代）
      */
+    @Deprecated
     private void runConversationWithThinking(int iteration, int emptyResponseCount) throws Exception {
         CliLogger logger = CliLogger.getInstance();
         
@@ -452,7 +469,7 @@ public class JwCodeApplication implements AutoCloseable {
             // 没有工具调用，检查是否有 finishReason
             if (response.getFinishReason() != null) {
                 logger.info("检测到 finishReason: " + response.getFinishReason() + "，结束对话");
-                assistantMessage = Message.createAssistantMessage(content);
+                assistantMessage = Message.createAssistantMessage(content, response.getReasoningContent());
                 session.addMessage(assistantMessage);
                 
                 if (content != null && !content.isEmpty()) {
@@ -465,10 +482,10 @@ public class JwCodeApplication implements AutoCloseable {
             // 检查回复内容是否包含结束标记
             if (content != null && content.contains(FINISH_MARKER)) {
                 logger.info("检测到结束标记 " + FINISH_MARKER + "，结束对话");
-                assistantMessage = Message.createAssistantMessage(content);
+                assistantMessage = Message.createAssistantMessage(content, response.getReasoningContent());
                 session.addMessage(assistantMessage);
                 
-                // 显示回复内容（不包含结束标记）
+                // 显示回复内容（不包含结束标记）},{
                 String displayContent = content.replace(FINISH_MARKER, "").trim();
                 if (!displayContent.isEmpty()) {
                     System.out.println("\r" + CliLogger.GREEN + "💬 回复:" + CliLogger.RESET);
@@ -495,7 +512,7 @@ public class JwCodeApplication implements AutoCloseable {
                 runConversationWithThinking(iteration + 1, emptyResponseCount);
             } else {
                 // 有有效内容，显示回复
-                assistantMessage = Message.createAssistantMessage(content);
+                assistantMessage = Message.createAssistantMessage(content, response.getReasoningContent());
                 session.addMessage(assistantMessage);
                 
                 System.out.println("\r" + CliLogger.GREEN + "💬 回复:" + CliLogger.RESET);
@@ -548,8 +565,9 @@ public class JwCodeApplication implements AutoCloseable {
     }
     
     /**
-     * 执行工具调用并显示结果
+     * 执行工具调用并显示结果（已废弃，由 queryStream 内部执行）
      */
+    @Deprecated
     private void executeToolCallsWithDisplay(List<LLMMessage.ToolCall> toolCalls) throws Exception {
         CliLogger logger = CliLogger.getInstance();
         Session session = llmQueryEngine.getSession();
@@ -981,22 +999,26 @@ public class JwCodeApplication implements AutoCloseable {
      */
     private void handleNaturalLanguageQueryFallback(String input) {
         System.out.print("? 正在思考...");
-        
+
         try {
-            CompletableFuture<LLMQueryEngine.QueryResult> future = llmQueryEngine.query(input);
-            LLMQueryEngine.QueryResult result = future.get();
-            
+            TerminalStepRenderer renderer = new TerminalStepRenderer();
+            llmQueryEngine.setStepCallback(renderer);
+
+            LLMQueryEngine.QueryResult result = llmQueryEngine.queryStream(
+                input,
+                null,
+                null,
+                null
+            ).join();
+
+            llmQueryEngine.setStepCallback(null);
+
             if (result.isSuccess()) {
-                Message message = result.getMessage();
-                if (message != null) {
-                    String content = extractMessageContent(message);
-                    if (!content.isEmpty()) {
-                        System.out.println("\n" + content + "\n");
-                    } else {
-                        System.out.println("\n(空响应)\n");
-                    }
+                String content = renderer.getContent();
+                if (content != null && !content.trim().isEmpty()) {
+                    System.out.println("\n" + content + "\n");
                 } else {
-                    System.out.println("\n(无消息返回)\n");
+                    System.out.println("\n(空响应)\n");
                 }
             } else {
                 System.err.println("\n错误: " + result.getErrorMessage() + "\n");
@@ -1007,6 +1029,78 @@ public class JwCodeApplication implements AutoCloseable {
         }
     }
     
+    /**
+     * 终端步骤渲染器 — 通过 StepCallback 实时打印 ANSI 颜色树形结构
+     */
+    private static class TerminalStepRenderer implements LLMQueryEngine.StepCallback {
+        private final StringBuilder contentBuilder = new StringBuilder();
+        private final Map<String, StringBuilder> toolCallAccumulators = new HashMap<>();
+        private final Map<String, String> toolCallNames = new HashMap<>();
+        private final Set<String> printedToolCalls = new HashSet<>();
+
+        @Override
+        public void onStepStart(String stepName, String description) {
+            System.out.println(CliLogger.CYAN + "▶ " + stepName + CliLogger.RESET);
+            if (description != null && !description.isEmpty()) {
+                System.out.println(CliLogger.GRAY + "  " + description + CliLogger.RESET);
+            }
+        }
+
+        @Override
+        public void onStepThinking(String stepName, String thought) {
+            System.out.println(CliLogger.BLUE + "  💭 " + thought + CliLogger.RESET);
+        }
+
+        @Override
+        public void onStepAction(String stepName, String action) {
+            System.out.println(CliLogger.YELLOW + "  ⚡ " + action + CliLogger.RESET);
+        }
+
+        @Override
+        public void onToolCallChunk(LLMService.StreamToolCallEvent event) {
+            String key = event.getId() != null ? event.getId() : String.valueOf(event.getIndex());
+            toolCallAccumulators.computeIfAbsent(key, k -> new StringBuilder()).append(event.getArguments());
+            toolCallNames.put(key, event.getName());
+
+            if (event.isComplete() && !printedToolCalls.contains(key)) {
+                printedToolCalls.add(key);
+                String args = toolCallAccumulators.get(key).toString();
+                String name = toolCallNames.getOrDefault(key, "Unknown");
+                System.out.println(CliLogger.MAGENTA + "    🔧 " + name + CliLogger.RESET);
+                System.out.println(CliLogger.GRAY + "      请求: " + args + CliLogger.RESET);
+            }
+        }
+
+        @Override
+        public void onToolResult(String toolName, String result) {
+            String preview = result != null && result.length() > 300
+                ? result.substring(0, 300) + "..." : result;
+            System.out.println(CliLogger.GREEN + "      ✅ 结果: " + preview + CliLogger.RESET);
+        }
+
+        @Override
+        public void onStepComplete(String stepName, String result) {
+            System.out.println(CliLogger.GREEN + "  ✓ " + stepName + CliLogger.RESET);
+            if ("LLM查询".equals(stepName)) {
+                System.out.println();
+            }
+        }
+
+        @Override
+        public void onContentChunk(String chunk) {
+            contentBuilder.append(chunk);
+        }
+
+        @Override
+        public void onThinkingChunk(String chunk) {
+            // 思考内容由 onStepThinking 展示，这里不累积
+        }
+
+        public String getContent() {
+            return contentBuilder.toString();
+        }
+    }
+
     private void executeCommand(String[] args) {
         String commandName = args[0];
         String commandArgs = args.length > 1 ? String.join(" ", Arrays.copyOfRange(args, 1, args.length)) : "";
@@ -1038,6 +1132,48 @@ public class JwCodeApplication implements AutoCloseable {
      * 主入口
      */
     public static void main(String[] args) {
+        // 解析启动参数
+        boolean forceNew = false;
+        for (String arg : args) {
+            if ("--new".equals(arg) || "-n".equals(arg)) {
+                forceNew = true;
+                break;
+            }
+        }
+        
+        // 检查是否有活动会话
+        if (!forceNew) {
+            SessionManager sm = SessionManager.getInstance();
+            Session activeSession = sm.getActiveSession();
+            if (activeSession != null && activeSession.getMessageCount() > 0) {
+                System.out.println();
+                System.out.println(CliLogger.CYAN + "=== 选择会话 ===" + CliLogger.RESET);
+                System.out.println();
+                System.out.println("  1. 继续上次会话");
+                System.out.println("     " + (activeSession.getTitle() != null ? activeSession.getTitle() : activeSession.getId().substring(0, 8)) 
+                    + " (" + activeSession.getMessageCount() + " 条消息)");
+                System.out.println("  2. 新建会话");
+                System.out.println();
+                System.out.print("请选择 [1]: ");
+                
+                java.util.Scanner scanner = new java.util.Scanner(System.in);
+                String choice = scanner.nextLine().trim();
+                if ("2".equals(choice)) {
+                    forceNew = true;
+                }
+            }
+        }
+        
+        if (forceNew) {
+            // 创建新会话并保存
+            SessionManager sm = SessionManager.getInstance();
+            Session newSession = sm.createSession(System.getProperty("user.dir"));
+            newSession.setTitle("会话 " + newSession.getId().substring(0, 8));
+            sm.saveSession(newSession);
+            sm.setActiveSession(newSession.getId());
+            System.out.println(CliLogger.GREEN + "✓ 已创建新会话: " + newSession.getTitle() + CliLogger.RESET);
+        }
+        
         try (JwCodeApplication app = new JwCodeApplication()) {
             app.run(args);
         }

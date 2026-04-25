@@ -1,5 +1,6 @@
 package com.jwcode.core.tool.input;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.constraints.NotBlank;
@@ -10,6 +11,7 @@ import jakarta.validation.constraints.Min;
  * 
  * 对标 JavaScript 项目的 FileReadTool input schema
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record FileReadInput(
     @NotBlank(message = "file_path 是必需的")

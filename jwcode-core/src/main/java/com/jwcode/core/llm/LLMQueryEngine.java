@@ -179,17 +179,8 @@ public class LLMQueryEngine {
             session.addMessage(Message.createSystemMessage(warning));
         }
         
-        // 检查超时
-        if (config.getTimeout() != null) {
-            Duration elapsed = Duration.between(startTime, Instant.now());
-            if (elapsed.compareTo(config.getTimeout()) > 0) {
-                logger.warning("[LLMQueryEngine] Timeout after " + elapsed);
-                triggerStepComplete("LLM查询", "查询超时");
-                return CompletableFuture.completedFuture(
-                    QueryResult.error("查询超时")
-                );
-            }
-        }
+        // 已移除累计超时检查，由 HTTP 层超时控制（OpenAILLMService 中的 timeoutSeconds）
+        // 单次 LLM 请求的超时由 HTTP 客户端处理，不受工具执行时间影响
         
         // 转换会话消息到 LLM 格式
         List<LLMMessage> llmMessages = convertSessionMessages(session);
@@ -371,17 +362,8 @@ public class LLMQueryEngine {
             );
         }
         
-        // 检查超时
-        if (config.getTimeout() != null) {
-            Duration elapsed = Duration.between(startTime, Instant.now());
-            if (elapsed.compareTo(config.getTimeout()) > 0) {
-                logger.warning("[LLMQueryEngine] Timeout after " + elapsed);
-                triggerStepComplete("LLM查询", "查询超时");
-                return CompletableFuture.completedFuture(
-                    QueryResult.error("查询超时")
-                );
-            }
-        }
+        // 已移除累计超时检查，由 HTTP 层超时控制
+        // 单次 LLM 请求的超时由 HTTP 客户端处理，不受工具执行时间影响
         
         // 转换会话消息到 LLM 格式
         List<LLMMessage> llmMessages = convertSessionMessages(session);
@@ -980,9 +962,13 @@ public class LLMQueryEngine {
         public void applyModelTraits(String modelId) {
             if (modelId == null || modelId.isEmpty()) return;
             String lower = modelId.toLowerCase();
-            if (lower.contains("deepseek-r1") || lower.contains("kimi-k1") || lower.contains("o1") || lower.contains("o3")) {
+            if (lower.contains("deepseek-r1") || lower.contains("deepseek-v4") || lower.contains("kimi-k1") || lower.contains("o1") || lower.contains("o3")) {
                 this.reasoningModel = true;
                 this.maxEmptyResponses = 5;
+                // reasoning 模型需要更长的总超时
+                if (this.timeout.compareTo(Duration.ofMinutes(10)) < 0) {
+                    this.timeout = Duration.ofMinutes(15);
+                }
             }
         }
         

@@ -90,7 +90,8 @@ public class SessionFork {
             case USER:
                 return Message.createUserMessage(getTextContent(original));
             case ASSISTANT:
-                return Message.createAssistantMessage(getTextContent(original));
+                // FIXED: 保留 reasoningContent 和 toolCalls
+                return cloneAssistantMessage(original);
             case SYSTEM:
                 return Message.createSystemMessage(getTextContent(original));
             case TOOL:
@@ -98,6 +99,21 @@ public class SessionFork {
                 return cloneToolMessage(original);
             default:
                 return Message.createUserMessage(getTextContent(original));
+        }
+    }
+    
+    /**
+     * 克隆助手消息，保留 reasoningContent 和 toolCalls
+     */
+    private Message cloneAssistantMessage(Message original) {
+        String content = getTextContent(original);
+        String reasoning = original.getReasoningContent();
+        List<Message.ToolCallInfo> toolCalls = original.getToolCalls();
+        
+        if (toolCalls != null && !toolCalls.isEmpty()) {
+            return Message.createAssistantMessageWithToolCalls(content, toolCalls, reasoning);
+        } else {
+            return Message.createAssistantMessage(content, reasoning);
         }
     }
     

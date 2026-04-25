@@ -19,7 +19,7 @@ public class LogConfigurator {
     private static final int MAX_LOG_FILES = 5;
     
     /**
-     * 配置安静模式（最小输出）
+     * 配置正常模式（控制台 INFO+，文件 WARNING+）
      */
     public static void configureQuietMode() {
         try {
@@ -31,21 +31,32 @@ public class LogConfigurator {
             
             // 获取根日志器
             Logger rootLogger = Logger.getLogger("");
-            rootLogger.setLevel(Level.WARNING);
+            rootLogger.setLevel(Level.INFO);
             
             // 清除现有处理器
             for (Handler handler : rootLogger.getHandlers()) {
                 rootLogger.removeHandler(handler);
             }
             
-            // 添加控制台处理器（仅警告及以上）
+            // 控制台处理器：INFO 及以上
             ConsoleHandler consoleHandler = new ConsoleHandler();
-            consoleHandler.setLevel(Level.WARNING);
+            consoleHandler.setLevel(Level.INFO);
             consoleHandler.setFormatter(new SimpleFormatter());
             rootLogger.addHandler(consoleHandler);
             
+            // 文件处理器：WARNING 及以上（单文件模式，避免 .0 后缀）
+            FileHandler fileHandler = new FileHandler(LOG_FILE, true);
+            fileHandler.setLevel(Level.WARNING);
+            fileHandler.setFormatter(createDetailedFormatter());
+            rootLogger.addHandler(fileHandler);
+            
+            // 诊断：强制写入一条日志确保文件创建
+            Logger.getLogger(LogConfigurator.class.getName()).warning("Logging configured. Log file: " + LOG_FILE);
+            fileHandler.flush();
+            
         } catch (IOException e) {
-            System.err.println("Failed to configure quiet mode: " + e.getMessage());
+            System.err.println("[LogConfigurator] Failed to configure logging: " + e.getMessage());
+            e.printStackTrace();
         }
     }
     

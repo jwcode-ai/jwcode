@@ -4,16 +4,14 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <!-- 项目基本信息 -->
     <groupId>com.jwcode</groupId>
     <artifactId>jwcode-parent</artifactId>
     <version>1.0.0-SNAPSHOT</version>
     <packaging>pom</packaging>
     <name>JWCode Parent</name>
-    <description>JWCode - Java 终端 AI 编码工具（父 POM）</description>
+    <description>JWCode - Java Terminal AI Coding Tool (Parent POM)</description>
     <url>https://github.com/jwcode-project/jwcode</url>
 
-    <!-- 开发者信�?-->
     <developers>
         <developer>
             <name>JWCode Team</name>
@@ -22,7 +20,6 @@
         </developer>
     </developers>
 
-    <!-- 许可�?-->
     <licenses>
         <license>
             <name>Apache License 2.0</name>
@@ -30,23 +27,19 @@
         </license>
     </licenses>
 
-    <!-- SCM 配置 -->
     <scm>
         <connection>scm:git:git://github.com/jwcode-project/jwcode.git</connection>
         <developerConnection>scm:git:ssh://github.com:jwcode-project/jwcode.git</developerConnection>
         <url>https://github.com/jwcode-project/jwcode/tree/main</url>
     </scm>
 
-    <!-- 属性定�?-->
     <properties>
-        <!-- Java 版本 -->
         <java.version>17</java.version>
         <maven.compiler.source>${java.version}</maven.compiler.source>
         <maven.compiler.target>${java.version}</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
-        <!-- 依赖版本 -->
         <jackson.version>2.17.0</jackson.version>
         <slf4j.version>2.0.13</slf4j.version>
         <logback.version>1.5.6</logback.version>
@@ -63,12 +56,11 @@
         <reactor.version>3.6.6</reactor.version>
         <jsonschema.version>4.35.0</jsonschema.version>
         <pdfbox.version>3.0.2</pdfbox.version>
+        <jtreesitter.version>0.24.0</jtreesitter.version>
     </properties>
 
-    <!-- 依赖管理 -->
     <dependencyManagement>
         <dependencies>
-            <!-- JWCode 内部模块 -->
             <dependency>
                 <groupId>com.jwcode</groupId>
                 <artifactId>jwcode-core</artifactId>
@@ -125,7 +117,6 @@
                 <version>${project.version}</version>
             </dependency>
 
-            <!-- Jackson JSON 处理 -->
             <dependency>
                 <groupId>com.fasterxml.jackson.core</groupId>
                 <artifactId>jackson-databind</artifactId>
@@ -147,7 +138,6 @@
                 <version>${jackson.version}</version>
             </dependency>
 
-            <!-- 日志 -->
             <dependency>
                 <groupId>org.slf4j</groupId>
                 <artifactId>slf4j-api</artifactId>
@@ -159,7 +149,6 @@
                 <version>${logback.version}</version>
             </dependency>
 
-            <!-- Lombok -->
             <dependency>
                 <groupId>org.projectlombok</groupId>
                 <artifactId>lombok</artifactId>
@@ -167,7 +156,6 @@
                 <scope>provided</scope>
             </dependency>
 
-            <!-- 命令行解�?-->
             <dependency>
                 <groupId>info.picocli</groupId>
                 <artifactId>picocli</artifactId>
@@ -179,7 +167,6 @@
                 <version>${picocli.version}</version>
             </dependency>
 
-            <!-- 终端 UI -->
             <dependency>
                 <groupId>org.jline</groupId>
                 <artifactId>jline</artifactId>
@@ -196,7 +183,6 @@
                 <version>${jline.version}</version>
             </dependency>
 
-            <!-- HTTP 客户�?-->
             <dependency>
                 <groupId>com.squareup.okhttp3</groupId>
                 <artifactId>okhttp</artifactId>
@@ -208,21 +194,18 @@
                 <version>${okhttp.version}</version>
             </dependency>
 
-            <!-- Google Guava -->
             <dependency>
                 <groupId>com.google.guava</groupId>
                 <artifactId>guava</artifactId>
                 <version>${guava.version}</version>
             </dependency>
 
-            <!-- 依赖注入 -->
             <dependency>
                 <groupId>com.google.inject</groupId>
                 <artifactId>guice</artifactId>
                 <version>${guice.version}</version>
             </dependency>
 
-            <!-- Apache Commons -->
             <dependency>
                 <groupId>org.apache.commons</groupId>
                 <artifactId>commons-lang3</artifactId>
@@ -234,21 +217,25 @@
                 <version>${commons.io.version}</version>
             </dependency>
 
-            <!-- Apache PDFBox -->
             <dependency>
                 <groupId>org.apache.pdfbox</groupId>
                 <artifactId>pdfbox</artifactId>
                 <version>${pdfbox.version}</version>
             </dependency>
 
-            <!-- 响应式编�?-->
+            <!-- Tree-sitter Java Binding -->
+            <dependency>
+                <groupId>io.github.tree-sitter</groupId>
+                <artifactId>jtreesitter</artifactId>
+                <version>${jtreesitter.version}</version>
+            </dependency>
+
             <dependency>
                 <groupId>io.projectreactor</groupId>
                 <artifactId>reactor-core</artifactId>
                 <version>${reactor.version}</version>
             </dependency>
 
-            <!-- JSON Schema 生成 -->
             <dependency>
                 <groupId>com.github.victools</groupId>
                 <artifactId>jsonschema-generator</artifactId>
@@ -260,7 +247,6 @@
                 <version>${jsonschema.version}</version>
             </dependency>
 
-            <!-- 测试依赖 -->
             <dependency>
                 <groupId>org.junit.jupiter</groupId>
                 <artifactId>junit-jupiter</artifactId>
@@ -294,11 +280,9 @@
         </dependencies>
     </dependencyManagement>
 
-    <!-- 构建配置 -->
     <build>
         <pluginManagement>
             <plugins>
-                <!-- Maven 编译器插�?-->
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-compiler-plugin</artifactId>
@@ -320,7 +304,6 @@
                     </configuration>
                 </plugin>
 
-                <!-- Maven 资源插件 -->
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-resources-plugin</artifactId>
@@ -330,7 +313,6 @@
                     </configuration>
                 </plugin>
 
-                <!-- Maven 源码插件 -->
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-source-plugin</artifactId>
@@ -345,7 +327,6 @@
                     </executions>
                 </plugin>
 
-                <!-- Maven Javadoc 插件 -->
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-javadoc-plugin</artifactId>
@@ -368,7 +349,6 @@
                     </executions>
                 </plugin>
 
-                <!-- Maven Surefire 插件（测试） -->
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-surefire-plugin</artifactId>
@@ -381,49 +361,42 @@
                     </configuration>
                 </plugin>
 
-                <!-- Maven Jar 插件 -->
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-jar-plugin</artifactId>
                     <version>3.4.1</version>
                 </plugin>
 
-                <!-- Maven Assembly 插件（打包） -->
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-assembly-plugin</artifactId>
                     <version>3.7.1</version>
                 </plugin>
 
-                <!-- Spring Boot Maven 插件（可执行 JAR�?-->
                 <plugin>
                     <groupId>org.springframework.boot</groupId>
                     <artifactId>spring-boot-maven-plugin</artifactId>
                     <version>3.2.5</version>
                 </plugin>
 
-                <!-- Lombok Maven 插件 -->
                 <plugin>
                     <groupId>org.projectlombok</groupId>
                     <artifactId>lombok-maven-plugin</artifactId>
                     <version>1.18.20.0</version>
                 </plugin>
 
-                <!-- Maven Enforcer 插件（依赖检查） -->
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-enforcer-plugin</artifactId>
                     <version>3.4.1</version>
                 </plugin>
 
-                <!-- Jacoco 代码覆盖�?-->
                 <plugin>
                     <groupId>org.jacoco</groupId>
                     <artifactId>jacoco-maven-plugin</artifactId>
                     <version>0.8.12</version>
                 </plugin>
 
-                <!-- Spotless 代码格式�?-->
                 <plugin>
                     <groupId>com.diffplug.spotless</groupId>
                     <artifactId>spotless-maven-plugin</artifactId>
@@ -432,7 +405,6 @@
             </plugins>
         </pluginManagement>
 
-        <!-- 默认插件配置 -->
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -445,7 +417,6 @@
         </plugins>
     </build>
 
-    <!-- 发布配置 -->
     <distributionManagement>
         <repository>
             <id>github</id>
@@ -454,7 +425,6 @@
         </repository>
     </distributionManagement>
 
-    <!-- 子模�?-->
     <modules>
         <module>../jwcode-common</module>
         <module>../jwcode-core</module>
@@ -464,7 +434,6 @@
         <module>../jwcode-distribution</module>
     </modules>
 
-    <!-- 发布 Profile -->
     <profiles>
         <profile>
             <id>release</id>

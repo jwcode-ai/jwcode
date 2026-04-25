@@ -113,14 +113,19 @@ public class LLMFactory {
         
         String modelId = model != null ? model.getId() : "kimi-k2.5";
         
-        // 使用更长的超时时间（300秒=5分钟）以支持复杂任务
+        // reasoning 模型需要更长的 HTTP 超时
+        int timeoutSeconds = 300;
+        if (modelId.toLowerCase().contains("deepseek-v4") || modelId.toLowerCase().contains("deepseek-r1")) {
+            timeoutSeconds = 900; // 15 分钟
+        }
+        
         return OpenAILLMService.ServiceConfig.builder()
             .baseUrl(baseUrl)
             .model(modelId)
             .apiKeys(provider.getApiKeys())
             .temperature(model != null ? model.getTemperature() : null)
             .maxTokens(model != null ? model.getMaxTokens() : 4096)
-            .timeoutSeconds(300)
+            .timeoutSeconds(timeoutSeconds)
             .contextWindow(model != null ? model.getContextWindow() : 1000000)
             .build();
     }
