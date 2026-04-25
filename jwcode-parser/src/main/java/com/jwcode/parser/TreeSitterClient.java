@@ -146,10 +146,12 @@ public class TreeSitterClient implements AutoCloseable {
      */
     public Map<String, ParseResult> parseBatch(List<Path> files) throws IOException {
         List<Map<String, Object>> fileRequests = files.stream()
-            .map(p -> Map.of(
-                "file_path", p.toAbsolutePath().toString().replace("\\", "/"),
-                "content", (String) null
-            ))
+            .map(p -> {
+                Map<String, Object> map = new java.util.HashMap<>();
+                map.put("file_path", p.toAbsolutePath().toString().replace("\\", "/"));
+                map.put("content", null);
+                return map;
+            })
             .toList();
         
         Map<String, Object> request = Map.of("files", fileRequests);
@@ -266,7 +268,7 @@ public class TreeSitterClient implements AutoCloseable {
             Map<String, Object> data = (Map<String, Object>) result.get("data");
             if (data != null) {
                 parseResult.setLanguage((String) data.get("language"));
-                parseResult.setPackage((String) data.get("package"));
+                parseResult.setPackageName((String) data.get("package"));
                 parseResult.setImports((List<String>) data.get("imports"));
                 parseResult.setErrors((List<String>) data.get("errors"));
                 

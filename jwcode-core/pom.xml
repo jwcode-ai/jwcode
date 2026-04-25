@@ -91,12 +91,6 @@
             <artifactId>pdfbox</artifactId>
         </dependency>
 
-        <!-- Tree-sitter Java Binding -->
-        <dependency>
-            <groupId>io.github.tree-sitter</groupId>
-            <artifactId>jtreesitter</artifactId>
-        </dependency>
-
         <!-- Jakarta Validation API -->
         <dependency>
             <groupId>jakarta.validation</groupId>

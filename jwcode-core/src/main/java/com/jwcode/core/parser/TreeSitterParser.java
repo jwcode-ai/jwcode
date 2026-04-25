@@ -3,8 +3,8 @@ package com.jwcode.core.parser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import io.github.treesitter.jtreesitter.*;
-import io.github.treesitter.jtreesitter.Parser;
+import com.jwcode.core.parser.internal.LanguageRegistry;
+import com.jwcode.core.parser.treesitter.*;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -101,23 +101,9 @@ public class TreeSitterParser {
     
     private Language getLanguage(String languageName) {
         return languageCache.computeIfAbsent(languageName, name -> {
-            // jtreesitter 0.24.0 Language loading
-            // The exact API depends on the binding version and language bundles
-            try {
-                // Try to get language from parser (some versions support this)
-                Language loaded = parser.getLanguage();
-                if (loaded != null) {
-                    return loaded;
-                }
-            } catch (Exception e) {
-                logger.debug("Could not get language from parser: {}", e.getMessage());
-            }
-            
-            // Language loading requires separate language bundle artifacts
-            // For now, return null to indicate language not available
-            // Users need to add language-specific dependencies (e.g., tree-sitter-java)
-            logger.debug("Language '{}' not loaded - may require language bundle dependency", name);
-            return null;
+            Language loaded = LanguageRegistry.forExtension(name);
+            logger.debug("Loaded language '{}' for extension '{}'", loaded.getName(), name);
+            return loaded;
         });
     }
     
@@ -184,53 +170,98 @@ public class TreeSitterParser {
         );
     }
     
-    private void collectNodes(TreeCursor cursor, String language, 
+    private void collectNodes(TreeCursor cursor, String language,
                                List<String> classes, List<String> methods,
                                List<String> fields, List<String> imports, List<String> functions) {
-        do {
-            Node currentNode = cursor.getCurrentNode();
-            String type = currentNode.getType();
-            
-            // Extract meaningful names based on language
-            String nodeName = extractNodeName(currentNode, language);
-            
-            if (isClassNode(type, language)) {
-                classes.add(nodeName);
-            } else if (isMethodNode(type, language)) {
-                methods.add(nodeName);
-            } else if (isFieldNode(type, language)) {
-                fields.add(nodeName);
-            } else if (isFunctionNode(type, language)) {
-                functions.add(nodeName);
-            } else if (isImportNode(type, language)) {
-                imports.add(nodeName);
+        // Depth-first traversal using tree-cursor API
+        boolean visited = false;
+        while (true) {
+            if (!visited) {
+                Node currentNode = cursor.getCurrentNode();
+                String type = currentNode.getType();
+
+                String nodeName = extractNodeName(currentNode, language);
+
+                if (isClassNode(type, language)) {
+                    classes.add(nodeName);
+                } else if (isMethodNode(type, language)) {
+                    methods.add(nodeName);
+                } else if (isFieldNode(type, language)) {
+                    Node parent = currentNode.getParent();
+                    if (parent != null && isClassNode(parent.getType(), language)) {
+                        fields.add(nodeName);
+                    }
+                } else if (isFunctionNode(type, language)) {
+                    functions.add(nodeName);
+                } else if (isImportNode(type, language)) {
+                    imports.add(nodeName);
+                }
             }
-            
-        } while (cursor.gotoNextSibling() || cursor.gotoParent());
+
+            if (!visited && cursor.gotoFirstChild()) {
+                visited = false;
+                continue;
+            }
+
+            visited = true;
+            if (cursor.gotoNextSibling()) {
+                visited = false;
+                continue;
+            }
+
+            if (!cursor.gotoParent()) {
+                break;
+            }
+        }
     }
     
     private String extractNodeName(Node node, String language) {
-        // Try to get the first child that contains the name
+        String type = node.getType();
+
+        // For import declarations, return the full text (e.g., "import java.util.List;")
+        if ("import_declaration".equals(type)) {
+            return node.getText().trim();
+        }
+
         long childCount = node.getChildCount();
+
+        // Prefer explicit identifier child
+        for (int i = 0; i < childCount; i++) {
+            Optional<Node> childOpt = node.getChild(i);
+            if (childOpt.isPresent() && "identifier".equals(childOpt.get().getType())) {
+                String text = childOpt.get().getText();
+                if (text != null && !text.isEmpty()) {
+                    return text;
+                }
+            }
+        }
+
+        // Skip structural / modifier children
         for (int i = 0; i < childCount; i++) {
             Optional<Node> childOpt = node.getChild(i);
             if (childOpt.isPresent()) {
                 Node child = childOpt.get();
+                String childType = child.getType();
+                if ("modifiers".equals(childType) || "block".equals(childType)
+                        || "class_body".equals(childType) || "package".equals(childType)) {
+                    continue;
+                }
                 String text = child.getText();
                 if (text != null && !text.isEmpty() && !text.matches("[{}\\[\\]();]")) {
                     return text;
                 }
             }
         }
-        return node.getText();
+        return node.getText().trim();
     }
     
     private boolean isClassNode(String type, String language) {
         return switch (language) {
-            case "java" -> type.equals("class_declaration") || type.equals("interface_declaration");
-            case "python" -> type.equals("class_definition");
+            case "java" -> type.equals("class_declaration") || type.equals("interface_declaration")
+                    || type.equals("enum_declaration") || type.equals("annotation_type_declaration");
+            case "python" -> type.equals("class_definition") || type.equals("class_declaration");
             case "javascript", "typescript" -> type.equals("class_declaration") || type.equals("class_expression");
-            case "go" -> type.equals("type_declaration") || type.equals("type_spec");
+            case "go" -> type.equals("type_declaration") || type.equals("type_spec") || type.equals("class_declaration");
             default -> type.contains("class");
         };
     }
@@ -238,7 +269,7 @@ public class TreeSitterParser {
     private boolean isMethodNode(String type, String language) {
         return switch (language) {
             case "java" -> type.equals("method_declaration") || type.equals("constructor_declaration");
-            case "python" -> type.equals("function_definition");
+            case "python" -> type.equals("function_definition") || type.equals("function_declaration");
             case "javascript", "typescript" -> type.equals("function_declaration") || type.equals("method_definition");
             case "go" -> type.equals("function_declaration");
             default -> type.contains("method") || type.contains("function");
@@ -248,8 +279,9 @@ public class TreeSitterParser {
     private boolean isFieldNode(String type, String language) {
         return switch (language) {
             case "java" -> type.equals("field_declaration") || type.equals("variable_declarator");
-            case "python" -> type.equals("assignment") || type.equals("annassign");
-            case "javascript", "typescript" -> type.equals("property_definition") || type.equals("variable_declaration");
+            case "python" -> type.equals("assignment") || type.equals("annassign") || type.equals("field_declaration");
+            case "javascript", "typescript" -> type.equals("property_definition") || type.equals("variable_declaration")
+                    || type.equals("field_declaration");
             default -> type.contains("field") || type.contains("variable");
         };
     }

@@ -274,6 +274,23 @@ public class OpenAILLMService implements LLMService {
                     if (response.statusCode() != 200) {
                         String errorBody = new String(response.body().readAllBytes(), StandardCharsets.UTF_8);
                         log.severe("[OpenAI Stream] Error: " + errorBody);
+                        
+                        // 对可重试错误执行退避重试（与 chatWithTools 保持一致）
+                        if (response.statusCode() == 429 || response.statusCode() >= 500) {
+                            attempt++;
+                            if (attempt <= maxRetries) {
+                                String errorType = response.statusCode() == 429 ? "Rate limited" : "Server error " + response.statusCode();
+                                log.warning("[OpenAI Stream] " + errorType + ", retrying (" + attempt + "/" + maxRetries + ") after " + retryDelay + "ms...");
+                                try {
+                                    Thread.sleep(retryDelay);
+                                } catch (InterruptedException ie) {
+                                    Thread.currentThread().interrupt();
+                                }
+                                retryDelay *= 2;
+                                apiKey = getNextApiKey();
+                                continue;
+                            }
+                        }
                         return LLMResponse.error("HTTP " + response.statusCode() + ": " + errorBody);
                     }
                     

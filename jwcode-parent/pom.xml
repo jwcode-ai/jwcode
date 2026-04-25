@@ -56,7 +56,6 @@
         <reactor.version>3.6.6</reactor.version>
         <jsonschema.version>4.35.0</jsonschema.version>
         <pdfbox.version>3.0.2</pdfbox.version>
-        <jtreesitter.version>0.24.0</jtreesitter.version>
     </properties>
 
     <dependencyManagement>
@@ -221,13 +220,6 @@
                 <groupId>org.apache.pdfbox</groupId>
                 <artifactId>pdfbox</artifactId>
                 <version>${pdfbox.version}</version>
-            </dependency>
-
-            <!-- Tree-sitter Java Binding -->
-            <dependency>
-                <groupId>io.github.tree-sitter</groupId>
-                <artifactId>jtreesitter</artifactId>
-                <version>${jtreesitter.version}</version>
             </dependency>
 
             <dependency>
@@ -432,6 +424,7 @@
         <module>../jwcode-repl</module>
         <module>../jwcode-web</module>
         <module>../jwcode-distribution</module>
+        <module>../jwcode-parser</module>
     </modules>
 
     <profiles>

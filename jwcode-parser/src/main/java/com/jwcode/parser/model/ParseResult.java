@@ -11,7 +11,7 @@ import java.util.List;
 public class ParseResult {
     private List<CodeSymbol> symbols;
     private List<String> imports;
-    private String package;
+    private String packageName;
     private String language;
     private List<String> errors;
     

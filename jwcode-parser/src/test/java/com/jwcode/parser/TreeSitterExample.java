@@ -33,7 +33,7 @@ public class TreeSitterExample {
         
         if (result.isSuccess()) {
             System.out.println("语言: " + result.getLanguage());
-            System.out.println("包名: " + result.getPackage());
+            System.out.println("包名: " + result.getPackageName());
             System.out.println("导入: " + result.getImports());
             System.out.println("符号数量: " + result.getSymbols().size());
             
