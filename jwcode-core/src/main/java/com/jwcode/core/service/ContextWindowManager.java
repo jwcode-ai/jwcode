@@ -37,19 +37,26 @@ public class ContextWindowManager {
     private final int contextLimit;
     private final int maxMessages;
     private final int minMessages;
+    private final SimpleCompactionStrategy compactionStrategy;
     
     public ContextWindowManager() {
-        this(DEFAULT_CONTEXT_LIMIT, DEFAULT_MAX_MESSAGES, DEFAULT_MIN_MESSAGES);
+        this(DEFAULT_CONTEXT_LIMIT, DEFAULT_MAX_MESSAGES, DEFAULT_MIN_MESSAGES, null);
     }
     
     public ContextWindowManager(int contextLimit) {
-        this(contextLimit, DEFAULT_MAX_MESSAGES, DEFAULT_MIN_MESSAGES);
+        this(contextLimit, DEFAULT_MAX_MESSAGES, DEFAULT_MIN_MESSAGES, null);
     }
     
     public ContextWindowManager(int contextLimit, int maxMessages, int minMessages) {
+        this(contextLimit, maxMessages, minMessages, null);
+    }
+    
+    public ContextWindowManager(int contextLimit, int maxMessages, int minMessages,
+                                SimpleCompactionStrategy compactionStrategy) {
         this.contextLimit = contextLimit;
         this.maxMessages = maxMessages;
         this.minMessages = Math.max(minMessages, 2); // 至少保留2条消息
+        this.compactionStrategy = compactionStrategy;
     }
     
     /**
@@ -76,8 +83,18 @@ public class ContextWindowManager {
             estimatedTokens, messages.size(), contextLimit
         ));
         
-        // 执行消息压缩
-        List<Message> compressed = compressMessages(messages);
+        List<Message> compressed;
+        // 优先尝试 LLM 语义压缩（若配置了 strategy 且消息足够多）
+        if (compactionStrategy != null && messages.size() > compactionStrategy.getTailSize() + 2) {
+            compressed = compactionStrategy.compact(messages);
+            // 如果 LLM 压缩后仍然超限，再降级为截断
+            if (estimateTokens(compressed) > contextLimit - SAFETY_MARGIN || compressed.size() > maxMessages) {
+                logger.info("[ContextWindowManager] LLM 压缩后仍超限，降级为截断策略");
+                compressed = compressMessages(compressed);
+            }
+        } else {
+            compressed = compressMessages(messages);
+        }
         
         int newTokens = estimateTokens(compressed);
         logger.info(String.format(

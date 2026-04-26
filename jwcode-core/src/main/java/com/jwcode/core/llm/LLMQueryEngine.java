@@ -23,6 +23,7 @@ import com.jwcode.core.observability.*;
 import com.jwcode.core.resilience.RecoveryExecutor;
 import com.jwcode.core.resilience.RecoveryProtocol;
 import com.jwcode.core.service.ContextWindowManager;
+import com.jwcode.core.service.SimpleCompactionStrategy;
 
 /**
  * 基于 LLM 服务的查询引擎
@@ -43,6 +44,7 @@ public class LLMQueryEngine {
 
     private final Instant startTime;
     private final List<String> toolCallHistory;
+    private final SimpleCompactionStrategy compactionStrategy;
     private static final ObjectMapper MAPPER = new ObjectMapper()
             .registerModule(new JavaTimeModule());
     
@@ -61,6 +63,7 @@ public class LLMQueryEngine {
         this.toolCallHistory = new ArrayList<>();
         this.pipeline = new DefaultObservationPipeline();
         this.tokenBudget = TokenBudget.of(this.config.getTokenBudget());
+        this.compactionStrategy = new SimpleCompactionStrategy(llmService);
     }
     
     /**
@@ -178,6 +181,18 @@ public class LLMQueryEngine {
             return CompletableFuture.completedFuture(
                 QueryResult.error("Token 预算已耗尽，任务被迫终止。请使用 /compact 压缩上下文后重试。")
             );
+        }
+
+        // 自动触发上下文压缩（当预算使用超过 60% 时）
+        if (tokenBudget.usageRatio() > 0.60 && session.getMessages().size() > 10) {
+            logger.info("[LLMQueryEngine] Token budget usage=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100)
+                + ", auto-compacting context...");
+            List<Message> compacted = compactionStrategy.compact(session.getMessages());
+            if (compacted != null && compacted.size() < session.getMessages().size()) {
+                session.clearMessages();
+                compacted.forEach(session::addMessage);
+                logger.info("[LLMQueryEngine] Auto-compacted: " + session.getMessages().size() + " messages remaining");
+            }
         }
 
         // Token 预算紧张时注入建议
@@ -384,6 +399,18 @@ public class LLMQueryEngine {
             return CompletableFuture.completedFuture(
                 QueryResult.error("Token 预算已耗尽，任务被迫终止。请使用 /compact 压缩上下文后重试。")
             );
+        }
+
+        // 自动触发上下文压缩（当预算使用超过 60% 时）
+        if (tokenBudget.usageRatio() > 0.60 && session.getMessages().size() > 10) {
+            logger.info("[LLMQueryEngine] Token budget usage=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100)
+                + ", auto-compacting context...");
+            List<Message> compacted = compactionStrategy.compact(session.getMessages());
+            if (compacted != null && compacted.size() < session.getMessages().size()) {
+                session.clearMessages();
+                compacted.forEach(session::addMessage);
+                logger.info("[LLMQueryEngine] Auto-compacted: " + session.getMessages().size() + " messages remaining");
+            }
         }
 
         // Token 预算紧张时注入建议
@@ -716,8 +743,7 @@ public class LLMQueryEngine {
         String toolName = tc.getFunction().getName();
         String args = tc.getFunction().getArguments();
         
-        logger.info("[LLMQueryEngine] Executing tool: " + toolName);
-        logger.info("[LLMQueryEngine] Tool input arguments: " + args);
+        logger.info("[LLMQueryEngine] Executing tool: " + toolName + " args=" + truncate(args, 120));
         
         // 解析 JSON 参数
         final JsonNode argsNode;
@@ -784,11 +810,14 @@ public class LLMQueryEngine {
      * 创建上下文窗口管理器 - 根据模型实际支持的上下文窗口动态配置
      */
     private ContextWindowManager createContextWindowManager() {
-        int contextLimit = llmService.getContextWindow();
+        int modelContextLimit = llmService.getContextWindow();
+        // TokenBudget 应比模型窗口更早触发压缩，防止预算耗尽
+        int budgetLimit = (int) Math.min(modelContextLimit, tokenBudget.getTotalBudget());
         return new ContextWindowManager(
-            contextLimit,       // 模型实际支持的上下文窗口
-            Integer.MAX_VALUE,  // 最大消息数：不限制，由 token 控制
-            6                   // 最小保留消息数，确保工具调用链完整
+            budgetLimit,        // 取模型窗口与 TokenBudget 的较小值
+            30,                 // 最大消息数限制，防止消息过多膨胀
+            6,                  // 最小保留消息数，确保工具调用链完整
+            compactionStrategy  // LLM 语义压缩策略
         );
     }
     
@@ -822,19 +851,18 @@ public class LLMQueryEngine {
                 String toolCallId = extractToolCallId(msg);
                 String content = extractToolResultContent(msg);
                 
-                logger.info("[LLMQueryEngine] Converting TOOL message: toolCallId=" + toolCallId + 
+                logger.fine("[LLMQueryEngine] Converting TOOL message: toolCallId=" + toolCallId + 
                     ", contentLength=" + (content != null ? content.length() : 0));
                 
                 // 修复: 如果 toolCallId 为空，生成临时 ID 而不是跳过
                 // 这样可以保证 tool_calls 和 tool 消息数量一致，避免 API 报错 "tool call and result not match"
                 if (toolCallId == null || toolCallId.isEmpty()) {
                     toolCallId = "temp_tool_" + System.nanoTime();
-                    logger.warning("[LLMQueryEngine] TOOL message missing toolCallId, generated temp ID: " + toolCallId + 
-                        ". This may indicate a data issue in the message history.");
+                    logger.warning("[LLMQueryEngine] TOOL message missing toolCallId, generated temp ID: " + toolCallId);
                 }
                 
                 LLMMessage llmMsg = LLMMessage.tool(toolCallId, content);
-                logger.info("[LLMQueryEngine] Created LLMMessage.TOOL: toolCallId=" + toolCallId);
+                logger.fine("[LLMQueryEngine] Created LLMMessage.TOOL: toolCallId=" + toolCallId);
                 result.add(llmMsg);
             } else {
                 // 处理其他消息类型

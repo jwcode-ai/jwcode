@@ -1,7 +1,12 @@
 package com.jwcode.core.tool;
+
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jwcode.core.tool.context.ToolExecutionContext;
+
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 
 public class SleepTool implements Tool<SleepTool.Input, SleepTool.Output, SleepTool.Progress> {
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -34,8 +39,42 @@ public class SleepTool implements Tool<SleepTool.Input, SleepTool.Output, SleepT
     }
     
     @Override
+    public TypeReference<Input> getInputType() {
+        return new TypeReference<Input>() {};
+    }
+    
+    @Override
+    public TypeReference<Output> getOutputType() {
+        return new TypeReference<Output>() {};
+    }
+    
+    @Override
+    public CompletableFuture<ToolResult<Output>> call(
+            Input input,
+            ToolExecutionContext context,
+            Consumer<ToolProgress<Progress>> onProgress) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                int seconds = Math.max(0, input.seconds);
+                if (seconds > 0) {
+                    Thread.sleep(seconds * 1000L);
+                }
+                Output output = new Output();
+                output.success = true;
+                return ToolResult.success(output);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return ToolResult.error("Sleep interrupted: " + e.getMessage());
+            }
+        });
+    }
+    
+    /**
+     * 保留旧版签名兼容
+     */
+    @Deprecated
     public CompletableFuture<ToolResult<Output>> call(Input args, ToolContext context, CanUseToolFn canUseTool, Object parentMessage, java.util.function.Consumer<ToolProgress<Progress>> onProgress) {
-        return CompletableFuture.completedFuture(ToolResult.success(new Output()));
+        return call(args, new ToolExecutionContext(null, null, null), onProgress);
     }
     
     public static class Input { public int seconds; }

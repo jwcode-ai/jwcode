@@ -200,57 +200,40 @@ public class ToolExecutor {
         
         try {
             // 解析输入
-            logger.info( inputJson != null ? "解析工具输入 (JSON): " + inputJson.toString() : "解析工具输入 (原始类型)");
+            logger.fine("解析工具输入: " + (inputJson != null ? truncateForLog(inputJson.toString(), 200) : "(原始类型)"));
             Object input = tool.parseInput(inputJson);
             
-            // 记录工具执行开始 - 包含完整的输入参数（JSON 格式）
-            logger.info("║ [AI 调用工具] " + toolName );
-            if (inputJson != null) {
-                String inputJsonStr = inputJson.toString();
-                logger.info("║ 输入参数 (JSON):");
-                // 打印完整 JSON（不拆分）
-                    logger.info("║   " + inputJsonStr);
-            } else if (input != null) {
-                String inputStr = truncateForLog(input.toString(), 500);
-                logger.info("║ 输入: " + inputStr);
-            }
+            // 记录工具执行开始（精简单行日志）
+            String inputPreview = inputJson != null 
+                ? truncateForLog(inputJson.toString(), 120) 
+                : (input != null ? truncateForLog(input.toString(), 120) : "");
+            logger.info("[Tool] " + toolName + " | input=" + inputPreview);
             
             // 执行工具 - 使用原始类型执行
             CompletableFuture<?> future = execute(tool, input, context, (Consumer) onProgress);
             return future.handle((result, throwable) -> {
                 if (throwable != null) {
                     String errorMsg = throwable.getMessage() != null ? throwable.getMessage() : throwable.getClass().getSimpleName();
-                    logger.severe("║ [工具执行异常] " + toolName);
-                    logger.severe("║ 错误: " + errorMsg);
+                    logger.warning("[Tool] " + toolName + " FAILED | error=" + errorMsg);
                     return ToolExecutionResult.error(toolName, errorMsg);
                 }
                 
-                // 记录工具执行结果 - 包含完整的输出结果
                 ToolResult<?> toolResult = (ToolResult<?>) result;
                 if (toolResult != null && toolResult.isSuccess()) {
-                    logger.info("║ [工具执行成功] " + toolName);
-                    if (toolResult.getData() != null) {
-                        logger.info("║ 输出结果:");
-                        String outputJson = tool.serializeOutput(toolResult.getData()).toString();
-                            logger.info("║   " + outputJson);
-                    }
+                    String outputPreview = toolResult.getData() != null 
+                        ? truncateForLog(tool.serializeOutput(toolResult.getData()).toString(), 120) 
+                        : "(empty)";
+                    logger.info("[Tool] " + toolName + " OK | output=" + outputPreview);
                     return ToolExecutionResult.success(toolName, toolResult);
                 } else {
                     String errorMsg = toolResult != null ? toolResult.getContent() : "未知错误";
-                    logger.info("║ [工具执行失败] " + toolName);
-                    logger.info("║ 错误: " + errorMsg);
+                    logger.warning("[Tool] " + toolName + " FAILED | error=" + errorMsg);
                     return ToolExecutionResult.error(toolName, errorMsg);
                 }
             });
                 
         } catch (Exception e) {
-            // 记录工具执行失败
-            logger.severe("╔══════════════════════════════════════════════════════════════╗");
-            logger.severe("║ [工具执行失败] " + toolName);
-            logger.severe("╠══════════════════════════════════════════════════════════════╣");
-            logger.severe("║ 错误类型: " + e.getClass().getSimpleName());
-            logger.severe("║ 错误信息: " + e.getMessage());
-            logger.severe("╚══════════════════════════════════════════════════════════════╝");
+            logger.warning("[Tool] " + toolName + " FAILED | " + e.getClass().getSimpleName() + ": " + e.getMessage());
             return CompletableFuture.completedFuture(
                 ToolExecutionResult.error(toolName, e.getMessage())
             );
