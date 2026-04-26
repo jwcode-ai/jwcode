@@ -217,4 +217,40 @@ public class SmartProjectAnalyzer {
     public ProjectFingerprint getFingerprint() {
         return fingerprint;
     }
+    
+    /**
+     * 获取项目中的所有源文件
+     * 
+     * @param projectRoot 项目根目录
+     * @return 源文件路径列表
+     */
+    public List<Path> getSourceFiles(Path projectRoot) {
+        List<Path> sourceFiles = new ArrayList<>();
+        try {
+            Files.walkFileTree(projectRoot, new SimpleFileVisitor<>() {
+                @Override
+                public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
+                    if (NoiseFilter.shouldSkipDirectory(dir)) {
+                        return FileVisitResult.SKIP_SUBTREE;
+                    }
+                    return FileVisitResult.CONTINUE;
+                }
+                
+                @Override
+                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+                    if (!NoiseFilter.isNoise(file) && NoiseFilter.isAcceptableSize(attrs.size())) {
+                        String ext = file.getFileName().toString();
+                        if (ext.endsWith(".java") || ext.endsWith(".ts") || ext.endsWith(".js") 
+                            || ext.endsWith(".py") || ext.endsWith(".rs") || ext.endsWith(".go")) {
+                            sourceFiles.add(file);
+                        }
+                    }
+                    return FileVisitResult.CONTINUE;
+                }
+            });
+        } catch (IOException e) {
+            recoveryNotes.add("[扫描警告] 源文件扫描失败: " + e.getMessage());
+        }
+        return sourceFiles;
+    }
 }

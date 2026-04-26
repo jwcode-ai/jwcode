@@ -1,0 +1,8 @@
+{
+  "_config.path" : "C:\\Users\\HUAWEI\\Desktop\\jwcode\\.jwcode\\config.yaml",
+  "server.host" : "localhost",
+  "server.port" : "8080",
+  "log.level" : "debug",
+  "app.debug" : "true",
+  "app.name" : "JwCode Test App"
+}

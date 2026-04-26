@@ -190,6 +190,15 @@ public class ProjectAnalysisReport {
     public int getTotalFilesScanned() { return totalFilesScanned; }
     public int getNoiseFilesSkipped() { return noiseFilesSkipped; }
     
+    /**
+     * 获取证据文件路径列表（便捷方法）
+     */
+    public List<String> getEvidenceFiles() {
+        return evidence.stream()
+            .map(EvidenceItem::relativePath)
+            .toList();
+    }
+    
     public record EvidenceItem(String relativePath, int priority, String source, String contentPreview) {}
     public record HypothesisItem(String description, int confidence, List<String> verifiedFiles) {}
 }

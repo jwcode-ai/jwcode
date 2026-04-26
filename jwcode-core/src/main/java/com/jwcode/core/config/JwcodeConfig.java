@@ -50,6 +50,12 @@ public class JwcodeConfig {
     private String defaultProvider = "moonshot";
     
     /**
+     * 备用提供商（当默认提供商触发硬性配额限制时自动切换）
+     */
+    @JsonProperty("fallback-provider")
+    private String fallbackProvider;
+    
+    /**
      * 全局设置
      */
     @JsonProperty("settings")

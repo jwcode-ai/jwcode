@@ -110,17 +110,30 @@ public class OpenAILLMService implements LLMService {
                         log.info("[OpenAI] ---------- End Response Body ----------");
                         return parseResponse(responseBody);
                     } else if (response.statusCode() == 429) {
-                        // Rate limit, retry with exponential backoff
+                        String errorBody = response.body();
+                        String errorType = extractErrorType(errorBody);
+                        String errorMsg = extractErrorMessage(errorBody);
+                        
+                        // Hard quota limits (TPD, insufficient_quota): do not retry, fail fast
+                        if (isHardRateLimit(errorType)) {
+                            String cleanMsg = cleanRateLimitMessage(errorMsg);
+                            log.severe("[OpenAI] Hard rate limit (" + errorType + "): " + cleanMsg);
+                            return LLMResponse.error("RATE_LIMIT_HARD",
+                                "Rate limit reached: " + cleanMsg +
+                                " [Provider: " + config.getModel() + "]");
+                        }
+                        
+                        // Transient overload: retry with exponential backoff
                         attempt++;
                         if (attempt <= maxRetries) {
-                            log.warning("[OpenAI] Rate limited, retrying (" + attempt + "/" + maxRetries + ") after " + retryDelay + "ms...");
+                            log.warning("[OpenAI] Rate limited (" + errorType + "), retrying (" + attempt + "/" + maxRetries + ") after " + retryDelay + "ms...");
                             Thread.sleep(retryDelay);
                             retryDelay *= 2; // 指数退避
                             // 切换 API key
                             apiKey = getNextApiKey();
                             continue;
                         }
-                        return LLMResponse.error("Rate limited. Please try again later.");
+                        return LLMResponse.error("RATE_LIMIT_RETRYABLE", "Rate limited. Please try again later.");
                     } else if (response.statusCode() >= 500) {
                         // 服务器错误 (500, 502, 503, 504)，重试
                         attempt++;
@@ -139,7 +152,7 @@ public class OpenAILLMService implements LLMService {
                         log.severe("[OpenAI] Status: " + response.statusCode());
                         log.severe("[OpenAI] Body: " + errorBody);
                         log.severe("[OpenAI] ---------- End Server Error Response ----------");
-                        return LLMResponse.error("Server error (HTTP " + response.statusCode() + "). The API server encountered an internal error. " +
+                        return LLMResponse.error("SERVER_ERROR", "Server error (HTTP " + response.statusCode() + "). The API server encountered an internal error. " +
                             "This is usually temporary. Please try again in a few moments. " +
                             "Error: " + errorBody);
                     } else {
@@ -148,7 +161,7 @@ public class OpenAILLMService implements LLMService {
                         log.severe("[OpenAI] Status: " + response.statusCode());
                         log.severe("[OpenAI] Body: " + errorBody);
                         log.severe("[OpenAI] ---------- End Error Response ----------");
-                        return LLMResponse.error("HTTP " + response.statusCode() + ": " + errorBody);
+                        return LLMResponse.error("CLIENT_ERROR", "HTTP " + response.statusCode() + ": " + errorBody);
                     }
                     
                 } catch (java.net.http.HttpTimeoutException e) {
@@ -161,7 +174,7 @@ public class OpenAILLMService implements LLMService {
                         apiKey = getNextApiKey();
                     } else {
                         log.severe("[OpenAI] Request timeout after " + (maxRetries + 1) + " attempts");
-                        return LLMResponse.error("Request timed out. The model is taking too long to respond. " +
+                        return LLMResponse.error("TIMEOUT", "Request timed out. The model is taking too long to respond. " +
                             "Please try again or use a simpler prompt. " +
                             "Current timeout: " + config.getTimeoutSeconds() + " seconds");
                     }
@@ -174,7 +187,7 @@ public class OpenAILLMService implements LLMService {
                         continue;
                     }
                     log.severe("[OpenAI] Connection failed after " + (maxRetries + 1) + " attempts: " + e.getMessage());
-                    return LLMResponse.error("Connection failed. Please check your network and API endpoint: " + url);
+                    return LLMResponse.error("CONNECTION_ERROR", "Connection failed. Please check your network and API endpoint: " + url);
                 } catch (java.net.SocketException e) {
                     attempt++;
                     if (attempt <= maxRetries) {
@@ -184,7 +197,7 @@ public class OpenAILLMService implements LLMService {
                         continue;
                     }
                     log.severe("[OpenAI] Connection reset after " + (maxRetries + 1) + " attempts: " + e.getMessage());
-                    return LLMResponse.error("Connection reset. Possible causes:\n" +
+                    return LLMResponse.error("CONNECTION_ERROR", "Connection reset. Possible causes:\n" +
                         "1. Request too large (too many messages in history) - Try 'clear' command\n" +
                         "2. Network instability\n" +
                         "3. API server closed connection\n" +
@@ -192,7 +205,7 @@ public class OpenAILLMService implements LLMService {
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     log.severe("[OpenAI] Request interrupted");
-                    return LLMResponse.error("Request was interrupted. Please try again.");
+                    return LLMResponse.error("INTERRUPTED", "Request was interrupted. Please try again.");
                 } catch (Exception e) {
                     attempt++;
                     if (attempt <= maxRetries) {
@@ -202,11 +215,11 @@ public class OpenAILLMService implements LLMService {
                         continue;
                     }
                     log.severe("[OpenAI] Request failed after " + (maxRetries + 1) + " attempts: " + e.getMessage());
-                    return LLMResponse.error("Request failed: " + e.getMessage());
+                    return LLMResponse.error("REQUEST_FAILED", "Request failed: " + e.getMessage());
                 }
             }
             
-            return LLMResponse.error("Max retries exceeded");
+            return LLMResponse.error("MAX_RETRIES", "Max retries exceeded");
         });
     }
     
@@ -275,12 +288,24 @@ public class OpenAILLMService implements LLMService {
                         String errorBody = new String(response.body().readAllBytes(), StandardCharsets.UTF_8);
                         log.severe("[OpenAI Stream] Error: " + errorBody);
                         
+                        String errorType = extractErrorType(errorBody);
+                        String errorMsg = extractErrorMessage(errorBody);
+                        
+                        // Hard quota limits: do not retry, fail fast
+                        if (response.statusCode() == 429 && isHardRateLimit(errorType)) {
+                            String cleanMsg = cleanRateLimitMessage(errorMsg);
+                            log.severe("[OpenAI Stream] Hard rate limit (" + errorType + "): " + cleanMsg);
+                            return LLMResponse.error("RATE_LIMIT_HARD",
+                                "Rate limit reached: " + cleanMsg +
+                                " [Provider: " + config.getModel() + "]");
+                        }
+                        
                         // 对可重试错误执行退避重试（与 chatWithTools 保持一致）
                         if (response.statusCode() == 429 || response.statusCode() >= 500) {
                             attempt++;
                             if (attempt <= maxRetries) {
-                                String errorType = response.statusCode() == 429 ? "Rate limited" : "Server error " + response.statusCode();
-                                log.warning("[OpenAI Stream] " + errorType + ", retrying (" + attempt + "/" + maxRetries + ") after " + retryDelay + "ms...");
+                                String retryReason = response.statusCode() == 429 ? "Rate limited (" + errorType + ")" : "Server error " + response.statusCode();
+                                log.warning("[OpenAI Stream] " + retryReason + ", retrying (" + attempt + "/" + maxRetries + ") after " + retryDelay + "ms...");
                                 try {
                                     Thread.sleep(retryDelay);
                                 } catch (InterruptedException ie) {
@@ -291,7 +316,8 @@ public class OpenAILLMService implements LLMService {
                                 continue;
                             }
                         }
-                        return LLMResponse.error("HTTP " + response.statusCode() + ": " + errorBody);
+                        String code = response.statusCode() >= 500 ? "SERVER_ERROR" : "CLIENT_ERROR";
+                        return LLMResponse.error(code, "HTTP " + response.statusCode() + ": " + errorBody);
                     }
                     
                     // 处理流式响应
@@ -322,14 +348,14 @@ public class OpenAILLMService implements LLMService {
                         }
                     }
                     log.log(Level.SEVERE, "[OpenAI Stream] Request failed: " + e.getMessage(), e);
-                    return LLMResponse.error("Stream request failed: " + e.getMessage());
+                    return LLMResponse.error("STREAM_FAILED", "Stream request failed: " + e.getMessage());
                 } catch (Exception e) {
                     log.log(Level.SEVERE, "[OpenAI Stream] Request failed: " + e.getMessage(), e);
                     return LLMResponse.error("Stream request failed: " + e.getMessage());
                 }
             }
             
-            return LLMResponse.error("Stream request failed after " + maxRetries + " retries");
+            return LLMResponse.error("MAX_RETRIES", "Stream request failed after " + maxRetries + " retries");
         });
     }
     
@@ -608,6 +634,56 @@ public class OpenAILLMService implements LLMService {
     @Override
     public void close() {
         // HTTP client doesn't need explicit close
+    }
+    
+    // ==================== 错误解析辅助方法 ====================
+    
+    /**
+     * 从错误响应 JSON 中提取 error.type
+     */
+    private String extractErrorType(String errorBody) {
+        try {
+            JsonNode json = mapper.readTree(errorBody);
+            if (json.has("error") && json.get("error").has("type")) {
+                return json.get("error").get("type").asText();
+            }
+        } catch (Exception e) {
+            // ignore parse failure
+        }
+        return null;
+    }
+    
+    /**
+     * 从错误响应 JSON 中提取 error.message，失败时返回原始 body
+     */
+    private String extractErrorMessage(String errorBody) {
+        try {
+            JsonNode json = mapper.readTree(errorBody);
+            if (json.has("error") && json.get("error").has("message")) {
+                return json.get("error").get("message").asText();
+            }
+        } catch (Exception e) {
+            // ignore parse failure
+        }
+        return errorBody;
+    }
+    
+    /**
+     * 判断是否为硬性配额限制（不可通过重试恢复）
+     */
+    private boolean isHardRateLimit(String errorType) {
+        return "rate_limit_reached_error".equals(errorType)
+            || "insufficient_quota".equals(errorType);
+    }
+    
+    /**
+     * 美化速率限制错误消息
+     */
+    private String cleanRateLimitMessage(String rawMessage) {
+        if (rawMessage == null) return "Unknown quota limit";
+        // 移除敏感信息（API key 等）
+        String cleaned = rawMessage.replaceAll("<ak-[a-zA-Z0-9]+>", "<api-key>");
+        return cleaned;
     }
     
     /**

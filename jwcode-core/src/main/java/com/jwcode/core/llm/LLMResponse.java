@@ -19,6 +19,7 @@ public class LLMResponse {
     
     private String rawResponse;
     private String errorMessage;
+    private String errorCode;
     
     public LLMResponse() {}
     
@@ -30,6 +31,14 @@ public class LLMResponse {
     
     public static LLMResponse error(String message) {
         LLMResponse r = new LLMResponse();
+        r.setErrorMessage(message);
+        r.setContent("");
+        return r;
+    }
+    
+    public static LLMResponse error(String code, String message) {
+        LLMResponse r = new LLMResponse();
+        r.setErrorCode(code);
         r.setErrorMessage(message);
         r.setContent("");
         return r;
@@ -65,6 +74,9 @@ public class LLMResponse {
     
     public String getErrorMessage() { return errorMessage; }
     public void setErrorMessage(String errorMessage) { this.errorMessage = errorMessage; }
+    
+    public String getErrorCode() { return errorCode; }
+    public void setErrorCode(String errorCode) { this.errorCode = errorCode; }
     
     public boolean isSuccess() {
         return errorMessage == null;
@@ -102,6 +114,7 @@ public class LLMResponse {
         private int totalTokens;
         private String rawResponse;
         private String errorMessage;
+        private String errorCode;
         
         public Builder content(String content) {
             this.content = content;
@@ -153,6 +166,11 @@ public class LLMResponse {
             return this;
         }
         
+        public Builder errorCode(String errorCode) {
+            this.errorCode = errorCode;
+            return this;
+        }
+        
         public LLMResponse build() {
             LLMResponse response = new LLMResponse();
             response.content = this.content;
@@ -165,6 +183,7 @@ public class LLMResponse {
             response.totalTokens = this.totalTokens;
             response.rawResponse = this.rawResponse;
             response.errorMessage = this.errorMessage;
+            response.errorCode = this.errorCode;
             return response;
         }
     }

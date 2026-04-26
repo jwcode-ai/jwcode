@@ -81,21 +81,44 @@ public class LLMFactory {
      */
     public synchronized LLMService getLLMService() {
         if (llmService == null) {
-            OpenAILLMService.ServiceConfig serviceConfig = createServiceConfig(config);
-            llmService = new OpenAILLMService(serviceConfig);
+            LLMService primary = createLLMService(config.getDefaultProviderName());
+            
+            String fallbackName = config.getFallbackProvider();
+            if (fallbackName != null && !fallbackName.isEmpty() && !fallbackName.equals(config.getDefaultProviderName())) {
+                JwcodeConfig.ProviderConfig fallbackProvider = config.getProvider(fallbackName);
+                if (fallbackProvider != null) {
+                    LLMService fallback = createLLMService(fallbackName);
+                    llmService = new FallbackLLMService(primary, config.getDefaultProviderName(), fallback, fallbackName);
+                    logger.info("[LLMFactory] Created FallbackLLMService with primary=" + config.getDefaultProviderName() + ", fallback=" + fallbackName);
+                } else {
+                    logger.warning("[LLMFactory] Fallback provider '" + fallbackName + "' not found in config. Using primary only.");
+                    llmService = primary;
+                }
+            } else {
+                llmService = primary;
+            }
         }
         return llmService;
     }
     
     /**
-     * 从 JwcodeConfig 创建 ServiceConfig
+     * 为指定 Provider 创建 LLMService
      */
-    private OpenAILLMService.ServiceConfig createServiceConfig(JwcodeConfig config) {
-        JwcodeConfig.ProviderConfig provider = config.getDefaultProvider();
-        JwcodeConfig.ModelDefinition model = config.getDefaultModel();
-        
+    private LLMService createLLMService(String providerName) {
+        JwcodeConfig.ProviderConfig provider = config.getProvider(providerName);
         if (provider == null) {
-            throw new IllegalStateException("No provider configured");
+            throw new IllegalStateException("Provider not found: " + providerName);
+        }
+        OpenAILLMService.ServiceConfig serviceConfig = createServiceConfig(providerName, provider);
+        return new OpenAILLMService(serviceConfig);
+    }
+    
+    /**
+     * 从 Provider 配置创建 ServiceConfig
+     */
+    private OpenAILLMService.ServiceConfig createServiceConfig(String providerName, JwcodeConfig.ProviderConfig provider) {
+        if (provider == null) {
+            throw new IllegalStateException("No provider configured: " + providerName);
         }
         
         String baseUrl = provider.getBaseUrl();
@@ -109,6 +132,15 @@ public class LLMFactory {
         // 对于 moonshot，确保 URL 格式正确
         if (baseUrl.contains("moonshot.cn") && !baseUrl.endsWith("/v1")) {
             baseUrl = baseUrl + "/v1";
+        }
+        
+        // 使用 Provider 自身的第一个模型，若无则回退到默认模型
+        JwcodeConfig.ModelDefinition model = null;
+        if (!provider.getModels().isEmpty()) {
+            model = provider.getModels().get(0);
+        }
+        if (model == null) {
+            model = config.getDefaultModel();
         }
         
         String modelId = model != null ? model.getId() : "kimi-k2.5";

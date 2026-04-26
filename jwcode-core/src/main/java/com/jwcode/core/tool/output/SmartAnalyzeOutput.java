@@ -42,15 +42,30 @@ public record SmartAnalyzeOutput(
     Map<String, Object> metadata,
     
     @JsonProperty("error")
-    String error
+    String error,
+
+    @JsonProperty("code_analysis")
+    CodeAnalysisOutput codeAnalysis
 ) {
     
     public SmartAnalyzeOutput {
         // success 是基本类型 boolean，无需 null 检查
     }
+
+    /**
+     * 向后兼容的构造函数（不包含 codeAnalysis 字段）
+     */
+    public SmartAnalyzeOutput(boolean success, String projectRoot, String projectType,
+                              List<String> indicators, String scanSummary, String report,
+                              List<String> evidenceFiles, List<HypothesisOutput> hypotheses,
+                              RecoveryAdviceOutput recoveryAdvice, Map<String, Object> metadata,
+                              String error) {
+        this(success, projectRoot, projectType, indicators, scanSummary, report,
+             evidenceFiles, hypotheses, recoveryAdvice, metadata, error, null);
+    }
     
     public static SmartAnalyzeOutput error(String message) {
-        return new SmartAnalyzeOutput(false, null, null, null, null, null, null, null, null, null, message);
+        return new SmartAnalyzeOutput(false, null, null, null, null, null, null, null, null, null, message, null);
     }
     
     public record HypothesisOutput(
@@ -76,5 +91,28 @@ public record SmartAnalyzeOutput(
         
         @JsonProperty("confidence")
         int confidence
+    ) {}
+
+    /**
+     * 代码语义分析输出（V2 能力合并）
+     */
+    public record CodeAnalysisOutput(
+        @JsonProperty("parsed_files")
+        int parsedFiles,
+
+        @JsonProperty("cached_files")
+        int cachedFiles,
+
+        @JsonProperty("symbol_nodes")
+        int symbolNodes,
+
+        @JsonProperty("symbol_edges")
+        int symbolEdges,
+
+        @JsonProperty("query_matches")
+        List<Map<String, Object>> queryMatches,
+
+        @JsonProperty("query_summary")
+        String querySummary
     ) {}
 }

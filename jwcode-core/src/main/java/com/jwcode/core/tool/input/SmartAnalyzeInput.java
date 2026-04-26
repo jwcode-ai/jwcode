@@ -36,7 +36,17 @@ public record SmartAnalyzeInput(
     String failedStderr,
     
     @JsonProperty("failed_exit_code")
-    Integer failedExitCode
+    Integer failedExitCode,
+    
+    // 以下用于 V2 代码分析
+    @JsonProperty("enable_code_analysis")
+    Boolean enableCodeAnalysis,
+    
+    @JsonProperty("query")
+    String query,
+    
+    @JsonProperty("builtin_query")
+    String builtinQuery
 ) {
     
     public SmartAnalyzeInput {
@@ -55,6 +65,6 @@ public record SmartAnalyzeInput(
     }
     
     public SmartAnalyzeInput(String projectRoot) {
-        this(projectRoot, null, null, null, null, null, null, null, null);
+        this(projectRoot, null, null, null, null, null, null, null, null, null, null, null);
     }
 }

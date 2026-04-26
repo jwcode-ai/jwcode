@@ -252,12 +252,25 @@ public class JwCodeApplication implements AutoCloseable {
     }
     
     private void printBanner() {
+        // 获取当前时间和工作目录
+        var now = java.time.LocalDateTime.now();
+        var formatter = java.time.format.DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss");
+        String currentTime = now.format(formatter);
+        String workingDir = System.getProperty("user.dir");
+        
+        // 获取配置信息
+        String configPath = configManager.getConfigPath();
+        String configType = configManager.isUsingYamlConfig() ? "YAML" : "Properties";
+        
         System.out.println();
         System.out.println(CliLogger.CYAN + "  ╔═══════════════════════════════════════════════════════════╗");
         System.out.println("  ║  ⚡ JwCode" + CliLogger.RESET + " - AI Coding Assistant                    " + CliLogger.CYAN + "║");
         System.out.println("  ╚═══════════════════════════════════════════════════════════╝" + CliLogger.RESET);
         System.out.println();
         System.out.println("  版本: 1.0.0-SNAPSHOT  |  输入 'help' 查看命令  |  'exit' 退出");
+        System.out.println("  工作目录: " + CliLogger.GREEN + workingDir + CliLogger.RESET);
+        System.out.println("  当前时间: " + CliLogger.GREEN + currentTime + CliLogger.RESET);
+        System.out.println("  配置文件: " + CliLogger.YELLOW + configType + CliLogger.RESET + " (" + configPath + ")");
         System.out.println();
         System.out.println();
     }
