@@ -4,7 +4,9 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import java.lang.reflect.Method;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import com.jwcode.core.tool.context.ToolExecutionContext;
@@ -139,7 +141,44 @@ public interface Tool<I, O, P> {
     default boolean isEnabled() {
         return true;
     }
-    
+
+    /**
+     * 获取工具的并发安全级别
+     *
+     * <p>AI 编排引擎利用此信息决定工具是否可与其他工具并行执行。</p>
+     */
+    default ConcurrencyLevel getConcurrencyLevel() {
+        return ConcurrencyLevel.SEQUENTIAL;
+    }
+
+    /**
+     * 获取工具的依赖工具名称列表
+     *
+     * <p>声明此工具在执行前必须先调用的其他工具。
+     * 例如：FileEditTool 依赖 FileReadTool。</p>
+     */
+    default List<String> getDependencies() {
+        return List.of();
+    }
+
+    /**
+     * 获取工具的副作用类型集合
+     *
+     * <p>显式声明工具可能对系统产生的副作用，用于智能编排和安全检查。</p>
+     */
+    default Set<SideEffect> getSideEffects() {
+        return Set.of();
+    }
+
+    /**
+     * 获取工具所属类别
+     *
+     * <p>用于按功能域组织工具，替代平铺列表。</p>
+     */
+    default ToolCategory getCategory() {
+        return ToolCategory.SYSTEM;
+    }
+
     /**
      * 获取工具用户友好名称
      */

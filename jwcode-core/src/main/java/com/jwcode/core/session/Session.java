@@ -44,6 +44,8 @@ public class Session {
     private final String workingDirectory;
     private String model;
     private final Map<String, Object> metadata;
+    private final List<SessionInsight> insights;
+    private final Set<String> importantMessageIds;
     
     public Session(String id, String workingDirectory) {
         this.id = Preconditions.checkNotNull(id, "id cannot be null");
@@ -52,10 +54,12 @@ public class Session {
         this.updatedAt = Instant.now();
         this.messages = new CopyOnWriteArrayList<>();
         this.metadata = new HashMap<>();
+        this.insights = new CopyOnWriteArrayList<>();
+        this.importantMessageIds = new HashSet<>();
         // 模型必须通过 setModel() 设置，不允许硬编码
         this.model = null;
     }
-    
+
     // 默认构造函数用于JSON反序列化
     private Session() {
         this.id = UUID.randomUUID().toString();
@@ -64,6 +68,8 @@ public class Session {
         this.updatedAt = Instant.now();
         this.messages = new CopyOnWriteArrayList<>();
         this.metadata = new HashMap<>();
+        this.insights = new CopyOnWriteArrayList<>();
+        this.importantMessageIds = new HashSet<>();
         this.model = null;
     }
     
@@ -103,6 +109,90 @@ public class Session {
         messages.clear();
         this.updatedAt = Instant.now();
         return this;
+    }
+
+    // ==================== 活的 Session — AI 自我进化记忆 ====================
+
+    /**
+     * AI 可以自主记录的洞察
+     */
+    public record SessionInsight(
+        String key,
+        String value,
+        String sourceMessageId,
+        double confidence
+    ) {}
+
+    /**
+     * 添加 AI 洞察
+     */
+    public Session addInsight(String key, String value, String sourceMessageId, double confidence) {
+        insights.add(new SessionInsight(key, value, sourceMessageId, confidence));
+        this.updatedAt = Instant.now();
+        return this;
+    }
+
+    public List<SessionInsight> getInsights() {
+        return Collections.unmodifiableList(new ArrayList<>(insights));
+    }
+
+    /**
+     * 标记关键消息，用于未来的上下文压缩
+     */
+    public void markImportant(String messageId, String reason) {
+        importantMessageIds.add(messageId);
+        logger.debug("Marked message {} as important: {}", messageId, reason);
+    }
+
+    public boolean isImportant(String messageId) {
+        return importantMessageIds.contains(messageId);
+    }
+
+    public Set<String> getImportantMessageIds() {
+        return Collections.unmodifiableSet(new HashSet<>(importantMessageIds));
+    }
+
+    /**
+     * 生成结构化压缩摘要
+     *
+     * <p>当前为启发式实现；未来可接入轻量级 LLM 做智能摘要。</p>
+     */
+    public String generateSummary() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("# Session Summary\n\n");
+        sb.append("- **Title**: ").append(title != null ? title : "Untitled").append("\n");
+        sb.append("- **Messages**: ").append(messages.size()).append("\n");
+        sb.append("- **Insights**: ").append(insights.size()).append("\n");
+        sb.append("- **Important Messages**: ").append(importantMessageIds.size()).append("\n\n");
+
+        if (!insights.isEmpty()) {
+            sb.append("## Key Insights\n\n");
+            for (SessionInsight insight : insights) {
+                sb.append("- **").append(insight.key()).append("**: ")
+                    .append(insight.value())
+                    .append(" (confidence=").append(insight.confidence()).append(")\n");
+            }
+            sb.append("\n");
+        }
+
+        if (!importantMessageIds.isEmpty()) {
+            sb.append("## Important Messages\n\n");
+            for (Message msg : messages) {
+                String msgId = msg.getTimestamp().toString(); // 使用时间戳作为简单 ID
+                if (importantMessageIds.contains(msgId)) {
+                    sb.append("- [").append(msg.getRole()).append("]: ")
+                        .append(truncate(msg.getTextContent(), 100)).append("\n");
+                }
+            }
+            sb.append("\n");
+        }
+
+        return sb.toString();
+    }
+
+    private String truncate(String str, int maxLen) {
+        if (str == null || str.length() <= maxLen) return str;
+        return str.substring(0, maxLen - 3) + "...";
     }
     
     @Override

@@ -563,25 +563,37 @@ public class ParallelAgentExecutor {
     /**
      * 执行 Agent 任务（调用 LLM）
      */
-    private String executeAgentTask(Agent agent, String prompt, SubAgentTask task, 
+    private String executeAgentTask(Agent agent, String prompt, SubAgentTask task,
                                      CancellationToken token) throws Exception {
         if (llmService == null) {
-            // 模拟执行（当 LLM 服务不可用时）
             return simulateExecution(agent, prompt);
         }
-        
-        // 实际调用 LLM 服务
+
         try {
-            // 检查取消
             token.checkCancelled();
-            
-            // 这里应该调用实际的 LLM 服务
-            // String response = llmService.query(prompt, agent.getModelConfig());
-            
-            // 暂时使用模拟
-            return simulateExecution(agent, prompt);
+
+            // 构建 LLM 消息列表
+            List<com.jwcode.core.llm.LLMMessage> messages = List.of(
+                com.jwcode.core.llm.LLMMessage.system(agent.getSystemPrompt()),
+                com.jwcode.core.llm.LLMMessage.user(prompt)
+            );
+
+            // 调用 LLM 服务
+            com.jwcode.core.llm.LLMResponse response = llmService.chat(messages).get(
+                task.getTimeoutMs(), java.util.concurrent.TimeUnit.MILLISECONDS);
+
+            if (response.hasError()) {
+                throw new RuntimeException("LLM error: " + response.getErrorMessage());
+            }
+
+            String content = response.getContent();
+            return content != null ? content : "Agent completed with no output.";
+
         } catch (CancellationException e) {
             throw e;
+        } catch (java.util.concurrent.ExecutionException e) {
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            throw new RuntimeException("LLM call failed: " + cause.getMessage(), cause);
         }
     }
     

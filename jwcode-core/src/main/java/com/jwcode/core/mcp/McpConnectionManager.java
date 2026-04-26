@@ -163,48 +163,118 @@ public class McpConnectionManager {
     }
     
     /**
-     * MCP 连接内部类
+     * MCP 连接内部类 — 实现真实传输层连接
      */
     private static class McpConnection {
         private final String serverName;
         private final McpConfig.McpServerConfig config;
         private volatile boolean connected;
         private volatile boolean connecting;
-        
+        private Process stdioProcess;
+        private java.net.HttpURLConnection httpConnection;
+
         McpConnection(String serverName, McpConfig.McpServerConfig config) {
             this.serverName = serverName;
             this.config = config;
             this.connected = false;
             this.connecting = false;
         }
-        
+
         CompletableFuture<Boolean> connect() {
             connecting = true;
             return CompletableFuture.supplyAsync(() -> {
                 try {
-                    // 模拟连接过程
-                    Thread.sleep(1000);
-                    connected = true;
+                    boolean success = doConnect();
+                    connected = success;
                     connecting = false;
-                    return true;
+                    return success;
                 } catch (Exception e) {
                     connecting = false;
                     return false;
                 }
             });
         }
-        
+
+        private boolean doConnect() {
+            String type = config.getType();
+            if ("sse".equalsIgnoreCase(type) || "http".equalsIgnoreCase(type)) {
+                return connectSse();
+            } else if ("stdio".equalsIgnoreCase(type)) {
+                return connectStdio();
+            } else if ("websocket".equalsIgnoreCase(type) || "ws".equalsIgnoreCase(type)) {
+                return connectWebSocket();
+            }
+            // 未知类型，默认尝试 HTTP
+            return connectSse();
+        }
+
+        private boolean connectSse() {
+            try {
+                java.net.URL url = new java.net.URL(config.getCommand());
+                httpConnection = (java.net.HttpURLConnection) url.openConnection();
+                httpConnection.setRequestMethod("GET");
+                httpConnection.setConnectTimeout(5000);
+                httpConnection.setReadTimeout(5000);
+                httpConnection.setRequestProperty("Accept", "text/event-stream");
+                int responseCode = httpConnection.getResponseCode();
+                return responseCode >= 200 && responseCode < 300;
+            } catch (Exception e) {
+                return false;
+            }
+        }
+
+        private boolean connectStdio() {
+            try {
+                ProcessBuilder pb = new ProcessBuilder();
+                pb.command(config.getCommand());
+                pb.inheritIO();
+                if (!config.getArgs().isEmpty()) {
+                    pb.command().addAll(config.getArgs());
+                }
+                pb.environment().putAll(config.getEnv());
+                stdioProcess = pb.start();
+                // 等待进程启动
+                Thread.sleep(500);
+                return stdioProcess.isAlive();
+            } catch (Exception e) {
+                return false;
+            }
+        }
+
+        private boolean connectWebSocket() {
+            try {
+                String url = config.getCommand();
+                java.net.URI uri = new java.net.URI(url.replace("ws://", "http://").replace("wss://", "https://"));
+                java.net.Socket socket = new java.net.Socket();
+                socket.connect(new java.net.InetSocketAddress(uri.getHost(), uri.getPort() > 0 ? uri.getPort() : 80), 5000);
+                boolean reachable = socket.isConnected();
+                socket.close();
+                return reachable;
+            } catch (Exception e) {
+                return false;
+            }
+        }
+
         CompletableFuture<Void> disconnect() {
             return CompletableFuture.runAsync(() -> {
                 connected = false;
                 connecting = false;
+                if (stdioProcess != null && stdioProcess.isAlive()) {
+                    stdioProcess.destroy();
+                }
+                if (httpConnection != null) {
+                    httpConnection.disconnect();
+                }
             });
         }
-        
+
         boolean isConnected() {
+            if (connected && stdioProcess != null) {
+                return stdioProcess.isAlive();
+            }
             return connected;
         }
-        
+
         boolean isConnecting() {
             return connecting;
         }

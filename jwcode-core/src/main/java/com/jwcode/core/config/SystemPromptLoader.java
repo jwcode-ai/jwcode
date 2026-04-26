@@ -1,5 +1,7 @@
 package com.jwcode.core.config;
 
+import com.jwcode.core.tool.ToolRegistry;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -36,11 +38,29 @@ public class SystemPromptLoader {
     private static long lastModified = 0;
     
     /**
-     * 获取系统提示词（包含动态环境信息）
-     * 
+     * 获取系统提示词（包含动态环境信息，向后兼容）
+     *
      * @return 系统提示词内容，如果无法加载则返回默认提示词
      */
     public static String getSystemPrompt() {
+        return getSystemPrompt(null);
+    }
+
+    /**
+     * 获取系统提示词（支持工具自描述聚合）
+     *
+     * <p>当 {@code ~/.jwcode/system-prompt/} 目录存在时，使用 {@link SystemPromptAssembler}
+     * 自动组装；否则回退到内置默认提示词。</p>
+     *
+     * @param toolRegistry 工具注册表，用于聚合工具自描述；可为 null
+     * @return 系统提示词内容
+     */
+    public static String getSystemPrompt(ToolRegistry toolRegistry) {
+        Path promptDir = SystemPromptAssembler.getDefaultPromptDir();
+        if (Files.exists(promptDir) && Files.isDirectory(promptDir)) {
+            SystemPromptAssembler assembler = new SystemPromptAssembler(promptDir, toolRegistry);
+            return assembler.assemble();
+        }
         String basePrompt = getBasePrompt();
         String envInfo = getEnvironmentInfo();
         return envInfo + "\n\n" + basePrompt;
@@ -87,7 +107,7 @@ public class SystemPromptLoader {
     
     /**
      * 获取动态环境信息
-     * 
+     *
      * @return 包含系统版本、当前时间、工作目录等的环境信息字符串
      */
     public static String getEnvironmentInfo() {
@@ -95,19 +115,21 @@ public class SystemPromptLoader {
         String osVersion = System.getProperty("os.version", "Unknown");
         String osArch = System.getProperty("os.arch", "Unknown");
         String workingDir = System.getProperty("user.dir", "Unknown");
-        
+        String javaVersion = System.getProperty("java.version", "Unknown");
+
         DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
             .withZone(ZoneId.systemDefault());
         String currentTime = formatter.format(Instant.now());
-        
+
         return """
             [Environment Information]
             Operating System: %s %s (%s)
+            Java Version: %s
             Current Time: %s
             Working Directory: %s
-            
+
             You are allowed to change the working directory when needed (e.g., via Shell/BashTool cwd parameter or cd commands).
-            """.formatted(osName, osVersion, osArch, currentTime, workingDir);
+            """.formatted(osName, osVersion, osArch, javaVersion, currentTime, workingDir);
     }
     
     /**

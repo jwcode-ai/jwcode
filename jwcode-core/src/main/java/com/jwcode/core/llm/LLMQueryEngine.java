@@ -19,6 +19,9 @@ import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
 
+import com.jwcode.core.observability.*;
+import com.jwcode.core.resilience.RecoveryExecutor;
+import com.jwcode.core.resilience.RecoveryProtocol;
 import com.jwcode.core.service.ContextWindowManager;
 
 /**
@@ -35,8 +38,9 @@ public class LLMQueryEngine {
     private final ToolExecutor toolExecutor;
     private final ToolExecutionContext toolContext;
     private final EngineConfig config;
-    private StepCallback stepCallback;
-    
+    private final ObservationPipeline pipeline;
+    private final TokenBudget tokenBudget;
+
     private final Instant startTime;
     private final List<String> toolCallHistory;
     private static final ObjectMapper MAPPER = new ObjectMapper()
@@ -55,13 +59,24 @@ public class LLMQueryEngine {
         );
         this.startTime = Instant.now();
         this.toolCallHistory = new ArrayList<>();
+        this.pipeline = new DefaultObservationPipeline();
+        this.tokenBudget = TokenBudget.of(this.config.getTokenBudget());
     }
     
     /**
      * 设置步骤回调，用于在执行过程中报告进度
      */
     public void setStepCallback(StepCallback callback) {
-        this.stepCallback = callback;
+        if (callback != null) {
+            this.pipeline.subscribe(new StepCallbackAdapter(callback));
+        }
+    }
+    
+    /**
+     * 获取可观测管道，用于注册自定义观察者
+     */
+    public ObservationPipeline getPipeline() {
+        return pipeline;
     }
     
     /**
@@ -97,10 +112,8 @@ public class LLMQueryEngine {
     public CompletableFuture<QueryResult> query(String prompt) {
         logger.info("[LLMQueryEngine] Query: " + prompt);
         
-        // 触发回调：开始查询
-        if (stepCallback != null) {
-            stepCallback.onStepStart("LLM查询", "正在分析问题并制定解决方案...");
-        }
+        // 触发事件：开始查询
+        pipeline.publish(new ObservationEvent.StepStart("LLM查询", "正在分析问题并制定解决方案..."));
         
         // 添加用户消息到会话
         session.addMessage(Message.createUserMessage(prompt));
@@ -158,25 +171,31 @@ public class LLMQueryEngine {
      * @param emptyResponseCount 连续空回复次数
      */
     private CompletableFuture<QueryResult> runConversationLoop(int iteration, int emptyResponseCount) {
-        // 检查迭代限制
+        // 检查 Token 预算
+        if (tokenBudget.isExhausted()) {
+            logger.warning("[LLMQueryEngine] Token budget exhausted: " + tokenBudget);
+            triggerStepComplete("LLM查询", "Token 预算已耗尽");
+            return CompletableFuture.completedFuture(
+                QueryResult.error("Token 预算已耗尽，任务被迫终止。请使用 /compact 压缩上下文后重试。")
+            );
+        }
+
+        // Token 预算紧张时注入建议
+        if (iteration > 0) {
+            String advice = tokenBudget.toPromptAdvice();
+            if (!advice.isEmpty() && !hasRecentSystemPrompt("[Token Budget]")) {
+                logger.info("[LLMQueryEngine] Injecting token budget advice");
+                session.addMessage(Message.createSystemMessage(advice));
+            }
+        }
+
+        // 后备：迭代限制检查（Token 预算的兜底安全网）
         if (config.getMaxIterations() > 0 && iteration >= config.getMaxIterations()) {
             logger.warning("[LLMQueryEngine] Max iterations reached: " + config.getMaxIterations());
             triggerStepComplete("LLM查询", "达到最大迭代次数限制");
             return CompletableFuture.completedFuture(
                 QueryResult.error("达到最大迭代次数限制")
             );
-        }
-        
-        // 接近迭代限制时发出警告（达到 80% 时）
-        int warningThreshold = (int)(config.getMaxIterations() * 0.8);
-        if (iteration > 0 && iteration >= warningThreshold) {
-            String warning = String.format(
-                "【警告】迭代次数已达到 %d/%d (%.0f%%)，接近限制！\n" +
-                "请评估当前进度，如果任务无法完成，请添加 [FINISH] 标记结束对话。",
-                iteration, config.getMaxIterations(), (iteration * 100.0 / config.getMaxIterations())
-            );
-            logger.warning("[LLMQueryEngine] " + warning);
-            session.addMessage(Message.createSystemMessage(warning));
         }
         
         // 已移除累计超时检查，由 HTTP 层超时控制（OpenAILLMService 中的 timeoutSeconds）
@@ -197,13 +216,11 @@ public class LLMQueryEngine {
             ));
         }
         
-        // 触发回调：发送请求
-        if (stepCallback != null) {
-            if (iteration == 0) {
-                stepCallback.onStepThinking("思考", "正在构建请求，发送 " + llmMessages.size() + " 条消息给AI模型...");
-            } else {
-                stepCallback.onStepThinking("分析", "继续对话循环 (第 " + iteration + " 轮)");
-            }
+        // 触发事件：发送请求
+        if (iteration == 0) {
+            pipeline.publish(new ObservationEvent.Thinking("思考", "正在构建请求，发送 " + llmMessages.size() + " 条消息给AI模型..."));
+        } else {
+            pipeline.publish(new ObservationEvent.Thinking("分析", "继续对话循环 (第 " + iteration + " 轮)"));
         }
         
         // 发送请求
@@ -230,9 +247,20 @@ public class LLMQueryEngine {
             );
         }
         
-        logger.info("[LLMQueryEngine] Response received, content length: " + 
+        logger.info("[LLMQueryEngine] Response received, content length: " +
             (response.getContent() != null ? response.getContent().length() : 0));
-        
+
+        // 消费 Token 预算并发布事件
+        int promptTokens = response.getPromptTokens();
+        int completionTokens = response.getCompletionTokens();
+        if (promptTokens > 0 || completionTokens > 0) {
+            tokenBudget.consume(promptTokens, completionTokens);
+            pipeline.publish(new ObservationEvent.TokenUsage(promptTokens, completionTokens,
+                response.getModel() != null ? response.getModel() : "unknown"));
+            logger.info("[LLMQueryEngine] Token usage: +" + completionTokens +
+                " completion (total used=" + tokenBudget.getUsedTotal() + "/" + tokenBudget.getTotalBudget() + ")");
+        }
+
         // 打印 AI 思考内容
         if (response.getReasoningContent() != null && !response.getReasoningContent().isEmpty()) {
             String think = response.getReasoningContent();
@@ -253,10 +281,8 @@ public class LLMQueryEngine {
             // 添加到会话
             session.addMessage(assistantMessage);
             
-            // 触发回调：准备调用工具
-            if (stepCallback != null) {
-                stepCallback.onStepThinking("分析", "AI决定调用 " + response.getToolCalls().size() + " 个工具");
-            }
+            // 触发事件：准备调用工具
+            pipeline.publish(new ObservationEvent.Thinking("分析", "AI决定调用 " + response.getToolCalls().size() + " 个工具"));
             
             // 执行工具调用
             return executeToolCalls(response.getToolCalls(), iteration + 1, emptyResponseCount, this::runConversationLoop);
@@ -336,9 +362,7 @@ public class LLMQueryEngine {
             Consumer<LLMService.StreamToolCallEvent> toolCallConsumer) {
         logger.info("[LLMQueryEngine] Stream Query: " + prompt);
         
-        if (stepCallback != null) {
-            stepCallback.onStepStart("LLM查询", "正在分析问题并制定解决方案...");
-        }
+        pipeline.publish(new ObservationEvent.StepStart("LLM查询", "正在分析问题并制定解决方案..."));
         
         session.addMessage(Message.createUserMessage(prompt));
         addFileEditGuidelines();
@@ -353,7 +377,24 @@ public class LLMQueryEngine {
             Consumer<String> contentConsumer,
             Consumer<String> thinkingConsumer,
             Consumer<LLMService.StreamToolCallEvent> toolCallConsumer) {
-        // 检查迭代限制
+        // 检查 Token 预算
+        if (tokenBudget.isExhausted()) {
+            logger.warning("[LLMQueryEngine] Token budget exhausted: " + tokenBudget);
+            triggerStepComplete("LLM查询", "Token 预算已耗尽");
+            return CompletableFuture.completedFuture(
+                QueryResult.error("Token 预算已耗尽，任务被迫终止。请使用 /compact 压缩上下文后重试。")
+            );
+        }
+
+        // Token 预算紧张时注入建议
+        if (iteration > 0) {
+            String advice = tokenBudget.toPromptAdvice();
+            if (!advice.isEmpty() && !hasRecentSystemPrompt("[Token Budget]")) {
+                session.addMessage(Message.createSystemMessage(advice));
+            }
+        }
+
+        // 后备：迭代限制检查
         if (config.getMaxIterations() > 0 && iteration >= config.getMaxIterations()) {
             logger.warning("[LLMQueryEngine] Max iterations reached: " + config.getMaxIterations());
             triggerStepComplete("LLM查询", "达到最大迭代次数限制");
@@ -361,9 +402,6 @@ public class LLMQueryEngine {
                 QueryResult.error("达到最大迭代次数限制")
             );
         }
-        
-        // 已移除累计超时检查，由 HTTP 层超时控制
-        // 单次 LLM 请求的超时由 HTTP 客户端处理，不受工具执行时间影响
         
         // 转换会话消息到 LLM 格式
         List<LLMMessage> llmMessages = convertSessionMessages(session);
@@ -380,41 +418,36 @@ public class LLMQueryEngine {
             ));
         }
         
-        // 触发回调：发送请求
-        if (stepCallback != null) {
-            if (iteration == 0) {
-                stepCallback.onStepThinking("思考", "正在构建请求，发送 " + llmMessages.size() + " 条消息给AI模型...");
-            } else {
-                stepCallback.onStepThinking("分析", "继续对话循环 (第 " + iteration + " 轮)");
-            }
+        // 触发事件：发送请求
+        if (iteration == 0) {
+            pipeline.publish(new ObservationEvent.Thinking("思考", "正在构建请求，发送 " + llmMessages.size() + " 条消息给AI模型..."));
+        } else {
+            pipeline.publish(new ObservationEvent.Thinking("分析", "继续对话循环 (第 " + iteration + " 轮)"));
         }
         
-        // 包装 Consumer，同时回调到 StepCallback
+        // 包装 Consumer，同时发布到管道
         Consumer<String> wrappedContentConsumer = chunk -> {
             if (contentConsumer != null) {
                 contentConsumer.accept(chunk);
             }
-            if (stepCallback != null) {
-                stepCallback.onContentChunk(chunk);
-            }
+            pipeline.publish(new ObservationEvent.ContentChunk(chunk));
         };
         
         Consumer<String> wrappedThinkingConsumer = chunk -> {
             if (thinkingConsumer != null) {
                 thinkingConsumer.accept(chunk);
             }
-            if (stepCallback != null) {
-                stepCallback.onThinkingChunk(chunk);
-            }
+            pipeline.publish(new ObservationEvent.ThinkingChunk(chunk));
         };
         
         Consumer<LLMService.StreamToolCallEvent> wrappedToolCallConsumer = event -> {
             if (toolCallConsumer != null) {
                 toolCallConsumer.accept(event);
             }
-            if (stepCallback != null) {
-                stepCallback.onToolCallChunk(event);
-            }
+            // StreamToolCallEvent 映射为 ToolCall 事件（工具名和参数从事件中提取）
+            String toolName = event != null && event.getName() != null ? event.getName() : "unknown";
+            String args = event != null && event.getArguments() != null ? event.getArguments() : "";
+            pipeline.publish(new ObservationEvent.ToolCall(toolName, args, event != null ? event.getId() : null));
         };
         
         // 发送流式请求
@@ -444,7 +477,16 @@ public class LLMQueryEngine {
         
         logger.info("[LLMQueryEngine] Stream response received, content length: " +
             (response.getContent() != null ? response.getContent().length() : 0));
-        
+
+        // 消费 Token 预算并发布事件
+        int promptTokens = response.getPromptTokens();
+        int completionTokens = response.getCompletionTokens();
+        if (promptTokens > 0 || completionTokens > 0) {
+            tokenBudget.consume(promptTokens, completionTokens);
+            pipeline.publish(new ObservationEvent.TokenUsage(promptTokens, completionTokens,
+                response.getModel() != null ? response.getModel() : "unknown"));
+        }
+
         // 打印 AI 思考内容
         if (response.getReasoningContent() != null && !response.getReasoningContent().isEmpty()) {
             String think = response.getReasoningContent();
@@ -463,9 +505,7 @@ public class LLMQueryEngine {
             
             session.addMessage(assistantMessage);
             
-            if (stepCallback != null) {
-                stepCallback.onStepThinking("分析", "AI决定调用 " + response.getToolCalls().size() + " 个工具");
-            }
+            pipeline.publish(new ObservationEvent.Thinking("分析", "AI决定调用 " + response.getToolCalls().size() + " 个工具"));
             
             // 执行工具调用，工具完成后继续流式循环
             return executeToolCalls(response.getToolCalls(), iteration + 1, emptyResponseCount,
@@ -547,10 +587,8 @@ public class LLMQueryEngine {
         for (LLMMessage.ToolCall tc : toolCalls) {
             String toolName = tc.getFunction().getName();
             
-            // 触发回调：开始执行工具
-            if (stepCallback != null) {
-                stepCallback.onStepAction("工具调用", "执行 " + toolName + " (第 " + toolIndex + "/" + toolCalls.size() + " 个)");
-            }
+            // 触发事件：开始执行工具
+            pipeline.publish(new ObservationEvent.StepStart("工具调用", "执行 " + toolName + " (第 " + toolIndex + "/" + toolCalls.size() + " 个)"));
             
             // 记录工具调用历史
             toolCallHistory.add(toolName + ":" + tc.getFunction().getArguments());
@@ -559,10 +597,8 @@ public class LLMQueryEngine {
             Tool<?, ?, ?> tool = findTool(toolName);
             if (tool == null) {
                 logger.warning("[LLMQueryEngine] Tool not found: " + toolName + " [toolCallId=" + tc.getId() + "]");
-                // 触发回调：工具未找到
-                if (stepCallback != null) {
-                    stepCallback.onStepComplete("工具执行", "未找到工具: " + toolName);
-                }
+                // 触发事件：工具未找到
+                pipeline.publish(new ObservationEvent.StepComplete("工具执行", "未找到工具: " + toolName));
                 // 必须添加错误结果，否则 assistant 的 tool_calls 会缺少对应的 tool 消息
                 futures.add(CompletableFuture.completedFuture(
                     new ToolExecutionResult(tc.getId(), toolName,
@@ -587,14 +623,12 @@ public class LLMQueryEngine {
                     try {
                         ToolExecutionResult result = future.get();
                         
-                        // 触发回调：工具执行完成（发送完整结果用于前端展示）
-                        if (stepCallback != null) {
-                            // 发送完整结果，供前端 tool_result 消息使用
-                            stepCallback.onToolResult(result.getToolName(), result.getResult());
-                            // 同时发送预览到 step_complete
-                            String resultPreview = truncate(result.getResult(), 100);
-                            stepCallback.onStepComplete("工具执行", result.getToolName() + " → " + resultPreview);
-                        }
+                        // 触发事件：工具执行完成
+                        boolean success = result.getResult() != null && !result.getResult().startsWith("Error:");
+                        pipeline.publish(new ObservationEvent.ToolResult(
+                            result.getToolName(), result.getResult(), success, null, result.getToolCallId()));
+                        String resultPreview = truncate(result.getResult(), 100);
+                        pipeline.publish(new ObservationEvent.StepComplete("工具执行", result.getToolName() + " → " + resultPreview));
                         
                         // 添加工具结果消息（包含输入参数）
                         Message toolResultMsg = Message.createToolResultMessage(
@@ -609,9 +643,7 @@ public class LLMQueryEngine {
                         
                     } catch (Exception e) {
                         logger.severe("[LLMQueryEngine] Failed to get tool result: " + e.getMessage());
-                        if (stepCallback != null) {
-                            stepCallback.onStepComplete("工具执行", "执行失败: " + e.getMessage());
-                        }
+                        pipeline.publish(new ObservationEvent.StepComplete("工具执行", "执行失败: " + e.getMessage()));
                         // 即使获取结果失败，也必须添加工具结果消息以保持 tool_calls 与 results 数量一致
                         // 使用第一个工具调用的 ID 作为回退
                         String fallbackToolCallId = "unknown";
@@ -627,10 +659,8 @@ public class LLMQueryEngine {
                     }
                 }
                 
-                // 触发回调：继续分析
-                if (stepCallback != null) {
-                    stepCallback.onStepThinking("分析", "工具执行完成，继续分析结果...");
-                }
+                // 触发事件：继续分析
+                pipeline.publish(new ObservationEvent.Thinking("分析", "工具执行完成，继续分析结果..."));
                 
                 // 继续对话循环（重置空回复计数，因为工具执行可能有有效输出）
                 return loopContinuation.apply(nextIteration, 0);
@@ -660,9 +690,7 @@ public class LLMQueryEngine {
      * 触发步骤完成回调
      */
     private void triggerStepComplete(String stepName, String result) {
-        if (stepCallback != null) {
-            stepCallback.onStepComplete(stepName, result);
-        }
+        pipeline.publish(new ObservationEvent.StepComplete(stepName, result));
     }
     
     /**
@@ -703,38 +731,41 @@ public class LLMQueryEngine {
             );
         }
         
-        // 通过 ToolExecutor 真正执行工具，保持 CompletableFuture 链式调用
-        return toolExecutor.execute(toolName, argsNode, toolContext)
-            .thenApply(execResult -> {
-                String resultContent;
-                if (execResult.isSuccess()) {
-                    ToolResult<?> toolResult = execResult.getResult();
-                    if (toolResult != null && toolResult.isSuccess()) {
-                        Object data = toolResult.getData();
-                        if (data != null) {
-                            try {
-                                resultContent = MAPPER.valueToTree(data).toString();
-                            } catch (Exception e) {
-                                resultContent = data.toString();
-                            }
-                        } else {
-                            resultContent = "Success";
+        // 通过 ToolExecutor 执行工具，并应用三阶段恢复协议
+        return RecoveryExecutor.executeWithRecovery(
+            () -> toolExecutor.execute(toolName, argsNode, toolContext),
+            new com.jwcode.core.resilience.RecoveryProtocol.AutoRetry(),
+            toolName
+        ).thenApply(execResult -> {
+            String resultContent;
+            if (execResult != null && execResult.isSuccess()) {
+                ToolResult<?> toolResult = execResult.getResult();
+                if (toolResult != null && toolResult.isSuccess()) {
+                    Object data = toolResult.getData();
+                    if (data != null) {
+                        try {
+                            resultContent = MAPPER.valueToTree(data).toString();
+                        } catch (Exception e) {
+                            resultContent = data.toString();
                         }
                     } else {
-                        String error = toolResult != null ? toolResult.getContent() : "Tool execution failed";
-                        resultContent = "Error: " + error;
+                        resultContent = "Success";
                     }
                 } else {
-                    resultContent = "Error: " + execResult.getErrorMessage();
+                    String error = toolResult != null ? toolResult.getContent() : "Tool execution failed";
+                    resultContent = "Error: " + error;
                 }
-                return new ToolExecutionResult(toolCallId, toolName, args, resultContent);
-            })
-            .exceptionally(e -> {
-                Throwable cause = e.getCause() != null ? e.getCause() : e;
-                logger.severe("[LLMQueryEngine] Tool execution failed: " + cause.getMessage());
-                return new ToolExecutionResult(toolCallId, toolName, args, 
-                    "Error: " + cause.getMessage());
-            });
+            } else {
+                String errorMsg = (execResult != null) ? execResult.getErrorMessage() : "Tool execution failed after recovery";
+                resultContent = "Error: " + errorMsg;
+            }
+            return new ToolExecutionResult(toolCallId, toolName, args, resultContent);
+        }).exceptionally(e -> {
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            logger.severe("[LLMQueryEngine] Tool execution failed after recovery: " + cause.getMessage());
+            return new ToolExecutionResult(toolCallId, toolName, args,
+                "Error: " + cause.getMessage());
+        });
     }
     
     /**
@@ -936,10 +967,11 @@ public class LLMQueryEngine {
     // ==================== 数据类 ====================
     
     public static class EngineConfig {
-        private int maxIterations = 200;
+        private int maxIterations = 1000; // 后备安全网，Token 预算驱动为主
         private Duration timeout = Duration.ofMinutes(5);
         private int maxEmptyResponses = DEFAULT_MAX_EMPTY_RESPONSES;
         private boolean reasoningModel = false;
+        private long tokenBudget = 500_000; // 默认 500K token 预算
         
         /**
          * 从 JwcodeConfig 创建 EngineConfig
@@ -951,6 +983,7 @@ public class LLMQueryEngine {
                 if (engine != null) {
                     engineConfig.setMaxIterations(engine.getMaxIterations());
                     engineConfig.setTimeout(Duration.ofMinutes(engine.getTimeoutMinutes()));
+                    // tokenBudget 可从配置读取（如配置中存在）
                 }
             }
             return engineConfig;
@@ -983,7 +1016,10 @@ public class LLMQueryEngine {
         
         public boolean isReasoningModel() { return reasoningModel; }
         public void setReasoningModel(boolean reasoningModel) { this.reasoningModel = reasoningModel; }
-        
+
+        public long getTokenBudget() { return tokenBudget; }
+        public void setTokenBudget(long tokenBudget) { this.tokenBudget = tokenBudget; }
+
         public static EngineConfig defaultConfig() {
             return new EngineConfig();
         }

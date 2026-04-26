@@ -28,41 +28,182 @@ public class ContextCompressor {
     }
     
     /**
-     * 压缩会话消息
-     * 
-     * 策略：
-     * 1. 保留系统消息
-     * 2. 保留最近的用户消息
-     * 3. 压缩/移除早期的工具调用结果
-     * 4. 总结早期对话内容
+     * 压缩会话消息（旧版兼容）
      */
     public static List<Message> compress(List<Message> messages) {
+        return compress(messages, null);
+    }
+
+    /**
+     * AI 驱动上下文压缩 — 考虑消息重要性、保留价值、错误经验。
+     *
+     * <p>核心思想：不是 LRU（最近最少使用），而是"最少信息量"。</p>
+     * <ul>
+     *   <li>高价值：用户明确要求、工具调用失败、被 AI 标记为重要 — 保留原文</li>
+     *   <li>中等价值：成功执行的工具调用 — 生成摘要</li>
+     *   <li>低价值：重复的系统提示、冗余的 [FINISH] 提醒 — 丢弃</li>
+     * </ul>
+     */
+    public static List<Message> compress(List<Message> messages, Session session) {
         if (messages.size() <= 4) {
-            return messages; // 消息太少，不压缩
+            return messages;
         }
-        
-        List<Message> compressed = new ArrayList<>();
-        
-        // 1. 保留系统消息（如果有）
-        Message systemMessage = findSystemMessage(messages);
-        if (systemMessage != null) {
-            compressed.add(systemMessage);
+
+        Set<String> importantIds = session != null ? session.getImportantMessageIds() : Collections.emptySet();
+
+        List<Message> retained = new ArrayList<>();
+        List<Message> summarized = new ArrayList<>();
+
+        // 1. 保留系统消息（去重，只保留最新的）
+        Message lastSystem = null;
+        for (Message msg : messages) {
+            if (msg.getRole() == Message.Role.SYSTEM) {
+                lastSystem = msg;
+            }
         }
-        
-        // 2. 保留最近的 4 条消息（用户 + AI 对话）
+        if (lastSystem != null) {
+            retained.add(lastSystem);
+        }
+
+        // 2. 保留最近 4 条消息
         int recentCount = Math.min(4, messages.size());
         for (int i = messages.size() - recentCount; i < messages.size(); i++) {
-            compressed.add(messages.get(i));
+            retained.add(messages.get(i));
         }
-        
-        // 3. 压缩早期的工具调用结果
+
+        // 3. 评估早期消息的价值
         List<Message> oldMessages = messages.subList(0, messages.size() - recentCount);
-        Message summaryMessage = createSummaryMessage(oldMessages);
-        if (summaryMessage != null) {
-            compressed.add(1, summaryMessage); // 插入到系统消息之后
+        for (Message msg : oldMessages) {
+            if (msg.getRole() == Message.Role.SYSTEM) {
+                continue; // 系统消息已处理
+            }
+
+            // 高价值：被标记为重要 或 包含失败信息 或 用户明确要求
+            if (isHighValue(msg, importantIds)) {
+                retained.add(msg);
+                continue;
+            }
+
+            // 低价值：可丢弃
+            if (isLowValue(msg)) {
+                continue;
+            }
+
+            // 中等价值：加入待摘要列表
+            summarized.add(msg);
         }
-        
-        return compressed;
+
+        // 4. 对中等价值消息生成摘要
+        if (!summarized.isEmpty()) {
+            Message summary = createSmartSummary(summarized);
+            if (summary != null) {
+                // 插入到系统消息之后、保留消息之前
+                int insertPos = lastSystem != null ? 1 : 0;
+                retained.add(insertPos, summary);
+            }
+        }
+
+        // 5. 按时间排序（保持消息顺序）
+        retained.sort(Comparator.comparing(Message::getTimestamp));
+
+        return retained;
+    }
+
+    /**
+     * 高价值消息判断
+     */
+    private static boolean isHighValue(Message msg, Set<String> importantIds) {
+        String msgId = msg.getTimestamp().toString();
+        if (importantIds.contains(msgId)) {
+            return true;
+        }
+        String text = msg.getTextContent();
+        if (text == null) return false;
+        String lower = text.toLowerCase();
+        // 包含失败信息（对错误恢复至关重要）
+        if (lower.contains("error") || lower.contains("失败") || lower.contains("exception")) {
+            return true;
+        }
+        // 用户明确要求
+        if (msg.getRole() == Message.Role.USER &&
+            (lower.contains("必须") || lower.contains("不要") || lower.contains("重要"))) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * 低价值消息判断
+     */
+    private static boolean isLowValue(Message msg) {
+        String text = msg.getTextContent();
+        if (text == null) return true;
+        String lower = text.toLowerCase();
+        // 重复的系统提示词
+        if (msg.getRole() == Message.Role.SYSTEM) {
+            return true;
+        }
+        // 冗余的 [FINISH] 提醒
+        if (lower.contains("[finish]") && lower.length() < 100) {
+            return true;
+        }
+        // 空的工具成功结果
+        if (msg.getRole() == Message.Role.TOOL && lower.contains("success") && text.length() < 50) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * 智能摘要生成
+     */
+    private static Message createSmartSummary(List<Message> messages) {
+        if (messages.isEmpty()) return null;
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("[Context Summary] 早期对话摘要:\n");
+
+        int userCount = 0;
+        int assistantCount = 0;
+        int toolCallCount = 0;
+        Set<String> toolsUsed = new HashSet<>();
+        Set<String> topics = new HashSet<>();
+
+        for (Message msg : messages) {
+            switch (msg.getRole()) {
+                case USER:
+                    userCount++;
+                    String userText = msg.getTextContent();
+                    if (userText != null && !userText.isEmpty()) {
+                        topics.add(truncate(userText, 30));
+                    }
+                    break;
+                case ASSISTANT:
+                    assistantCount++;
+                    List<Message.ToolCallInfo> tcs = msg.getToolCalls();
+                    if (tcs != null) {
+                        toolCallCount += tcs.size();
+                        for (Message.ToolCallInfo tc : tcs) {
+                            toolsUsed.add(tc.getName());
+                        }
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        sb.append("- ").append(userCount).append(" user messages, ")
+          .append(assistantCount).append(" assistant responses\n");
+        if (toolCallCount > 0) {
+            sb.append("- ").append(toolCallCount).append(" tool calls (")
+              .append(String.join(", ", toolsUsed)).append(")\n");
+        }
+        if (!topics.isEmpty()) {
+            sb.append("- Topics: ").append(String.join("; ", topics)).append("\n");
+        }
+
+        return Message.createSystemMessage(sb.toString());
     }
     
     /**

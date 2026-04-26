@@ -139,11 +139,69 @@ public class ToolRegistry {
     
     /**
      * 获取已注册工具的数量
-     * 
+     *
      * @return 工具数量
      */
     public int size() {
         return tools.size();
+    }
+
+    // ==================== AI-Native ToolRef 查询 ====================
+
+    /**
+     * 通过 {@link ToolRef} 查找工具
+     */
+    public Tool<?, ?, ?> get(ToolRef ref) {
+        if (ref instanceof ToolRef.ByName byName) {
+            return getByName(byName.name());
+        } else if (ref instanceof ToolRef.ByType byType) {
+            for (Tool<?, ?, ?> tool : tools) {
+                if (byType.type().isInstance(tool)) {
+                    return tool;
+                }
+            }
+            throw new NoSuchElementException("Tool not found by type: " + byType.type().getName());
+        } else if (ref instanceof ToolRef.Composite composite) {
+            throw new IllegalArgumentException("Cannot resolve Composite ToolRef to single tool");
+        }
+        throw new IllegalArgumentException("Unknown ToolRef type: " + ref.getClass());
+    }
+
+    /**
+     * 按类别获取工具
+     */
+    public List<Tool<?, ?, ?>> getByCategory(ToolCategory category) {
+        return tools.stream()
+            .filter(t -> t.getCategory() == category)
+            .collect(java.util.stream.Collectors.toList());
+    }
+
+    /**
+     * 按副作用类型获取工具
+     */
+    public List<Tool<?, ?, ?>> getBySideEffect(SideEffect sideEffect) {
+        return tools.stream()
+            .filter(t -> t.getSideEffects().contains(sideEffect))
+            .collect(java.util.stream.Collectors.toList());
+    }
+
+    /**
+     * 获取所有只读工具（无副作用或仅 READ_ONLY）
+     */
+    public List<Tool<?, ?, ?>> getReadOnlyTools() {
+        return tools.stream()
+            .filter(t -> t.getSideEffects().isEmpty() ||
+                (t.getSideEffects().size() == 1 && t.getSideEffects().contains(SideEffect.READ_ONLY)))
+            .collect(java.util.stream.Collectors.toList());
+    }
+
+    /**
+     * 获取所有可并行执行的工具
+     */
+    public List<Tool<?, ?, ?>> getParallelSafeTools() {
+        return tools.stream()
+            .filter(t -> t.getConcurrencyLevel() == ConcurrencyLevel.PARALLEL_SAFE)
+            .collect(java.util.stream.Collectors.toList());
     }
     
     /**

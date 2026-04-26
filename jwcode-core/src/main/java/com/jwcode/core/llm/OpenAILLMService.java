@@ -265,13 +265,6 @@ public class OpenAILLMService implements LLMService {
                     log.info("[OpenAI Stream] " + requestJson);
                     log.info("[OpenAI Stream] ---------- End Request Body ----------");
                     
-                    // 诊断：逐条确认消息中 reasoning_content 的携带情况
-                    log.warning("[OpenAI Stream] Messages detail:");
-                    for (LLMMessage msg : messages) {
-                        Map<String, Object> fmt = msg.toOpenAIFormat();
-                        log.warning("  role=" + msg.getRole() + ", hasReasoning=" + fmt.containsKey("reasoning_content"));
-                    }
-                    
                     // 发送请求
                     HttpRequest request = HttpRequest.newBuilder()
                         .uri(URI.create(url))
