@@ -504,6 +504,12 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
         // 根据操作系统选择 shell
         boolean isWindows = System.getProperty("os.name").toLowerCase().contains("win");
         
+        // 【修复】自动转换 Unix 命令为 Windows 命令
+        if (isWindows) {
+            command = autoConvertCommand(command);
+            logger.fine("Auto-converted command for Windows: " + truncateForLog(command));
+        }
+        
         // 【修复】自动检测 PowerShell 命令并切换执行器
         if (isWindows && isPowerShellCommand(command)) {
             logger.fine("Detected PowerShell command, using powershell.exe: " + truncateForLog(command));
@@ -513,7 +519,103 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
         String shell = isWindows ? "cmd.exe" : "/bin/bash";
         String shellArg = isWindows ? "/c" : "-c";
         
+        // 【修复】在 Windows 上切换到 UTF-8 编码，解决中文乱码问题
+        if (isWindows) {
+            command = "chcp 65001 >nul && " + command;
+            logger.fine("Added chcp 65001 to command for UTF-8 encoding");
+        }
+        
         return Arrays.asList(shell, shellArg, command);
+    }
+    
+    /**
+     * 自动转换 Windows 不兼容的 Unix 命令为等价命令
+     * 这是核心的跨平台兼容修复
+     */
+    private String autoConvertCommand(String command) {
+        boolean isWindows = System.getProperty("os.name").toLowerCase().contains("win");
+        if (!isWindows) {
+            return command;
+        }
+        
+        // 转换为小写进行匹配
+        String lower = command.toLowerCase();
+        
+        // pwd -> cd (显示当前目录)
+        if (lower.startsWith("pwd")) {
+            logger.fine("Auto-converting pwd to cd for Windows");
+            return "cd";
+        }
+        
+        // ls -la -> dir (详细列表)
+        if (lower.startsWith("ls ") || lower.startsWith("ls\t")) {
+            logger.fine("Auto-converting ls to dir for Windows");
+            return command.replaceFirst("(?i)ls(\\s+)", "dir $1");
+        }
+        
+        // ll -> dir (简短列表)
+        if (lower.startsWith("ll ")) {
+            logger.fine("Auto-converting ll to dir for Windows");
+            return command.replaceFirst("(?i)ll(\\s+)", "dir $1");
+        }
+        
+        // cat -> type (显示文件内容)
+        if (lower.startsWith("cat ")) {
+            logger.fine("Auto-converting cat to type for Windows");
+            return command.replaceFirst("(?i)cat(\\s+)", "type $1");
+        }
+        
+        // rm -> del (删除文件)
+        if (lower.startsWith("rm ")) {
+            logger.fine("Auto-converting rm to del for Windows");
+            return command.replaceFirst("(?i)rm(\\s+)", "del $1");
+        }
+        
+        // cp -> copy (复制文件)
+        if (lower.startsWith("cp ")) {
+            logger.fine("Auto-converting cp to copy for Windows");
+            return command.replaceFirst("(?i)cp(\\s+)", "copy $1");
+        }
+        
+        // mv -> move (移动文件)
+        if (lower.startsWith("mv ")) {
+            logger.fine("Auto-converting mv to move for Windows");
+            return command.replaceFirst("(?i)mv(\\s+)", "move $1");
+        }
+        
+        // mkdir -> md (创建目录)
+        if (lower.startsWith("mkdir ")) {
+            logger.fine("Auto-converting mkdir to md for Windows");
+            return command.replaceFirst("(?i)mkdir(\\s+)", "md $1");
+        }
+        
+        // touch -> echo + type (创建空文件)
+        if (lower.startsWith("touch ")) {
+            logger.fine("Auto-converting touch to echo for Windows");
+            // 提取文件名并创建空文件
+            String filename = command.substring(6).trim();
+            return "echo. > " + filename;
+        }
+        
+        // which -> where (查找命令位置)
+        if (lower.startsWith("which ")) {
+            logger.fine("Auto-converting which to where for Windows");
+            return command.replaceFirst("(?i)which(\\s+)", "where $1");
+        }
+        
+        // clear -> cls (清屏)
+        if (lower.equals("clear") || lower.startsWith("clear ")) {
+            logger.fine("Auto-converting clear to cls for Windows");
+            return "cls";
+        }
+        
+        // grep -> findstr (搜索内容)
+        if (lower.contains(" grep ")) {
+            logger.fine("Auto-converting grep to findstr for Windows");
+            return command.replaceAll("(?i)\\s+grep\\s+", " | findstr ");
+        }
+        
+        return command;
     }
     
     /**
