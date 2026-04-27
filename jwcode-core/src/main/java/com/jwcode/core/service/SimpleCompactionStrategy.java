@@ -79,15 +79,23 @@ public class SimpleCompactionStrategy {
         int originalSize = messages.size();
         logger.info("[SimpleCompaction] 开始压缩: original=" + originalSize + " messages");
 
-        // 1. 分离尾部安全区
-        List<Message> tail = extractTail(messages);
-        List<Message> head = extractHead(messages, tail.size());
+        // 0. 保护前 2 条非系统消息（通常是用户初始任务描述）
+        List<Message> preserved = extractFirstUserMessages(messages, 2);
 
-        // 2. 构建压缩 Prompt
-        String compactionPrompt = buildCompactionPrompt(head);
+        // 1. 分离尾部安全区（排除已保护的消息）
+        List<Message> tail = extractTail(messages);
+        List<Message> head = extractHead(messages, tail.size() + preserved.size());
+
+        // 【修复】从 head 中排除已被保护的消息，避免重复压缩
+        head.removeAll(preserved);
+
+        // 2. 构建压缩 Prompt（注入被保护的任务目标）
+        String compactionPrompt = buildCompactionPrompt(head, preserved);
         if (compactionPrompt == null || compactionPrompt.isBlank()) {
             logger.info("[SimpleCompaction] 头部无可压缩内容，仅截断");
-            return CompletableFuture.completedFuture(tail);
+            List<Message> fallback = new ArrayList<>(preserved);
+            fallback.addAll(tail);
+            return CompletableFuture.completedFuture(fallback);
         }
 
         // 3. 调用 LLM 生成摘要（禁用工具调用）
@@ -96,16 +104,17 @@ public class SimpleCompactionStrategy {
         );
 
         return llmService.chat(promptMessages).thenApply(response -> {
+            String summary;
             if (response == null || response.hasError()) {
                 String err = response != null ? response.getErrorMessage() : "null response";
-                logger.warning("[SimpleCompaction] LLM 摘要失败: " + err + "，降级为截断");
-                return tail;
-            }
-
-            String summary = response.getContent();
-            if (summary == null || summary.isBlank()) {
-                logger.warning("[SimpleCompaction] LLM 返回空摘要，降级为截断");
-                return tail;
+                logger.warning("[SimpleCompaction] LLM 摘要失败: " + err + "，使用 fallback 摘要");
+                summary = "压缩失败，仅保留最近对话。";
+            } else {
+                summary = response.getContent();
+                if (summary == null || summary.isBlank()) {
+                    logger.warning("[SimpleCompaction] LLM 返回空摘要，使用 fallback 摘要");
+                    summary = "压缩失败，仅保留最近对话。";
+                }
             }
 
             // 截断过长的摘要
@@ -113,8 +122,8 @@ public class SimpleCompactionStrategy {
                 summary = summary.substring(0, SUMMARY_TARGET_CHARS * 2) + "\n...[摘要已截断]";
             }
 
-            // 4. 组装结果：摘要(system) + 尾部
-            List<Message> result = new ArrayList<>();
+            // 4. 组装结果：保护消息 + 摘要(system) + 尾部
+            List<Message> result = new ArrayList<>(preserved);
             result.add(Message.createSystemMessage(
                 "[历史对话摘要] " + summary.trim() + "\n\n[注意] 以上为此前 "
                     + head.size() + " 轮对话的压缩摘要，后续请基于摘要和最近对话继续。"
@@ -125,8 +134,14 @@ public class SimpleCompactionStrategy {
                 + " messages, summary=" + summary.length() + " chars");
             return result;
         }).exceptionally(e -> {
-            logger.warning("[SimpleCompaction] 压缩异常: " + e.getMessage() + "，降级为截断");
-            return tail;
+            logger.warning("[SimpleCompaction] 压缩异常: " + e.getMessage() + "，使用 fallback 摘要");
+            List<Message> result = new ArrayList<>(preserved);
+            result.add(Message.createSystemMessage(
+                "[历史对话摘要] 压缩异常，仅保留最近对话。\n\n[注意] 以上为此前 "
+                    + head.size() + " 轮对话的压缩摘要，后续请基于摘要和最近对话继续。"
+            ));
+            result.addAll(tail);
+            return result;
         });
     }
 
@@ -151,23 +166,70 @@ public class SimpleCompactionStrategy {
     }
 
     /**
-     * 构建压缩 Prompt。
+     * 提取前 N 条用户消息（初始任务描述），这些消息不参与压缩。
      */
-    private String buildCompactionPrompt(List<Message> headMessages) {
+    private List<Message> extractFirstUserMessages(List<Message> messages, int count) {
+        List<Message> result = new ArrayList<>();
+        for (Message msg : messages) {
+            if (msg.getRole() == Message.Role.USER && result.size() < count) {
+                result.add(msg);
+            }
+            if (result.size() >= count) {
+                break;
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 从被保护的消息中提取任务目标。
+     */
+    private String extractTaskGoal(List<Message> preservedMessages) {
+        if (preservedMessages == null || preservedMessages.isEmpty()) {
+            return null;
+        }
+        for (Message msg : preservedMessages) {
+            if (msg.getRole() == Message.Role.USER) {
+                String content = msg.getTextContent();
+                if (content != null && !content.isBlank()) {
+                    return content.trim();
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 构建压缩 Prompt。
+     *
+     * @param headMessages    待压缩的头部消息（已排除被保护消息）
+     * @param preservedMessages 被保护的早期消息（用于注入任务目标约束）
+     */
+    private String buildCompactionPrompt(List<Message> headMessages, List<Message> preservedMessages) {
         StringBuilder sb = new StringBuilder();
+
+        // 【修复】强制注入用户原始任务目标，防止压缩后丢失
+        String taskGoal = extractTaskGoal(preservedMessages);
+        if (taskGoal != null && !taskGoal.isBlank()) {
+            sb.append("【强制约束】用户原始任务目标：").append(truncate(taskGoal, 200)).append("\n");
+            sb.append("你必须在摘要开头用一句话准确复述上述任务目标，禁止篡改、遗漏或臆测。\n\n");
+        }
+
         sb.append("请用 200 字以内总结以下对话历史，保留关键信息：\n");
-        sb.append("- 当前任务目标\n");
+        sb.append("- 当前任务目标（必须从用户第一条消息中准确提取，禁止臆测或篡改）\n");
         sb.append("- 已做出的设计决策\n");
         sb.append("- 遇到的错误及解决方案\n");
         sb.append("- 尚未完成的待办事项\n\n");
 
         int msgIndex = 1;
+        int validCount = 0;
         for (Message msg : headMessages) {
             String role = msg.getRole().name().toLowerCase();
             String content = extractCompactContent(msg);
             if (content == null || content.isBlank()) {
                 continue;
             }
+            validCount++;
             // 单条消息内容截断，防止单条消息占满 Prompt
             if (content.length() > 800) {
                 content = content.substring(0, 800) + "\n...[内容截断]";
@@ -177,8 +239,47 @@ public class SimpleCompactionStrategy {
             sb.append("Content: ").append(content).append("\n\n");
         }
 
+        // 无可压缩的实质内容，返回 null 触发 fallback 截断
+        if (validCount == 0) {
+            logger.info("[SimpleCompaction] 头部无可压缩的实质内容（全是工具结果/监控消息），跳过 LLM 压缩");
+            return null;
+        }
+
         sb.append("[请用中文总结，控制在 200 字以内]");
         return sb.toString();
+    }
+
+    private String truncate(String text, int maxLength) {
+        if (text == null || text.length() <= maxLength) {
+            return text;
+        }
+        return text.substring(0, maxLength) + "...[已截断]";
+    }
+
+    // 噪声消息前缀——这些消息不应参与 LLM 语义压缩
+    private static final List<String> NOISE_PREFIXES = List.of(
+        "[Token Budget]",
+        "[历史对话摘要]",
+        "[Token Budget] EXHAUSTED"
+    );
+
+    /**
+     * 检查消息是否为噪声（系统监控类消息，不应参与压缩）
+     */
+    private boolean isNoiseMessage(Message msg) {
+        if (msg.getRole() != Message.Role.SYSTEM) {
+            return false;
+        }
+        String text = msg.getTextContent();
+        if (text == null || text.isBlank()) {
+            return false;
+        }
+        for (String prefix : NOISE_PREFIXES) {
+            if (text.startsWith(prefix)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -186,6 +287,9 @@ public class SimpleCompactionStrategy {
      * 过滤掉 reasoningContent、工具调用的 JSON 参数等噪声。
      */
     private String extractCompactContent(Message msg) {
+        if (isNoiseMessage(msg)) {
+            return null;
+        }
         if (msg.getContent() == null || msg.getContent().isEmpty()) {
             return msg.getTextContent();
         }

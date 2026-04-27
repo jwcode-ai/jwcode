@@ -168,7 +168,7 @@ public class GlobTool implements Tool<GlobInput, GlobOutput, GlobTool.GlobProgre
             
             Path startPath = Paths.get(searchPath);
             
-            logger.info("GlobTool: 搜索 pattern=" + pattern + ", path=" + startPath + ", isRegex=" + isRegex);
+            logger.fine("GlobTool: 搜索 pattern=" + pattern + ", path=" + startPath + ", isRegex=" + isRegex);
             
             List<String> matchedFiles = performSearch(startPath, pattern, isRegex, excludePattern, maxResults);
             

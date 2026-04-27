@@ -1,112 +1,71 @@
 package com.jwcode.core.task;
 
 /**
- * 任务状态枚举
- * 
- * 定义任务生命周期中的各种状态，每个状态都有对应的中文描述
- * 
- * @author JWCode Team
- * @since 1.0.0
+ * 统一任务状态枚举。
+ *
+ * <p>合并了后台任务系统（Task/TaskStore）和会话级激活任务（ActiveTask）的状态需求。</p>
  */
 public enum TaskStatus {
-    
-    /**
-     * 待处理 - 任务已创建但尚未开始执行
-     */
-    PENDING("待处理"),
-    
-    /**
-     * 运行中 - 任务正在执行
-     */
-    RUNNING("运行中"),
-    
-    /**
-     * 已完成 - 任务成功完成
-     */
+
+    // ========== 后台任务系统兼容状态 ==========
+    PENDING("等待中"),
+    RUNNING("执行中"),
     COMPLETED("已完成"),
-    
-    /**
-     * 失败 - 任务执行过程中发生错误
-     */
     FAILED("失败"),
-    
-    /**
-     * 已停止 - 任务被外部停止
-     */
     STOPPED("已停止"),
-    
-    /**
-     * 已取消 - 任务被取消（通常在开始前）
-     */
-    CANCELLED("已取消");
-    
+    CANCELLED("已取消"),
+
+    // ========== 会话级任务生命周期新增状态 ==========
+    NONE("无当前任务"),
+    PLANNING("规划中"),
+    PLANNED("已规划"),
+    EXECUTING("执行中"),
+    WAITING_INPUT("等待输入");
+
     private final String description;
-    
+
     TaskStatus(String description) {
         this.description = description;
     }
-    
-    /**
-     * 获取状态的中文描述
-     * 
-     * @return 状态描述
-     */
+
     public String getDescription() {
         return description;
     }
-    
-    @Override
-    public String toString() {
-        return description;
-    }
-    
+
     /**
-     * 检查任务是否处于活跃状态（可以执行或正在执行）
-     * 
-     * @return true 如果是 PENDING 或 RUNNING
+     * 是否是活跃状态（尚未结束）
      */
     public boolean isActive() {
-        return this == PENDING || this == RUNNING;
+        return this == PENDING
+            || this == RUNNING
+            || this == PLANNING
+            || this == PLANNED
+            || this == EXECUTING
+            || this == WAITING_INPUT;
     }
-    
+
     /**
-     * 检查任务是否已完成（无论成功或失败）
-     * 
-     * @return true 如果是 COMPLETED, FAILED, STOPPED 或 CANCELLED
+     * 是否是终止状态（已完成、失败、停止、取消）
      */
     public boolean isFinished() {
-        return this == COMPLETED || this == FAILED || this == STOPPED || this == CANCELLED;
+        return this == COMPLETED
+            || this == FAILED
+            || this == STOPPED
+            || this == CANCELLED;
     }
-    
+
     /**
-     * 检查任务是否成功完成
-     * 
-     * @return true 如果是 COMPLETED
-     */
-    public boolean isSuccessful() {
-        return this == COMPLETED;
-    }
-    
-    /**
-     * 从字符串解析状态
-     * 
-     * @param status 状态字符串
-     * @return TaskStatus 枚举值，如果解析失败返回 PENDING
+     * 从字符串解析状态（大小写不敏感）
      */
     public static TaskStatus fromString(String status) {
-        if (status == null || status.trim().isEmpty()) {
+        if (status == null || status.isBlank()) {
             return PENDING;
         }
-        try {
-            return valueOf(status.toUpperCase());
-        } catch (IllegalArgumentException e) {
-            // 尝试匹配中文描述
-            for (TaskStatus ts : values()) {
-                if (ts.description.equals(status) || ts.description.equals(status.trim())) {
-                    return ts;
-                }
+        for (TaskStatus s : values()) {
+            if (s.name().equalsIgnoreCase(status.trim())) {
+                return s;
             }
-            return PENDING;
         }
+        return PENDING;
     }
 }

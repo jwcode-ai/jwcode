@@ -29,9 +29,10 @@ public class JwCodeApplication implements AutoCloseable {
     private LLMQueryEngine llmQueryEngine;
     private JLine3Terminal terminal;
     
-    public JwCodeApplication() {
+    public JwCodeApplication(String[] args) {
         this.context = new CommandContext();
         this.configManager = new ConfigManager();
+        initializeSession(args);
         initializeLLMQueryEngine();
         registerCommands();
         initializeTerminal();
@@ -45,6 +46,52 @@ public class JwCodeApplication implements AutoCloseable {
         } catch (Exception e) {
             logger.warn("JLine3 not available, using simple mode");
             this.terminal = null;
+        }
+    }
+    
+    /**
+     * 初始化会话 — 从 main() 下沉的会话选择/创建逻辑
+     */
+    private void initializeSession(String[] args) {
+        // 解析启动参数
+        boolean forceNew = false;
+        for (String arg : args) {
+            if ("--new".equals(arg) || "-n".equals(arg)) {
+                forceNew = true;
+                break;
+            }
+        }
+        
+        SessionManager sm = SessionManager.getInstance();
+        
+        // 检查是否有活动会话
+        if (!forceNew) {
+            Session activeSession = sm.getActiveSession();
+            if (activeSession != null && activeSession.getMessageCount() > 0) {
+                System.out.println();
+                System.out.println(CliLogger.CYAN + "=== 选择会话 ===" + CliLogger.RESET);
+                System.out.println();
+                System.out.println("  1. 继续上次会话");
+                System.out.println("     " + (activeSession.getTitle() != null ? activeSession.getTitle() : activeSession.getId().substring(0, 8)) 
+                    + " (" + activeSession.getMessageCount() + " 条消息)");
+                System.out.println("  2. 新建会话");
+                System.out.println();
+                System.out.print("请选择 [1]: ");
+                
+                java.util.Scanner scanner = new java.util.Scanner(System.in);
+                String choice = scanner.nextLine().trim();
+                if ("2".equals(choice)) {
+                    forceNew = true;
+                }
+            }
+        }
+        
+        // 强制新建或无活动会话时，创建新会话
+        if (forceNew || sm.getActiveSession() == null) {
+            Session newSession = sm.createSession(System.getProperty("user.dir"));
+            newSession.setTitle("会话 " + newSession.getId().substring(0, 8));
+            sm.setActiveSession(newSession.getId());
+            System.out.println(CliLogger.GREEN + "✓ 已创建新会话: " + newSession.getTitle() + CliLogger.RESET);
         }
     }
     
@@ -82,8 +129,14 @@ public class JwCodeApplication implements AutoCloseable {
             // 创建 LLM 工厂
             LLMFactory llmFactory = LLMFactory.fromConfig(config);
             
-            // 创建会话
-            Session session = new Session(UUID.randomUUID().toString(), System.getProperty("user.dir"));
+            // 通过 SessionManager 获取或创建会话，确保持久化一致性
+            SessionManager sessionManager = SessionManager.getInstance();
+            Session session = sessionManager.getActiveSession();
+            if (session == null) {
+                session = sessionManager.createSession(System.getProperty("user.dir"));
+                sessionManager.setActiveSession(session.getId());
+                logger.info("Created and activated new session: " + session.getId());
+            }
             
             // 加载并添加系统提示词
             String systemPrompt = SystemPromptLoader.getSystemPrompt();
@@ -216,7 +269,7 @@ public class JwCodeApplication implements AutoCloseable {
         registerCommand(new WebCommand());
         registerCommand(new WhoamiCommand());
         registerCommand(new NewCommand());
-        
+
         // 其他实现了 Command 接口的命令
         registerCommand(new AdvancedCmd());
         registerCommand(new AgentCmd());
@@ -224,6 +277,61 @@ public class JwCodeApplication implements AutoCloseable {
         registerCommand(new ParallelCmd());
         registerCommand(new PlanCmd());
         registerCommand(new SkillCmd());
+
+        // 批量注册历史遗留命令（死代码复活）
+        registerLegacyCommands();
+    }
+
+    /**
+     * 批量注册历史遗留命令 — 用反射实例化，失败则跳过。
+     */
+    private void registerLegacyCommands() {
+        String[] legacyClasses = {
+            "com.jwcode.cli.commands.AdvisorCommand",
+            "com.jwcode.cli.commands.AgentCommand",
+            "com.jwcode.cli.commands.AgentsCommand",
+            "com.jwcode.cli.commands.BriefCommand",
+            "com.jwcode.cli.commands.CommitCommand",
+            "com.jwcode.cli.commands.CompactCommand",
+            "com.jwcode.cli.commands.ContextCommand",
+            "com.jwcode.cli.commands.EffortCommand",
+            "com.jwcode.cli.commands.FastCommand",
+            "com.jwcode.cli.commands.FeedbackCommand",
+            "com.jwcode.cli.commands.HooksCommand",
+            "com.jwcode.cli.commands.IdeCommand",
+            "com.jwcode.cli.commands.InitCommand",
+            "com.jwcode.cli.commands.LoginCommand",
+            "com.jwcode.cli.commands.LogoutCommand",
+            "com.jwcode.cli.commands.MemoryCommand",
+            "com.jwcode.cli.commands.PermissionsCommand",
+            "com.jwcode.cli.commands.RemoteCommand",
+            "com.jwcode.cli.commands.ResumeCommand",
+            "com.jwcode.cli.commands.RewindCommand",
+            "com.jwcode.cli.commands.SessionCommand",
+            "com.jwcode.cli.commands.ShareCommand",
+            "com.jwcode.cli.commands.SkillsCommand",
+            "com.jwcode.cli.commands.StatsCommand",
+            "com.jwcode.cli.commands.TasksCommand",
+            "com.jwcode.cli.commands.TeleportCommand",
+            "com.jwcode.cli.commands.UpgradeCommand",
+            "com.jwcode.cli.commands.VimCommand",
+            "com.jwcode.cli.commands.VoiceCommand"
+        };
+
+        int registered = 0;
+        for (String className : legacyClasses) {
+            try {
+                Class<?> clazz = Class.forName(className);
+                if (Command.class.isAssignableFrom(clazz)) {
+                    Command cmd = (Command) clazz.getDeclaredConstructor().newInstance();
+                    registerCommand(cmd);
+                    registered++;
+                }
+            } catch (Exception e) {
+                CliLogger.getInstance().debug("跳过遗留命令 " + className + ": " + e.getMessage());
+            }
+        }
+        CliLogger.getInstance().info("已复活 " + registered + "/" + legacyClasses.length + " 个遗留命令");
     }
     
     private void registerCommand(Command command) {
@@ -1145,49 +1253,7 @@ public class JwCodeApplication implements AutoCloseable {
      * 主入口
      */
     public static void main(String[] args) {
-        // 解析启动参数
-        boolean forceNew = false;
-        for (String arg : args) {
-            if ("--new".equals(arg) || "-n".equals(arg)) {
-                forceNew = true;
-                break;
-            }
-        }
-        
-        // 检查是否有活动会话
-        if (!forceNew) {
-            SessionManager sm = SessionManager.getInstance();
-            Session activeSession = sm.getActiveSession();
-            if (activeSession != null && activeSession.getMessageCount() > 0) {
-                System.out.println();
-                System.out.println(CliLogger.CYAN + "=== 选择会话 ===" + CliLogger.RESET);
-                System.out.println();
-                System.out.println("  1. 继续上次会话");
-                System.out.println("     " + (activeSession.getTitle() != null ? activeSession.getTitle() : activeSession.getId().substring(0, 8)) 
-                    + " (" + activeSession.getMessageCount() + " 条消息)");
-                System.out.println("  2. 新建会话");
-                System.out.println();
-                System.out.print("请选择 [1]: ");
-                
-                java.util.Scanner scanner = new java.util.Scanner(System.in);
-                String choice = scanner.nextLine().trim();
-                if ("2".equals(choice)) {
-                    forceNew = true;
-                }
-            }
-        }
-        
-        if (forceNew) {
-            // 创建新会话并保存
-            SessionManager sm = SessionManager.getInstance();
-            Session newSession = sm.createSession(System.getProperty("user.dir"));
-            newSession.setTitle("会话 " + newSession.getId().substring(0, 8));
-            sm.saveSession(newSession);
-            sm.setActiveSession(newSession.getId());
-            System.out.println(CliLogger.GREEN + "✓ 已创建新会话: " + newSession.getTitle() + CliLogger.RESET);
-        }
-        
-        try (JwCodeApplication app = new JwCodeApplication()) {
+        try (JwCodeApplication app = new JwCodeApplication(args)) {
             app.run(args);
         }
     }

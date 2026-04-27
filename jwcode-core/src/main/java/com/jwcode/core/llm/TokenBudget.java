@@ -15,6 +15,7 @@ public class TokenBudget {
     private final AtomicLong usedPromptTokens = new AtomicLong(0);
     private final AtomicLong usedCompletionTokens = new AtomicLong(0);
     private final AtomicLong reservedTokens = new AtomicLong(0);
+    private double lastAdvisedRatio = 0.0;
 
     public TokenBudget(long totalBudget) {
         if (totalBudget <= 0) {
@@ -53,6 +54,15 @@ public class TokenBudget {
      */
     public void release(long tokens) {
         reservedTokens.updateAndGet(current -> Math.max(0, current - tokens));
+    }
+
+    /**
+     * 重置已使用的 token 计数（通常在上下文压缩后调用）
+     */
+    public void reset() {
+        usedPromptTokens.set(0);
+        usedCompletionTokens.set(0);
+        lastAdvisedRatio = 0.0;
     }
 
     // ==================== 查询状态 ====================
@@ -97,20 +107,35 @@ public class TokenBudget {
     // ==================== 分级建议 ====================
 
     /**
-     * 根据预算消耗率生成 system prompt 建议文本
+     * 根据预算消耗率生成 system prompt 建议文本。
+     * 仅在使用率首次跨越预设阈值时返回建议，避免每次迭代重复提示。
      */
     public String toPromptAdvice() {
         double ratio = usageRatio();
-        if (ratio < 0.5) {
+        double[] thresholds = {0.5, 0.7, 0.85, 0.95};
+
+        // 找到当前比率对应的最高阈值
+        double currentThreshold = 0.0;
+        for (double t : thresholds) {
+            if (ratio >= t) {
+                currentThreshold = t;
+            }
+        }
+
+        // 如果当前阈值没有超过上次报告的阈值，不重复提示
+        if (currentThreshold <= lastAdvisedRatio) {
             return "";
         }
-        if (ratio < 0.7) {
+
+        lastAdvisedRatio = currentThreshold;
+
+        if (currentThreshold == 0.5) {
             return String.format(
                 "[Token Budget] Used %.0f%% (%,d / %,d). Monitor usage.",
                 ratio * 100, getUsedTotal(), totalBudget
             );
         }
-        if (ratio < 0.85) {
+        if (currentThreshold == 0.7) {
             return String.format(
                 "[Token Budget] Used %.0f%% (%,d / %,d). Recommendations:\n" +
                 "1. Use /compact to compress context when possible.\n" +
@@ -119,7 +144,7 @@ public class TokenBudget {
                 ratio * 100, getUsedTotal(), totalBudget
             );
         }
-        if (ratio < 0.95) {
+        if (currentThreshold == 0.85) {
             return String.format(
                 "[Token Budget] CRITICAL — Used %.0f%% (%,d / %,d). Immediate actions:\n" +
                 "1. COMPRESS context now with /compact.\n" +

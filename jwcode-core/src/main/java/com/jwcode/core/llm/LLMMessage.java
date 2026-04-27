@@ -76,10 +76,10 @@ public class LLMMessage {
             map.put("tool_call_id", toolCallId != null ? toolCallId : "");
         }
         
-        // FIXED: Always include reasoning_content when not null (even empty strings)
+        // FIXED: Always include reasoning_content for ASSISTANT messages
         // This ensures DeepSeek API receives reasoning_content in thinking mode
-        if (role == Role.ASSISTANT && reasoningContent != null) {
-            map.put("reasoning_content", reasoningContent);
+        if (role == Role.ASSISTANT) {
+            map.put("reasoning_content", reasoningContent != null ? reasoningContent : "");
         }
         
         if (hasToolCalls()) {

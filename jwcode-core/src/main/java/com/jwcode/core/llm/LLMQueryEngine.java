@@ -24,6 +24,7 @@ import com.jwcode.core.resilience.RecoveryExecutor;
 import com.jwcode.core.resilience.RecoveryProtocol;
 import com.jwcode.core.service.ContextWindowManager;
 import com.jwcode.core.service.SimpleCompactionStrategy;
+import com.jwcode.core.task.TaskLifecycleManager;
 
 /**
  * 基于 LLM 服务的查询引擎
@@ -45,6 +46,11 @@ public class LLMQueryEngine {
     private final Instant startTime;
     private final List<String> toolCallHistory;
     private final SimpleCompactionStrategy compactionStrategy;
+    private final TaskLifecycleManager taskLifecycleManager;
+    private long lastSeenCompactCount = 0;
+    private String pendingBudgetAdvice;
+    // 去重：记录已注册的 StepCallbackAdapter，防止重复订阅导致日志重复
+    private StepCallbackAdapter stepCallbackAdapter;
     private static final ObjectMapper MAPPER = new ObjectMapper()
             .registerModule(new JavaTimeModule());
     
@@ -64,14 +70,22 @@ public class LLMQueryEngine {
         this.pipeline = new DefaultObservationPipeline();
         this.tokenBudget = TokenBudget.of(this.config.getTokenBudget());
         this.compactionStrategy = new SimpleCompactionStrategy(llmService);
+        this.taskLifecycleManager = new TaskLifecycleManager(llmService, this.pipeline);
     }
     
     /**
      * 设置步骤回调，用于在执行过程中报告进度
+     * 去重：防止重复订阅相同类型的 Observer 导致日志重复
      */
     public void setStepCallback(StepCallback callback) {
         if (callback != null) {
-            this.pipeline.subscribe(new StepCallbackAdapter(callback));
+            // 如果已有订阅者，先移除旧的在添加新的
+            if (this.stepCallbackAdapter != null) {
+                this.pipeline.unsubscribe(this.stepCallbackAdapter);
+                logger.info("[LLMQueryEngine] Removed old StepCallbackAdapter before adding new one");
+            }
+            this.stepCallbackAdapter = new StepCallbackAdapter(callback);
+            this.pipeline.subscribe(this.stepCallbackAdapter);
         }
     }
     
@@ -115,6 +129,22 @@ public class LLMQueryEngine {
     public CompletableFuture<QueryResult> query(String prompt) {
         logger.info("[LLMQueryEngine] Query: " + prompt);
         
+        // 【任务生命周期】意图检测与上下文重置
+        TaskLifecycleManager.TaskIntent intent = taskLifecycleManager.detectIntent(session, prompt);
+        switch (intent) {
+            case NEW_TASK -> {
+                taskLifecycleManager.startNewTask(session, prompt);
+                tokenBudget.reset();
+                lastSeenCompactCount = 0;
+                pendingBudgetAdvice = null;
+                logger.info("[LLMQueryEngine] 新任务已启动，上下文已重置");
+            }
+            case CLARIFICATION -> taskLifecycleManager.onUserInput(session, prompt);
+            case CONTINUE -> {
+                // 正常流程，不做特殊处理
+            }
+        }
+        
         // 触发事件：开始查询
         pipeline.publish(new ObservationEvent.StepStart("LLM查询", "正在分析问题并制定解决方案..."));
         
@@ -137,9 +167,10 @@ public class LLMQueryEngine {
             
             1. 编辑任何文件前，必须先使用 FileReadTool 读取文件最新内容
             2. 禁止基于记忆或推测编辑文件，必须使用刚读取的实际内容
-            3. 如果工具执行失败，立即使用 FileReadTool 重新读取文件
-            4. 检查错误信息中的文件内容提示，修正编辑指令
-            5. 同一文件多次编辑失败时，考虑使用 GrepTool 搜索关键代码片段
+            3. 读取文件前，如果不确定文件路径或文件名，必须先使用 GlobTool 搜索确认，禁止猜测文件路径
+            4. 如果工具执行失败，立即使用 FileReadTool 重新读取文件
+            5. 检查错误信息中的文件内容提示，修正编辑指令
+            6. 同一文件多次编辑失败时，考虑使用 GrepTool 搜索关键代码片段
             
             这些规则是为了避免"幻觉"问题 - 即 AI 基于不准确的文件内容生成编辑指令。
             
@@ -153,9 +184,36 @@ public class LLMQueryEngine {
             例如："所有文件修改已完成。[FINISH]"
             
             不要再继续分析或提出建议，直接结束对话。
+            
+            【重要】简单任务快速路径（避免过度工程化）：
+            
+            对于简单的文件操作，不要走"枚举→分类→逐个读取"的复杂路径，直接使用原子工具：
+            
+            - 批量读取多个文件 → 使用 BatchReadTool（替代逐个 FileReadTool）
+            - 合并多个文件为一个 → 使用 MergeFilesTool（如：合并 md 文件）
+            - 按模式搜索并复制/移动 → 使用 BashTool 或 PowerShellTool 的 shell 批处理
+            - 简单统计/过滤文件内容 → 使用 BashTool 的 grep/find/awk 等（Linux）或 Select-String（Windows）
+            
+            原则：能用 1 轮工具调用完成的，绝不用 5 轮。
+            
+            【重要】任务清单执行规则：
+            
+            1. 如果存在任务清单，必须在每次回复开头简要汇报当前进度（如"步骤 2/5 已完成，正在执行步骤 3"）
+            2. 每完成一个步骤，在回复中明确标注该步骤状态变更（如"✅ 步骤 X 完成"）
+            3. 如果发现遗漏的工作，动态添加新步骤并继续执行
+            4. 如果需要用户补充信息，使用 AskUserQuestionTool 主动提问，不要空等
+            5. 遇到步骤失败时，优先尝试替代方案；若确实无法解决，标记失败并说明原因
+            6. 所有步骤完成后，添加 [FINISH] 标记结束对话
             """;
         
         session.addMessage(Message.createSystemMessage(guidelines));
+    }
+
+    /**
+     * 重置 TokenBudget（通常在上下文压缩后调用）
+     */
+    public void resetTokenBudget() {
+        tokenBudget.reset();
     }
     
     // 空回复限制次数（可通过 EngineConfig 覆盖，默认保持向后兼容）
@@ -174,6 +232,32 @@ public class LLMQueryEngine {
      * @param emptyResponseCount 连续空回复次数
      */
     private CompletableFuture<QueryResult> runConversationLoop(int iteration, int emptyResponseCount) {
+        // 检测会话是否被外部压缩（如 /compact 命令），如果是则重置 TokenBudget
+        if (session.getCompactCount() > lastSeenCompactCount) {
+            resetTokenBudget();
+            lastSeenCompactCount = session.getCompactCount();
+            logger.info("[LLMQueryEngine] Context compacted detected, TokenBudget reset.");
+        }
+
+        // 【任务生命周期】检查当前任务状态
+        var activeTask = session.getActiveTask();
+        if (activeTask != null && activeTask.getStatus() == com.jwcode.core.task.TaskStatus.WAITING_INPUT) {
+            logger.info("[LLMQueryEngine] 任务处于 WAITING_INPUT 状态，暂停循环等待用户输入");
+            return CompletableFuture.completedFuture(
+                QueryResult.success(Message.createAssistantMessage(
+                    "⏳ 等待用户补充信息：" + activeTask.getWaitingFor()))
+            );
+        }
+        
+        // 【任务生命周期】如果任务已规划但未开始执行，注入开始执行提示
+        if (activeTask != null && activeTask.getStatus() == com.jwcode.core.task.TaskStatus.PLANNED && iteration == 0) {
+            session.addMessage(Message.createSystemMessage(
+                "任务清单已制定完成，请从第一个待办步骤开始执行。每完成一步请汇报进度。"
+            ));
+            activeTask.setStatus(com.jwcode.core.task.TaskStatus.EXECUTING);
+            activeTask.advanceToNextStep();
+        }
+
         // 检查 Token 预算
         if (tokenBudget.isExhausted()) {
             logger.warning("[LLMQueryEngine] Token budget exhausted: " + tokenBudget);
@@ -183,24 +267,28 @@ public class LLMQueryEngine {
             );
         }
 
-        // 自动触发上下文压缩（当预算使用超过 60% 时）
-        if (tokenBudget.usageRatio() > 0.60 && session.getMessages().size() > 10) {
+        // 自动触发上下文压缩（当预算使用超过 70% 时）
+        if (tokenBudget.usageRatio() > 0.70 && session.getMessages().size() > 10) {
             logger.info("[LLMQueryEngine] Token budget usage=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100)
                 + ", auto-compacting context...");
+            int beforeCount = session.getMessages().size();
             List<Message> compacted = compactionStrategy.compact(session.getMessages());
-            if (compacted != null && compacted.size() < session.getMessages().size()) {
+            if (compacted != null && compacted.size() < beforeCount) {
                 session.clearMessages();
                 compacted.forEach(session::addMessage);
-                logger.info("[LLMQueryEngine] Auto-compacted: " + session.getMessages().size() + " messages remaining");
+                logger.info("[LLMQueryEngine] Auto-compacted: " + beforeCount + " -> " + session.getMessages().size()
+                    + " messages, budget=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100));
+            } else {
+                logger.warning("[LLMQueryEngine] Auto-compact skipped: result size not reduced (before=" + beforeCount + ")");
             }
         }
 
-        // Token 预算紧张时注入建议
+        // Token 预算紧张时缓存建议（将在 convertSessionMessages 中临时注入，不保存到 session 历史）
         if (iteration > 0) {
             String advice = tokenBudget.toPromptAdvice();
-            if (!advice.isEmpty() && !hasRecentSystemPrompt("[Token Budget]")) {
-                logger.info("[LLMQueryEngine] Injecting token budget advice");
-                session.addMessage(Message.createSystemMessage(advice));
+            if (!advice.isEmpty()) {
+                logger.info("[LLMQueryEngine] Token budget advice pending");
+                this.pendingBudgetAdvice = advice;
             }
         }
 
@@ -318,6 +406,8 @@ public class LLMQueryEngine {
             // 检查回复内容是否包含结束标记
             if (content != null && content.contains(FINISH_MARKER)) {
                 logger.info("[LLMQueryEngine] 检测到结束标记 " + FINISH_MARKER + "，结束对话");
+                // 【任务生命周期】检查任务是否全部完成
+                taskLifecycleManager.checkTaskCompletion(session);
                 triggerStepComplete("LLM查询", "完成回复");
                 return CompletableFuture.completedFuture(
                     QueryResult.success(assistantMessage)
@@ -392,6 +482,13 @@ public class LLMQueryEngine {
             Consumer<String> contentConsumer,
             Consumer<String> thinkingConsumer,
             Consumer<LLMService.StreamToolCallEvent> toolCallConsumer) {
+        // 检测会话是否被外部压缩（如 /compact 命令），如果是则重置 TokenBudget
+        if (session.getCompactCount() > lastSeenCompactCount) {
+            resetTokenBudget();
+            lastSeenCompactCount = session.getCompactCount();
+            logger.info("[LLMQueryEngine] Context compacted detected, TokenBudget reset.");
+        }
+
         // 检查 Token 预算
         if (tokenBudget.isExhausted()) {
             logger.warning("[LLMQueryEngine] Token budget exhausted: " + tokenBudget);
@@ -401,23 +498,27 @@ public class LLMQueryEngine {
             );
         }
 
-        // 自动触发上下文压缩（当预算使用超过 60% 时）
-        if (tokenBudget.usageRatio() > 0.60 && session.getMessages().size() > 10) {
+        // 自动触发上下文压缩（当预算使用超过 70% 时）
+        if (tokenBudget.usageRatio() > 0.70 && session.getMessages().size() > 10) {
             logger.info("[LLMQueryEngine] Token budget usage=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100)
                 + ", auto-compacting context...");
+            int beforeCount = session.getMessages().size();
             List<Message> compacted = compactionStrategy.compact(session.getMessages());
-            if (compacted != null && compacted.size() < session.getMessages().size()) {
+            if (compacted != null && compacted.size() < beforeCount) {
                 session.clearMessages();
                 compacted.forEach(session::addMessage);
-                logger.info("[LLMQueryEngine] Auto-compacted: " + session.getMessages().size() + " messages remaining");
+                logger.info("[LLMQueryEngine] Auto-compacted: " + beforeCount + " -> " + session.getMessages().size()
+                    + " messages, budget=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100));
+            } else {
+                logger.warning("[LLMQueryEngine] Auto-compact skipped: result size not reduced (before=" + beforeCount + ")");
             }
         }
 
-        // Token 预算紧张时注入建议
+        // Token 预算紧张时缓存建议（将在 convertSessionMessages 中临时注入，不保存到 session 历史）
         if (iteration > 0) {
             String advice = tokenBudget.toPromptAdvice();
-            if (!advice.isEmpty() && !hasRecentSystemPrompt("[Token Budget]")) {
-                session.addMessage(Message.createSystemMessage(advice));
+            if (!advice.isEmpty()) {
+                this.pendingBudgetAdvice = advice;
             }
         }
 
@@ -518,6 +619,7 @@ public class LLMQueryEngine {
         if (response.getReasoningContent() != null && !response.getReasoningContent().isEmpty()) {
             String think = response.getReasoningContent();
             logger.info("[LLMQueryEngine] AI思考内容: " + think);
+            System.out.println("🤔 AI思考: " + think);
         }
         
         // 创建助手消息
@@ -646,6 +748,8 @@ public class LLMQueryEngine {
             .thenCompose(v -> {
                 // 添加工具结果到会话
                 int resultIndex = 1;
+                boolean hasAskUserQuestion = false;
+                boolean hasError = false;
                 for (CompletableFuture<ToolExecutionResult> future : futures) {
                     try {
                         ToolExecutionResult result = future.get();
@@ -668,6 +772,14 @@ public class LLMQueryEngine {
                             result.getToolCallId() + ", toolName=" + result.getToolName());
                         session.addMessage(toolResultMsg);
                         
+                        // 【任务生命周期】检测关键工具
+                        if ("AskUserQuestion".equals(result.getToolName())) {
+                            hasAskUserQuestion = true;
+                        }
+                        if (!success) {
+                            hasError = true;
+                        }
+                        
                     } catch (Exception e) {
                         logger.severe("[LLMQueryEngine] Failed to get tool result: " + e.getMessage());
                         pipeline.publish(new ObservationEvent.StepComplete("工具执行", "执行失败: " + e.getMessage()));
@@ -683,7 +795,27 @@ public class LLMQueryEngine {
                             "Error: Failed to get tool result - " + e.getMessage()
                         );
                         session.addMessage(errorMsg);
+                        hasError = true;
                     }
+                    resultIndex++;
+                }
+                
+                // 【任务生命周期】根据工具结果更新任务状态
+                if (hasAskUserQuestion) {
+                    // AskUserQuestion 的结果作为等待的问题描述
+                    String question = futures.stream()
+                        .map(f -> {
+                            try { return f.get(); } catch (Exception e) { return null; }
+                        })
+                        .filter(r -> r != null && "AskUserQuestion".equals(r.getToolName()))
+                        .findFirst()
+                        .map(ToolExecutionResult::getResult)
+                        .orElse("需要用户补充信息");
+                    taskLifecycleManager.waitForUserInput(session, question);
+                } else if (hasError) {
+                    taskLifecycleManager.failStep(session, "工具执行失败");
+                } else {
+                    taskLifecycleManager.advanceStep(session, "工具执行成功");
                 }
                 
                 // 触发事件：继续分析
@@ -813,11 +945,13 @@ public class LLMQueryEngine {
         int modelContextLimit = llmService.getContextWindow();
         // TokenBudget 应比模型窗口更早触发压缩，防止预算耗尽
         int budgetLimit = (int) Math.min(modelContextLimit, tokenBudget.getTotalBudget());
+        // 动态计算消息数限制：每 10K token 允许 1 条消息，最少保留 50 条
+        int dynamicMaxMessages = Math.max(50, budgetLimit / 10_000);
         return new ContextWindowManager(
-            budgetLimit,        // 取模型窗口与 TokenBudget 的较小值
-            30,                 // 最大消息数限制，防止消息过多膨胀
-            6,                  // 最小保留消息数，确保工具调用链完整
-            compactionStrategy  // LLM 语义压缩策略
+            budgetLimit,           // 取模型窗口与 TokenBudget 的较小值
+            dynamicMaxMessages,    // 动态最大消息数限制
+            6,                     // 最小保留消息数，确保工具调用链完整
+            compactionStrategy     // LLM 语义压缩策略
         );
     }
     
@@ -885,6 +1019,12 @@ public class LLMQueryEngine {
             }
         }
         
+        // 临时注入 Token 预算建议（仅当前请求有效，不进入 session 历史）
+        if (pendingBudgetAdvice != null && !pendingBudgetAdvice.isEmpty()) {
+            result.add(LLMMessage.system(pendingBudgetAdvice));
+            pendingBudgetAdvice = null;
+        }
+        
         return result;
     }
     
@@ -904,7 +1044,8 @@ public class LLMQueryEngine {
     }
     
     /**
-     * 从 TOOL 消息中提取结果内容（使用格式化的完整内容）
+     * 从 TOOL 消息中提取结果内容
+     * 仅返回结果字符串，丢弃工具名和输入参数；过长结果自动截断以节省 token。
      */
     private String extractToolResultContent(Message msg) {
         if (msg.getContent() == null || msg.getContent().isEmpty()) {
@@ -913,8 +1054,11 @@ public class LLMQueryEngine {
         for (Message.ContentBlock block : msg.getContent()) {
             if (block instanceof Message.ToolResultContent) {
                 Message.ToolResultContent trc = (Message.ToolResultContent) block;
-                // 使用格式化方法，包含输入和输出
-                return trc.getFormattedContent();
+                String result = trc.getResult() != null ? trc.getResult().toString() : "";
+                if (result.length() > 800) {
+                    result = result.substring(0, 800) + "\n...[内容已截断]";
+                }
+                return result;
             }
         }
         return msg.getTextContent();
@@ -999,7 +1143,7 @@ public class LLMQueryEngine {
         private Duration timeout = Duration.ofMinutes(5);
         private int maxEmptyResponses = DEFAULT_MAX_EMPTY_RESPONSES;
         private boolean reasoningModel = false;
-        private long tokenBudget = 500_000; // 默认 500K token 预算
+        private long tokenBudget = 1_000_000; // 默认 1M token 预算
         
         /**
          * 从 JwcodeConfig 创建 EngineConfig
@@ -1011,7 +1155,7 @@ public class LLMQueryEngine {
                 if (engine != null) {
                     engineConfig.setMaxIterations(engine.getMaxIterations());
                     engineConfig.setTimeout(Duration.ofMinutes(engine.getTimeoutMinutes()));
-                    // tokenBudget 可从配置读取（如配置中存在）
+                    engineConfig.setTokenBudget(engine.getTokenBudget());
                 }
             }
             return engineConfig;

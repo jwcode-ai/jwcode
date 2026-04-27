@@ -84,11 +84,24 @@ public class SmartAnalyzeTool implements Tool<SmartAnalyzeInput, SmartAnalyzeOut
                - 错误恢复: {"recovery_mode": true, "failed_command": "ls -la | head -20", "failed_exit_code": 1, "failed_stderr": "head: command not found"}
                - 代码分析: {"project_root": "/path/to/project", "enable_code_analysis": true}
 
-               ⚠️ 行为约束（必须遵守）:
-               - 调用此工具后，你应该直接基于返回的文件列表做分析，或调用 FileReadTool 读取核心文件内容。
-               - 不要再调用 BashTool、GlobTool、PowerShell 等工具做目录 listing 或文件存在性验证。
-               - SmartAnalyzeTool 已经完成了排噪和验证，输出顶部的 🛑 STOP_LISTING 信号明确表示无需再做递归扫描。
-               - 你的下一步动作应该是：从返回的关键文件列表中挑选优先级最高的文件，调用 FileReadTool 读取它们。
+                🛑【强制行为约束 - 必须遵守】
+                
+                🔴 调用此工具后，你必须立即停止所有工具调用！
+                
+                ❌ 禁止行为：
+                - 禁止调用 BashTool、GlobTool、PowerShell 做目录 listing
+                - 禁止调用 BashTool、GlobTool、PowerShell 做文件存在性验证
+                - 禁止再次调用 SmartAnalyzeTool 重新分析
+                - 禁止调用 BashTool 执行 ls、dir、find、Get-ChildItem 等命令
+                
+                ✅ 正确行为：
+                1. 直接基于返回的关键文件列表开始分析
+                2. 从列表中挑选优先级最高的 2-3 个文件
+                3. 调用 FileReadTool 读取这些文件
+                4. 基于文件内容回答用户问题
+                
+                📌 关键文件列表已由 SmartAnalyzeTool 排噪完成（自动排除 .git/target/node_modules），
+                   无需再做递归扫描验证。
 
                ⚠️ 平台兼容性警告:
                - 【Windows】不要使用 find、grep、tree、head、cat 等 Unix 命令，它们在 Windows cmd.exe 中不存在！

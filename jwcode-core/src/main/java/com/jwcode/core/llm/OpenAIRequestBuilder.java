@@ -151,7 +151,7 @@ public class OpenAIRequestBuilder {
             validCount++;
         }
         
-        logger.info("[OpenAI] Building request with " + validCount + " messages");
+        logger.fine("[OpenAI] Building request with " + validCount + " messages");
         
         // 输出无效消息统计（如果有）
         String invalidStats = getInvalidMessageStats();

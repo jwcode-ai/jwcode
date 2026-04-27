@@ -237,6 +237,8 @@ public class ToolRegistry {
         // 注册内置工具 - 与 JavaScript 项目对齐
         registry.register(new BashTool());
         registry.register(new FileReadTool());
+        registry.register(new BatchReadTool());
+        registry.register(new MergeFilesTool());
         registry.register(new FileEditTool());
         registry.register(new FileWriteTool());
         registry.register(new GrepTool());

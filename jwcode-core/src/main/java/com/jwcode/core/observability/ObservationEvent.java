@@ -117,4 +117,40 @@ public sealed interface ObservationEvent {
             this(chunk, Instant.now());
         }
     }
+
+    /**
+     * 任务状态变更 — 当前激活任务的状态流转
+     */
+    record TaskStateChanged(String taskId, String taskDescription,
+                            com.jwcode.core.task.TaskStatus oldStatus,
+                            com.jwcode.core.task.TaskStatus newStatus,
+                            String reason, Instant timestamp) implements ObservationEvent {
+        public TaskStateChanged(String taskId, String taskDescription,
+                                com.jwcode.core.task.TaskStatus oldStatus,
+                                com.jwcode.core.task.TaskStatus newStatus,
+                                String reason) {
+            this(taskId, taskDescription, oldStatus, newStatus, reason, Instant.now());
+        }
+    }
+
+    /**
+     * 任务计划更新 — 步骤进度变化
+     */
+    record TaskPlanUpdated(String taskId, int totalSteps, int completedSteps,
+                           String currentStepDescription, Instant timestamp) implements ObservationEvent {
+        public TaskPlanUpdated(String taskId, int totalSteps, int completedSteps,
+                               String currentStepDescription) {
+            this(taskId, totalSteps, completedSteps, currentStepDescription, Instant.now());
+        }
+    }
+
+    /**
+     * 等待用户输入 — 任务阻塞等待补充信息
+     */
+    record WaitingForInput(String taskId, String question,
+                           Instant timestamp) implements ObservationEvent {
+        public WaitingForInput(String taskId, String question) {
+            this(taskId, question, Instant.now());
+        }
+    }
 }

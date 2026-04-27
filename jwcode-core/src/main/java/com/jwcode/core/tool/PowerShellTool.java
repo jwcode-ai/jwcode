@@ -7,11 +7,21 @@ import com.jwcode.core.tool.context.ToolExecutionContext;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 
 public class PowerShellTool implements Tool<PowerShellTool.Input, PowerShellTool.Output, PowerShellTool.Progress> {
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final int MAX_FILE_LIST_RESULTS = 100;
+    private static final Set<String> IGNORED_PATTERNS = new HashSet<>(Arrays.asList(
+        "\\.git", "node_modules", "target", "\\.class", "\\.jar",
+        "__pycache__", "\\.venv", "\\.idea", "\\.DS_Store"
+    ));
     
     @Override public String getName() { return "PowerShell"; }
     @Override public String getDescription() { return "执行 PowerShell 命令"; }
@@ -78,7 +88,7 @@ public class PowerShellTool implements Tool<PowerShellTool.Input, PowerShellTool
                 if (exitCode == 0) {
                     Output result = new Output();
                     result.success = true;
-                    result.output = output.toString();
+                    result.output = filterFileListOutput(output.toString(), command);
                     result.error = error.toString();
                     result.exitCode = exitCode;
                     return ToolResult.success(result);
@@ -130,6 +140,82 @@ public class PowerShellTool implements Tool<PowerShellTool.Input, PowerShellTool
         // PowerShell 命令可能是只读也可能是破坏性的，这里保守估计
         String cmd = input.command != null ? input.command.toLowerCase() : "";
         return cmd.startsWith("get-") || cmd.startsWith("test-") || cmd.startsWith("select-");
+    }
+    
+    /**
+     * 过滤文件列表输出，自动忽略无关文件并限制数量
+     */
+    private String filterFileListOutput(String output, String command) {
+        String lowerCommand = command.toLowerCase();
+        boolean isFileListCommand = lowerCommand.contains("get-childitem") ||
+                                   lowerCommand.contains("gci") ||
+                                   lowerCommand.contains("dir ") ||
+                                   lowerCommand.contains("ls ");
+        
+        if (!isFileListCommand) {
+            return output;
+        }
+        
+        String[] lines = output.split("\n");
+        List<String> resultLines = new ArrayList<>();
+        int ignoredCount = 0;
+        
+        for (String line : lines) {
+            if (shouldIgnoreLine(line)) {
+                ignoredCount++;
+                continue;
+            }
+            resultLines.add(line);
+        }
+        
+        StringBuilder filtered = new StringBuilder();
+        boolean truncated = false;
+        int totalResults = resultLines.size();
+        
+        if (totalResults > MAX_FILE_LIST_RESULTS) {
+            for (int i = 0; i < MAX_FILE_LIST_RESULTS; i++) {
+                filtered.append(resultLines.get(i)).append("\n");
+            }
+            filtered.append("\n⚠️ 文件过多（共 ").append(totalResults).append(" 个，超过 ").append(MAX_FILE_LIST_RESULTS).append(" 个限制）。已只显示前 ").append(MAX_FILE_LIST_RESULTS).append(" 个。\n");
+            filtered.append("💡 建议：请按子目录逐个扫描，或使用更精确的过滤条件（如 -Filter '*.md'、-Depth 2、-Exclude node_modules）。\n");
+            truncated = true;
+        } else {
+            for (String line : resultLines) {
+                filtered.append(line).append("\n");
+            }
+        }
+        
+        String result = filtered.toString();
+        if (ignoredCount > 0) {
+            if (truncated) {
+                result = result.trim() + "\n[此外已自动过滤 " + ignoredCount + " 个无关文件/目录，如 .git、target、node_modules 等]";
+            } else {
+                result = result.trim() + "\n\n[已自动过滤 " + ignoredCount + " 个无关文件/目录，如 .git、target、node_modules 等]";
+            }
+        }
+        
+        return result;
+    }
+    
+    /**
+     * 检查行是否应该被忽略
+     */
+    private boolean shouldIgnoreLine(String line) {
+        if (line == null || line.trim().isEmpty()) {
+            return false;
+        }
+        String normalizedLine = line.replace('\\', '/');
+        for (String pattern : IGNORED_PATTERNS) {
+            try {
+                String regex = pattern.contains("\\\\") ? pattern.replace("\\\\", "/") : pattern;
+                if (normalizedLine.matches(".*" + regex + ".*")) {
+                    return true;
+                }
+            } catch (Exception e) {
+                // 正则表达式无效，跳过此模式
+            }
+        }
+        return false;
     }
     
     @JsonIgnoreProperties(ignoreUnknown = true)

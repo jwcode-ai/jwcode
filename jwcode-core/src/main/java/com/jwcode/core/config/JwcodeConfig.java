@@ -324,6 +324,9 @@ public class JwcodeConfig {
         
         @JsonProperty("timeout-minutes")
         private int timeoutMinutes = 5;   // 超时时间（分钟）
+        
+        @JsonProperty("token-budget")
+        private long tokenBudget = 1_000_000;  // Token 预算，默认 1M
     }
     
     /**

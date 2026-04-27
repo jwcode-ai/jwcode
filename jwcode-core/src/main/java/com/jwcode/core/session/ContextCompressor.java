@@ -72,13 +72,26 @@ public class ContextCompressor {
         }
 
         // 3. 评估早期消息的价值
-        List<Message> oldMessages = messages.subList(0, messages.size() - recentCount);
+        List<Message> oldMessages = new ArrayList<>(messages.subList(0, messages.size() - recentCount));
+
+        // 保护前 2 条非系统消息（通常是用户初始任务描述）
+        int preservedEarlyCount = 0;
+        for (int i = 0; i < oldMessages.size() && preservedEarlyCount < 2; i++) {
+            Message msg = oldMessages.get(i);
+            if (msg.getRole() != Message.Role.SYSTEM) {
+                retained.add(msg);
+                oldMessages.remove(i);
+                i--;
+                preservedEarlyCount++;
+            }
+        }
+
         for (Message msg : oldMessages) {
             if (msg.getRole() == Message.Role.SYSTEM) {
                 continue; // 系统消息已处理
             }
 
-            // 高价值：被标记为重要 或 包含失败信息 或 用户明确要求
+            // 高价值：被标记为重要 或 包含失败信息 或 用户明确要求 或 任务列表
             if (isHighValue(msg, importantIds)) {
                 retained.add(msg);
                 continue;
@@ -127,6 +140,10 @@ public class ContextCompressor {
         // 用户明确要求
         if (msg.getRole() == Message.Role.USER &&
             (lower.contains("必须") || lower.contains("不要") || lower.contains("重要"))) {
+            return true;
+        }
+        // 任务列表相关
+        if (lower.contains("todo") || lower.contains("待办") || lower.contains("任务列表") || lower.contains("todos")) {
             return true;
         }
         return false;

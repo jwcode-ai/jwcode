@@ -66,17 +66,19 @@ public class FileReadTool implements Tool<FileReadInput, FileReadOutput, FileRea
                - start_line: 起始行号，从 1 开始（可选，默认：1）
                - end_line: 结束行号（可选，默认：读取到文件末尾）
                - reason: 读取文件的原因（可选）
-               - offset: 偏移量（可选）
+               - offset: 行偏移量（可选，默认：0）。在 start_line 基础上额外跳过的行数，用于大文件分块续读
                
                示例:
                - 读取整个文件：{"file_path": "src/main.java"}
                - 读取指定行：{"file_path": "src/main.java", "start_line": 1, "end_line": 50}
                - 读取最后 100 行：{"file_path": "log.txt", "start_line": -100}
+               - 分块续读（跳过前 1000 行）：{"file_path": "log.txt", "start_line": 1, "offset": 1000, "end_line": 2000}
                
                注意:
                - 对于大文件，会自动截断以避免超出 token 限制
                - 图片文件会返回 base64 编码
-                - PDF 文件会尝试提取文本内容
+               - PDF 文件会尝试提取文本内容
+               - 不要猜测文件路径或文件名。如果不确定文件是否存在，先使用 GlobTool 搜索确认
                 """;
     }
     
@@ -308,8 +310,9 @@ public class FileReadTool implements Tool<FileReadInput, FileReadOutput, FileRea
         List<String> lines = Files.readAllLines(filePath);
         int totalLines = lines.size();
         
-        // 计算读取范围
-        int startLine = input.getEffectiveStartLine();
+        // 计算读取范围（支持 offset 分块续读）
+        int effectiveOffset = input.getEffectiveOffset();
+        int startLine = input.getEffectiveStartLine() + effectiveOffset;
         int endLine = input.endLine() != null ? input.endLine() : totalLines;
         
         // 调整范围

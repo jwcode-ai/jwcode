@@ -35,6 +35,7 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
     private static final int DEFAULT_TIMEOUT_MS = 600000; // 10 分钟
     private static final int MAX_OUTPUT_LINES = 1000;
     private static final int MAX_OUTPUT_CHARS = 100000; // 100KB
+    private static final int MAX_FILE_LIST_RESULTS = 100;
     
     // 危险命令模式
     private static final Set<String> DANGEROUS_COMMANDS = new HashSet<>(Arrays.asList(
@@ -249,11 +250,40 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
     }
     
     /**
-     * 检测命令是否使用了 Windows 上不存在的 Unix 命令
+     * 检测命令是否使用了 Windows 上不存在的 Unix 命令或不兼容语法
      */
     private String detectUnixCommandWarning(String command) {
         String lower = command.toLowerCase();
         String trimmed = command.trim();
+        
+        // 【修复】检测 PowerShell 不兼容的链式命令语法
+        if (trimmed.contains(" && ") || trimmed.contains("&&")) {
+            return "⚠️ PowerShell / cmd.exe 不支持 '&&' 链式命令！建议：\n" +
+                   "  - 使用 ';' 分隔多个命令（顺序执行）\n" +
+                   "  - 或使用 PowerShell: 'if ($?) { command2 }' 条件执行";
+        }
+        
+        if (trimmed.contains(" || ") || (trimmed.contains("||") && !trimmed.contains("|"))) {
+            return "⚠️ PowerShell / cmd.exe 不支持 '||' 链式命令！建议：\n" +
+                   "  - 使用 PowerShell: 'if (-not $?) { command2 }' 条件执行";
+        }
+        
+        // 【修复】检测反引号转义序列（JSON 传递后易解析失败）
+        if (command.contains("`") && !command.contains("``")) {
+            return "⚠️ 命令包含反引号，在 JSON → Shell 传递中可能解析失败！建议：\n" +
+                   "  - 使用双引号字符串包裹含特殊字符的参数\n" +
+                   "  - 避免在命令中使用反引号作为转义符";
+        }
+        
+        // 【修复】检测裸字符串被当作命令（如 "Total:"）
+        String firstToken = trimmed.split("\\s+")[0];
+        if (!firstToken.isEmpty() && !firstToken.startsWith("\"") && !firstToken.startsWith("'") &&
+            !firstToken.startsWith("$") && !firstToken.startsWith("@") &&
+            (firstToken.endsWith(":") || firstToken.contains(":") && !firstToken.contains("\\") && !firstToken.contains("/"))) {
+            return "⚠️ 命令片段 '" + firstToken + "' 可能被 PowerShell 解释为无效语法！建议：\n" +
+                   "  - 使用引号包裹字符串参数: '\"Total: value\"'\n" +
+                   "  - 或使用 Write-Output 输出文本";
+        }
         
         // find 命令检测（最常见的问题）
         if (trimmed.startsWith("find ") || lower.contains(" find ") || 
@@ -472,13 +502,63 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
      */
     private List<String> prepareCommand(String command) {
         // 根据操作系统选择 shell
-        String shell = System.getProperty("os.name").toLowerCase().contains("win") 
-            ? "cmd.exe" : "/bin/bash";
+        boolean isWindows = System.getProperty("os.name").toLowerCase().contains("win");
         
-        String shellArg = System.getProperty("os.name").toLowerCase().contains("win") 
-            ? "/c" : "-c";
+        // 【修复】自动检测 PowerShell 命令并切换执行器
+        if (isWindows && isPowerShellCommand(command)) {
+            logger.fine("Detected PowerShell command, using powershell.exe: " + truncateForLog(command));
+            return Arrays.asList("powershell.exe", "-NoProfile", "-Command", command);
+        }
+        
+        String shell = isWindows ? "cmd.exe" : "/bin/bash";
+        String shellArg = isWindows ? "/c" : "-c";
         
         return Arrays.asList(shell, shellArg, command);
+    }
+    
+    /**
+     * 检测命令是否为 PowerShell 命令
+     * 包含 PowerShell cmdlet 时自动使用 powershell.exe 执行
+     */
+    private boolean isPowerShellCommand(String command) {
+        if (command == null || command.isEmpty()) {
+            return false;
+        }
+        
+        String lower = command.toLowerCase();
+        
+        // 常见 PowerShell cmdlet 检测
+        String[] psCmdlets = {
+            "get-childitem", "get-content", "get-item", "get-location",
+            "select-string", "set-location", "test-path", "new-item",
+            "remove-item", "copy-item", "move-item", "invoke-restmethod",
+            "invoke-webrequest", "write-output", "write-host"
+        };
+        
+        for (String cmdlet : psCmdlets) {
+            if (lower.contains(cmdlet)) {
+                return true;
+            }
+        }
+        
+        // PowerShell 特有语法检测
+        if (lower.contains("-path ") || lower.contains("-filter ") ||
+            lower.contains("-recurse") || lower.contains("-first ") ||
+            lower.contains("-last ") || lower.contains("-pattern ") ||
+            lower.contains("| where-object") || lower.contains("| select-object") ||
+            lower.contains("$env:") || lower.contains("${")) {
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * 日志输出时截断命令（避免敏感信息泄露）
+     */
+    private String truncateForLog(String command) {
+        if (command == null) return "null";
+        return command.length() > 50 ? command.substring(0, 50) + "..." : command;
     }
     
     /**
@@ -567,20 +647,41 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
         }
         
         String[] lines = output.split("\n");
-        StringBuilder filtered = new StringBuilder();
-        int filteredCount = 0;
+        List<String> resultLines = new ArrayList<>();
+        int ignoredCount = 0;
         
         for (String line : lines) {
             if (shouldIgnoreLine(line)) {
-                filteredCount++;
+                ignoredCount++;
                 continue;
             }
-            filtered.append(line).append("\n");
+            resultLines.add(line);
+        }
+        
+        StringBuilder filtered = new StringBuilder();
+        boolean truncated = false;
+        int totalResults = resultLines.size();
+        
+        if (totalResults > MAX_FILE_LIST_RESULTS) {
+            for (int i = 0; i < MAX_FILE_LIST_RESULTS; i++) {
+                filtered.append(resultLines.get(i)).append("\n");
+            }
+            filtered.append("\n⚠️ 文件过多（共 ").append(totalResults).append(" 个，超过 ").append(MAX_FILE_LIST_RESULTS).append(" 个限制）。已只显示前 ").append(MAX_FILE_LIST_RESULTS).append(" 个。\n");
+            filtered.append("💡 建议：请按子目录逐个扫描，或使用更精确的过滤条件（如 -Filter '*.java'、-Depth 2、-Exclude node_modules）。\n");
+            truncated = true;
+        } else {
+            for (String line : resultLines) {
+                filtered.append(line).append("\n");
+            }
         }
         
         String result = filtered.toString();
-        if (filteredCount > 0) {
-            result = result.trim() + "\n\n[已自动过滤 " + filteredCount + " 个无关文件/目录，如 .git、target、.class 等]";
+        if (ignoredCount > 0) {
+            if (truncated) {
+                result = result.trim() + "\n[此外已自动过滤 " + ignoredCount + " 个无关文件/目录，如 .git、target、node_modules 等]";
+            } else {
+                result = result.trim() + "\n\n[已自动过滤 " + ignoredCount + " 个无关文件/目录，如 .git、target、.class 等]";
+            }
         }
         
         return result;

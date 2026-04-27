@@ -132,24 +132,41 @@ public class ContextWindowManager {
             result.add(systemMessage);
         }
         
-        // 如果消息数不多，直接返回
-        if (historicalMessages.size() <= minMessages) {
-            result.addAll(historicalMessages);
+        // 【修复】保护前 2 条非系统消息（通常是用户初始任务描述），防止截断后任务目标丢失
+        List<Message> preservedEarly = new ArrayList<>();
+        int preservedCount = 0;
+        for (Message msg : historicalMessages) {
+            if (preservedCount < 2) {
+                preservedEarly.add(msg);
+                preservedCount++;
+            } else {
+                break;
+            }
+        }
+        
+        // 从待压缩历史中移除已保护消息
+        List<Message> compressibleHistory = new ArrayList<>(historicalMessages);
+        compressibleHistory.removeAll(preservedEarly);
+        
+        // 如果剩余消息数不多，直接返回
+        if (compressibleHistory.size() <= minMessages) {
+            result.addAll(preservedEarly);
+            result.addAll(compressibleHistory);
             return result;
         }
         
-        // 保留最近的消息
-        int recentCount = Math.min(minMessages, historicalMessages.size());
-        int startIndex = historicalMessages.size() - recentCount;
+        // 保留最近的消息（从 compressibleHistory 中计算）
+        int recentCount = Math.min(minMessages, compressibleHistory.size());
+        int startIndex = compressibleHistory.size() - recentCount;
         
         // 【关键修复】确保截断点不破坏 tool_calls 配对
         // 如果从截断点开始的第一个消息是 TOOL，需要向前包含对应的 ASSISTANT
-        startIndex = fixTruncationBoundary(historicalMessages, startIndex);
+        startIndex = fixTruncationBoundary(compressibleHistory, startIndex);
         
-        recentMessages = historicalMessages.subList(startIndex, historicalMessages.size());
+        recentMessages = compressibleHistory.subList(startIndex, compressibleHistory.size());
         
         // 对旧消息进行摘要
-        List<Message> oldMessages = historicalMessages.subList(0, historicalMessages.size() - recentCount);
+        List<Message> oldMessages = compressibleHistory.subList(0, compressibleHistory.size() - recentMessages.size());
         if (!oldMessages.isEmpty()) {
             Message summaryMessage = createSummaryMessage(oldMessages);
             if (summaryMessage != null) {
@@ -157,14 +174,17 @@ public class ContextWindowManager {
             }
         }
         
+        // 添加被保护的早期消息（在摘要之后、最近消息之前）
+        result.addAll(preservedEarly);
+        
         // 添加最近的消息
         result.addAll(recentMessages);
         
-        // 如果还是超过限制，进行截断
-        while (result.size() > maxMessages && result.size() > minMessages + 1) {
-            // 保留系统消息和最近的消息，移除中间的摘要
+        // 如果还是超过限制，进行截断（优先移除摘要，保留早期消息和最近消息）
+        while (result.size() > maxMessages && result.size() > minMessages + preservedEarly.size() + 1) {
+            // 保留系统消息、早期消息和最近的消息，移除中间的摘要
             int removeIndex = systemMessage != null ? 1 : 0;
-            if (removeIndex < result.size() - minMessages) {
+            if (removeIndex < result.size() - minMessages - preservedEarly.size()) {
                 result.remove(removeIndex);
             } else {
                 break;

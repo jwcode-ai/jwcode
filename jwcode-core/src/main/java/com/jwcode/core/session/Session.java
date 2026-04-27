@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.jwcode.common.util.Preconditions;
 import com.jwcode.core.model.Message;
+import com.jwcode.core.task.ActiveTask;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,6 +47,8 @@ public class Session {
     private final Map<String, Object> metadata;
     private final List<SessionInsight> insights;
     private final Set<String> importantMessageIds;
+    private int compactCount;
+    private ActiveTask activeTask;
     
     public Session(String id, String workingDirectory) {
         this.id = Preconditions.checkNotNull(id, "id cannot be null");
@@ -56,6 +59,7 @@ public class Session {
         this.metadata = new HashMap<>();
         this.insights = new CopyOnWriteArrayList<>();
         this.importantMessageIds = new HashSet<>();
+        this.activeTask = null;
         // 模型必须通过 setModel() 设置，不允许硬编码
         this.model = null;
     }
@@ -70,6 +74,7 @@ public class Session {
         this.metadata = new HashMap<>();
         this.insights = new CopyOnWriteArrayList<>();
         this.importantMessageIds = new HashSet<>();
+        this.activeTask = null;
         this.model = null;
     }
     
@@ -111,6 +116,21 @@ public class Session {
         return this;
     }
 
+    /**
+     * 标记会话已被压缩，用于通知 LLMQueryEngine 重置 TokenBudget
+     */
+    public synchronized void markCompacted() {
+        this.compactCount++;
+        this.updatedAt = Instant.now();
+    }
+
+    /**
+     * 获取会话被压缩的次数
+     */
+    public synchronized int getCompactCount() {
+        return this.compactCount;
+    }
+
     // ==================== 活的 Session — AI 自我进化记忆 ====================
 
     /**
@@ -150,6 +170,59 @@ public class Session {
 
     public Set<String> getImportantMessageIds() {
         return Collections.unmodifiableSet(new HashSet<>(importantMessageIds));
+    }
+
+    // ==================== 激活任务管理 ====================
+
+    /**
+     * 获取当前激活任务
+     */
+    public ActiveTask getActiveTask() {
+        return activeTask;
+    }
+
+    /**
+     * 设置当前激活任务
+     */
+    public Session setActiveTask(ActiveTask activeTask) {
+        this.activeTask = activeTask;
+        this.updatedAt = Instant.now();
+        return this;
+    }
+
+    /**
+     * 为新任务重置会话上下文。
+     * 保留第一条 system message，清空其余消息，重置压缩计数。
+     */
+    public Session resetForNewTask() {
+        // 保存第一条 system message
+        Message systemPrompt = null;
+        for (Message msg : this.messages) {
+            if (msg.getRole() == Message.Role.SYSTEM) {
+                systemPrompt = msg;
+                break;
+            }
+        }
+
+        // 清空消息
+        clearMessages();
+
+        // 恢复系统提示
+        if (systemPrompt != null) {
+            addMessage(systemPrompt);
+        }
+
+        // 重置压缩计数
+        this.compactCount = 0;
+
+        // 清空重要消息标记（保留到新任务中可能有用的）
+        this.importantMessageIds.clear();
+
+        // 清空洞察（可选：是否保留跨任务的洞察？当前选择清空）
+        this.insights.clear();
+
+        logger.info("[Session] 上下文已重置，保留 system prompt，消息数={}", this.messages.size());
+        return this;
     }
 
     /**
@@ -257,11 +330,35 @@ public class Session {
             msgMap.put("role", msg.getRole().name());
             msgMap.put("content", msg.getTextContent());
             msgMap.put("reasoningContent", msg.getReasoningContent());
+            // 序列化 toolCalls
+            if (msg.hasToolCalls()) {
+                List<Map<String, String>> toolCallsList = new ArrayList<>();
+                for (Message.ToolCallInfo tc : msg.getToolCalls()) {
+                    Map<String, String> tcMap = new HashMap<>();
+                    tcMap.put("id", tc.getId());
+                    tcMap.put("name", tc.getName());
+                    tcMap.put("arguments", tc.getArguments());
+                    toolCallsList.add(tcMap);
+                }
+                msgMap.put("toolCalls", toolCallsList);
+            }
             msgMap.put("timestamp", msg.getTimestamp().toString());
             messagesList.add(msgMap);
         }
         map.put("messages", messagesList);
         map.put("metadata", metadata);
+        // 序列化 activeTask（如果有）
+        if (activeTask != null) {
+            Map<String, Object> taskMap = new HashMap<>();
+            taskMap.put("taskId", activeTask.getTaskId());
+            taskMap.put("description", activeTask.getDescription());
+            taskMap.put("status", activeTask.getStatus().name());
+            taskMap.put("currentStepIndex", activeTask.getCurrentStepIndex());
+            taskMap.put("waitingFor", activeTask.getWaitingFor());
+            taskMap.put("createdAt", activeTask.getCreatedAt().toString());
+            taskMap.put("updatedAt", activeTask.getUpdatedAt().toString());
+            map.put("activeTask", taskMap);
+        }
         return map;
     }
     
@@ -290,7 +387,20 @@ public class Session {
                             break;
                         case "ASSISTANT":
                             String reasoningContent = (String) msgMap.get("reasoningContent");
-                            message = Message.createAssistantMessage(content, reasoningContent);
+                            @SuppressWarnings("unchecked")
+                            List<Map<String, Object>> toolCallsList = (List<Map<String, Object>>) msgMap.get("toolCalls");
+                            if (toolCallsList != null && !toolCallsList.isEmpty()) {
+                                List<Message.ToolCallInfo> toolCalls = new ArrayList<>();
+                                for (Map<String, Object> tcMap : toolCallsList) {
+                                    String tcId = (String) tcMap.get("id");
+                                    String tcName = (String) tcMap.get("name");
+                                    String tcArgs = (String) tcMap.get("arguments");
+                                    toolCalls.add(new Message.ToolCallInfo(tcId, tcName, tcArgs));
+                                }
+                                message = Message.createAssistantMessageWithToolCalls(content, toolCalls, reasoningContent);
+                            } else {
+                                message = Message.createAssistantMessage(content, reasoningContent);
+                            }
                             break;
                         case "SYSTEM":
                             message = Message.createSystemMessage(content);

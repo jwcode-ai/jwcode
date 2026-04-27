@@ -207,7 +207,7 @@ public class ToolExecutor {
             String inputPreview = inputJson != null 
                 ? truncateForLog(inputJson.toString(), 120) 
                 : (input != null ? truncateForLog(input.toString(), 120) : "");
-            logger.info("[Tool] " + toolName + " | input=" + inputPreview);
+            logger.fine("[Tool] " + toolName + " | input=" + inputPreview);
             
             // 执行工具 - 使用原始类型执行
             CompletableFuture<?> future = execute(tool, input, context, (Consumer) onProgress);
@@ -223,7 +223,7 @@ public class ToolExecutor {
                     String outputPreview = toolResult.getData() != null 
                         ? truncateForLog(tool.serializeOutput(toolResult.getData()).toString(), 120) 
                         : "(empty)";
-                    logger.info("[Tool] " + toolName + " OK | output=" + outputPreview);
+                    logger.fine("[Tool] " + toolName + " OK | output=" + outputPreview);
                     return ToolExecutionResult.success(toolName, toolResult);
                 } else {
                     String errorMsg = toolResult != null ? toolResult.getContent() : "未知错误";
