@@ -115,6 +115,21 @@ public class Session {
         this.updatedAt = Instant.now();
         return this;
     }
+    
+    /**
+     * 设置消息列表（用于上下文压缩后更新消息）
+     * 
+     * @param newMessages 压缩后的消息列表
+     * @return this
+     */
+    public Session setMessages(List<Message> newMessages) {
+        this.messages.clear();
+        if (newMessages != null) {
+            this.messages.addAll(newMessages);
+        }
+        this.updatedAt = Instant.now();
+        return this;
+    }
 
     /**
      * 标记会话已被压缩，用于通知 LLMQueryEngine 重置 TokenBudget

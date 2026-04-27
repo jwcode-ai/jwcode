@@ -42,8 +42,12 @@ public class PatternTool implements Tool<PatternInput, PatternOutput, PatternOut
         
         return CompletableFuture.supplyAsync(() -> {
             try {
-                // 验证输入
-                if (input.pattern() == null || input.pattern().isEmpty()) {
+                // 验证输入 - 支持 pattern 或 regex
+                String searchPattern = input.pattern();
+                if (searchPattern == null || searchPattern.isEmpty()) {
+                    searchPattern = input.regex();
+                }
+                if (searchPattern == null || searchPattern.isEmpty()) {
                     return ToolResult.error("搜索模式不能为空");
                 }
                 

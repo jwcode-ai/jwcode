@@ -971,6 +971,9 @@ public class LLMQueryEngine {
         if (messages.size() < originalCount) {
             logger.info("[LLMQueryEngine] 上下文压缩: " + originalCount + " -> " + messages.size() + 
                 " 条消息 (限制=" + windowManager.getContextLimit() + ")");
+            // 修复：压缩后的消息需要写回 session，否则下一轮会使用原始消息列表
+            session.setMessages(messages);
+            session.markCompacted();
         }
         
         List<LLMMessage> result = new ArrayList<>();

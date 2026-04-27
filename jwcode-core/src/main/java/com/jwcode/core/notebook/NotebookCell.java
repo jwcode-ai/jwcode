@@ -3,7 +3,14 @@ package com.jwcode.core.notebook;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
+import com.fasterxml.jackson.databind.DeserializationContext;
+import com.fasterxml.jackson.databind.JsonDeserializer;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 
+import java.io.IOException;
 import java.util.*;
 
 /**
@@ -75,7 +82,33 @@ public class NotebookCell {
     private CellType cellType;
     
     // Cell 内容（代码或 Markdown）
+    @JsonDeserialize(using = SourceDeserializer.class)
     private List<String> source;
+    
+    /**
+     * 自定义反序列化器：处理 String 或 Array 格式的 source 字段
+     */
+    public static class SourceDeserializer extends JsonDeserializer<List<String>> {
+        @Override
+        public List<String> deserialize(JsonParser p, DeserializationContext ctxt) throws IOException {
+            List<String> result = new ArrayList<>();
+            
+            if (p.currentToken().isStructStart()) {
+                // 是数组格式
+                JsonNode node = p.getCodec().readTree(p);
+                if (node.isArray()) {
+                    for (JsonNode element : node) {
+                        result.add(element.asText());
+                    }
+                }
+            } else if (p.currentToken() == JsonToken.VALUE_STRING) {
+                // 是字符串格式 - 转换为单元素列表
+                result.add(p.getValueAsString());
+            }
+            
+            return result;
+        }
+    }
     
     // 执行计数（仅 CODE 类型）
     @JsonProperty("execution_count")

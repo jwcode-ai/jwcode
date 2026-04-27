@@ -11,6 +11,7 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
@@ -170,6 +171,35 @@ public class WebFetchTool implements Tool<WebFetchTool.Input, WebFetchTool.Outpu
     }
     
     /**
+     * 从 Content-Type 头检测字符编码
+     */
+    private Charset detectCharset(String contentType) {
+        if (contentType == null) {
+            return StandardCharsets.UTF_8;
+        }
+        
+        // 查找 charset=xxx
+        int charsetIndex = contentType.toLowerCase().indexOf("charset=");
+        if (charsetIndex >= 0) {
+            String charsetPart = contentType.substring(charsetIndex + 8).trim();
+            // 去除可能的引号和分号
+            int endIndex = charsetPart.indexOf(';');
+            if (endIndex > 0) {
+                charsetPart = charsetPart.substring(0, endIndex);
+            }
+            charsetPart = charsetPart.replace('"', ' ').replace('\'', ' ').trim();
+            
+            try {
+                return Charset.forName(charsetPart);
+            } catch (Exception e) {
+                logger.warning("不支持的字符编码: " + charsetPart + ", 使用 UTF-8");
+            }
+        }
+        
+        return StandardCharsets.UTF_8;
+    }
+    
+    /**
      * 获取网页内容
      */
     private FetchResult fetchWebPage(String urlString, int maxLength, boolean extractArticle) throws Exception {
@@ -189,10 +219,13 @@ public class WebFetchTool implements Tool<WebFetchTool.Input, WebFetchTool.Outpu
             // 获取内容类型
             result.contentType = conn.getContentType();
             
+            // 动态检测编码
+            Charset charset = detectCharset(result.contentType);
+            
             // 读取内容
             StringBuilder content = new StringBuilder();
             try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                    new InputStreamReader(conn.getInputStream(), charset))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
                     content.append(line).append("\n");

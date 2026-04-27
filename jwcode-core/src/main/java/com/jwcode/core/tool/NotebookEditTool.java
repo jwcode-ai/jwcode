@@ -3,6 +3,8 @@ package com.jwcode.core.tool;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.jwcode.core.notebook.Notebook;
 import com.jwcode.core.notebook.NotebookCell;
 import com.jwcode.core.notebook.NotebookParser;
@@ -30,7 +32,9 @@ import java.util.logging.Logger;
 public class NotebookEditTool implements Tool<NotebookEditTool.Input, NotebookEditTool.Output, NotebookEditTool.Progress> {
     
     private static final Logger logger = Logger.getLogger(NotebookEditTool.class.getName());
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final ObjectMapper MAPPER = new ObjectMapper()
+            .registerModule(new JavaTimeModule())
+            .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
     
     private final NotebookParser parser;
     private final REPLFactory replFactory;

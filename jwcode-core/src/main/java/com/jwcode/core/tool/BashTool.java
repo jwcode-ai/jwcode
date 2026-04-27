@@ -236,6 +236,12 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
                     builder.addWarning(warning);
                 }
             }
+            
+            // 【新增】检测无法持久化的任务（会重试的任务）
+            String persistentWarning = detectPersistentChangeWarning(input.command());
+            if (persistentWarning != null) {
+                builder.addWarning(persistentWarning);
+            }
         }
         
         if (input.timeout() != null && input.timeout() < 100) {
@@ -247,6 +253,40 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
         }
         
         return builder.build();
+    }
+    
+    /**
+     * 检测命令是否尝试持久化状态变更（这类任务无法完成，会导致 AI 不断重试）
+     */
+    private String detectPersistentChangeWarning(String command) {
+        String lower = command.toLowerCase().trim();
+        
+        // 检测 cd 命令（切换工作目录）
+        if (lower.startsWith("cd ") || lower.equals("cd") || 
+            lower.startsWith("chdir ") || lower.equals("chdir") ||
+            lower.startsWith("pushd ") || lower.equals("pushd")) {
+            return "⚠️ 切换工作目录无法持久化！\n" +
+                   "  - Session 的 workingDirectory 在会话创建时已固定，无法通过命令修改\n" +
+                   "  - 每次命令执行都在独立进程中运行，目录变更不会保留\n" +
+                   "  - 建议：在命令中使用完整路径，或在 BashTool 的 cwd 参数中指定工作目录";
+        }
+        
+        // 检测 export/setx 命令（设置环境变量）
+        if (lower.startsWith("export ") || lower.startsWith("setx ") ||
+            lower.startsWith("set ") && lower.contains("=")) {
+            return "⚠️ 设置环境变量无法持久化！\n" +
+                   "  - 环境变量只在当前命令进程内有效\n" +
+                   "  - 建议：使用 BashTool 的 env 参数传递环境变量";
+        }
+        
+        // 检测 source 命令
+        if (lower.startsWith("source ") || lower.startsWith(". ")) {
+            return "⚠️ source 命令无法持久化环境变更！\n" +
+                   "  - 脚本中的环境修改只在当前进程内有效\n" +
+                   "  - 建议：直接在命令中使用完整路径和参数";
+        }
+        
+        return null;
     }
     
     /**
