@@ -59,11 +59,13 @@ public class LLMQueryEngine {
             .registerModule(new JavaTimeModule());
     
     public LLMQueryEngine(Session session, LLMService llmService, 
-                          ToolExecutor toolExecutor, EngineConfig config) {
+                          ToolExecutor toolExecutor, EngineConfig config,
+                          AgentRegistry agentRegistry) {
         this.session = session;
         this.llmService = llmService;
         this.toolExecutor = toolExecutor;
         this.config = config != null ? config : EngineConfig.defaultConfig();
+        this.agentRegistry = agentRegistry;
         if (this.config.getMaxMessageHistory() > 0) {
             session.setMaxMessageHistory(this.config.getMaxMessageHistory());
         }
@@ -78,6 +80,14 @@ public class LLMQueryEngine {
         this.tokenBudget = TokenBudget.of(this.config.getTokenBudget());
         this.compactionStrategy = new SimpleCompactionStrategy(llmService);
         this.taskLifecycleManager = new TaskLifecycleManager(llmService, this.pipeline);
+    }
+    
+    /**
+     * 兼容构造器：不需要 AgentRegistry
+     */
+    public LLMQueryEngine(Session session, LLMService llmService, 
+                          ToolExecutor toolExecutor, EngineConfig config) {
+        this(session, llmService, toolExecutor, config, null);
     }
     
     /**

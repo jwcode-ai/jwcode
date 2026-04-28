@@ -33,3 +33,7 @@ jwcode-cli/target/jwcode-cli-1.0.0-SNAPSHOT.jar
 jwcode-cli/target/original-jwcode-cli-1.0.0-SNAPSHOT.jar
 jwcode-common/target/jwcode-common-1.0.0-SNAPSHOT.jar
 jwcode-repl/target/jwcode-repl-1.0.0-SNAPSHOT.jar
+.jwcode/*
+jwcode-parser/target/*
+jwcode-ui/target/*
+jwcode-repl/target/jwcode-repl-1.0.0-SNAPSHOT.jar

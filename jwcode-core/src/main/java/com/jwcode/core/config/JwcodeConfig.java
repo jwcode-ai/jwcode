@@ -433,6 +433,39 @@ public class JwcodeConfig {
         
         @JsonProperty("token-threshold")
         private int tokenThreshold = 8000;
+        
+        // ========== 结构化上下文管理配置 ==========
+        @JsonProperty("structured-context-enabled")
+        private boolean structuredContextEnabled = true;
+        
+        @JsonProperty("max-active-size")
+        private int maxActiveSize = 50;
+        
+        @JsonProperty("min-retain-count")
+        private int minRetainCount = 5;
+        
+        @JsonProperty("enable-archive")
+        private boolean enableArchive = true;
+        
+        @JsonProperty("periodic-eval-interval")
+        private int periodicEvalInterval = 10;
+        
+        // ========== 安全守卫配置 ==========
+        @JsonProperty("enable-intent-protection")
+        private boolean enableIntentProtection = true;
+        
+        @JsonProperty("enable-refcount-protection")
+        private boolean enableRefCountProtection = true;
+        
+        @JsonProperty("enable-recent-protection")
+        private boolean enableRecentProtection = true;
+        
+        @JsonProperty("recent-protection-count")
+        private int recentProtectionCount = 10;
+        
+        // ========== AI 评估配置 ==========
+        @JsonProperty("enable-ai-evaluation")
+        private boolean enableAiEvaluation = true;
     }
     
     /**
