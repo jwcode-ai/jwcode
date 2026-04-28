@@ -60,6 +60,9 @@ public class LLMQueryEngine {
         this.llmService = llmService;
         this.toolExecutor = toolExecutor;
         this.config = config != null ? config : EngineConfig.defaultConfig();
+        if (this.config.getMaxMessageHistory() > 0) {
+            session.setMaxMessageHistory(this.config.getMaxMessageHistory());
+        }
         this.toolContext = new ToolExecutionContext(
             session,
             java.nio.file.Path.of(System.getProperty("user.dir")),
@@ -204,6 +207,17 @@ public class LLMQueryEngine {
             4. 如果需要用户补充信息，使用 AskUserQuestionTool 主动提问，不要空等
             5. 遇到步骤失败时，优先尝试替代方案；若确实无法解决，标记失败并说明原因
             6. 所有步骤完成后，添加 [FINISH] 标记结束对话
+            
+            【重要】大任务拆分规则：
+            
+            当任务涉及多个独立子任务（如"同时修改多个不相关文件"、"并行分析多个模块"），你必须使用 AgentTool 创建子 Agent 并行执行：
+            
+            - 使用 AgentTool 的 execute 操作分配子任务
+            - 每个子 Agent 拥有独立的上下文和迭代预算，不会消耗主 Agent 的资源
+            - 子 Agent 完成后自动清理上下文，结果合并返回主 Agent
+            - 适用于：批量代码审查、多文件重构、并行测试、跨模块分析
+            
+            示例：{"action": "execute", "tasks": [{"name": "review-auth", "role": "安全专家", "task": "审查认证模块"}, {"name": "review-api", "role": "API专家", "task": "审查接口模块"}]}
             """;
         
         session.addMessage(Message.createSystemMessage(guidelines));
@@ -1142,11 +1156,12 @@ public class LLMQueryEngine {
     // ==================== 数据类 ====================
     
     public static class EngineConfig {
-        private int maxIterations = 1000; // 后备安全网，Token 预算驱动为主
+        private int maxIterations = 0; // 默认 0 表示不限制，由 TokenBudget 控制
         private Duration timeout = Duration.ofMinutes(5);
         private int maxEmptyResponses = DEFAULT_MAX_EMPTY_RESPONSES;
         private boolean reasoningModel = false;
         private long tokenBudget = 1_000_000; // 默认 1M token 预算
+        private int maxMessageHistory = 0; // 默认 0 表示不限制，由 ContextWindowManager 智能压缩
         
         /**
          * 从 JwcodeConfig 创建 EngineConfig
@@ -1159,6 +1174,7 @@ public class LLMQueryEngine {
                     engineConfig.setMaxIterations(engine.getMaxIterations());
                     engineConfig.setTimeout(Duration.ofMinutes(engine.getTimeoutMinutes()));
                     engineConfig.setTokenBudget(engine.getTokenBudget());
+                    engineConfig.setMaxMessageHistory(engine.getMaxMessageHistory());
                 }
             }
             return engineConfig;
@@ -1194,6 +1210,9 @@ public class LLMQueryEngine {
 
         public long getTokenBudget() { return tokenBudget; }
         public void setTokenBudget(long tokenBudget) { this.tokenBudget = tokenBudget; }
+
+        public int getMaxMessageHistory() { return maxMessageHistory; }
+        public void setMaxMessageHistory(int maxMessageHistory) { this.maxMessageHistory = maxMessageHistory; }
 
         public static EngineConfig defaultConfig() {
             return new EngineConfig();

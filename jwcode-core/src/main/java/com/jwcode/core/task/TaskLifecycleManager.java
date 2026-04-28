@@ -1,5 +1,7 @@
 package com.jwcode.core.task;
 
+import com.jwcode.core.llm.LLMMessage;
+import com.jwcode.core.llm.LLMResponse;
 import com.jwcode.core.llm.LLMService;
 import com.jwcode.core.model.Message;
 import com.jwcode.core.observability.ObservationEvent;
@@ -39,10 +41,12 @@ public class TaskLifecycleManager {
         Pattern.compile(".*不(要|想)(做|继续).*(这个|当前).*")
     );
 
+    private final LLMService llmService;
     private final AIPlanner aiPlanner;
     private final ObservationPipeline pipeline;
 
     public TaskLifecycleManager(LLMService llmService, ObservationPipeline pipeline) {
+        this.llmService = llmService;
         this.aiPlanner = llmService != null ? new AIPlanner(llmService) : null;
         this.pipeline = pipeline != null ? pipeline : new com.jwcode.core.observability.DefaultObservationPipeline();
     }
@@ -57,7 +61,7 @@ public class TaskLifecycleManager {
     public TaskIntent detectIntent(Session session, String prompt) {
         String trimmed = prompt != null ? prompt.trim() : "";
 
-        // 1. 显式命令
+        // 1. 显式命令（快速路径，无需 LLM）
         if (trimmed.startsWith("/new") || trimmed.equals("/reset")) {
             logger.info("[TaskLifecycle] 检测到显式新任务命令: {}", trimmed.substring(0, Math.min(30, trimmed.length())));
             return TaskIntent.NEW_TASK;
@@ -66,7 +70,7 @@ public class TaskLifecycleManager {
         // 2. 获取当前任务
         ActiveTask activeTask = session.getActiveTask();
 
-        // 3. 无当前任务或已完成/失败/取消 → 自动作为新任务
+        // 3. 无当前任务或已完成/失败/取消 → 直接判定为新任务（无需 LLM）
         if (activeTask == null ||
             activeTask.getStatus() == TaskStatus.COMPLETED ||
             activeTask.getStatus() == TaskStatus.FAILED ||
@@ -75,21 +79,13 @@ public class TaskLifecycleManager {
             return TaskIntent.NEW_TASK;
         }
 
-        // 4. 当前在等待输入 → 补充信息
+        // 4. 当前在等待输入 → 补充信息（无需 LLM）
         if (activeTask.getStatus() == TaskStatus.WAITING_INPUT) {
             return TaskIntent.CLARIFICATION;
         }
 
-        // 5. 关键词规则检测
-        for (Pattern pattern : NEW_TASK_PATTERNS) {
-            if (pattern.matcher(trimmed).find()) {
-                logger.info("[TaskLifecycle] 关键词检测到新任务意图: {}", trimmed.substring(0, Math.min(50, trimmed.length())));
-                return TaskIntent.NEW_TASK;
-            }
-        }
-
-        // 6. 默认：继续当前任务
-        return TaskIntent.CONTINUE;
+        // 5. 其余所有情况直接交给 LLM 语义判断
+        return detectIntentByLLM(session, prompt);
     }
 
     // ==================== 新任务启动 ====================
@@ -372,6 +368,60 @@ public class TaskLifecycleManager {
             ));
         } catch (Exception e) {
             logger.warn("发布等待输入事件失败", e);
+        }
+    }
+
+    // ==================== LLM 语义意图检测 ====================
+
+    /**
+     * 使用 LLM 进行语义意图检测。
+     * Prompt 极简，要求只输出一个单词，成本极低（<100 tokens）。
+     * 带有 2 秒超时保护，失败时 fallback 到 CONTINUE。
+     */
+    private TaskIntent detectIntentByLLM(Session session, String prompt) {
+        if (llmService == null) {
+            return TaskIntent.CONTINUE;
+        }
+
+        ActiveTask activeTask = session.getActiveTask();
+        // 如果当前没有正在执行的任务，无需 LLM 判断
+        if (activeTask == null) {
+            return TaskIntent.CONTINUE;
+        }
+
+        String currentTaskDesc = activeTask.getDescription() != null
+            ? activeTask.getDescription()
+            : "无";
+
+        List<LLMMessage> messages = List.of(
+            LLMMessage.system("你是一个意图分类器。只输出一个单词：NEW_TASK、CONTINUE 或 CLARIFICATION。不要解释。"),
+            LLMMessage.user(String.format(
+                "当前任务：%s\n用户输入：%s\n判断用户是想继续当前任务、补充信息、还是发起新任务。",
+                currentTaskDesc, prompt
+            ))
+        );
+
+        try {
+            LLMResponse response = llmService.chat(messages)
+                .get(5, java.util.concurrent.TimeUnit.MINUTES);
+
+            if (response.hasError() || response.getContent() == null) {
+                return TaskIntent.CONTINUE;
+            }
+
+            String content = response.getContent().trim().toUpperCase();
+            if (content.contains("NEW_TASK")) {
+                logger.info("[TaskLifecycle] LLM 判断为新任务: {}", prompt.substring(0, Math.min(40, prompt.length())));
+                return TaskIntent.NEW_TASK;
+            }
+            if (content.contains("CLARIFICATION")) {
+                return TaskIntent.CLARIFICATION;
+            }
+            return TaskIntent.CONTINUE;
+
+        } catch (Exception e) {
+            logger.debug("[TaskLifecycle] LLM 意图检测失败，fallback 到 CONTINUE: {}", e.getMessage());
+            return TaskIntent.CONTINUE;
         }
     }
 

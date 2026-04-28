@@ -2,8 +2,12 @@ package com.jwcode.core.agent.parallel;
 
 import com.jwcode.core.agent.Agent;
 import com.jwcode.core.agent.AgentRegistry;
+import com.jwcode.core.llm.LLMQueryEngine;
 import com.jwcode.core.llm.LLMService;
 import com.jwcode.core.session.Session;
+import com.jwcode.core.tool.Tool;
+import com.jwcode.core.tool.ToolExecutor;
+import com.jwcode.core.tool.ToolRegistry;
 
 import java.util.*;
 import java.util.concurrent.*;
@@ -562,6 +566,7 @@ public class ParallelAgentExecutor {
     
     /**
      * 执行 Agent 任务（调用 LLM）
+     * 如果 Agent 配置了工具，会创建独立的 LLMQueryEngine 让子 Agent 自主完成工具调用循环。
      */
     private String executeAgentTask(Agent agent, String prompt, SubAgentTask task,
                                      CancellationToken token) throws Exception {
@@ -569,16 +574,20 @@ public class ParallelAgentExecutor {
             return simulateExecution(agent, prompt);
         }
 
+        List<Tool<?, ?, ?>> tools = agent.getTools();
+        if (tools != null && !tools.isEmpty()) {
+            return executeAgentTaskWithEngine(agent, prompt, task, token, tools);
+        }
+
+        // 无工具时 fallback 到单次 LLM 调用
         try {
             token.checkCancelled();
 
-            // 构建 LLM 消息列表
             List<com.jwcode.core.llm.LLMMessage> messages = List.of(
                 com.jwcode.core.llm.LLMMessage.system(agent.getSystemPrompt()),
                 com.jwcode.core.llm.LLMMessage.user(prompt)
             );
 
-            // 调用 LLM 服务
             com.jwcode.core.llm.LLMResponse response = llmService.chat(messages).get(
                 task.getTimeoutMs(), java.util.concurrent.TimeUnit.MILLISECONDS);
 
@@ -594,6 +603,72 @@ public class ParallelAgentExecutor {
         } catch (java.util.concurrent.ExecutionException e) {
             Throwable cause = e.getCause() != null ? e.getCause() : e;
             throw new RuntimeException("LLM call failed: " + cause.getMessage(), cause);
+        }
+    }
+
+    /**
+     * 使用独立的 LLMQueryEngine 执行子 Agent 任务。
+     * 子 Agent 拥有独立的 Session、ToolExecutor 和 TokenBudget，
+     * 不会消耗主 Agent 的迭代次数，任务完成后自动清理上下文。
+     */
+    private String executeAgentTaskWithEngine(Agent agent, String prompt, SubAgentTask task,
+                                               CancellationToken token, List<Tool<?, ?, ?>> tools) throws Exception {
+        // 1. 创建子 Session
+        Session subSession = new Session("subagent-" + task.getTaskId(), System.getProperty("user.dir"));
+        if (agent.getModelConfig() != null && agent.getModelConfig().getModel() != null) {
+            subSession.setModel(agent.getModelConfig().getModel());
+        }
+
+        // 2. 构建 ToolRegistry（排除 AgentTool 防止递归 fork）
+        ToolRegistry registry = new ToolRegistry();
+        for (Tool<?, ?, ?> tool : tools) {
+            if ("AgentTool".equals(tool.getName())) {
+                continue; // 防止子 Agent 再创建子 Agent 导致递归
+            }
+            registry.register(tool);
+        }
+        ToolExecutor toolExecutor = new ToolExecutor(registry);
+
+        // 3. 子 Agent 配置：不限制迭代次数，独立 Token 预算
+        LLMQueryEngine.EngineConfig subConfig = LLMQueryEngine.EngineConfig.defaultConfig();
+        subConfig.setMaxIterations(0);
+        subConfig.setTokenBudget(500_000);
+
+        // 4. 创建 LLMQueryEngine
+        LLMQueryEngine engine = LLMQueryEngine.builder()
+            .session(subSession)
+            .llmService(llmService)
+            .toolExecutor(toolExecutor)
+            .config(subConfig)
+            .build();
+
+        // 5. 构建完整 prompt
+        String fullPrompt = (agent.getSystemPrompt() != null && !agent.getSystemPrompt().isEmpty())
+            ? "[系统提示]\n" + agent.getSystemPrompt() + "\n\n[任务]\n" + prompt
+            : prompt;
+
+        // 6. 执行查询（带子 Agent 自己的工具循环）
+        try {
+            token.checkCancelled();
+            LLMQueryEngine.QueryResult result = engine.query(fullPrompt)
+                .get(task.getTimeoutMs(), java.util.concurrent.TimeUnit.MILLISECONDS);
+
+            // 7. 任务完成后清空子 Agent 上下文
+            subSession.clearMessages();
+
+            if (result.isSuccess()) {
+                com.jwcode.core.model.Message msg = result.getMessage();
+                return msg != null ? msg.getTextContent() : "Agent completed with no output.";
+            } else {
+                throw new RuntimeException("Sub-agent error: " + result.getErrorMessage());
+            }
+        } catch (CancellationException e) {
+            subSession.clearMessages();
+            throw e;
+        } catch (java.util.concurrent.ExecutionException e) {
+            subSession.clearMessages();
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            throw new RuntimeException("Sub-agent LLM call failed: " + cause.getMessage(), cause);
         }
     }
     

@@ -320,13 +320,16 @@ public class JwcodeConfig {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class EngineSettings {
         @JsonProperty("max-iterations")
-        private int maxIterations = 100;  // 最大迭代次数
+        private int maxIterations = 0;  // 最大迭代次数，默认 0 表示不限制（由 TokenBudget 控制）
         
         @JsonProperty("timeout-minutes")
         private int timeoutMinutes = 5;   // 超时时间（分钟）
         
         @JsonProperty("token-budget")
         private long tokenBudget = 1_000_000;  // Token 预算，默认 1M
+        
+        @JsonProperty("max-message-history")
+        private int maxMessageHistory = 0;  // Session 消息 FIFO 硬上限，默认 0 表示不限制
     }
     
     /**

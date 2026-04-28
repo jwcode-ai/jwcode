@@ -49,6 +49,7 @@ public class Session {
     private final Set<String> importantMessageIds;
     private int compactCount;
     private ActiveTask activeTask;
+    private int maxMessageHistory = 0; // 默认 0 表示不限制
     
     public Session(String id, String workingDirectory) {
         this.id = Preconditions.checkNotNull(id, "id cannot be null");
@@ -91,6 +92,9 @@ public class Session {
         Preconditions.checkNotNull(message, "message cannot be null");
         messages.add(message);
         this.updatedAt = Instant.now();
+        if (maxMessageHistory > 0 && messages.size() > maxMessageHistory) {
+            trimToSize();
+        }
         return this;
     }
     
@@ -203,6 +207,116 @@ public class Session {
         this.activeTask = activeTask;
         this.updatedAt = Instant.now();
         return this;
+    }
+
+    /**
+     * 设置消息历史最大长度（FIFO 限制）。
+     * @param maxMessageHistory 最大消息数，0 表示不限制
+     */
+    public void setMaxMessageHistory(int maxMessageHistory) {
+        this.maxMessageHistory = maxMessageHistory;
+    }
+
+    public int getMaxMessageHistory() {
+        return maxMessageHistory;
+    }
+
+    /**
+     * 将消息历史裁剪到 maxMessageHistory 长度。
+     * 保留所有 SYSTEM 消息，对非 SYSTEM 消息保留最近的部分。
+     * 确保不破坏 tool_calls 与 TOOL 结果的配对。
+     */
+    public Session trimToSize() {
+        if (maxMessageHistory <= 0 || messages.size() <= maxMessageHistory) {
+            return this;
+        }
+
+        List<Message> systemMessages = new ArrayList<>();
+        List<Message> nonSystemMessages = new ArrayList<>();
+
+        for (Message msg : messages) {
+            if (msg.getRole() == Message.Role.SYSTEM) {
+                systemMessages.add(msg);
+            } else {
+                nonSystemMessages.add(msg);
+            }
+        }
+
+        int keepNonSystem = maxMessageHistory - systemMessages.size();
+        if (keepNonSystem < 0) {
+            // SYSTEM 消息本身已超过上限，只保留最后几个 SYSTEM
+            keepNonSystem = 0;
+            int sysStart = Math.max(0, systemMessages.size() - maxMessageHistory);
+            systemMessages = systemMessages.subList(sysStart, systemMessages.size());
+        }
+
+        List<Message> retained = new ArrayList<>(systemMessages);
+
+        if (keepNonSystem > 0 && nonSystemMessages.size() > keepNonSystem) {
+            int start = nonSystemMessages.size() - keepNonSystem;
+            start = fixToolCallBoundary(nonSystemMessages, start);
+            retained.addAll(nonSystemMessages.subList(start, nonSystemMessages.size()));
+        } else {
+            retained.addAll(nonSystemMessages);
+        }
+
+        int beforeSize = messages.size();
+        messages.clear();
+        messages.addAll(retained);
+        this.updatedAt = Instant.now();
+        logger.info("[Session] FIFO trim: {} -> {} messages (max={})", beforeSize, retained.size(), maxMessageHistory);
+        return this;
+    }
+
+    /**
+     * 修复截断边界，确保不破坏 tool_calls 配对。
+     * 如果起始位置是 TOOL，向前移动到对应的 ASSISTANT。
+     */
+    private int fixToolCallBoundary(List<Message> list, int start) {
+        while (start > 0 && start < list.size()) {
+            Message msg = list.get(start);
+            if (msg.getRole() != Message.Role.TOOL) {
+                break;
+            }
+            String toolUseId = extractToolUseId(msg);
+            if (toolUseId == null) {
+                start++;
+                continue;
+            }
+            int assistantIndex = -1;
+            for (int i = start - 1; i >= 0; i--) {
+                Message candidate = list.get(i);
+                if (candidate.getRole() == Message.Role.ASSISTANT && candidate.hasToolCalls()) {
+                    for (Message.ToolCallInfo tc : candidate.getToolCalls()) {
+                        if (toolUseId.equals(tc.getId())) {
+                            assistantIndex = i;
+                            break;
+                        }
+                    }
+                    if (assistantIndex >= 0) break;
+                }
+            }
+            if (assistantIndex >= 0) {
+                start = assistantIndex;
+                // 继续循环，因为新的 start 可能也是 TOOL（多个连续 TOOL 的情况）
+            } else {
+                start++; // 跳过孤立 TOOL
+                break;
+            }
+        }
+        return start;
+    }
+
+    private String extractToolUseId(Message msg) {
+        if (msg.getContent() == null || msg.getContent().isEmpty()) {
+            return null;
+        }
+        for (Message.ContentBlock block : msg.getContent()) {
+            if (block instanceof Message.ToolResultContent) {
+                return ((Message.ToolResultContent) block).getToolUseId();
+            }
+        }
+        return null;
     }
 
     /**
