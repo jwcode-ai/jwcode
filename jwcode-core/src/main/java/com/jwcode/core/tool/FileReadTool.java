@@ -7,6 +7,7 @@ import com.jwcode.core.tool.input.FileReadInput;
 import com.jwcode.core.tool.output.FileReadOutput;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -307,7 +308,7 @@ public class FileReadTool implements Tool<FileReadInput, FileReadOutput, FileRea
      * 读取文本文件
      */
     private ToolResult<FileReadOutput> readTextFile(Path filePath, FileReadInput input) throws IOException {
-        List<String> lines = Files.readAllLines(filePath);
+        List<String> lines = Files.readAllLines(filePath, StandardCharsets.UTF_8);
         int totalLines = lines.size();
         
         // 计算读取范围（支持 offset 分块续读）

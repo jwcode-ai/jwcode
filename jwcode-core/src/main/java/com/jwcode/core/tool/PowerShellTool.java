@@ -6,18 +6,27 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jwcode.core.tool.context.ToolExecutionContext;
 
 import java.io.BufferedReader;
+import java.io.IOException;
 import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
+import java.util.logging.Logger;
 
 public class PowerShellTool implements Tool<PowerShellTool.Input, PowerShellTool.Output, PowerShellTool.Progress> {
+    private static final Logger logger = Logger.getLogger(PowerShellTool.class.getName());
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final int MAX_FILE_LIST_RESULTS = 100;
+    private static final int PROCESS_TIMEOUT_SECONDS = 120;  // PowerShell 进程超时时间（2分钟）
+    private static final int MAX_OUTPUT_LINES = 1000;
+    private static final int MAX_OUTPUT_CHARS = 100000; // 100KB
     private static final Set<String> IGNORED_PATTERNS = new HashSet<>(Arrays.asList(
         "\\.git", "node_modules", "target", "\\.class", "\\.jar",
         "__pycache__", "\\.venv", "\\.idea", "\\.DS_Store"
@@ -58,55 +67,120 @@ public class PowerShellTool implements Tool<PowerShellTool.Input, PowerShellTool
                 return ToolResult.error("命令不能为空");
             }
             
-            StringBuilder output = new StringBuilder();
-            StringBuilder error = new StringBuilder();
-            
+            Process process = null;
             try {
                 // 使用 ProcessBuilder 执行 PowerShell 命令
                 ProcessBuilder pb = new ProcessBuilder("powershell", "-NoProfile", "-Command", command);
-                pb.redirectErrorStream(false);
-                Process process = pb.start();
+                pb.redirectErrorStream(true); // 合并 stdout 和 stderr，避免管道死锁
+                process = pb.start();
                 
-                // 读取标准输出
-                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        output.append(line).append("\n");
+                // 在后台线程异步读取输出，避免主线程阻塞在 I/O 上
+                StringBuilder outputBuilder = new StringBuilder();
+                StringBuilder errorBuilder = new StringBuilder();
+                CompletableFuture<Void> outputFuture = readProcessOutputAsync(process, outputBuilder, errorBuilder);
+                
+                // 主线程等待进程完成（带超时）
+                boolean finished = process.waitFor(PROCESS_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                
+                if (!finished) {
+                    // 超时，强制终止进程
+                    process.destroyForcibly();
+                    try {
+                        outputFuture.get(2000, TimeUnit.MILLISECONDS);
+                    } catch (TimeoutException e) {
+                        outputFuture.cancel(true);
                     }
+                    Output timeoutResult = new Output();
+                    timeoutResult.success = false;
+                    timeoutResult.output = truncateOutput(outputBuilder.toString());
+                    timeoutResult.error = "PowerShell 命令执行超时（" + PROCESS_TIMEOUT_SECONDS + "秒）";
+                    timeoutResult.exitCode = -1;
+                    return ToolResult.success(timeoutResult);
                 }
                 
-                // 读取错误输出
-                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getErrorStream()))) {
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        error.append(line).append("\n");
-                    }
-                }
+                // 等待输出读取完成
+                outputFuture.get(2000, TimeUnit.MILLISECONDS);
                 
-                int exitCode = process.waitFor();
+                int exitCode = process.exitValue();
+                String stdout = outputBuilder.toString();
+                String stderr = errorBuilder.toString();
+                
+                Output result = new Output();
+                result.exitCode = exitCode;
+                result.error = stderr;
                 
                 if (exitCode == 0) {
-                    Output result = new Output();
                     result.success = true;
-                    result.output = filterFileListOutput(output.toString(), command);
-                    result.error = error.toString();
-                    result.exitCode = exitCode;
+                    result.output = filterFileListOutput(stdout, command);
                     return ToolResult.success(result);
                 } else {
-                    String errorMsg = error.toString();
+                    // 非零退出码应该返回失败状态，同时包含Output数据
+                    result.success = false;
+                    String errorMsg = stderr;
                     if (errorMsg == null || errorMsg.isEmpty()) {
-                        errorMsg = output.toString();
+                        errorMsg = stdout;
                     }
                     if (errorMsg == null || errorMsg.isEmpty()) {
-                        errorMsg = "PowerShell 命令执行失败，无输出";
+                        errorMsg = "PowerShell 命令执行失败（exit code: " + exitCode + "）";
                     }
-                    return ToolResult.error(errorMsg);
+                    result.output = truncateOutput(stdout);
+                    result.error = errorMsg;
+                    // 直接构造包含数据的失败结果
+                    ToolResult<Output> errorResult = new ToolResult<>(result);
+                    errorResult.setSuccess(false);
+                    errorResult.setContent(errorMsg);
+                    return errorResult;
                 }
                 
             } catch (Exception e) {
+                logger.severe("执行 PowerShell 命令失败: " + e.getMessage());
                 return ToolResult.error("执行 PowerShell 命令失败: " + e.getMessage());
+            } finally {
+                if (process != null && process.isAlive()) {
+                    process.destroyForcibly();
+                }
             }
         });
+    }
+    
+    /**
+     * 异步读取进程输出
+     */
+    private CompletableFuture<Void> readProcessOutputAsync(Process process, StringBuilder stdoutBuilder, StringBuilder stderrBuilder) {
+        return CompletableFuture.runAsync(() -> {
+            // 读取合并后的输出流（redirectErrorStream=true 后，errorStream 已无效，都从 inputStream 读）
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                int lineCount = 0;
+                while ((line = reader.readLine()) != null) {
+                    if (lineCount < MAX_OUTPUT_LINES) {
+                        stdoutBuilder.append(line).append("\n");
+                        lineCount++;
+                    } else {
+                        break;
+                    }
+                    if (stdoutBuilder.length() > MAX_OUTPUT_CHARS) {
+                        stdoutBuilder.setLength(MAX_OUTPUT_CHARS);
+                        stdoutBuilder.append("\n...[输出被截断]");
+                        break;
+                    }
+                }
+            } catch (IOException e) {
+                logger.warning("读取 PowerShell 输出失败: " + e.getMessage());
+            }
+        });
+    }
+    
+    /**
+     * 截断输出
+     */
+    private String truncateOutput(String output) {
+        if (output == null) return "";
+        if (output.length() <= MAX_OUTPUT_CHARS) {
+            return output;
+        }
+        return output.substring(0, MAX_OUTPUT_CHARS) + "\n...[输出被截断，总长度: " + output.length() + " 字符]";
     }
     
     /**

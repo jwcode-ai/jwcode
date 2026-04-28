@@ -40,6 +40,16 @@ public class TaskLifecycleManager {
         Pattern.compile(".*换(一个|种).*(任务|方式|思路).*"),
         Pattern.compile(".*不(要|想)(做|继续).*(这个|当前).*")
     );
+    
+    // 任务清单操作检测关键词
+    private static final List<Pattern> TASK_OP_PATTERNS = List.of(
+        Pattern.compile(".*添[加加]步[骤骤].*"),
+        Pattern.compile(".*删[除除]步[骤骤].*"),
+        Pattern.compile(".*修改步[骤骤].*"),
+        Pattern.compile(".*调整顺[序序].*"),
+        Pattern.compile(".*重[新排]顺[序序].*"),
+        Pattern.compile("^(add|delete|edit|reorder)\\s+(step|task).*", Pattern.CASE_INSENSITIVE)
+    );
 
     private final LLMService llmService;
     private final AIPlanner aiPlanner;
@@ -61,11 +71,11 @@ public class TaskLifecycleManager {
     public TaskIntent detectIntent(Session session, String prompt) {
         String trimmed = prompt != null ? prompt.trim() : "";
 
-        // 1. 显式命令（快速路径，无需 LLM）
-        if (trimmed.startsWith("/new") || trimmed.equals("/reset")) {
-            logger.info("[TaskLifecycle] 检测到显式新任务命令: {}", trimmed.substring(0, Math.min(30, trimmed.length())));
-            return TaskIntent.NEW_TASK;
-        }
+    // 1. 显式命令（快速路径，无需 LLM）
+    if (trimmed.startsWith("/new") || trimmed.equals("/reset") || trimmed.equals("/switch")) {
+        logger.info("[TaskLifecycle] 检测到显式新任务命令: {}", trimmed.substring(0, Math.min(30, trimmed.length())));
+        return TaskIntent.NEW_TASK;
+    }
 
         // 2. 获取当前任务
         ActiveTask activeTask = session.getActiveTask();
@@ -237,6 +247,64 @@ public class TaskLifecycleManager {
         publishTaskPlanUpdated(task);
         logger.info("[TaskLifecycle] 动态添加步骤 [{}]: {}", newIndex + 1, description);
     }
+    
+    // ==================== 任务清单操作 ====================
+    
+    /**
+     * 操作任务清单：添加/删除/修改步骤
+     * @param session 会话
+     * @param operation 操作类型：add, delete, update, reorder
+     * @param index 步骤索引（从 0 开始）
+     * @param description 描述（add/update 时需要）
+     * @param toIndex 目标索引（reorder 时需要）
+     * @return 操作结果描述
+     */
+    public String operateTaskList(Session session, String operation, Integer index, String description, Integer toIndex) {
+        ActiveTask task = session.getActiveTask();
+        if (task == null) {
+            return "当前没有任务清单，请先创建一个任务";
+        }
+        
+        return switch (operation.toLowerCase()) {
+            case "add" -> {
+                if (description == null || description.isEmpty()) {
+                    yield "请提供步骤描述";
+                }
+                task.addStep(description);
+                yield "已添加步骤: " + description;
+            }
+            case "delete" -> {
+                if (index == null || !task.removeStep(index)) {
+                    yield "删除步骤失败：索引无效";
+                }
+                yield "已删除步骤 #" + (index + 1);
+            }
+            case "update" -> {
+                if (index == null || !task.updateStep(index, description)) {
+                    yield "更新步骤失败：索引无效";
+                }
+                yield "已更新步骤 #" + (index + 1) + ": " + description;
+            }
+            case "reorder" -> {
+                if (toIndex == null || !task.reorderStep(index, toIndex)) {
+                    yield "调整顺序失败：索引无效";
+                }
+                yield "已将步骤 #" + (index + 1) + " 移动到 #" + (toIndex + 1);
+            }
+            default -> "未知操作: " + operation;
+        };
+    }
+    
+    /**
+     * 获取当前任务清单摘要（用于显示给用户）
+     */
+    public String getTaskListSummary(Session session) {
+        ActiveTask task = session.getActiveTask();
+        if (task == null) {
+            return "当前没有任务清单";
+        }
+        return task.toTaskListSummary();
+    }
 
     // ==================== 规划 ====================
 
@@ -393,10 +461,13 @@ public class TaskLifecycleManager {
             ? activeTask.getDescription()
             : "无";
 
+        // 优化后的 prompt，包含更多判断逻辑
+        String systemPrompt = "你是一个意图分类器。只输出一个单词：NEW_TASK、CONTINUE 或 CLARIFICATION。不要解释。\n\n判断规则：\n- 如果用户明确提到新任务、不同的事情、暂停当前任务、换任务等 → NEW_TASK\n- 如果用户在继续、补充、完善当前任务的细节 → CLARIFICATION\n- 其他情况 → CONTINUE";
+        
         List<LLMMessage> messages = List.of(
-            LLMMessage.system("你是一个意图分类器。只输出一个单词：NEW_TASK、CONTINUE 或 CLARIFICATION。不要解释。"),
+            LLMMessage.system(systemPrompt),
             LLMMessage.user(String.format(
-                "当前任务：%s\n用户输入：%s\n判断用户是想继续当前任务、补充信息、还是发起新任务。",
+                "当前任务：%s\n用户输入：%s\n请判断用户意图：",
                 currentTaskDesc, prompt
             ))
         );

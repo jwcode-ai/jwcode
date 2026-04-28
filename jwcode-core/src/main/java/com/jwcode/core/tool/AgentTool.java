@@ -65,13 +65,14 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
                操作类型:
                - create: 创建新 Agent
                - create_parallel: 并行创建多个 Agent
-               - assign: 分配任务给 Agent
+               - assign: 分配任务给 Agent（自动提交执行）
                - execute: 并行执行多个任务
                - status: 查看 Agent 状态
                - list: 列出所有 Agent
                - stop: 停止 Agent
                - merge: 合并 Agent 结果
                - cancel: 取消正在执行的任务
+               - query: 查询已分配任务的结果
                
                create 参数:
                - name: Agent 名称（可选）
@@ -92,10 +93,14 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
                - parallel: 是否并行执行（可选，默认true）
                - timeout: 全局超时时间（可选，默认300000）
                
+               query 参数:
+               - agent_id: Agent ID（必需）
+               
                示例:
                - {"action": "create", "name": "测试专家", "role": "负责编写和运行测试"}
                - {"action": "create_parallel", "agents": [{"name": "前端专家"}, {"name": "后端专家"}]}
                - {"action": "execute", "tasks": [{"name": "task1", "role": "coder", "task": "编写登录功能"}]}
+               - {"action": "query", "agent_id": "abc123"}
                """;
     }
     
@@ -106,7 +111,7 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
                 {
                     "type": "object",
                     "properties": {
-                        "action": {"type": "string", "enum": ["create", "create_parallel", "assign", "execute", "status", "list", "stop", "merge", "cancel"]},
+                        "action": {"type": "string", "enum": ["create", "create_parallel", "assign", "execute", "status", "list", "stop", "merge", "cancel", "query"]},
                         "agent_id": {"type": "string"},
                         "name": {"type": "string"},
                         "role": {"type": "string"},
@@ -172,6 +177,8 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
                         return mergeResults(input, context.getSession());
                     case "cancel":
                         return cancelTask(input, context.getSession());
+                    case "query":
+                        return queryTask(input, context.getSession());
                     default:
                         return ToolResult.error("未知的操作类型：" + action);
                 }
@@ -308,7 +315,7 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
     }
     
     /**
-     * 分配任务给 Agent
+     * 分配任务给 Agent（自动提交到 ParallelAgentExecutor 执行）
      */
     private ToolResult<Map<String, Object>> assignTask(Map<String, Object> args, Session session) {
         String agentId = (String) args.get("agent_id");
@@ -336,11 +343,58 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
         
         agent.assignTask(task, context);
         
-        session.getLogger().info("AgentTool: 分配任务 - agentId=" + agentId + ", task=" + task);
+        // 构建 SubAgentTask 并提交到 ParallelAgentExecutor
+        Map<String, Object> taskContext = new HashMap<>();
+        if (context != null && !context.isEmpty()) {
+            taskContext.put("user_context", context);
+        }
+        
+        SubAgentTask subTask = SubAgentTask.builder()
+            .name(agent.name)
+            .role(agent.role)
+            .taskDescription(task)
+            .agentType(inferAgentType(agent.role))
+            .timeout(timeout)
+            .context(taskContext)
+            .build();
+        
+        CompletableFuture<ParallelExecutionResult> parallelFuture = 
+            parallelExecutor.executeAsync(List.of(subTask), session, timeout);
+        
+        CompletableFuture<SubAgentResult> subAgentFuture = parallelFuture.thenApply(result -> {
+            List<SubAgentResult> results = result.getResults();
+            if (results != null && !results.isEmpty()) {
+                return results.get(0);
+            }
+            return SubAgentResult.failure(subTask.getTaskId(), "No result returned");
+        }).exceptionally(ex -> {
+            return SubAgentResult.failure(subTask.getTaskId(), ex.getMessage());
+        });
+        
+        agent.executionFuture = subAgentFuture;
+        agent.taskId = subTask.getTaskId();
+        agent.taskTimeout = timeout;
+        
+        subAgentFuture.whenComplete((result, error) -> {
+            if (error != null) {
+                agent.executionResult = SubAgentResult.failure(agent.taskId, error.getMessage());
+                agent.failTask(error.getMessage());
+            } else if (result != null) {
+                agent.executionResult = result;
+                if (result.isSuccess()) {
+                    agent.completeTask(result.getOutput());
+                } else {
+                    agent.failTask(result.getError());
+                }
+            }
+        });
+        
+        session.getLogger().info("AgentTool: 分配任务并提交执行 - agentId=" + agentId + ", taskId=" + subTask.getTaskId() + ", task=" + task);
         
         StringBuilder content = new StringBuilder();
         content.append("任务分配成功！\n\n");
         content.append("Agent: ").append(agent.name).append(" (").append(agentId).append(")\n");
+        content.append("任务ID: ").append(subTask.getTaskId()).append("\n");
         content.append("任务：").append(task).append("\n");
         content.append("超时：").append(timeout).append("ms\n");
         
@@ -349,9 +403,11 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
         }
         
         content.append("\nAgent 状态已更新为：working\n");
+        content.append("任务已自动提交到执行器，可通过 status 或 query 查询进度。\n");
         
         Map<String, Object> metadata = new HashMap<>();
         metadata.put("agent_id", agentId);
+        metadata.put("task_id", subTask.getTaskId());
         metadata.put("task", task);
         metadata.put("timeout", timeout);
         metadata.put("status", "working");
@@ -495,7 +551,7 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
     }
     
     /**
-     * 取消任务
+     * 取消任务（支持 ParallelAgentExecutor 和 AgentInfo 两种 task_id）
      */
     private ToolResult<Map<String, Object>> cancelTask(Map<String, Object> args, Session session) {
         String taskId = (String) args.get("task_id");
@@ -504,7 +560,20 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
             return ToolResult.error("task_id 参数是必需的");
         }
         
-        boolean cancelled = parallelExecutor != null && parallelExecutor.cancel(taskId);
+        boolean cancelled = false;
+        
+        // 1. 尝试取消 ParallelAgentExecutor 中的任务
+        if (parallelExecutor != null) {
+            cancelled = parallelExecutor.cancel(taskId);
+        }
+        
+        // 2. 同时检查 AgentInfo 中的任务
+        for (AgentInfo agent : agentManager.getAllAgents()) {
+            if (taskId.equals(agent.taskId) && agent.executionFuture != null && !agent.executionFuture.isDone()) {
+                agent.executionFuture.cancel(true);
+                cancelled = true;
+            }
+        }
         
         Map<String, Object> metadata = new HashMap<>();
         metadata.put("task_id", taskId);
@@ -513,6 +582,78 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
         ToolResult<Map<String, Object>> result = new ToolResult<>(metadata);
         result.setSuccess(cancelled);
         result.setContent(cancelled ? "任务已取消: " + taskId : "取消任务失败或任务已完成: " + taskId);
+        result.setMetadata(metadata);
+        
+        return result;
+    }
+    
+    /**
+     * 查询已分配任务的结果
+     */
+    private ToolResult<Map<String, Object>> queryTask(Map<String, Object> args, Session session) {
+        String agentId = (String) args.get("agent_id");
+        
+        if (agentId == null || agentId.isEmpty()) {
+            return ToolResult.error("agent_id 参数是必需的");
+        }
+        
+        AgentInfo agent = agentManager.getAgent(agentId);
+        if (agent == null) {
+            return ToolResult.error("未找到 Agent：" + agentId);
+        }
+        
+        if (agent.executionFuture == null) {
+            return ToolResult.error("该 Agent 尚未分配任务");
+        }
+        
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("agent_id", agentId);
+        metadata.put("task_id", agent.taskId);
+        
+        StringBuilder content = new StringBuilder();
+        content.append("Agent 任务查询\n\n");
+        content.append("Agent: ").append(agent.name).append(" (").append(agentId).append(")\n");
+        content.append("任务ID: ").append(agent.taskId).append("\n");
+        
+        if (!agent.executionFuture.isDone()) {
+            content.append("状态：执行中\n");
+            metadata.put("status", "running");
+            metadata.put("done", false);
+        } else {
+            metadata.put("done", true);
+            if (agent.executionFuture.isCancelled()) {
+                content.append("状态：已取消\n");
+                metadata.put("status", "cancelled");
+            } else if (agent.executionFuture.isCompletedExceptionally()) {
+                content.append("状态：执行异常\n");
+                metadata.put("status", "exception");
+            } else {
+                content.append("状态：已完成\n");
+                metadata.put("status", "completed");
+            }
+            
+            if (agent.executionResult != null) {
+                if (agent.executionResult.isSuccess()) {
+                    content.append("结果：成功\n");
+                    if (agent.executionResult.getOutput() != null) {
+                        content.append("输出：\n").append(agent.executionResult.getOutput()).append("\n");
+                    }
+                    metadata.put("success", true);
+                    metadata.put("output", agent.executionResult.getOutput());
+                } else {
+                    content.append("结果：失败\n");
+                    if (agent.executionResult.getError() != null) {
+                        content.append("错误：").append(agent.executionResult.getError()).append("\n");
+                    }
+                    metadata.put("success", false);
+                    metadata.put("error", agent.executionResult.getError());
+                }
+            }
+        }
+        
+        ToolResult<Map<String, Object>> result = new ToolResult<>(metadata);
+        result.setSuccess(true);
+        result.setContent(content.toString());
         result.setMetadata(metadata);
         
         return result;
@@ -544,6 +685,28 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
             content.append("\n当前任务：").append(agent.currentTask).append("\n");
         }
         
+        if (agent.taskId != null) {
+            content.append("任务ID：").append(agent.taskId).append("\n");
+        }
+        
+        // 检查 executionFuture 动态状态
+        if (agent.executionFuture != null) {
+            if (!agent.executionFuture.isDone()) {
+                content.append("执行状态：进行中\n");
+            } else {
+                if (agent.executionFuture.isCancelled()) {
+                    content.append("执行状态：已取消\n");
+                } else if (agent.executionFuture.isCompletedExceptionally()) {
+                    content.append("执行状态：异常完成\n");
+                } else {
+                    content.append("执行状态：已完成\n");
+                }
+                if (agent.executionResult != null) {
+                    content.append("执行结果：").append(agent.executionResult.isSuccess() ? "成功" : "失败").append("\n");
+                }
+            }
+        }
+        
         if (agent.completedTasks > 0) {
             content.append("完成任务数：").append(agent.completedTasks).append("\n");
         }
@@ -557,6 +720,7 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
         metadata.put("name", agent.name);
         metadata.put("status", agent.status.toString());
         metadata.put("current_task", agent.currentTask);
+        metadata.put("task_id", agent.taskId);
         
         ToolResult<Map<String, Object>> result = new ToolResult<>(metadata);
         result.setSuccess(true);
@@ -626,6 +790,14 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
             return ToolResult.error("未找到 Agent：" + agentId);
         }
         
+        // 如果有关联的执行任务，先取消
+        if (agent.taskId != null && parallelExecutor != null) {
+            parallelExecutor.cancel(agent.taskId);
+        }
+        if (agent.executionFuture != null && !agent.executionFuture.isDone()) {
+            agent.executionFuture.cancel(true);
+        }
+        
         agentManager.stopAgent(agentId);
         
         session.getLogger().info("AgentTool: 停止 Agent - id=" + agentId);
@@ -668,9 +840,29 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
             AgentInfo agent = agentManager.getAgent(agentId);
             if (agent != null) {
                 content.append("=== ").append(agent.name).append(" (").append(agentId).append(") ===\n");
-                if (agent.lastResult != null) {
-                    content.append(agent.lastResult).append("\n");
-                    results.add(agent.lastResult);
+                
+                String result = null;
+                // 优先检查 executionFuture 的结果
+                if (agent.executionFuture != null) {
+                    if (agent.executionFuture.isDone()) {
+                        if (agent.executionResult != null) {
+                            result = agent.executionResult.isSuccess() 
+                                ? agent.executionResult.getOutput() 
+                                : ("错误：" + agent.executionResult.getError());
+                        }
+                    } else {
+                        result = "(任务仍在执行中)";
+                    }
+                }
+                
+                // 回退到 lastResult
+                if (result == null && agent.lastResult != null) {
+                    result = agent.lastResult;
+                }
+                
+                if (result != null) {
+                    content.append(result).append("\n");
+                    results.add(result);
                 } else {
                     content.append("(无结果)\n");
                 }
@@ -690,6 +882,38 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
         result.setMetadata(metadata);
         
         return result;
+    }
+    
+    // ==================== 辅助方法 ====================
+    
+    /**
+     * 根据 role 推断 agentType
+     */
+    private String inferAgentType(String role) {
+        if (role == null) return "default";
+        String lower = role.toLowerCase();
+        if (lower.contains("code") || lower.contains("coder") || lower.contains("编码") || lower.contains("开发")) {
+            return "coder";
+        }
+        if (lower.contains("debug") || lower.contains("调试") || lower.contains("排查")) {
+            return "debug";
+        }
+        if (lower.contains("review") || lower.contains("审查") || lower.contains("审核")) {
+            return "review";
+        }
+        if (lower.contains("test") || lower.contains("测试")) {
+            return "test";
+        }
+        if (lower.contains("doc") || lower.contains("文档")) {
+            return "doc";
+        }
+        if (lower.contains("explore") || lower.contains("调研") || lower.contains("分析")) {
+            return "explore";
+        }
+        if (lower.contains("architect") || lower.contains("架构") || lower.contains("设计")) {
+            return "architect";
+        }
+        return "default";
     }
     
     // ==================== 公共方法 ====================
@@ -717,10 +941,70 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
         
         String action = (String) input.get("action");
         Set<String> validActions = Set.of("create", "create_parallel", "assign", "execute", 
-                                          "status", "list", "stop", "merge", "cancel");
+                                          "status", "list", "stop", "merge", "cancel", "query");
         
         if (!validActions.contains(action)) {
             builder.addError("无效的 action: " + action);
+        }
+        
+        // 增强参数校验：execute action 必须使用 tasks 数组（不是 task 字符串）
+        if ("execute".equals(action)) {
+            Object tasks = input.get("tasks");
+            if (tasks == null) {
+                builder.addError("execute action 必须提供 tasks 参数（注意是复数 tasks，不是单数 task）");
+            } else if (!(tasks instanceof List)) {
+                builder.addError("tasks 必须是数组类型，不能是字符串");
+            } else {
+                List<?> taskList = (List<?>) tasks;
+                if (taskList.isEmpty()) {
+                    builder.addError("tasks 数组不能为空");
+                } else {
+                    // 校验每个任务对象
+                    for (int i = 0; i < taskList.size(); i++) {
+                        Object item = taskList.get(i);
+                        if (!(item instanceof Map)) {
+                            builder.addError("tasks[" + i + "] 必须是对象 {name, task, role}，不能是字符串");
+                        } else {
+                            Map<String, Object> taskMap = (Map<String, Object>) item;
+                            boolean hasName = taskMap.containsKey("name") && taskMap.get("name") != null;
+                            boolean hasTask = taskMap.containsKey("task") && taskMap.get("task") != null;
+                            boolean hasInstruction = taskMap.containsKey("instruction") && taskMap.get("instruction") != null;
+                            if (!hasName && !hasTask && !hasInstruction) {
+                                builder.addError("tasks[" + i + "] 必须包含 name 或 task 或 instruction 字段");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // 增强参数校验：create_parallel action 必须使用 agents 数组
+        if ("create_parallel".equals(action)) {
+            Object agents = input.get("agents");
+            if (agents == null) {
+                builder.addError("create_parallel action 必须提供 agents 参数");
+            } else if (!(agents instanceof List)) {
+                builder.addError("agents 必须是数组类型");
+            } else if (((List<?>) agents).isEmpty()) {
+                builder.addError("agents 数组不能为空");
+            }
+        }
+        
+        // 增强参数校验：assign action 必须使用 agent_id 和 task
+        if ("assign".equals(action)) {
+            if (!input.containsKey("agent_id") || input.get("agent_id") == null) {
+                builder.addError("assign action 必须提供 agent_id 参数");
+            }
+            if (!input.containsKey("task") || input.get("task") == null) {
+                builder.addError("assign action 必须提供 task 参数（注意是单数 task）");
+            }
+        }
+        
+        // 增强参数校验：query action 必须使用 agent_id
+        if ("query".equals(action)) {
+            if (!input.containsKey("agent_id") || input.get("agent_id") == null) {
+                builder.addError("query action 必须提供 agent_id 参数");
+            }
         }
         
         return builder.build();
@@ -729,7 +1013,7 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
     @Override
     public boolean isReadOnly(Map<String, Object> input) {
         String action = (String) input.get("action");
-        return "status".equals(action) || "list".equals(action);
+        return "status".equals(action) || "list".equals(action) || "query".equals(action);
     }
     
     // ==================== 内部类 ====================
@@ -766,6 +1050,12 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
         public Date createdAt;
         public Date updatedAt;
         
+        // 新增字段：与 ParallelAgentExecutor 打通
+        public String taskId;
+        public CompletableFuture<SubAgentResult> executionFuture;
+        public SubAgentResult executionResult;
+        public long taskTimeout;
+        
         public AgentInfo(String name, String role, String color) {
             this.id = UUID.randomUUID().toString().substring(0, 8);
             this.name = name;
@@ -781,6 +1071,11 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
             this.context = context;
             this.status = AgentStatus.WORKING;
             this.updatedAt = new Date();
+            // 重置执行状态
+            this.taskId = null;
+            this.executionFuture = null;
+            this.executionResult = null;
+            this.taskTimeout = 0;
         }
         
         public void completeTask(String result) {

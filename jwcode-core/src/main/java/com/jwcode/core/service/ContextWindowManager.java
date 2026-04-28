@@ -34,6 +34,17 @@ public class ContextWindowManager {
     // 默认最小保留消息数
     public static final int DEFAULT_MIN_MESSAGES = 4;
     
+    private static final List<String> GREETING_PATTERNS = List.of(
+        "你好", "hi", "hello", "在吗", "请问", "谢谢", "感谢"
+    );
+    private static final List<String> TASK_KEYWORDS = List.of(
+        "修复", "添加", "实现", "优化", "重构", "分析", "审计", "检查", "完成", "设计", "编写"
+    );
+    private static final List<String> CODE_INDICATORS = List.of(
+        "/", ".java", ".py", ".js", ".ts", ".go", ".rs", ".cpp", ".c", ".h",
+        "模块", "文件", "类", "方法", "函数", "包", "pom.xml", "build.gradle"
+    );
+    
     private final int contextLimit;
     private final int maxMessages;
     private final int minMessages;
@@ -73,8 +84,8 @@ public class ContextWindowManager {
         // 估算当前 Token 数
         int estimatedTokens = estimateTokens(messages);
         
-        // 如果在限制内，直接返回
-        if (estimatedTokens <= contextLimit - SAFETY_MARGIN && messages.size() <= maxMessages) {
+        // 只检查 token 是否超限，不再检查消息数限制
+        if (estimatedTokens <= contextLimit - SAFETY_MARGIN) {
             return messages;
         }
         
@@ -144,6 +155,12 @@ public class ContextWindowManager {
             }
         }
         
+        // 【修复】额外保护被启发式识别为真实任务目标的消息
+        Message taskGoalMsg = findTaskGoalMessage(historicalMessages);
+        if (taskGoalMsg != null && !preservedEarly.contains(taskGoalMsg)) {
+            preservedEarly.add(taskGoalMsg);
+        }
+        
         // 从待压缩历史中移除已保护消息
         List<Message> compressibleHistory = new ArrayList<>(historicalMessages);
         compressibleHistory.removeAll(preservedEarly);
@@ -168,7 +185,8 @@ public class ContextWindowManager {
         // 对旧消息进行摘要
         List<Message> oldMessages = compressibleHistory.subList(0, compressibleHistory.size() - recentMessages.size());
         if (!oldMessages.isEmpty()) {
-            Message summaryMessage = createSummaryMessage(oldMessages);
+            String taskGoal = extractTaskGoal(historicalMessages);
+            Message summaryMessage = createSummaryMessage(oldMessages, taskGoal);
             if (summaryMessage != null) {
                 result.add(summaryMessage);
             }
@@ -195,39 +213,197 @@ public class ContextWindowManager {
     }
     
     /**
-     * 创建摘要消息
+     * 从所有消息中启发式识别真实任务目标消息。
      */
-    private Message createSummaryMessage(List<Message> messages) {
+    private Message findTaskGoalMessage(List<Message> allMessages) {
+        if (allMessages == null || allMessages.isEmpty()) {
+            return null;
+        }
+
+        Message bestCandidate = null;
+        int bestScore = -1;
+
+        for (Message msg : allMessages) {
+            if (msg.getRole() != Message.Role.USER) {
+                continue;
+            }
+
+            String content = msg.getTextContent();
+            if (content == null || content.isBlank()) {
+                continue;
+            }
+
+            String trimmed = content.trim();
+            String lower = trimmed.toLowerCase();
+
+            // 排除纯问候语
+            boolean isGreeting = false;
+            for (String pattern : GREETING_PATTERNS) {
+                String patternLower = pattern.toLowerCase();
+                if (lower.equals(patternLower)
+                    || lower.startsWith(patternLower + " ")
+                    || lower.startsWith(patternLower + "，")
+                    || lower.startsWith(patternLower + ",")) {
+                    if (trimmed.length() < 15) {
+                        isGreeting = true;
+                        break;
+                    }
+                }
+            }
+            if (isGreeting) {
+                continue;
+            }
+
+            // 排除过短消息
+            if (trimmed.length() < 10) {
+                continue;
+            }
+
+            int score = 0;
+
+            if (trimmed.length() > 20) {
+                score += trimmed.length();
+            }
+
+            for (String keyword : TASK_KEYWORDS) {
+                if (trimmed.contains(keyword)) {
+                    score += 50;
+                }
+            }
+
+            for (String indicator : CODE_INDICATORS) {
+                if (trimmed.contains(indicator)) {
+                    score += 30;
+                }
+            }
+
+            if (score > bestScore) {
+                bestScore = score;
+                bestCandidate = msg;
+            } else if (score == bestScore && bestCandidate != null) {
+                if (trimmed.length() > bestCandidate.getTextContent().trim().length()) {
+                    bestCandidate = msg;
+                }
+            }
+        }
+
+        return bestCandidate;
+    }
+
+    /**
+     * 从所有消息中提取任务目标文本。
+     */
+    private String extractTaskGoal(List<Message> allMessages) {
+        Message taskGoalMsg = findTaskGoalMessage(allMessages);
+        return taskGoalMsg != null ? taskGoalMsg.getTextContent().trim() : null;
+    }
+    
+    /**
+     * 创建摘要消息
+     * 
+     * @param messages  待摘要的旧消息
+     * @param taskGoal  从全部消息中识别的任务目标文本
+     */
+    private Message createSummaryMessage(List<Message> messages, String taskGoal) {
         if (messages.isEmpty()) {
             return null;
         }
         
         StringBuilder summary = new StringBuilder();
-        summary.append("[历史对话摘要] 之前共 ").append(messages.size()).append(" 轮对话。\n");
+        summary.append("[历史对话摘要] 之前共 ").append(messages.size()).append(" 轮对话。");
+        if (taskGoal != null && !taskGoal.isBlank()) {
+            summary.append(" 用户任务目标：").append(taskGoal.trim());
+        }
+        summary.append("\n");
         
         // 提取关键信息
         List<String> keyPoints = new ArrayList<>();
+        
+        // 第一条保留任务目标（完整内容，不限 50 字符）
+        if (taskGoal != null && !taskGoal.isBlank()) {
+            keyPoints.add("[用户任务] " + taskGoal.trim());
+        }
+        
+        // 其余要点：优先保留包含决策、错误、TODO 的消息，限 50 字符
+        List<Message> scoredMessages = new ArrayList<>();
         for (Message msg : messages) {
             String content = extractContent(msg);
             if (content != null && !content.isEmpty()) {
-                // 只取前 50 个字符作为要点
-                String point = content.length() > 50 
-                    ? content.substring(0, 50) + "..." 
-                    : content;
-                keyPoints.add("[" + msg.getRole().name().toLowerCase() + "] " + point);
+                scoredMessages.add(msg);
             }
-            
-            // 限制要点数量
+        }
+        
+        // 按重要性排序：决策 > 错误 > TODO > 其他
+        scoredMessages.sort((a, b) -> {
+            int scoreA = scoreMessageForSummary(a);
+            int scoreB = scoreMessageForSummary(b);
+            return Integer.compare(scoreB, scoreA);
+        });
+        
+        for (Message msg : scoredMessages) {
             if (keyPoints.size() >= 5) {
                 break;
             }
+            String content = extractContent(msg);
+            if (content == null || content.isEmpty()) {
+                continue;
+            }
+            // 如果该消息就是任务目标本身，已添加，跳过
+            if (taskGoal != null && content.trim().equals(taskGoal.trim())) {
+                continue;
+            }
+            String point = content.length() > 50 
+                ? content.substring(0, 50) + "..." 
+                : content;
+            keyPoints.add("[" + msg.getRole().name().toLowerCase() + "] " + point);
         }
         
-        if (!keyPoints.isEmpty()) {
+        if (keyPoints.size() > 1 || (keyPoints.size() == 1 && !keyPoints.get(0).startsWith("[用户任务]"))) {
             summary.append("关键信息: ").append(String.join("; ", keyPoints));
+        } else if (keyPoints.size() == 1) {
+            summary.append("关键信息: ").append(keyPoints.get(0));
         }
         
         return Message.createSystemMessage(summary.toString());
+    }
+    
+    /**
+     * 为摘要生成对消息进行重要性评分。
+     */
+    private int scoreMessageForSummary(Message msg) {
+        String content = extractContent(msg);
+        if (content == null || content.isEmpty()) {
+            return 0;
+        }
+        String lower = content.toLowerCase();
+        int score = 0;
+        
+        // 决策类
+        if (lower.contains("决策") || lower.contains("决定") || lower.contains("设计")
+            || lower.contains("方案") || lower.contains("选择") || lower.contains("采用")) {
+            score += 100;
+        }
+        // 错误/失败类
+        if (lower.contains("错误") || lower.contains("error") || lower.contains("exception")
+            || lower.contains("失败") || lower.contains("bug") || lower.contains("fix")
+            || lower.contains("nullpointer") || lower.contains("npe")) {
+            score += 80;
+        }
+        // TODO/待办类
+        if (lower.contains("todo") || lower.contains("待办") || lower.contains("待完成")
+            || lower.contains("待实现") || lower.contains("尚未") || lower.contains("未完成")) {
+            score += 60;
+        }
+        // 简短消息降低优先级（可能是寒暄）
+        if (content.length() < 10) {
+            score -= 50;
+        }
+        // USER 消息略优先
+        if (msg.getRole() == Message.Role.USER) {
+            score += 10;
+        }
+        
+        return score;
     }
     
     /**

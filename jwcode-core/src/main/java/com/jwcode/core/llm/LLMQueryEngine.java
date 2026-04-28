@@ -3,6 +3,8 @@ package com.jwcode.core.llm;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.jwcode.core.agent.Agent;
+import com.jwcode.core.agent.AgentRegistry;
 import com.jwcode.core.config.JwcodeConfig;
 import com.jwcode.core.model.Message;
 import com.jwcode.core.session.Session;
@@ -51,6 +53,8 @@ public class LLMQueryEngine {
     private String pendingBudgetAdvice;
     // 去重：记录已注册的 StepCallbackAdapter，防止重复订阅导致日志重复
     private StepCallbackAdapter stepCallbackAdapter;
+    // 【Phase 5】Agent 感知：当前 Agent 注册表，用于工具过滤和提示词注入
+    private AgentRegistry agentRegistry;
     private static final ObjectMapper MAPPER = new ObjectMapper()
             .registerModule(new JavaTimeModule());
     
@@ -130,7 +134,9 @@ public class LLMQueryEngine {
      * 执行查询
      */
     public CompletableFuture<QueryResult> query(String prompt) {
-        logger.info("[LLMQueryEngine] Query: " + prompt);
+        Agent currentAgent = agentRegistry != null ? agentRegistry.getCurrent() : null;
+        String agentName = currentAgent != null ? currentAgent.getName() : "default";
+        logger.info("[LLMQueryEngine] Query [Agent=" + agentName + "]: " + prompt);
         
         // 【任务生命周期】意图检测与上下文重置
         TaskLifecycleManager.TaskIntent intent = taskLifecycleManager.detectIntent(session, prompt);
@@ -161,6 +167,57 @@ public class LLMQueryEngine {
         return runConversationLoop(0, 0);
     }
     
+    /**
+     * 【Phase 5】注入当前 Agent 的系统提示词
+     * 在对话开始时注入，让 LLM 知晓自己的角色、职责和可用工具约束。
+     */
+    private void injectAgentSystemPrompt() {
+        if (agentRegistry == null) return;
+        Agent agent = agentRegistry.getCurrent();
+        if (agent == null) return;
+
+        // 检查最近是否已经注入过该 Agent 的提示词（避免重复）
+        String marker = "[AGENT_ROLE:" + agent.getId() + "]";
+        if (hasRecentSystemPrompt(marker)) {
+            logger.fine("[LLMQueryEngine] Agent system prompt already injected for " + agent.getId());
+            return;
+        }
+
+        StringBuilder prompt = new StringBuilder();
+        prompt.append(marker).append("\n");
+        prompt.append("# 当前角色：").append(agent.getName()).append("\n\n");
+        prompt.append(agent.getSystemPrompt()).append("\n\n");
+
+        // 显式列出可用工具（增强约束感）
+        List<Tool<?, ?, ?>> allowedTools = toolExecutor.getEnabledTools().stream()
+            .filter(t -> agent.canUseTool(t.getName()))
+            .toList();
+        if (!allowedTools.isEmpty()) {
+            prompt.append("## 你当前可用的工具（仅限以下工具）\n\n");
+            for (Tool<?, ?, ?> t : allowedTools) {
+                prompt.append("- ").append(t.getName()).append(": ").append(t.getDescription()).append("\n");
+            }
+            prompt.append("\n");
+        }
+
+        // 显式列出禁止工具（对 Orchestrator 尤为重要）
+        List<Tool<?, ?, ?>> disallowedTools = toolExecutor.getEnabledTools().stream()
+            .filter(t -> !agent.canUseTool(t.getName()))
+            .toList();
+        if (!disallowedTools.isEmpty()) {
+            prompt.append("## 你【禁止】使用的工具（必须通过 AgentTool 指派给子Agent）\n\n");
+            for (Tool<?, ?, ?> t : disallowedTools) {
+                prompt.append("- ").append(t.getName()).append("\n");
+            }
+            prompt.append("\n如果你需要执行上述禁止工具的工作，请使用 AgentTool 创建对应角色的子Agent来完成。\n\n");
+        }
+
+        session.addMessage(Message.createSystemMessage(prompt.toString()));
+        logger.info("[LLMQueryEngine] 已注入 Agent 系统提示词 | agent=" + agent.getId()
+            + " | 允许工具=" + allowedTools.size()
+            + " | 禁止工具=" + disallowedTools.size());
+    }
+
     /**
      * 添加文件编辑指南到系统提示
      */
@@ -203,10 +260,19 @@ public class LLMQueryEngine {
             
             1. 如果存在任务清单，必须在每次回复开头简要汇报当前进度（如"步骤 2/5 已完成，正在执行步骤 3"）
             2. 每完成一个步骤，在回复中明确标注该步骤状态变更（如"✅ 步骤 X 完成"）
-            3. 如果发现遗漏的工作，动态添加新步骤并继续执行
-            4. 如果需要用户补充信息，使用 AskUserQuestionTool 主动提问，不要空等
-            5. 遇到步骤失败时，优先尝试替代方案；若确实无法解决，标记失败并说明原因
-            6. 所有步骤完成后，添加 [FINISH] 标记结束对话
+            3. 如果发现遗漏的工作，动态添加新步骤并继续执行（AI自动执行，无需用户确认）
+            4. 如果发现某个步骤不需要，可以自动删除该步骤
+            5. 如果发现步骤顺序不合理，可以自动调整顺序
+            6. 如果需要用户补充信息，使用 AskUserQuestionTool 主动提问，不要空等
+            7. 所有步骤完成后，添加 [FINISH] 标记结束对话
+            8. 在回复末尾使用以下格式显示任务进度：
+               【任务进度】X/Y 已完成 | Z 待处理
+               例如：【任务进度】3/5 已完成 | 2 待处理
+            
+            重要：任务清单的添加/删除/调整由 AI 自动判断并执行，无需询问用户！
+            如果发现当前步骤遗漏了相关工作，直接添加新步骤。
+            如果发现某个步骤已经完成或不需要，可以直接删除。
+            如果发现后续步骤需要提前执行，可以直接调整顺序。
             
             【重要】大任务拆分规则：
             
@@ -318,12 +384,17 @@ public class LLMQueryEngine {
         // 已移除累计超时检查，由 HTTP 层超时控制（OpenAILLMService 中的 timeoutSeconds）
         // 单次 LLM 请求的超时由 HTTP 客户端处理，不受工具执行时间影响
         
+        // 【Phase 5】注入当前 Agent 的系统提示词（仅首次迭代，避免重复）
+        if (iteration == 0) {
+            injectAgentSystemPrompt();
+        }
+
         // 转换会话消息到 LLM 格式
         List<LLMMessage> llmMessages = convertSessionMessages(session);
         
         logger.info("[LLMQueryEngine] Iteration " + iteration + ", messages: " + llmMessages.size());
         
-        // 获取可用工具
+        // 获取可用工具（已按 Agent 白名单过滤）
         List<LLMTool> tools = convertTools(toolExecutor.getEnabledTools());
         
         // 提醒使用 [FINISH] 标记，但避免重复堆积系统提示
@@ -479,7 +550,9 @@ public class LLMQueryEngine {
             Consumer<String> contentConsumer,
             Consumer<String> thinkingConsumer,
             Consumer<LLMService.StreamToolCallEvent> toolCallConsumer) {
-        logger.info("[LLMQueryEngine] Stream Query: " + prompt);
+        Agent currentAgent = agentRegistry != null ? agentRegistry.getCurrent() : null;
+        String agentName = currentAgent != null ? currentAgent.getName() : "default";
+        logger.info("[LLMQueryEngine] Stream Query [Agent=" + agentName + "]: " + prompt);
         
         pipeline.publish(new ObservationEvent.StepStart("LLM查询", "正在分析问题并制定解决方案..."));
         
@@ -545,6 +618,11 @@ public class LLMQueryEngine {
             );
         }
         
+        // 【Phase 5】注入当前 Agent 的系统提示词（仅首次迭代，避免重复）
+        if (iteration == 0) {
+            injectAgentSystemPrompt();
+        }
+
         // 转换会话消息到 LLM 格式
         List<LLMMessage> llmMessages = convertSessionMessages(session);
         
@@ -1113,6 +1191,17 @@ public class LLMQueryEngine {
      * 转换工具
      */
     private List<LLMTool> convertTools(List<Tool<?, ?, ?>> tools) {
+        // 【Phase 5】按当前 Agent 的工具白名单过滤
+        Agent currentAgent = agentRegistry != null ? agentRegistry.getCurrent() : null;
+        if (currentAgent != null) {
+            List<Tool<?, ?, ?>> original = tools;
+            tools = tools.stream()
+                .filter(t -> currentAgent.canUseTool(t.getName()))
+                .toList();
+            logger.info("[LLMQueryEngine] Agent '" + currentAgent.getName() + "' 工具过滤: "
+                + original.size() + " -> " + tools.size()
+                + " | 允许: " + tools.stream().map(Tool::getName).toList());
+        }
         List<LLMTool> result = new ArrayList<>();
         for (Tool<?, ?, ?> tool : tools) {
             LLMTool llmTool = new LLMTool();
@@ -1271,6 +1360,8 @@ public class LLMQueryEngine {
     public LLMService getLLMService() { return llmService; }
     public ToolExecutor getToolExecutor() { return toolExecutor; }
     public EngineConfig getConfig() { return config; }
+    public AgentRegistry getAgentRegistry() { return agentRegistry; }
+    public void setAgentRegistry(AgentRegistry agentRegistry) { this.agentRegistry = agentRegistry; }
     
     // ==================== Builder ====================
     
@@ -1284,6 +1375,7 @@ public class LLMQueryEngine {
         private ToolExecutor toolExecutor;
         private ToolRegistry toolRegistry;
         private EngineConfig config;
+        private AgentRegistry agentRegistry;
         
         public Builder session(Session session) {
             this.session = session;
@@ -1309,6 +1401,11 @@ public class LLMQueryEngine {
             this.config = config;
             return this;
         }
+
+        public Builder agentRegistry(AgentRegistry agentRegistry) {
+            this.agentRegistry = agentRegistry;
+            return this;
+        }
         
         public LLMQueryEngine build() {
             if (session == null) {
@@ -1320,7 +1417,7 @@ public class LLMQueryEngine {
             if (toolExecutor == null) {
                 toolExecutor = new ToolExecutor(toolRegistry != null ? toolRegistry : ToolRegistry.createDefault());
             }
-            return new LLMQueryEngine(session, llmService, toolExecutor, config);
+            return new LLMQueryEngine(session, llmService, toolExecutor, config, agentRegistry);
         }
     }
 }

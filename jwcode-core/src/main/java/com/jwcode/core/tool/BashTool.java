@@ -90,10 +90,10 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
                - require_approval: 是否需要用户确认（可选，默认：true）
                
                示例:
-               - 简单命令：{"command": "ls -la"}
-               - 带工作目录：{"command": "ls -la", "cwd": "/home/user"}
-               - 带环境变量：{"command": "echo $PATH", "env": {"PATH": "/usr/bin:/bin"}}
-               - 带超时：{"command": "sleep 10", "timeout": 5000}
+               - 简单命令（Unix）: {"command": "ls -la"}  |  Windows: {"command": "dir"}
+               - 带工作目录（Unix）: {"command": "ls -la", "cwd": "/home/user"}  |  Windows: {"command": "dir", "cwd": "C:\\Users"}
+               - 带环境变量（Unix）: {"command": "echo $PATH", "env": {"PATH": "/usr/bin:/bin"}}  |  Windows: {"command": "echo %PATH%", "env": {"PATH": "C:\\Windows\\System32"}}
+               - 带超时（Unix）: {"command": "sleep 5", "timeout": 5000}  |  Windows: {"command": "timeout /t 5", "timeout": 5000}
                
                注意:
                - 危险命令需要用户确认
@@ -405,10 +405,25 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
     @Override
     public boolean isReadOnly(BashInput input) {
         // 检查是否是只读命令
-        String command = input.command().toLowerCase();
-        return command.startsWith("ls ") || command.startsWith("cat ") ||
-               command.startsWith("echo ") || command.startsWith("pwd") ||
-               command.startsWith("whoami") || command.startsWith("date");
+        String command = input.command().toLowerCase().trim();
+        
+        // Unix 只读命令
+        boolean unixReadOnly = command.startsWith("ls ") || command.startsWith("cat ") ||
+                command.startsWith("echo ") || command.startsWith("pwd") ||
+                command.startsWith("whoami") || command.startsWith("date") ||
+                command.startsWith("head ") || command.startsWith("tail ") ||
+                command.startsWith("find ") || command.startsWith("grep ") ||
+                command.startsWith("wc ") || command.startsWith("du ");
+        
+        // Windows 只读命令
+        boolean windowsReadOnly = command.startsWith("dir ") || command.startsWith("type ") ||
+                command.startsWith("cd") || command.startsWith("echo ") ||
+                command.startsWith("whoami") || command.startsWith("date /t") ||
+                command.startsWith("ver") || command.startsWith("systeminfo") ||
+                command.startsWith("where ") || command.startsWith("get-") ||  // PowerShell
+                command.startsWith("chcp");
+        
+        return unixReadOnly || windowsReadOnly;
     }
     
     @Override
@@ -626,7 +641,10 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
         // mkdir -> md (创建目录)
         if (lower.startsWith("mkdir ")) {
             logger.fine("Auto-converting mkdir to md for Windows");
-            return command.replaceFirst("(?i)mkdir(\\s+)", "md $1");
+            String converted = command.replaceFirst("(?i)mkdir(\\s+)", "md $1");
+            // 移除 Windows md 不支持的 -p 参数（md 本身支持递归创建）
+            converted = converted.replace(" -p ", " ").replace(" -p", "");
+            return converted;
         }
         
         // touch -> echo + type (创建空文件)
@@ -649,7 +667,55 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
             return "cls";
         }
         
-        // grep -> findstr (搜索内容)
+        // grep -> findstr (独立命令)
+        if (lower.startsWith("grep ")) {
+            logger.fine("Auto-converting grep to findstr for Windows");
+            return command.replaceFirst("(?i)^grep(\\s+)", "findstr $1");
+        }
+        
+        // head -> PowerShell Get-Content | Select-Object -First
+        if (lower.startsWith("head ")) {
+            logger.fine("Auto-converting head to PowerShell Get-Content for Windows");
+            String args = command.substring(5).trim();
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)(?:-n\\s+(\\d+)|-(\\d+))(?:\\s+(.*))?").matcher(args);
+            if (m.find()) {
+                String num = m.group(1) != null ? m.group(1) : m.group(2);
+                String file = m.group(3) != null ? m.group(3).trim() : "";
+                if (!file.isEmpty()) {
+                    return "Get-Content " + file + " | Select-Object -First " + num;
+                }
+            }
+            return "Get-Content " + args + " | Select-Object -First 10";
+        }
+        
+        // tail -> PowerShell Get-Content | Select-Object -Last
+        if (lower.startsWith("tail ")) {
+            logger.fine("Auto-converting tail to PowerShell Get-Content for Windows");
+            String args = command.substring(5).trim();
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)(?:-n\\s+(\\d+)|-(\\d+))(?:\\s+(.*))?").matcher(args);
+            if (m.find()) {
+                String num = m.group(1) != null ? m.group(1) : m.group(2);
+                String file = m.group(3) != null ? m.group(3).trim() : "";
+                if (!file.isEmpty()) {
+                    return "Get-Content " + file + " | Select-Object -Last " + num;
+                }
+            }
+            return "Get-Content " + args + " | Select-Object -Last 10";
+        }
+        
+        // find (Unix 风格) -> PowerShell Get-ChildItem
+        if (lower.startsWith("find ") && (lower.contains(" -name ") || lower.contains(" -type "))) {
+            logger.fine("Auto-converting Unix find to PowerShell Get-ChildItem for Windows");
+            String args = command.substring(5).trim();
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)(?:\".*?\"|\\S+)\\s+-name\\s+(.*)").matcher(args);
+            if (m.find()) {
+                String pattern = m.group(1).trim();
+                return "Get-ChildItem -Recurse -Filter " + pattern;
+            }
+            return "Get-ChildItem -Recurse";
+        }
+        
+        // grep -> findstr (管道中)
         if (lower.contains(" grep ")) {
             logger.fine("Auto-converting grep to findstr for Windows");
             return command.replaceAll("(?i)\\s+grep\\s+", " | findstr ");

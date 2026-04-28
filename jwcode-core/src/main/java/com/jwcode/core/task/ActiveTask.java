@@ -92,6 +92,88 @@ public class ActiveTask {
         }
         return null;
     }
+    
+    // ==================== 任务清单操作方法 ====================
+    
+    /**
+     * 添加新步骤
+     */
+    public TaskStep addStep(String description) {
+        TaskStep newStep = new TaskStep(steps.size(), description);
+        steps.add(newStep);
+        this.updatedAt = Instant.now();
+        return newStep;
+    }
+    
+    /**
+     * 删除指定步骤
+     */
+    public boolean removeStep(int index) {
+        if (index >= 0 && index < steps.size()) {
+            steps.remove(index);
+            // 重新编号
+            reindexSteps();
+            this.updatedAt = Instant.now();
+            return true;
+        }
+        return false;
+    }
+    
+    /**
+     * 更新步骤描述
+     */
+    public boolean updateStep(int index, String newDescription) {
+        if (index >= 0 && index < steps.size()) {
+            TaskStep step = steps.get(index);
+            step.setDescription(newDescription);
+            this.updatedAt = Instant.now();
+            return true;
+        }
+        return false;
+    }
+    
+    /**
+     * 调整步骤顺序（从 fromIndex 移动到 toIndex）
+     */
+    public boolean reorderStep(int fromIndex, int toIndex) {
+        if (fromIndex < 0 || fromIndex >= steps.size() || toIndex < 0 || toIndex >= steps.size()) {
+            return false;
+        }
+        TaskStep step = steps.remove(fromIndex);
+        steps.add(toIndex, step);
+        reindexSteps();
+        // 如果移动的是当前步骤，需要更新 currentStepIndex
+        if (currentStepIndex == fromIndex) {
+            currentStepIndex = toIndex;
+        } else if (fromIndex < currentStepIndex && toIndex >= currentStepIndex) {
+            currentStepIndex--;
+        } else if (fromIndex > currentStepIndex && toIndex <= currentStepIndex) {
+            currentStepIndex++;
+        }
+        this.updatedAt = Instant.now();
+        return true;
+    }
+    
+    /**
+     * 重新编号所有步骤
+     */
+    private void reindexSteps() {
+        for (int i = 0; i < steps.size(); i++) {
+            steps.get(i).setIndex(i);
+        }
+    }
+    
+    /**
+     * 获取任务进度摘要（简洁版）
+     */
+    public String getProgressSummary() {
+        int completed = getCompletedCount();
+        int total = steps.size();
+        if (total == 0) {
+            return "任务清单为空";
+        }
+        return String.format("进度：%d/%d (%d%%)", completed, total, (completed * 100 / total));
+    }
 
     /**
      * 获取已完成步骤数

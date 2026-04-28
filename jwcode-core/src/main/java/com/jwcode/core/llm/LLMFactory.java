@@ -195,6 +195,31 @@ public class LLMFactory {
             .toolExecutor(toolExecutor)
             .build();
     }
+
+    /**
+     * 创建新的 LLMQueryEngine，带 AgentRegistry（Phase 5 分层架构）
+     */
+    public LLMQueryEngine createQueryEngine(
+            com.jwcode.core.session.Session session,
+            com.jwcode.core.tool.ToolRegistry toolRegistry,
+            com.jwcode.core.tool.ToolExecutor toolExecutor,
+            com.jwcode.core.agent.AgentRegistry agentRegistry) {
+        LLMQueryEngine.EngineConfig engineConfig = LLMQueryEngine.EngineConfig.fromJwcodeConfig(config);
+        String modelId = session.getModel();
+        if (modelId == null || modelId.isEmpty()) {
+            modelId = config != null && config.getDefaultModel() != null ? config.getDefaultModel().getId() : null;
+        }
+        engineConfig.applyModelTraits(modelId);
+
+        return LLMQueryEngine.builder()
+            .session(session)
+            .llmService(getLLMService())
+            .toolRegistry(toolRegistry)
+            .toolExecutor(toolExecutor)
+            .config(engineConfig)
+            .agentRegistry(agentRegistry)
+            .build();
+    }
     
     /**
      * 获取配置

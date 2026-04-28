@@ -379,6 +379,87 @@ List<PlanStep> merged = planner.smartMerge(steps, 60000);  // 合并小于 1 分
 
 ---
 
+## 与 Orchestrator 的协作（Phase 5 分层架构）
+
+从 v2.0.0 开始，JWCode 强制执行**主从分层架构**：
+
+- **OrchestratorAgent**（主Agent）：唯一入口，只做任务分析、拆解、调度和整合
+- **AITaskPlanner**：作为 Orchestrator 的"大脑"，提供 AI 驱动的分析和拆解能力
+
+### 协作流程
+
+```
+用户输入
+   ↓
+OrchestratorAgent
+   ├── 调用 planner.analyze()    → 获取意图分析 + 复杂度评估
+   ├── 调用 planner.plan()       → 获取 ExecutionPlan（子任务列表）
+   ├── 将 PlanStep 映射为 SubAgentTask
+   │     Coder/Architect/Test/Reviewer/Doc/Explore/Debug
+   ├── 调用 AgentTool.execute()  → 并行/串行执行子Agent
+   └── 验收结果 → 整合输出
+```
+
+### 关键约束
+
+| 层级 | 能否直接调用工具 | 能否创建子Agent |
+|------|------------------|----------------|
+| Orchestrator | 仅限 AgentTool / SmartAnalyzeTool / AskUserQuestionTool | ✅ 通过 AgentTool |
+| Worker（子Agent） | 按角色白名单（Coder可读写，Reviewer只读等） | ❌ 禁止递归 |
+
+### Agent 选型映射
+
+AITaskPlanner 生成的 `PlanStep.agentType` 自动映射到对应子Agent：
+
+| PlanStep 类型 | 子Agent | 说明 |
+|---------------|---------|------|
+| `coder` | CoderAgent | 代码实现、重构 |
+| `debug` | DebugAgent | 错误排查、修复验证 |
+| `reviewer` | ReviewerAgent | 代码审查（只读） |
+| `test` | TestAgent | 测试设计、执行 |
+| `analyzer` / `explore` | ExploreAgent | 代码库调研（只读） |
+| `architect` | ArchitectAgent | 架构设计、接口定义 |
+| `doc` | DocAgent | 文档编写 |
+| `default` | DefaultAgent | 通用兜底 |
+
+### 使用示例（Orchestrator 视角）
+
+```java
+// Orchestrator 内部的工作流
+public class OrchestratorAgent implements Agent {
+
+    public String handleUserRequest(String request, Session session) {
+        // 1. AI 分析
+        TaskAnalysis analysis = planner.analyze(request).join();
+
+        // 2. 生成执行计划
+        ExecutionPlan plan = planner.plan(request, context).join();
+
+        // 3. 将 PlanStep 转换为 SubAgentTask
+        List<SubAgentTask> subTasks = plan.getSteps().stream()
+            .map(step -> new SubAgentTask(
+                step.getAction(),
+                step.getDescription(),
+                mapAgentType(step.getAgentType())  // coder/debug/test/...
+            ))
+            .toList();
+
+        // 4. 通过 AgentTool 并行执行
+        Map<String, Object> executeInput = Map.of(
+            "action", "execute",
+            "tasks", subTasks,
+            "parallel", true
+        );
+        ToolResult<Map<String, Object>> result = agentTool.call(executeInput, context, progress -> {});
+
+        // 5. 整合输出
+        return integrateResults(result);
+    }
+}
+```
+
+---
+
 ## 总结
 
 JWCode 的 AI 驱动任务规划系统提供了：

@@ -4,6 +4,7 @@ import com.jwcode.cli.commands.*;
 import com.jwcode.cli.log.CliLogger;
 import com.jwcode.cli.log.LogConfigurator;
 import com.jwcode.cli.log.ProgressIndicator;
+import com.jwcode.core.agent.AgentRegistry;
 import com.jwcode.core.config.JwcodeConfig;
 import com.jwcode.core.config.SystemPromptLoader;
 import com.jwcode.core.llm.*;
@@ -12,8 +13,12 @@ import com.jwcode.core.session.Session;
 import com.jwcode.core.session.SessionManager;
 import com.jwcode.core.skill.SkillLoader;
 import com.jwcode.core.skill.SkillRegistry;
+import com.jwcode.core.task.BackgroundTaskLauncher;
+import com.jwcode.core.task.IdleDetector;
+import com.jwcode.core.task.TaskStore;
 import com.jwcode.core.terminal.JLine3Terminal;
 
+import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
@@ -28,12 +33,15 @@ public class JwCodeApplication implements AutoCloseable {
     private final ConfigManager configManager;
     private LLMQueryEngine llmQueryEngine;
     private JLine3Terminal terminal;
+    private BackgroundTaskLauncher backgroundTaskLauncher;
+    private IdleDetector idleDetector;
     
     public JwCodeApplication(String[] args) {
         this.context = new CommandContext();
         this.configManager = new ConfigManager();
         initializeSession(args);
         initializeLLMQueryEngine();
+        initializeBackgroundInfrastructure();
         registerCommands();
         initializeTerminal();
     }
@@ -97,12 +105,36 @@ public class JwCodeApplication implements AutoCloseable {
     
     @Override
     public void close() {
+        if (idleDetector != null) {
+            idleDetector.stop();
+        }
         if (terminal != null) {
             try {
                 terminal.close();
             } catch (Exception e) {
                 // 忽略关闭错误
             }
+        }
+    }
+    
+    /**
+     * 初始化后台任务基础设施（BackgroundTaskLauncher + IdleDetector + WireEventBus）
+     */
+    private void initializeBackgroundInfrastructure() {
+        try {
+            TaskStore taskStore = TaskStore.getInstance(Paths.get(System.getProperty("user.dir")));
+            this.backgroundTaskLauncher = new BackgroundTaskLauncher(
+                Paths.get(System.getProperty("user.dir")), taskStore);
+            
+            this.idleDetector = new IdleDetector(taskStore);
+            idleDetector.setOnIdleTaskComplete(task -> {
+                CliLogger.getInstance().info("[IdleDetector] 后台任务完成 | taskId=" + task.getId() + " | status=" + task.getStatus());
+            });
+            idleDetector.start();
+            
+            CliLogger.getInstance().info("后台基础设施初始化完成: BackgroundTaskLauncher + IdleDetector");
+        } catch (Exception e) {
+            CliLogger.getInstance().warn("后台基础设施初始化失败: " + e.getMessage());
         }
     }
     
@@ -144,9 +176,20 @@ public class JwCodeApplication implements AutoCloseable {
                 session.addMessage(Message.createSystemMessage(systemPrompt));
                 logger.debug("System prompt loaded: " + SystemPromptLoader.getPromptInfo());
             }
-            
-            // 创建 LLM 查询引擎
-            this.llmQueryEngine = llmFactory.createQueryEngine(session);
+
+            // 【Phase 5】创建 AgentRegistry，默认入口为 OrchestratorAgent
+            AgentRegistry agentRegistry = AgentRegistry.createDefault();
+            logger.info("AgentRegistry initialized, currentAgent=" + agentRegistry.getCurrent().getId()
+                + " (" + agentRegistry.getCurrent().getName() + ")"
+                + " | registered=" + agentRegistry.listAgentIds());
+
+            // 创建 LLM 查询引擎（传入 AgentRegistry 启用分层架构）
+            this.llmQueryEngine = llmFactory.createQueryEngine(
+                session,
+                null,  // toolRegistry — 使用默认
+                null,  // toolExecutor — 使用默认
+                agentRegistry
+            );
             
             // 获取工具信息
             int toolCount = llmQueryEngine.getToolExecutor().getEnabledTools().size();

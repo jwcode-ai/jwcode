@@ -38,19 +38,31 @@ public class AgentRegistry {
     
     /**
      * 注册默认 Agent
+     *
+     * <p>严格分层架构：
+     * <ul>
+     *   <li><b>Orchestrator</b>（主Agent）：唯一入口，只做拆解调度</li>
+     *   <li><b>Worker Agents</b>（子Agent）：执行具体工作</li>
+     * </ul>
      */
     private void registerDefaultAgents() {
-        // 注册 Coder Agent
+        // ===== 主控 Agent（唯一入口）=====
+        register(new OrchestratorAgent());
+
+        // ===== 专业子Agent（Worker）=====
         register(new CoderAgent());
-        
-        // 注册 Debug Agent
         register(new DebugAgent());
-        
-        // 注册通用 Agent
+        register(new ReviewerAgent());
+        register(new TestAgent());
+        register(new DocAgent());
+        register(new ExploreAgent());
+        register(new ArchitectAgent());
+
+        // 注册通用 Agent（降级兜底）
         register(new DefaultAgent());
-        
-        // 设置默认 Agent
-        currentAgent = get("default");
+
+        // 设置默认 Agent 为 Orchestrator
+        currentAgent = get("orchestrator");
     }
     
     /**

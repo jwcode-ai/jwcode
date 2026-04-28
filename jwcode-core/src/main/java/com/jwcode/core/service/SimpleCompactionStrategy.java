@@ -37,6 +37,17 @@ public class SimpleCompactionStrategy {
     // 预留 token 安全余量
     private static final int RESERVED_TOKENS = 4096;
 
+    private static final List<String> GREETING_PATTERNS = List.of(
+        "你好", "hi", "hello", "在吗", "请问", "谢谢", "感谢"
+    );
+    private static final List<String> TASK_KEYWORDS = List.of(
+        "修复", "添加", "实现", "优化", "重构", "分析", "审计", "检查", "完成", "设计", "编写"
+    );
+    private static final List<String> CODE_INDICATORS = List.of(
+        "/", ".java", ".py", ".js", ".ts", ".go", ".rs", ".cpp", ".c", ".h",
+        "模块", "文件", "类", "方法", "函数", "包", "pom.xml", "build.gradle"
+    );
+
     private final LLMService llmService;
     private final int tailSize;
 
@@ -79,7 +90,7 @@ public class SimpleCompactionStrategy {
         int originalSize = messages.size();
         logger.info("[SimpleCompaction] 开始压缩: original=" + originalSize + " messages");
 
-        // 0. 保护前 2 条非系统消息（通常是用户初始任务描述）
+        // 0. 保护前 2 条非系统消息（通常是用户初始任务描述），额外保护真实任务目标
         List<Message> preserved = extractFirstUserMessages(messages, 2);
 
         // 1. 分离尾部安全区（排除已保护的消息）
@@ -89,8 +100,19 @@ public class SimpleCompactionStrategy {
         // 【修复】从 head 中排除已被保护的消息，避免重复压缩
         head.removeAll(preserved);
 
+        // 【修复】额外保护被识别的真实任务目标消息（如果它不在前 2 条中且不在 tail 中）
+        Message taskGoalMsg = findTaskGoalMessage(messages);
+        if (taskGoalMsg != null && !preserved.contains(taskGoalMsg) && !tail.contains(taskGoalMsg)) {
+            preserved.add(taskGoalMsg);
+            head.remove(taskGoalMsg);
+        }
+
+        // 同时从 tail 中排除已被保护的消息，避免最终结果中出现重复
+        tail.removeAll(preserved);
+
         // 2. 构建压缩 Prompt（注入被保护的任务目标）
-        String compactionPrompt = buildCompactionPrompt(head, preserved);
+        String taskGoal = extractTaskGoal(messages);
+        String compactionPrompt = buildCompactionPrompt(head, taskGoal);
         if (compactionPrompt == null || compactionPrompt.isBlank()) {
             logger.info("[SimpleCompaction] 头部无可压缩内容，仅截断");
             List<Message> fallback = new ArrayList<>(preserved);
@@ -167,6 +189,7 @@ public class SimpleCompactionStrategy {
 
     /**
      * 提取前 N 条用户消息（初始任务描述），这些消息不参与压缩。
+     * 额外保护被启发式识别为"真实任务目标"的消息（如果它不在前 N 条中）。
      */
     private List<Message> extractFirstUserMessages(List<Message> messages, int count) {
         List<Message> result = new ArrayList<>();
@@ -182,41 +205,114 @@ public class SimpleCompactionStrategy {
     }
 
     /**
-     * 从被保护的消息中提取任务目标。
+     * 从所有消息中启发式识别真实任务目标消息。
      */
-    private String extractTaskGoal(List<Message> preservedMessages) {
-        if (preservedMessages == null || preservedMessages.isEmpty()) {
+    private Message findTaskGoalMessage(List<Message> allMessages) {
+        if (allMessages == null || allMessages.isEmpty()) {
             return null;
         }
-        for (Message msg : preservedMessages) {
-            if (msg.getRole() == Message.Role.USER) {
-                String content = msg.getTextContent();
-                if (content != null && !content.isBlank()) {
-                    return content.trim();
+
+        Message bestCandidate = null;
+        int bestScore = -1;
+
+        for (Message msg : allMessages) {
+            if (msg.getRole() != Message.Role.USER) {
+                continue;
+            }
+
+            String content = msg.getTextContent();
+            if (content == null || content.isBlank()) {
+                continue;
+            }
+
+            String trimmed = content.trim();
+            String lower = trimmed.toLowerCase();
+
+            // 排除纯问候语
+            boolean isGreeting = false;
+            for (String pattern : GREETING_PATTERNS) {
+                String patternLower = pattern.toLowerCase();
+                if (lower.equals(patternLower)
+                    || lower.startsWith(patternLower + " ")
+                    || lower.startsWith(patternLower + "，")
+                    || lower.startsWith(patternLower + ",")) {
+                    if (trimmed.length() < 15) {
+                        isGreeting = true;
+                        break;
+                    }
+                }
+            }
+            if (isGreeting) {
+                continue;
+            }
+
+            // 排除过短消息（大概率是寒暄）
+            if (trimmed.length() < 10) {
+                continue;
+            }
+
+            int score = 0;
+
+            // 长度启发：真实任务通常较长
+            if (trimmed.length() > 20) {
+                score += trimmed.length();
+            }
+
+            // 任务关键词
+            for (String keyword : TASK_KEYWORDS) {
+                if (trimmed.contains(keyword)) {
+                    score += 50;
+                }
+            }
+
+            // 代码/文件/模块指示
+            for (String indicator : CODE_INDICATORS) {
+                if (trimmed.contains(indicator)) {
+                    score += 30;
+                }
+            }
+
+            if (score > bestScore) {
+                bestScore = score;
+                bestCandidate = msg;
+            } else if (score == bestScore && bestCandidate != null) {
+                // 平局：更长的消息胜出
+                if (trimmed.length() > bestCandidate.getTextContent().trim().length()) {
+                    bestCandidate = msg;
                 }
             }
         }
-        return null;
+
+        return bestCandidate;
+    }
+
+    /**
+     * 从所有消息中提取任务目标文本。
+     */
+    private String extractTaskGoal(List<Message> allMessages) {
+        Message taskGoalMsg = findTaskGoalMessage(allMessages);
+        return taskGoalMsg != null ? taskGoalMsg.getTextContent().trim() : null;
     }
 
     /**
      * 构建压缩 Prompt。
      *
-     * @param headMessages    待压缩的头部消息（已排除被保护消息）
-     * @param preservedMessages 被保护的早期消息（用于注入任务目标约束）
+     * @param headMessages 待压缩的头部消息（已排除被保护消息）
+     * @param taskGoal     从全部消息中识别的任务目标文本
      */
-    private String buildCompactionPrompt(List<Message> headMessages, List<Message> preservedMessages) {
+    private String buildCompactionPrompt(List<Message> headMessages, String taskGoal) {
         StringBuilder sb = new StringBuilder();
 
-        // 【修复】强制注入用户原始任务目标，防止压缩后丢失
-        String taskGoal = extractTaskGoal(preservedMessages);
+        // 【修复】强制注入用户真实任务目标，防止压缩后丢失
         if (taskGoal != null && !taskGoal.isBlank()) {
-            sb.append("【强制约束】用户原始任务目标：").append(truncate(taskGoal, 200)).append("\n");
-            sb.append("你必须在摘要开头用一句话准确复述上述任务目标，禁止篡改、遗漏或臆测。\n\n");
+            sb.append("【强制约束】用户真实任务目标：").append(truncate(taskGoal, 200)).append("\n");
+            sb.append("注意：如果上述目标看起来只是问候语/寒暄，请从完整对话历史中重新识别真正的任务目标。\n");
+            sb.append("真正的任务目标通常是：包含具体动作（修复/添加/实现/优化）、涉及具体模块/文件、有明确验收标准的消息。\n");
+            sb.append("你必须在摘要开头用一句话准确复述用户真实任务目标，禁止篡改、遗漏或臆测。\n\n");
         }
 
         sb.append("请用 200 字以内总结以下对话历史，保留关键信息：\n");
-        sb.append("- 当前任务目标（必须从用户第一条消息中准确提取，禁止臆测或篡改）\n");
+        sb.append("- 当前任务目标（必须从用户消息中准确提取，禁止臆测或篡改）\n");
         sb.append("- 已做出的设计决策\n");
         sb.append("- 遇到的错误及解决方案\n");
         sb.append("- 尚未完成的待办事项\n\n");

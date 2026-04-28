@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jwcode.core.tool.context.ToolExecutionContext;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -153,7 +154,7 @@ public class FileWriteTool implements Tool<FileWriteTool.Input, FileWriteTool.Ou
                     Files.createDirectories(parentDir);
                 }
                 
-                Files.writeString(filePath, input.content, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+                Files.writeString(filePath, input.content, StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
                 long size = Files.size(filePath);
                 
                 Output output = new Output();
