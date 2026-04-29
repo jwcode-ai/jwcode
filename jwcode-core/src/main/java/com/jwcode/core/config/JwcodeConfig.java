@@ -200,7 +200,7 @@ public class JwcodeConfig {
         private int contextWindow = 128000;
         
         @JsonProperty("max-tokens")
-        private int maxTokens = 4096;
+        private Integer maxTokens = null;  // null 表示不限制，让模型输出自己的最大值
         
         @JsonProperty("temperature")
         private Double temperature;  // null 表示使用模型默认值

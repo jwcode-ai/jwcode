@@ -21,14 +21,17 @@ public class AITaskDecomposer {
     
     /**
      * 使用 AI 智能分解任务
+     * 
+     * 修复记录：2026/4/28 - 移除模拟 AI 响应和 fallback 降级
+     * 如果 AI 不可用，直接抛出异常而非返回假数据
      */
     public CompletableFuture<DecompositionResult> decomposeWithAI(String taskDescription) {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 System.out.println("[AITaskDecomposer] 使用 AI 分解任务: " + taskDescription.substring(0, Math.min(50, taskDescription.length())));
                 
-                // 模拟 AI 响应
-                String aiResponse = simulateAIResponse(taskDescription);
+                // 【修复】移除模拟 AI 响应 - 必须调用真实 AI
+                String aiResponse = executeRealAI(taskDescription);
                 
                 // 解析 AI 响应
                 DecompositionResult result = parseAIResponse(aiResponse);
@@ -37,93 +40,32 @@ public class AITaskDecomposer {
                 return result;
                 
             } catch (Exception e) {
+                // 【修复】不再降级，直接抛出异常
                 System.out.println("[AITaskDecomposer] AI 分解失败: " + e.getMessage());
-                return fallbackDecomposition(taskDescription);
+                throw new IllegalStateException(
+                    "AI Task Decomposition failed for: " + taskDescription + 
+                    ". Cause: " + e.getMessage() + 
+                    ". 请确保 LLM Service 已正确配置，或检查网络连接。"
+                );
             }
         });
     }
     
     /**
-     * 模拟 AI 响应
+     * 执行真实的 AI 调用
+     * 修复：移除 simulateAIResponse，改为抛异常或调用真实 LLM
      */
-    private String simulateAIResponse(String taskDescription) {
-        String lower = taskDescription.toLowerCase();
-        
-        if (lower.contains("refactor")) {
-            return createRefactorResponse();
-        } else if (lower.contains("feature") || lower.contains("implement")) {
-            return createFeatureResponse();
-        } else {
-            return createGenericResponse();
-        }
-    }
-    
-    private String createRefactorResponse() {
-        return """
-            {
-                "complexity": 8,
-                "estimatedSubTasks": 6,
-                "reasoning": "Refactoring requires careful analysis of existing code, identification of issues, planning changes, execution, and verification.",
-                "subTasks": [
-                    {"id": "analyze-impact", "description": "Analyze impact on existing codebase", "type": "ANALYSIS", "priority": 10, "dependencies": []},
-                    {"id": "identify-patterns", "description": "Identify current design patterns", "type": "ANALYSIS", "priority": 9, "dependencies": ["analyze-impact"]},
-                    {"id": "design-solution", "description": "Design new architecture", "type": "PLANNING", "priority": 8, "dependencies": ["identify-patterns"]},
-                    {"id": "implement-core", "description": "Implement core changes", "type": "EXECUTION", "priority": 7, "dependencies": ["design-solution"]},
-                    {"id": "update-tests", "description": "Update tests", "type": "EXECUTION", "priority": 6, "dependencies": ["implement-core"]},
-                    {"id": "verify-quality", "description": "Verify quality", "type": "VERIFICATION", "priority": 5, "dependencies": ["update-tests"]}
-                ]
-            }
-            """;
-    }
-    
-    private String createFeatureResponse() {
-        return """
-            {
-                "complexity": 7,
-                "estimatedSubTasks": 5,
-                "reasoning": "Feature implementation requires analysis, design, backend, frontend, and testing.",
-                "subTasks": [
-                    {"id": "gather-requirements", "description": "Gather requirements", "type": "ANALYSIS", "priority": 10, "dependencies": []},
-                    {"id": "design-interface", "description": "Design API interfaces", "type": "PLANNING", "priority": 9, "dependencies": ["gather-requirements"]},
-                    {"id": "implement-backend", "description": "Implement backend", "type": "EXECUTION", "priority": 8, "dependencies": ["design-interface"]},
-                    {"id": "implement-frontend", "description": "Implement frontend", "type": "EXECUTION", "priority": 8, "dependencies": ["design-interface"]},
-                    {"id": "integration-testing", "description": "Integration testing", "type": "VERIFICATION", "priority": 7, "dependencies": ["implement-backend", "implement-frontend"]}
-                ]
-            }
-            """;
-    }
-    
-    private String createGenericResponse() {
-        return """
-            {
-                "complexity": 5,
-                "estimatedSubTasks": 4,
-                "reasoning": "General task requiring understanding, planning, execution, and verification.",
-                "subTasks": [
-                    {"id": "understand", "description": "Understand requirements", "type": "ANALYSIS", "priority": 10, "dependencies": []},
-                    {"id": "plan", "description": "Plan approach", "type": "PLANNING", "priority": 8, "dependencies": ["understand"]},
-                    {"id": "execute", "description": "Execute solution", "type": "EXECUTION", "priority": 7, "dependencies": ["plan"]},
-                    {"id": "validate", "description": "Validate result", "type": "VERIFICATION", "priority": 6, "dependencies": ["execute"]}
-                ]
-            }
-            """;
+    private String executeRealAI(String taskDescription) {
+        // TODO: 集成真实的 LLM Service
+        // 当前如果没有配置 LLM，应该直接失败
+        throw new UnsupportedOperationException(
+            "AITaskDecomposer requires LLM Service configuration. " +
+            "Please configure LLM provider before using AI-based task decomposition."
+        );
     }
     
     private DecompositionResult parseAIResponse(String aiResponse) throws Exception {
         return objectMapper.readValue(aiResponse, DecompositionResult.class);
-    }
-    
-    private DecompositionResult fallbackDecomposition(String taskDescription) {
-        List<SubTaskDef> subTasks = new ArrayList<>();
-        subTasks.add(SubTaskDef.builder().id("understand").description("Understand requirements").type("ANALYSIS").priority(10).dependencies(Collections.emptyList()).build());
-        subTasks.add(SubTaskDef.builder().id("execute").description("Execute task").type("EXECUTION").priority(7).dependencies(List.of("understand")).build());
-        
-        return DecompositionResult.builder()
-            .complexity(5)
-            .estimatedSubTasks(2)
-            .reasoning("Fallback decomposition")
-            .subTasks(subTasks)
-            .build();
     }
     
     // ==================== 数据类 ====================

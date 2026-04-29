@@ -11,6 +11,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
 
@@ -133,10 +134,46 @@ public class AgentRegistry {
     }
     
     /**
-     * 获取 Agent
+     * 降级链映射：请求类型 → 备用类型
+     */
+    private static final Map<String, String> FALLBACK_CHAIN = Map.ofEntries(
+        Map.entry("explore", "default"),
+        Map.entry("architect", "coder"),
+        Map.entry("debug", "default"),
+        Map.entry("review", "default"),
+        Map.entry("test", "default"),
+        Map.entry("doc", "default")
+    );
+    
+    /**
+     * 获取 Agent（含降级链）
+     * 
+     * 修复日志中 "No registered agent found" 错误：
+     * - 若请求的类型不存在，尝试降级链
+     * - explore → default
+     * - architect → coder
      */
     public Agent get(String id) {
-        return agents.get(id);
+        // 直接查找
+        Agent agent = agents.get(id);
+        if (agent != null) {
+            return agent;
+        }
+        
+        // 降级链查找
+        String fallbackType = FALLBACK_CHAIN.get(id);
+        if (fallbackType != null) {
+            logger.info("[AgentRegistry] 类型 " + id + " 不存在，降级到 " + fallbackType);
+            return agents.get(fallbackType);
+        }
+        
+        // 最终兜底到 default
+        if (!"default".equals(id)) {
+            logger.info("[AgentRegistry] 类型 " + id + " 不存在，降级到 default");
+            return agents.get("default");
+        }
+        
+        return null;
     }
     
     /**

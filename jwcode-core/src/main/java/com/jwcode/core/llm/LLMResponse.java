@@ -90,6 +90,26 @@ public class LLMResponse {
         return toolCalls != null && !toolCalls.isEmpty();
     }
     
+    /**
+     * 判断响应是否应该结束对话
+     * 
+     * 检查以下条件之一满足即认为应该结束：
+     * 1. finishReason 不为空（API 明确返回结束原因）
+     * 2. 没有工具调用
+     */
+    public boolean shouldEndConversation() {
+        // 有工具调用时不结束，需要执行工具
+        if (hasToolCalls()) {
+            return false;
+        }
+        // 有 finishReason 时结束
+        if (finishReason != null && !finishReason.isEmpty()) {
+            return true;
+        }
+        // 没有工具调用时假设可以结束（让调用方检查内容）
+        return true;
+    }
+    
     public LLMMessage toAssistantMessage() {
         if (hasToolCalls()) {
             return LLMMessage.assistantWithTools(content, toolCalls, reasoningContent);

@@ -68,7 +68,7 @@ public class LLMFactory {
         JwcodeConfig.ModelConfig model = new JwcodeConfig.ModelConfig();
         model.setId("kimi-k2.5");
         model.setTemperature(1.0);  // kimi-k2.5 要求 temperature 必须为 1
-        model.setMaxTokens(4096);
+        model.setMaxTokens(null);  // 不限制输出，让模型用自己的最大值
         
         provider.setModels(java.util.Collections.singletonList(model));
         config.setProviders(java.util.Map.of("moonshot", provider));
@@ -156,7 +156,7 @@ public class LLMFactory {
             .model(modelId)
             .apiKeys(provider.getApiKeys())
             .temperature(model != null ? model.getTemperature() : null)
-            .maxTokens(model != null ? model.getMaxTokens() : 4096)
+            .maxTokens(model != null ? model.getMaxTokens() : null)
             .timeoutSeconds(timeoutSeconds)
             .contextWindow(model != null ? model.getContextWindow() : 1000000)
             .build();

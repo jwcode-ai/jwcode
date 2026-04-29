@@ -31,10 +31,11 @@ import java.util.logging.Logger;
  * - 实时显示思考过程
  * - 实时显示工具调用
  * - 实时显示后台日志/活动
- * - 心跳保活
+ * - 心跳保活（带认证）
  * - 实时显示执行步骤（思考、规划、工具调用等）
  * 
  * 消息协议（JSON）：
+ * - 客户端 -> 服务器: {"type": "auth", "token": "xxx"} （认证）
  * - 客户端 -> 服务器: {"type": "chat", "sessionId": "xxx", "message": "..."}
  * - 服务器 -> 客户端: {"type": "content", "data": "..."}
  * - 服务器 -> 客户端: {"type": "thinking", "data": "..."}
@@ -54,10 +55,23 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     
     private static final Logger logger = Logger.getLogger(StreamingWebSocketHandler.class.getName());
     
+    // 心跳检测配置
+    private static final long PING_INTERVAL_MS = 30000; // 30发送一次 ping
+    private static final long PONG_TIMEOUT_MS = 10000;   // 10秒内未收到 pong 则断开
+    private static final long CONNECTION_TIMEOUT_MS = 300000; // 5分钟无活动则断开
+    
+    // 认证配置（从系统配置读取）
+    private String validToken = "default-token"; // 默认 token，生产环境应从配置读取
+    
+    // 已认证的连接集合
+    private final Map<WebSocket, Boolean> authenticatedConnections;
+    
     private final Map<String, Session> sessions;
     private final ToolRegistry toolRegistry;
     private final Map<WebSocket, String> connectionSessions;
     private final Map<WebSocket, Consumer<LogEntry>> logListeners;
+    private final Map<WebSocket, Long> lastPongTime;    // 最后收到 pong 的时间
+    private final Map<WebSocket, Long> lastActivityTime; // 最后活跃时间
     
     public StreamingWebSocketHandler(int port, ToolRegistry toolRegistry) {
         super(new InetSocketAddress(port));
@@ -65,14 +79,160 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         this.toolRegistry = toolRegistry;
         this.connectionSessions = new ConcurrentHashMap<>();
         this.logListeners = new ConcurrentHashMap<>();
+        this.lastPongTime = new ConcurrentHashMap<>();
+        this.lastActivityTime = new ConcurrentHashMap<>();
+        this.authenticatedConnections = new ConcurrentHashMap<>();
+        
+        // 从配置读取有效 token
+        loadConfig();
+        
+        // 启动心跳检测线程
+        startHeartbeatThread();
+    }
+    
+    /**
+     * 检查连接是否已认证
+     */
+    private boolean isAuthenticated(WebSocket conn) {
+        Boolean authenticated = authenticatedConnections.get(conn);
+        return authenticated != null && authenticated;
+    }
+    
+    /**
+     * 处理认证消息
+     */
+    private void handleAuthMessage(WebSocket conn, ClientMessage msg) {
+        String token = msg.token;
+        
+        if (token == null || token.isEmpty()) {
+            logger.warning("认证失败: token 为空");
+            sendMessage(conn, MessageType.AUTH_FAILED, "Token is required");
+            return;
+        }
+        
+        if (validToken.equals(token)) {
+            authenticatedConnections.put(conn, true);
+            logger.info("认证成功: " + conn.getRemoteSocketAddress());
+            sendMessage(conn, MessageType.AUTH_SUCCESS, "Authenticated");
+        } else {
+            logger.warning("认证失败: " + conn.getRemoteSocketAddress() + ", token=" + maskToken(token));
+            sendMessage(conn, MessageType.AUTH_FAILED, "Invalid token");
+        }
+    }
+    
+    /**
+     * 脱敏显示 token
+     */
+    private String maskToken(String token) {
+        if (token == null || token.length() < 8) return "***";
+        return token.substring(0, 4) + "****" + token.substring(token.length() - 4);
+    }
+    
+    /**
+     * 检查连接是否已认证，如未认证则拒绝
+     */
+    private boolean checkAuthentication(WebSocket conn) {
+        if (!isAuthenticated(conn)) {
+            sendMessage(conn, MessageType.AUTH_REQUIRED, "Authentication required");
+            return false;
+        }
+        return true;
+    }
+    
+    /**
+     * 从配置加载设置
+     * 优先级：系统属性 > 环境变量 > 配置文件 > 默认值
+     */
+    private void loadConfig() {
+        // 1. 先尝试从系统属性读取
+        String tokenFromProp = System.getProperty("jwcode.websocket.token");
+        if (tokenFromProp != null && !tokenFromProp.isEmpty()) {
+            this.validToken = tokenFromProp;
+            logger.info("从系统属性加载 WebSocket token");
+            return;
+        }
+        
+        // 2. 尝试从环境变量读取
+        String tokenFromEnv = System.getenv("JWCODE_WEBSOCKET_TOKEN");
+        if (tokenFromEnv != null && !tokenFromEnv.isEmpty()) {
+            this.validToken = tokenFromEnv;
+            logger.info("从环境变量加载 WebSocket token");
+            return;
+        }
+        
+        // 3. 尝试从 YAML 配置读取（通过全局设置）
+        try {
+            JwcodeConfig config = YamlConfigLoader.getInstance().getConfig();
+            if (config != null && config.getSettings() != null) {
+                // 可通过 settings 的 advanced 配置扩展
+                JwcodeConfig.AdvancedSettings advanced = config.getSettings().getAdvanced();
+                if (advanced != null) {
+                    // 这里可以扩展读取 websocket 配置
+                }
+            }
+        } catch (Exception e) {
+            logger.fine("无法从 YAML 配置加载: " + e.getMessage());
+        }
+        
+        // 4. 使用默认值（已经在构造函数中设置）
+        logger.info("使用默认 WebSocket token");
+    }
+    
+    /**
+     * 启动心跳检测线程
+     */
+    private void startHeartbeatThread() {
+        Thread heartbeatThread = new Thread(() -> {
+            while (!Thread.currentThread().isInterrupted()) {
+                try {
+                    Thread.sleep(PING_INTERVAL_MS);
+                    checkHeartbeat();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }, "ws-heartbeat");
+        heartbeatThread.setDaemon(true);
+        heartbeatThread.start();
+    }
+    
+    /**
+     * 检查所有连接的心跳状态
+     */
+    private void checkHeartbeat() {
+        long now = System.currentTimeMillis();
+        
+        for (WebSocket conn : getConnections()) {
+            if (!conn.isOpen()) continue;
+            
+            // 检查 pong 超时
+            Long lastPong = lastPongTime.get(conn);
+            if (lastPong != null && (now - lastPong) > PONG_TIMEOUT_MS) {
+                logger.warning("Pong 超时，断开连接: " + conn.getRemoteSocketAddress());
+                conn.close(4001, "Pong timeout");
+                continue;
+            }
+            
+            // 检查连接超时
+            Long lastActivity = lastActivityTime.get(conn);
+            if (lastActivity != null && (now - lastActivity) > CONNECTION_TIMEOUT_MS) {
+                logger.warning("连接超时，断开: " + conn.getRemoteSocketAddress());
+                conn.close(4002, "Connection timeout");
+            }
+        }
     }
     
     @Override
     public void onOpen(WebSocket conn, ClientHandshake handshake) {
         logger.info("WebSocket 连接打开: " + conn.getRemoteSocketAddress());
         
-        // 发送欢迎消息
-        sendMessage(conn, MessageType.CONNECTED, "Connected to JwCode Streaming Server");
+        // 初始化心跳时间
+        lastPongTime.put(conn, System.currentTimeMillis());
+        lastActivityTime.put(conn, System.currentTimeMillis());
+        
+        // 发送认证请求
+        sendMessage(conn, MessageType.AUTH_REQUIRED, "Token required");
     }
     
     @Override
@@ -85,19 +245,41 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             WebSocketLogBroadcaster.getInstance().removeListener(listener);
         }
         
+        // 清理认证状态
+        authenticatedConnections.remove(conn);
+        
+        // 清理心跳跟踪数据
+        lastPongTime.remove(conn);
+        lastActivityTime.remove(conn);
         connectionSessions.remove(conn);
     }
     
     @Override
     public void onMessage(WebSocket conn, String message) {
+        // 更新最后活跃时间
+        lastActivityTime.put(conn, System.currentTimeMillis());
+        
         try {
             ClientMessage clientMsg = parseMessage(message);
+            
+            // 处理认证（不需要认证）
+            if ("auth".equals(clientMsg.type)) {
+                handleAuthMessage(conn, clientMsg);
+                return;
+            }
+            
+            // 其他消息需要认证
+            if (!isAuthenticated(conn)) {
+                sendMessage(conn, MessageType.AUTH_REQUIRED, "Authentication required");
+                return;
+            }
             
             switch (clientMsg.type) {
                 case "chat":
                     handleChatMessage(conn, clientMsg);
                     break;
                 case "ping":
+                    lastPongTime.put(conn, System.currentTimeMillis());
                     sendMessage(conn, MessageType.PONG, null);
                     break;
                 case "create_session":
@@ -596,6 +778,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         msg.sessionId = extractJsonValue(json, "sessionId");
         msg.message = extractJsonValue(json, "message");
         msg.model = extractJsonValue(json, "model");
+        msg.token = extractJsonValue(json, "token");
         
         return msg;
     }
@@ -649,7 +832,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         }
     }
     
-    /**
+        /**
      * 消息类型枚举
      */
     public enum MessageType {
@@ -668,6 +851,10 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         COMPLETE,       // 完成
         ERROR,          // 错误
         PONG,           // 心跳响应
+        PING,           // 心跳请求
+        AUTH_REQUIRED,  // 需要认证
+        AUTH_SUCCESS,   // 认证成功
+        AUTH_FAILED,   // 认证失败
         LOG             // 日志消息
     }
     
@@ -771,5 +958,6 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         String sessionId;
         String message;
         String model;
+        String token;
     }
 }

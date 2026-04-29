@@ -33,6 +33,8 @@ import java.util.stream.Collectors;
  */
 public class SmartAnalyzeTool implements Tool<SmartAnalyzeInput, SmartAnalyzeOutput, Void> {
 
+    private static final java.util.logging.Logger logger = java.util.logging.Logger.getLogger(SmartAnalyzeTool.class.getName());
+    
     private final CodeSemanticAnalyzer codeAnalyzer;
 
     public SmartAnalyzeTool() {
@@ -144,9 +146,49 @@ public class SmartAnalyzeTool implements Tool<SmartAnalyzeInput, SmartAnalyzeOut
                     return ToolResult.error("project_root 是必需的");
                 }
 
-                Path rootPath = Paths.get(input.projectRoot()).toAbsolutePath().normalize();
+                // 【修复】路径规范化 - 支持 Unix 路径自动转换为 Windows 路径
+                String projectRoot = input.projectRoot();
+                
+                // 处理 Unix 绝对路径开头（如 /home/ubuntu、/jwcode）
+                if (projectRoot.startsWith("/")) {
+                    // 检测是否可能是环境变量目录
+                    String osName = System.getProperty("os.name", "").toLowerCase();
+                    if (osName.contains("win")) {
+                        // 在 Windows 上，尝试将 Unix 路径转换为有效路径
+                        // 常见转换：/home/ubuntu -> C:/Users/ubuntu, /jwcode -> 当前工作目录
+                        if (projectRoot.equals("/jwcode") || projectRoot.equals("/jwcode/")) {
+                            // 特殊处理：转换为当前工作目录
+                            projectRoot = System.getProperty("user.dir", "C:/Users/HUAWEI/Desktop/jwcode");
+                            logger.fine("SmartTool: 将 /jwcode 转换为: " + projectRoot);
+                        } else if (projectRoot.startsWith("/home/")) {
+                            // /home/username -> C:/Users/username
+                            String username = projectRoot.substring(6);
+                            projectRoot = "C:\\Users\\" + username;
+                            logger.fine("SmartTool: 将 Unix 路径转换为 Windows: " + projectRoot);
+                        } else if (projectRoot.startsWith("/")) {
+                            // 其他 /xxx 路径，尝试相对于用户目录转换
+                            String remainder = projectRoot.substring(1);
+                            String userHome = System.getProperty("user.home", "C:\\Users\\HUAWEI");
+                            projectRoot = userHome + "\\" + remainder;
+                            logger.fine("SmartTool: 将 Unix 路径转换为: " + projectRoot);
+                        }
+                    }
+                }
+                
+                Path rootPath = Paths.get(projectRoot).toAbsolutePath().normalize();
                 if (!Files.exists(rootPath)) {
-                    return ToolResult.error("项目路径不存在: " + input.projectRoot());
+                    // 尝试使用当前工作目录作为回退
+                    String cwd = System.getProperty("user.dir", "");
+                    if (!cwd.isEmpty()) {
+                        Path cwdPath = Paths.get(cwd);
+                        if (Files.exists(cwdPath) && Files.isDirectory(cwdPath)) {
+                            logger.fine("SmartTool: 项目路径不存在，使用当前工作目录: " + cwd);
+                            rootPath = cwdPath.toAbsolutePath().normalize();
+                        }
+                    }
+                    if (!Files.exists(rootPath)) {
+                        return ToolResult.error("项目路径不存在: " + input.projectRoot() + " (尝试转换后: " + projectRoot + ")");
+                    }
                 }
                 if (!Files.isDirectory(rootPath)) {
                     return ToolResult.error("项目路径不是目录: " + input.projectRoot());

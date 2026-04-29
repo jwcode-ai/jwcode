@@ -286,25 +286,75 @@ public class ParallelAgentExecutor {
         // 组合所有 Future
         return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
             .thenApply(v -> {
-                List<SubAgentResult> results = futures.stream()
-                    .map(f -> {
-                        try {
-                            return f.getNow(null);
-                        } catch (Exception e) {
-                            return SubAgentResult.failure("async", e.getMessage());
-                        }
-                    })
-                    .filter(Objects::nonNull)
-                    .collect(Collectors.toList());
+                // 收集已完成的结果
+                List<SubAgentResult> results = collectResults(futures, "completed");
                 
                 long executionTime = System.currentTimeMillis() - startTime;
                 return new ParallelExecutionResult(results, executionTime);
             })
             .orTimeout(timeoutMs, TimeUnit.MILLISECONDS)
             .exceptionally(ex -> {
-                logger.log(Level.WARNING, "[ParallelAgent] Async execution failed or timeout", ex);
-                return createErrorResult(tasks, ex);
+                // 【修复】超时时不丢失已完成的结果，收集中间成果
+                logger.log(Level.WARNING, "[ParallelAgent] Async execution timeout after " + timeoutMs + "ms, collecting partial results", ex);
+                List<SubAgentResult> partialResults = collectResults(futures, "partial");
+                
+                if (partialResults.isEmpty()) {
+                    return createTimeoutResult(tasks, timeoutMs);
+                } else {
+                    // 混合结果：已完成 + 超时标记
+                    return createMixedResult(partialResults, tasks, timeoutMs, System.currentTimeMillis() - startTime);
+                }
             });
+    }
+    
+    /**
+     * 【新增】收集 Future 的结果，支持获取已完成的中间结果
+     */
+    private List<SubAgentResult> collectResults(List<CompletableFuture<SubAgentResult>> futures, String mode) {
+        List<SubAgentResult> results = new ArrayList<>();
+        for (CompletableFuture<SubAgentResult> f : futures) {
+            try {
+                if (f.isDone()) {
+                    // 已完成的 Future，直接获取结果
+                    SubAgentResult r = f.getNow(null);
+                    if (r != null) {
+                        results.add(r);
+                    }
+                } else if ("partial".equals(mode)) {
+                    // 部分模式：尝试获取已完成但未超时的结果
+                    SubAgentResult r = f.getNow(null);
+                    if (r != null) {
+                        results.add(r);
+                    }
+                }
+            } catch (Exception e) {
+                logger.fine("[ParallelAgent] Error collecting result: " + e.getMessage());
+            }
+        }
+        return results;
+    }
+    
+    /**
+     * 【新增】创建混合结果（已完成 + 超时标记）
+     */
+    private ParallelExecutionResult createMixedResult(List<SubAgentResult> partialResults, 
+                                                       List<SubAgentTask> allTasks, long timeoutMs, long executionTime) {
+        // 为未完成的任务添加超时标记
+        Set<String> completedTaskIds = partialResults.stream()
+            .map(SubAgentResult::getTaskId)
+            .collect(Collectors.toSet());
+        
+        for (SubAgentTask task : allTasks) {
+            if (!completedTaskIds.contains(task.getTaskId())) {
+                partialResults.add(SubAgentResult.builder()
+                    .taskId(task.getTaskId())
+                    .success(false)
+                    .error("Task timeout after " + timeoutMs + "ms (partial completion)")
+                    .build());
+            }
+        }
+        
+        return new ParallelExecutionResult(partialResults, executionTime);
     }
     
     /**
@@ -549,14 +599,24 @@ public class ParallelAgentExecutor {
     
     /**
      * 解析 Agent（增强容错）
+     * 
+     * 修复记录：
+     * - 2026/4/28: 如果 agentType 为 null 或空，根据 role/name 推断类型后再查找
+     * - 避免创建临时 Agent 导致结果空壳
      */
     private Agent resolveAgent(SubAgentTask task) {
         String agentType = task.getAgentType();
+        
+        // 【修复】尝试根据 role/name 推断 agentType
+        if ((agentType == null || agentType.isEmpty()) && agentRegistry != null) {
+            agentType = inferAgentType(task.getRole(), task.getName());
+        }
         
         // 尝试按类型获取
         if (agentType != null && !agentType.isEmpty() && agentRegistry != null) {
             Agent agent = agentRegistry.get(agentType);
             if (agent != null) {
+                logger.info("[ParallelAgent] Resolved agent: " + agentType + " for task: " + task.getTaskId());
                 return agent;
             }
         }
@@ -565,67 +625,54 @@ public class ParallelAgentExecutor {
         if (agentRegistry != null) {
             Agent current = agentRegistry.getCurrent();
             if (current != null) {
+                logger.info("[ParallelAgent] Using current agent for task: " + task.getTaskId());
                 return current;
             }
         }
         
-        // 【修复】当没有可用 Agent 时，不抛异常，而是创建临时 Agent
-        // 这样可以避免"No agent available for task"错误导致 0% 成功率
-        logger.warning("[ParallelAgent] No registered agent found, creating temporary agent for task: " + task.getTaskId());
-        return createTemporaryAgent(task);
+        // 【修复】当没有可用 Agent 时，不再创建临时 Agent 或模拟 Agent
+        // 抛出异常，让调用方知道需要正确配置
+        throw new IllegalStateException(
+            "No registered agent found for task: " + task.getTaskId() + 
+            ", agentType=" + agentType + ". " +
+            "请确保 AgentRegistry 已正确注册子 Agent，或 Task 的 agentType 已正确设置。"
+        );
     }
     
     /**
-     * 创建临时 Agent（用于无 Agent 可用时的降级处理）
+     * 根据 role 和 name 推断 agentType
      */
-    private Agent createTemporaryAgent(SubAgentTask task) {
-        // 使用 Anonymous Agent 类（如果存在），否则返回基础实现
-        String name = task.getName() != null ? task.getName() : "temp-" + task.getTaskId();
-        String role = task.getRole();
-        String description = "临时 Agent，用于执行任务: " + task.getTaskId();
+    private String inferAgentType(String role, String name) {
+        String source = (role != null ? role : "") + (name != null ? name : "");
+        if (source.isEmpty()) return "default";
         
-        // 创建一个简单的匿名 Agent
-        return new Agent() {
-            @Override
-            public String getId() {
-                return "temp-" + UUID.randomUUID().toString().substring(0, 8);
-            }
-            
-            @Override
-            public String getName() {
-                return name;
-            }
-            
-            @Override
-            public String getDescription() {
-                return description;
-            }
-            
-            @Override
-            public String getSystemPrompt() {
-                return role != null ? role : "你是一个通用 Agent，执行分配给你的任务。";
-            }
-            
-            @Override
-            public List<Tool<?, ?, ?>> getTools() {
-                return Collections.emptyList();
-            }
-            
-            @Override
-            public Map<String, Object> getConfig() {
-                return Collections.emptyMap();
-            }
-            
-            @Override
-            public ModelConfig getModelConfig() {
-                return null;
-            }
-            
-            @Override
-            public boolean canUseTool(String toolName) {
-                return false;
-            }
-        };
+        String lower = source.toLowerCase();
+        if (lower.contains("code") || lower.contains("coder") || lower.contains("编码") 
+            || lower.contains("开发") || lower.contains("写")) {
+            return "coder";
+        }
+        if (lower.contains("debug") || lower.contains("调试") || lower.contains("排查")
+            || lower.contains("bug") || lower.contains("修复")) {
+            return "debug";
+        }
+        if (lower.contains("review") || lower.contains("审查") || lower.contains("审核")
+            || lower.contains("检查") || lower.contains("质量")) {
+            return "review";
+        }
+        if (lower.contains("test") || lower.contains("测试")) {
+            return "test";
+        }
+        if (lower.contains("doc") || lower.contains("文档") || lower.contains("说明")) {
+            return "doc";
+        }
+        if (lower.contains("explore") || lower.contains("调研") || lower.contains("分析")
+            || lower.contains("探索")) {
+            return "explore";
+        }
+        if (lower.contains("architect") || lower.contains("架构") || lower.contains("设计")) {
+            return "architect";
+        }
+        return "default";
     }
     
     /**
@@ -660,11 +707,17 @@ public class ParallelAgentExecutor {
     /**
      * 执行 Agent 任务（调用 LLM）
      * 如果 Agent 配置了工具，会创建独立的 LLMQueryEngine 让子 Agent 自主完成工具调用循环。
+     * 
+     * 修复记录：2026/4/28 - 移除模拟执行，只返回真实数据或错误
      */
     private String executeAgentTask(Agent agent, String prompt, SubAgentTask task,
                                      CancellationToken token) throws Exception {
+        // 【修复】移除模拟执行，LLM Service 必须可用
         if (llmService == null) {
-            return simulateExecution(agent, prompt);
+            throw new IllegalStateException(
+                "LLM Service 未配置，Agent 无法执行任务。" +
+                "请确保 ToolExecutionContext 已正确注入 LLMService。"
+            );
         }
 
         List<Tool<?, ?, ?>> tools = agent.getTools();
@@ -765,30 +818,6 @@ public class ParallelAgentExecutor {
         }
     }
     
-    /**
-     * 模拟执行（用于测试或 LLM 服务不可用时）
-     */
-    private String simulateExecution(Agent agent, String prompt) {
-        try {
-            // 模拟执行时间（100-500ms）
-            Thread.sleep(100 + (long)(Math.random() * 400));
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new CancellationException("Simulation interrupted");
-        }
-        
-        return String.format(
-            "Agent [%s] execution result:\n" +
-            "- Agent Name: %s\n" +
-            "- Input Length: %d characters\n" +
-            "- Status: Completed successfully\n" +
-            "- Timestamp: %s",
-            agent.getId(),
-            agent.getName(),
-            prompt.length(),
-            new Date().toString()
-        );
-    }
     
     // ==================== 依赖处理 ====================
     

@@ -593,6 +593,20 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
             return command;
         }
         
+        // 先处理 Unix 重定向符号（必须在其他转换之前）
+        // 2>/dev/null -> 2>$null
+        if (command.contains("2>/dev/null")) {
+            logger.fine("Auto-converting 2>/dev/null to 2>$null for Windows");
+            command = command.replace("2>/dev/null", "2>$null");
+        }
+        // >/dev/null -> >$null
+        if (command.contains(">/dev/null")) {
+            logger.fine("Auto-converting >/dev/null to >$null for Windows");
+            command = command.replace(">/dev/null", ">$null");
+        }
+        // 2>&1 -> 2>&1 (Windows PowerShell 支持)
+        // /dev/null 替换后继续处理
+        
         // 转换为小写进行匹配
         String lower = command.toLowerCase();
         

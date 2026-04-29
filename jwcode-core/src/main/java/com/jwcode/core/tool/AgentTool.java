@@ -44,6 +44,9 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
     private volatile LLMService llmService;
     private volatile AgentRegistry agentRegistry;
     
+    // 【修复】用于同步注册到全局 AgentRegistry
+    private static volatile AgentRegistry sharedAgentRegistry;
+    
     // 执行统计
     private final AtomicInteger executionCounter = new AtomicInteger(0);
     
@@ -74,33 +77,38 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
                - cancel: 取消正在执行的任务
                - query: 查询已分配任务的结果
                
-               create 参数:
-               - name: Agent 名称（可选）
-               - role: Agent 角色/专业领域（可选）
-               - color: Agent 颜色标识（可选）
+                create 参数:
+                - name: Agent 名称（可选）
+                - role: Agent 角色/专业领域（可选）
+                - color: Agent 颜色标识（可选）
+                
+                create_parallel 参数:
+                - agents: 要创建的 Agent 配置列表 [{name, role}, ...]
+                
+                assign 参数:
+                - agent_id: Agent ID（必需）
+                - task: 任务描述（单数，用于单个任务）
+                - context: 上下文信息（可选）
+                - timeout: 超时时间毫秒（可选，默认60000）
+                
+                execute 参数:
+                - tasks: 任务列表（复数，用于多个任务）[{name, role, task, depends_on}, ...]
+                - parallel: 是否并行执行（可选，默认true）
+                - timeout: 全局超时时间（可选，默认300000）
+                
+                merge 参数:
+                - agent_ids: Agent ID 列表（必需）
+                
+                query 参数:
+                - agent_id: Agent ID（必需）
                
-               create_parallel 参数:
-               - agents: 要创建的 Agent 配置列表 [{name, role}, ...]
-               
-               assign 参数:
-               - agent_id: Agent ID（必需）
-               - task: 任务描述（必需）
-               - context: 上下文信息（可选）
-               - timeout: 超时时间毫秒（可选，默认60000）
-               
-               execute 参数:
-               - tasks: 任务列表 [{name, role, task, depends_on}, ...]
-               - parallel: 是否并行执行（可选，默认true）
-               - timeout: 全局超时时间（可选，默认300000）
-               
-               query 参数:
-               - agent_id: Agent ID（必需）
-               
-               示例:
-               - {"action": "create", "name": "测试专家", "role": "负责编写和运行测试"}
-               - {"action": "create_parallel", "agents": [{"name": "前端专家"}, {"name": "后端专家"}]}
-               - {"action": "execute", "tasks": [{"name": "task1", "role": "coder", "task": "编写登录功能"}]}
-               - {"action": "query", "agent_id": "abc123"}
+                示例:
+                - {"action": "create", "name": "测试专家", "role": "负责编写和运行测试"}
+                - {"action": "create_parallel", "agents": [{"name": "前端专家"}, {"name": "后端专家"}]}
+                - {"action": "assign", "agent_id": "abc123", "task": "分析代码结构"}
+                - {"action": "execute", "tasks": [{"name": "task1", "role": "coder", "task": "编写登录功能"}]}
+                - {"action": "merge", "agent_ids": ["abc123", "def456"]}
+                - {"action": "query", "agent_id": "abc123"}
                """;
     }
     
@@ -551,13 +559,25 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
     }
     
     /**
-     * 取消任务（支持 ParallelAgentExecutor 和 AgentInfo 两种 task_id）
+     * 取消任务（支持 task_id 和 agent_id 两种取消方式）
+     * 修复：同时支持 task_id 和 agent_id 参数
      */
     private ToolResult<Map<String, Object>> cancelTask(Map<String, Object> args, Session session) {
         String taskId = (String) args.get("task_id");
+        String agentId = (String) args.get("agent_id");
+        
+        // 【修复】如果传的是 agent_id，则通过 agent 查找对应的 taskId
+        if ((taskId == null || taskId.isEmpty()) && agentId != null && !agentId.isEmpty()) {
+            AgentInfo agent = agentManager.getAgent(agentId);
+            if (agent != null && agent.taskId != null) {
+                taskId = agent.taskId;
+            } else {
+                return ToolResult.error("未找到 Agent 或该 Agent 没有正在执行的任务：" + agentId);
+            }
+        }
         
         if (taskId == null || taskId.isEmpty()) {
-            return ToolResult.error("task_id 参数是必需的");
+            return ToolResult.error("task_id 或 agent_id 参数是必需的");
         }
         
         boolean cancelled = false;

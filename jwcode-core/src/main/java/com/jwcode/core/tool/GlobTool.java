@@ -161,12 +161,18 @@ public class GlobTool implements Tool<GlobInput, GlobOutput, GlobTool.GlobProgre
     private ToolResult<GlobOutput> searchFiles(GlobInput input, ToolExecutionContext context) {
         try {
             String pattern = input.pattern();
-            String searchPath = input.getPathOrDefault();
-            boolean isRegex = input.isRegex();
-            String excludePattern = input.exclude();
-            int maxResults = input.getMaxResults();
-            
-            Path startPath = Paths.get(searchPath);
+             String searchPath = input.getPathOrDefault();
+             boolean isRegex = input.isRegex();
+             String excludePattern = input.exclude();
+             int maxResults = input.getMaxResults();
+             
+             // 【修复】空路径处理 - 如果 path 为空或 null，使用当前目录 "."
+             if (searchPath == null || searchPath.trim().isEmpty()) {
+                 searchPath = "." ;
+                 logger.fine("GlobTool: path 为空，使用当前目录: .");
+             }
+             
+             Path startPath = Paths.get(searchPath);
             
             logger.fine("GlobTool: 搜索 pattern=" + pattern + ", path=" + startPath + ", isRegex=" + isRegex);
             
@@ -365,30 +371,12 @@ public class GlobTool implements Tool<GlobInput, GlobOutput, GlobTool.GlobProgre
     }
     
     /**
-     * 检查路径是否匹配模式
+     * 【简化修复】检查路径是否匹配模式
+     * 只检查完整路径匹配，避免过度复杂的检查导致性能问题
      */
     private boolean matchesPattern(String path, Pattern pattern) {
-        // 同时检查完整路径和文件名
-        if (pattern.matcher(path).matches()) {
-            return true;
-        }
-        
-        // 也检查文件名
-        Path p = Paths.get(path);
-        String fileName = p.getFileName().toString();
-        if (pattern.matcher(fileName).matches()) {
-            return true;
-        }
-        
-        // 对于 ** 模式，检查路径的任何部分
-        String[] parts = path.replace('\\', '/').split("/");
-        for (String part : parts) {
-            if (pattern.matcher(part).matches()) {
-                return true;
-            }
-        }
-        
-        return false;
+        // 直接检查完整路径是否匹配
+        return pattern.matcher(path).matches();
     }
     
     /**

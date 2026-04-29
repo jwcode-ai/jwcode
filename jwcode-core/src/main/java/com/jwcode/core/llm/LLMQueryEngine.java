@@ -53,6 +53,9 @@ public class LLMQueryEngine {
     private String pendingBudgetAdvice;
     // 去重：记录已注册的 StepCallbackAdapter，防止重复订阅导致日志重复
     private StepCallbackAdapter stepCallbackAdapter;
+    // 【修复】压缩冷却时间：避免短时间内多次压缩
+    private long lastCompactTime = 0;
+    private static final long COMPACT_COOLDOWN_MS = 30000; // 30秒冷却时间
     // 【Phase 5】Agent 感知：当前 Agent 注册表，用于工具过滤和提示词注入
     private AgentRegistry agentRegistry;
     private static final ObjectMapper MAPPER = new ObjectMapper()
@@ -69,11 +72,12 @@ public class LLMQueryEngine {
         if (this.config.getMaxMessageHistory() > 0) {
             session.setMaxMessageHistory(this.config.getMaxMessageHistory());
         }
-        this.toolContext = new ToolExecutionContext(
-            session,
-            java.nio.file.Path.of(System.getProperty("user.dir")),
-            null
-        );
+        this.toolContext = ToolExecutionContext.builder()
+            .session(session)
+            .workingDirectory(java.nio.file.Path.of(System.getProperty("user.dir")))
+            .agentRegistry(agentRegistry)
+            .llmService(llmService)
+            .build();
         this.startTime = Instant.now();
         this.toolCallHistory = new ArrayList<>();
         this.pipeline = new DefaultObservationPipeline();
@@ -357,8 +361,10 @@ public class LLMQueryEngine {
             );
         }
 
-        // 自动触发上下文压缩（当预算使用超过 70% 时）
-        if (tokenBudget.usageRatio() > 0.70 && session.getMessages().size() > 10) {
+        // 【修复】自动触发上下文压缩（当预算使用超过 70% 时，且满足冷却时间）
+        long now = System.currentTimeMillis();
+        if (tokenBudget.usageRatio() > 0.70 && session.getMessages().size() > 10 
+            && (now - lastCompactTime) > COMPACT_COOLDOWN_MS) {
             logger.info("[LLMQueryEngine] Token budget usage=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100)
                 + ", auto-compacting context...");
             int beforeCount = session.getMessages().size();
@@ -366,11 +372,15 @@ public class LLMQueryEngine {
             if (compacted != null && compacted.size() < beforeCount) {
                 session.clearMessages();
                 compacted.forEach(session::addMessage);
+                lastCompactTime = now; // 更新压缩时间
                 logger.info("[LLMQueryEngine] Auto-compacted: " + beforeCount + " -> " + session.getMessages().size()
-                    + " messages, budget=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100));
+                    + " messages, budget after compact=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100));
             } else {
                 logger.warning("[LLMQueryEngine] Auto-compact skipped: result size not reduced (before=" + beforeCount + ")");
             }
+        } else if (tokenBudget.usageRatio() > 0.70 && (now - lastCompactTime) <= COMPACT_COOLDOWN_MS) {
+            logger.info("[LLMQueryEngine] Auto-compact skipped: cooldown period active (" 
+                + ((COMPACT_COOLDOWN_MS - (now - lastCompactTime)) / 1000) + "s remaining)");
         }
 
         // Token 预算紧张时缓存建议（将在 convertSessionMessages 中临时注入，不保存到 session 历史）
@@ -1270,7 +1280,13 @@ public class LLMQueryEngine {
             if (config != null && config.getSettings() != null) {
                 JwcodeConfig.EngineSettings engine = config.getSettings().getEngine();
                 if (engine != null) {
-                    engineConfig.setMaxIterations(engine.getMaxIterations());
+                    // 【修复】只有当配置值 > 0 时才覆盖默认值，确保默认不限制迭代次数
+                    int configuredMaxIterations = engine.getMaxIterations();
+                    if (configuredMaxIterations > 0) {
+                        engineConfig.setMaxIterations(configuredMaxIterations);
+                    }
+                    // 否则保持默认值 0（无限制）
+                    
                     engineConfig.setTimeout(Duration.ofMinutes(engine.getTimeoutMinutes()));
                     engineConfig.setTokenBudget(engine.getTokenBudget());
                     engineConfig.setMaxMessageHistory(engine.getMaxMessageHistory());
