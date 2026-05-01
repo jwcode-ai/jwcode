@@ -351,6 +351,32 @@ function App() {
         });
         break;
         
+      case 'auth_required':
+        // Token required - always send auth when requested (even if previously authenticated)
+        // This handles reconnection cases where auth state needs to be refreshed
+        let savedToken = localStorage.getItem('auth_token');
+        if (!savedToken) {
+          // Auto-set default token for development convenience
+          savedToken = 'default-token';
+          localStorage.setItem('auth_token', savedToken);
+          console.log('[WS] Auto-set default auth_token');
+        }
+        // Always send authentication when server requests it
+        console.log('[WS] Sending authentication...');
+        wsService.setToken(savedToken);
+        wsService.setAuthenticated(false); // Reset auth state before sending
+        wsService.send({ type: 'auth', token: savedToken });
+        break;
+
+      case 'auth_success':
+        console.log('[WS] Authentication successful');
+        wsService.setAuthenticated(true);
+        break;
+
+      case 'auth_failed':
+        console.error('[WS] Authentication failed:', msg.data);
+        break;
+
       case 'log':
         try {
           const logData = typeof msg.data === 'string' ? JSON.parse(msg.data) : msg.data;
@@ -368,6 +394,12 @@ function App() {
         } catch (e) {
           console.error('Failed to parse log:', e);
         }
+        break;
+        
+      case 'ping':
+        // 收到心跳 ping 时自动回复 pong
+        console.log('[WS] Received ping, sending pong...');
+        wsService.send({ type: 'pong', data: Date.now().toString() });
         break;
     }
   }, [activeTab, startGeneration, addMessage, appendToLastMessage, setThinking, addStep, updateStep, addToolCall, endGeneration]);

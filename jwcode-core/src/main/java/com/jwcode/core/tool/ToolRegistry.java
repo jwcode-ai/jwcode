@@ -249,12 +249,9 @@ public class ToolRegistry {
         registry.register(new AgentTool());
         registry.register(new TaskOutputTool());
         registry.register(new TaskStopTool());
-        registry.register(new SkillTool());
         registry.register(new AskUserQuestionTool());
         registry.register(new EnterPlanModeTool());
-        registry.register(new ExitPlanModeTool());
         registry.register(new ExitPlanModeV2Tool());
-        registry.register(new BriefTool());
         registry.register(new REPLTool());
         registry.register(new GitTool());
         registry.register(new LSPTool());

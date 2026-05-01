@@ -6,6 +6,9 @@ type ConnectionHandler = () => void;
 class WebSocketService {
   private ws: WebSocket | null = null;
   private url: string;
+  private token: string | null = null;
+  private authenticated = false;
+  private pendingAuth = false;
   private messageHandlers: Set<MessageHandler> = new Set();
   private openHandlers: Set<ConnectionHandler> = new Set();
   private closeHandlers: Set<ConnectionHandler> = new Set();
@@ -14,11 +17,32 @@ class WebSocketService {
   private maxReconnectAttempts = 5;
   private reconnectDelay = 3000;
   private isManualClose = false;
-  private token: string | null = null;
-  private authenticated = false;
 
-  constructor(url: string = `ws://${window.location.hostname}:8081`) {
+  constructor(url: string = `ws://${window.location.hostname}:80`) {
     this.url = url;
+  }
+
+  setToken(token: string): void {
+    this.token = token;
+  }
+
+  isAuthenticated(): boolean {
+    return this.authenticated;
+  }
+
+  private buildUrl(): string {
+    if (this.token) {
+      const separator = this.url.includes('?') ? '&' : '?';
+      return `${this.url}${separator}token=${encodeURIComponent(this.token)}`;
+    }
+    return this.url;
+  }
+
+  private sendAuthIfNeeded(): void {
+    if (this.token && !this.authenticated) {
+      this.pendingAuth = true;
+      this.send({ type: 'auth', data: this.token });
+    }
   }
 
   connect(): void {
@@ -27,11 +51,13 @@ class WebSocketService {
     }
 
     this.isManualClose = false;
-    this.ws = new WebSocket(this.url);
+    this.authenticated = false;
+    this.ws = new WebSocket(this.buildUrl());
 
     this.ws.onopen = () => {
       console.log('WebSocket connected');
       this.reconnectAttempts = 0;
+      this.sendAuthIfNeeded();
       this.openHandlers.forEach((handler) => handler());
     };
 
@@ -52,6 +78,12 @@ class WebSocketService {
     this.ws.onmessage = (event) => {
       try {
         const message: WSMessage = JSON.parse(event.data);
+        // Handle auth_success message
+        if (message.type === 'auth_success') {
+          this.authenticated = true;
+          this.pendingAuth = false;
+          console.log('[WS] Authentication successful');
+        }
         this.messageHandlers.forEach((handler) => handler(message));
       } catch (error) {
         console.error('Failed to parse WebSocket message:', error);
@@ -103,18 +135,8 @@ class WebSocketService {
     return this.ws?.readyState === WebSocket.OPEN;
   }
 
-  setToken(token: string): void {
-    this.token = token;
-    // 保存到localStorage
-    localStorage.setItem('auth_token', token);
-  }
-
-  get isAuthenticated(): boolean {
-    return this.authenticated;
-  }
-
-  setAuthenticated(authenticated: boolean): void {
-    this.authenticated = authenticated;
+  get hasPendingAuth(): boolean {
+    return this.pendingAuth;
   }
 }
 

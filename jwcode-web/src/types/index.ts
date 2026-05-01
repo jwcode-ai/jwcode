@@ -163,13 +163,21 @@ export type WSMessageType =
   | 'subscribe_logs'
   | 'unsubscribe_logs'
   | 'chat'
-  | 'create_session';
+  | 'create_session'
+  | 'ping'
+  | 'pong'
+  | 'auth'
+  | 'auth_required'
+  | 'auth_success'
+  | 'auth_failed'
+  | 'ack';
 
 export interface WSMessage {
   type: WSMessageType;
   data?: string;
   sessionId?: string;
   message?: string;
+  token?: string;
 }
 
 // Tab types

@@ -51,7 +51,9 @@ public class GitTool implements Tool<GitInput, GitOutput, Void> {
         
         return CompletableFuture.supplyAsync(() -> {
             try {
-                String operation = input.operation();
+                // ===== 智能参数归一化层（容错处理）=====
+                // 如果 operation 为空，尝试根据其他字段推断
+                String operation = inferOperation(input);
                 
                 return switch (operation) {
                     case "status" -> handleStatus();
@@ -208,6 +210,46 @@ public class GitTool implements Tool<GitInput, GitOutput, Void> {
         
         String output = runGitCommand(cmd);
         return ToolResult.success(GitOutput.success("pull", output));
+    }
+    
+    /**
+     * 智能推断操作类型
+     * 如果 operation 为空，根据其他字段推断应该执行的操作
+     */
+    private String inferOperation(GitInput input) {
+        String op = input.operation();
+        
+        // 如果 operation 已存在，直接返回
+        if (op != null && !op.isEmpty()) {
+            return op;
+        }
+        
+        // 尝试根据其他字段推断
+        if (input.message() != null && !input.message().isEmpty()) {
+            return "commit";
+        }
+        if (input.branch() != null && !input.branch().isEmpty()) {
+            return "branch";
+        }
+        if (input.file() != null && !input.file().isEmpty()) {
+            return "diff";
+        }
+        if (input.remote() != null && !input.remote().isEmpty()) {
+            if (input.args() != null && input.args().contains("push")) {
+                return "push";
+            }
+            return "pull";
+        }
+        if (input.args() != null && !input.args().isEmpty()) {
+            String lower = input.args().toLowerCase();
+            if (lower.contains("push")) return "push";
+            if (lower.contains("pull")) return "pull";
+            if (lower.contains("log")) return "log";
+            if (lower.contains("branch")) return "branch";
+        }
+        
+        // 默认返回 status
+        return "status";
     }
     
     private String runGitCommand(String command) {

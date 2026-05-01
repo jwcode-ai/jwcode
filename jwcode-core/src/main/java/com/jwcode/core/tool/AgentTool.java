@@ -157,7 +157,10 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
         
         return CompletableFuture.supplyAsync(() -> {
             try {
-                String action = (String) input.get("action");
+                // 【核心修复】先归化（容错处理）- 在验证和执行之前
+                Map<String, Object> normalizedInput = normalizeInput(input);
+                
+                String action = (String) normalizedInput.get("action");
                 
                 if (action == null || action.isEmpty()) {
                     return ToolResult.error("action 参数是必需的");
@@ -168,25 +171,25 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
                 
                 switch (action) {
                     case "create":
-                        return createAgent(input, context.getSession());
+                        return createAgent(normalizedInput, context.getSession());
                     case "create_parallel":
-                        return createAgentsParallel(input, context.getSession());
+                        return createAgentsParallel(normalizedInput, context.getSession());
                     case "assign":
-                        return assignTask(input, context.getSession());
+                        return assignTask(normalizedInput, context.getSession());
                     case "execute":
-                        return executeTasks(input, context.getSession());
+                        return executeTasks(normalizedInput, context.getSession());
                     case "status":
-                        return getAgentStatus(input, context.getSession());
+                        return getAgentStatus(normalizedInput, context.getSession());
                     case "list":
                         return listAgents(context.getSession());
                     case "stop":
-                        return stopAgent(input, context.getSession());
+                        return stopAgent(normalizedInput, context.getSession());
                     case "merge":
-                        return mergeResults(input, context.getSession());
+                        return mergeResults(normalizedInput, context.getSession());
                     case "cancel":
-                        return cancelTask(input, context.getSession());
+                        return cancelTask(normalizedInput, context.getSession());
                     case "query":
-                        return queryTask(input, context.getSession());
+                        return queryTask(normalizedInput, context.getSession());
                     default:
                         return ToolResult.error("未知的操作类型：" + action);
                 }
@@ -195,6 +198,128 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
                 return ToolResult.error("AgentTool 执行失败: " + e.getMessage());
             }
         });
+    }
+    
+    /**
+     * 智能参数归一化层
+     * 修复 LLM 生成的 JSON 与 Schema 不匹配的问题：
+     * - tasks/task 单复数混用
+     * - agent_id/agentId/id 字段名混用
+     * - tasks 数组元素为字符串而非对象
+     * - 字段类型错误
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> normalizeInput(Map<String, Object> input) {
+        if (input == null) {
+            return new HashMap<>();
+        }
+        
+        Map<String, Object> normalized = new HashMap<>(input);
+        String action = (String) normalized.get("action");
+        
+        // 1. 字段名归一化：agent_id / agentId / id → agent_id
+        if (!normalized.containsKey("agent_id") || normalized.get("agent_id") == null) {
+            if (normalized.containsKey("agentId") && normalized.get("agentId") != null) {
+                normalized.put("agent_id", normalized.get("agentId"));
+                logger.fine("[AgentTool] 自动映射 agentId → agent_id");
+            } else if (normalized.containsKey("id") && normalized.get("id") != null && !"action".equals(normalized.get("id"))) {
+                normalized.put("agent_id", normalized.get("id"));
+                logger.fine("[AgentTool] 自动映射 id → agent_id");
+            }
+        }
+        
+        // 2. task_ids / agentIds → agent_ids
+        if (!normalized.containsKey("agent_ids") || normalized.get("agent_ids") == null) {
+            if (normalized.containsKey("agentIds") && normalized.get("agentIds") != null) {
+                normalized.put("agent_ids", normalized.get("agentIds"));
+                logger.fine("[AgentTool] 自动映射 agentIds → agent_ids");
+            }
+        }
+        
+        // 3. execute action 的 tasks/task 归一化
+        if ("execute".equals(action)) {
+            Object tasks = normalized.get("tasks");
+            Object task = normalized.get("task");
+            
+            // 如果 tasks 为空但 task 不为空，将 task 包装为 tasks 数组
+            if ((tasks == null) && task != null) {
+                if (task instanceof String) {
+                    // 单个字符串任务 → 包装为数组
+                    List<Map<String, Object>> taskList = new ArrayList<>();
+                    Map<String, Object> singleTask = new HashMap<>();
+                    singleTask.put("task", task);
+                    singleTask.put("name", "unnamed-task");
+                    taskList.add(singleTask);
+                    normalized.put("tasks", taskList);
+                    logger.fine("[AgentTool] 自动将单数 task 包装为 tasks 数组");
+                } else if (task instanceof Map) {
+                    // 单个对象任务 → 包装为数组
+                    List<Map<String, Object>> taskList = new ArrayList<>();
+                    taskList.add((Map<String, Object>) task);
+                    normalized.put("tasks", taskList);
+                    logger.fine("[AgentTool] 自动将单个 task 对象包装为 tasks 数组");
+                }
+            }
+            
+            // 修复 tasks 数组中的元素类型
+            if (normalized.get("tasks") instanceof List) {
+                List<?> taskList = (List<?>) normalized.get("tasks");
+                List<Map<String, Object>> fixedList = new ArrayList<>();
+                for (int i = 0; i < taskList.size(); i++) {
+                    Object item = taskList.get(i);
+                    if (item instanceof String) {
+                        // 字符串 → 包装为对象
+                        Map<String, Object> taskObj = new HashMap<>();
+                        taskObj.put("task", item);
+                        taskObj.put("name", "task-" + (i + 1));
+                        fixedList.add(taskObj);
+                        logger.fine("[AgentTool] 自动将 tasks[" + i + "] 从字符串转换为对象");
+                    } else if (item instanceof Map) {
+                        Map<String, Object> taskObj = new HashMap<>((Map<String, Object>) item);
+                        // 确保 name 字段存在
+                        if (!taskObj.containsKey("name") || taskObj.get("name") == null) {
+                            taskObj.put("name", "task-" + (i + 1));
+                        }
+                        // 确保 task 字段存在（兼容 instruction 字段）
+                        if ((!taskObj.containsKey("task") || taskObj.get("task") == null) 
+                            && taskObj.containsKey("instruction") && taskObj.get("instruction") != null) {
+                            taskObj.put("task", taskObj.get("instruction"));
+                            logger.fine("[AgentTool] 自动将 tasks[" + i + "].instruction 映射为 task");
+                        }
+                        fixedList.add(taskObj);
+                    }
+                }
+                normalized.put("tasks", fixedList);
+            }
+        }
+        
+        // 4. assign action 的 task/tasks 归一化
+        if ("assign".equals(action)) {
+            // 如果 task 为空但 tasks 数组不为空，取第一个
+            if ((!normalized.containsKey("task") || normalized.get("task") == null)
+                && normalized.containsKey("tasks") && normalized.get("tasks") instanceof List) {
+                List<?> tasksList = (List<?>) normalized.get("tasks");
+                if (!tasksList.isEmpty() && tasksList.get(0) instanceof Map) {
+                    Map<String, Object> firstTask = (Map<String, Object>) tasksList.get(0);
+                    if (firstTask.containsKey("task")) {
+                        normalized.put("task", firstTask.get("task"));
+                        logger.fine("[AgentTool] 自动从 tasks[0].task 提取 assign 的 task");
+                    }
+                }
+            }
+        }
+        
+        // 5. timeout 类型归一化（兼容字符串数字）
+        if (normalized.containsKey("timeout") && normalized.get("timeout") instanceof String) {
+            try {
+                normalized.put("timeout", Long.parseLong((String) normalized.get("timeout")));
+                logger.fine("[AgentTool] 自动将 timeout 从字符串转换为数字");
+            } catch (NumberFormatException e) {
+                // 忽略，保留原值
+            }
+        }
+        
+        return normalized;
     }
     
     // ==================== 初始化 ====================
@@ -952,14 +1077,17 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
     
     @Override
     public ToolValidationResult validate(Map<String, Object> input) {
+        // 【核心修复】先归一化再验证 - 让AI更容易适配参数
+        Map<String, Object> normalized = normalizeInput(input);
+        
         ToolValidationResult.Builder builder = ToolValidationResult.builder();
         
-        if (input == null || !input.containsKey("action")) {
+        if (normalized == null || !normalized.containsKey("action")) {
             builder.addError("action 是必需的");
             return builder.build();
         }
         
-        String action = (String) input.get("action");
+        String action = (String) normalized.get("action");
         Set<String> validActions = Set.of("create", "create_parallel", "assign", "execute", 
                                           "status", "list", "stop", "merge", "cancel", "query");
         
@@ -967,11 +1095,12 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
             builder.addError("无效的 action: " + action);
         }
         
-        // 增强参数校验：execute action 必须使用 tasks 数组（不是 task 字符串）
+        // 【修复】同时接受 tasks（复数）或 task（单数）- 归一化后两者都有值
         if ("execute".equals(action)) {
-            Object tasks = input.get("tasks");
+            Object tasks = normalized.get("tasks");
             if (tasks == null) {
-                builder.addError("execute action 必须提供 tasks 参数（注意是复数 tasks，不是单数 task）");
+                // 【修复】归一化后 task 已被转换为 tasks，不再报错
+                builder.addError("tasks 参数是必需的");
             } else if (!(tasks instanceof List)) {
                 builder.addError("tasks 必须是数组类型，不能是字符串");
             } else {
