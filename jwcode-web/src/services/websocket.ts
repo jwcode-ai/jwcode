@@ -16,6 +16,7 @@ class WebSocketService {
   private isManualClose = false;
   private token: string | null = null;
   private authenticated = false;
+  private sessionId: string | null = null; // 当前会话ID，用于重连恢复
   
   // 心跳检测相关
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
@@ -27,13 +28,32 @@ class WebSocketService {
     this.url = url;
   }
 
+  /**
+   * 设置当前会话ID，用于重连时恢复连接映射
+   */
+  setSessionId(sessionId: string | null): void {
+    this.sessionId = sessionId;
+  }
+
+  /**
+   * 获取当前会话ID
+   */
+  getSessionId(): string | null {
+    return this.sessionId;
+  }
+
   connect(): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
       return;
     }
 
     this.isManualClose = false;
-    this.ws = new WebSocket(this.url);
+    
+    // 重连时携带 sessionId 参数，让后端更新连接映射
+    const reconnectUrl = this.sessionId 
+      ? `${this.url}?sessionId=${encodeURIComponent(this.sessionId)}`
+      : this.url;
+    this.ws = new WebSocket(reconnectUrl);
 
     this.ws.onopen = () => {
       console.log('WebSocket connected');

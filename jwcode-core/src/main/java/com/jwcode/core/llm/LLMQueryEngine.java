@@ -600,13 +600,20 @@ public class LLMQueryEngine {
         if (tokenBudget.isExhausted()) {
             logger.warning("[LLMQueryEngine] Token budget exhausted: " + tokenBudget);
             triggerStepComplete("LLM查询", "Token 预算已耗尽");
+            // 【修复】Token 耗尽时，通过 contentConsumer 发送结束信号给前端
+            if (contentConsumer != null) {
+                contentConsumer.accept("\n\n---\n⚠️ **Token 预算已耗尽，任务被迫终止。**\n\n请使用 `/compact` 压缩上下文后重试，或开始新会话。\n\n[FINISH]");
+            }
             return CompletableFuture.completedFuture(
                 QueryResult.error("Token 预算已耗尽，任务被迫终止。请使用 /compact 压缩上下文后重试。")
             );
         }
 
         // 自动触发上下文压缩（当预算使用超过 70% 时）
-        if (tokenBudget.usageRatio() > 0.70 && session.getMessages().size() > 10) {
+        // 【修复】增加冷却时间检查，避免频繁压缩导致上下文丢失
+        long now = System.currentTimeMillis();
+        if (tokenBudget.usageRatio() > 0.70 && session.getMessages().size() > 10
+            && (now - lastCompactTime) > COMPACT_COOLDOWN_MS) {
             logger.info("[LLMQueryEngine] Token budget usage=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100)
                 + ", auto-compacting context...");
             int beforeCount = session.getMessages().size();
@@ -614,11 +621,15 @@ public class LLMQueryEngine {
             if (compacted != null && compacted.size() < beforeCount) {
                 session.clearMessages();
                 compacted.forEach(session::addMessage);
+                lastCompactTime = now; // 更新压缩时间
                 logger.info("[LLMQueryEngine] Auto-compacted: " + beforeCount + " -> " + session.getMessages().size()
                     + " messages, budget=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100));
             } else {
                 logger.warning("[LLMQueryEngine] Auto-compact skipped: result size not reduced (before=" + beforeCount + ")");
             }
+        } else if (tokenBudget.usageRatio() > 0.70 && (now - lastCompactTime) <= COMPACT_COOLDOWN_MS) {
+            logger.info("[LLMQueryEngine] Auto-compact skipped: cooldown period active ("
+                + ((COMPACT_COOLDOWN_MS - (now - lastCompactTime)) / 1000) + "s remaining)");
         }
 
         // Token 预算紧张时缓存建议（将在 convertSessionMessages 中临时注入，不保存到 session 历史）

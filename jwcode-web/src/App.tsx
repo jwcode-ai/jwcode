@@ -431,9 +431,13 @@ function App() {
       timestamp: Date.now(),
     });
     
+    // 设置 sessionId 到 wsService，用于重连时恢复连接映射
+    const sessionId = activeSessionId || `session-${Date.now()}`;
+    wsService.setSessionId(sessionId);
+    
     wsService.send({
       type: 'chat',
-      sessionId: activeSessionId || `session-${Date.now()}`,
+      sessionId: sessionId,
       message: content,
     });
   }, [isGenerating, addMessage, activeSessionId, executeCommand]);

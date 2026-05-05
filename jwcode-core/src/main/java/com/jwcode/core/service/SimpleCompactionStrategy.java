@@ -28,12 +28,12 @@ public class SimpleCompactionStrategy {
 
     private static final Logger logger = Logger.getLogger(SimpleCompactionStrategy.class.getName());
 
-    // 保留尾部最近的消息数（默认 4 条 = 约 2 轮对话）
-    private static final int DEFAULT_TAIL_SIZE = 4;
+    // 保留尾部最近的消息数（默认 8 条 = 约 4 轮对话，确保 AgentTool 任务分配信息不被压缩）
+    private static final int DEFAULT_TAIL_SIZE = 8;
     // 摘要 Prompt 最大消息数（防止 Prompt 本身过大）
     private static final int MAX_HEAD_MESSAGES = 40;
-    // 摘要目标长度（字符）
-    private static final int SUMMARY_TARGET_CHARS = 400;
+    // 摘要目标长度（字符）- 【修复】从 400 增加到 800，确保保留关键任务信息
+    private static final int SUMMARY_TARGET_CHARS = 800;
     // 预留 token 安全余量
     private static final int RESERVED_TOKENS = 4096;
 
@@ -381,6 +381,7 @@ public class SimpleCompactionStrategy {
     /**
      * 提取用于压缩的消息内容。
      * 过滤掉 reasoningContent、工具调用的 JSON 参数等噪声。
+     * 【修复】保留 AgentTool 的任务分配信息，避免压缩后丢失关键任务上下文。
      */
     private String extractCompactContent(Message msg) {
         if (isNoiseMessage(msg)) {
@@ -395,11 +396,23 @@ public class SimpleCompactionStrategy {
             if (block instanceof Message.TextContent tc) {
                 sb.append(tc.getText()).append("\n");
             } else if (block instanceof Message.ToolResultContent trc) {
-                // 工具结果只保留简要状态，省略完整输出
+                // 【修复】保留 AgentTool 的任务分配信息，不简化为"成功/失败"
                 Object resultObj = trc.getResult();
                 String result = resultObj != null ? resultObj.toString() : "";
-                String status = result.startsWith("Error:") ? "失败" : "成功";
-                sb.append("[工具结果: ").append(status).append("]\n");
+                String toolName = trc.getToolName();
+                
+                // 对于 AgentTool 的任务分配，保留完整内容（包含子任务描述）
+                if ("AgentTool".equals(toolName)) {
+                    // 截断过长的结果，但保留关键信息
+                    if (result.length() > 500) {
+                        result = result.substring(0, 500) + "\n...[AgentTool 结果已截断]";
+                    }
+                    sb.append("[AgentTool 结果: ").append(result).append("]\n");
+                } else {
+                    // 其他工具结果只保留简要状态
+                    String status = result.startsWith("Error:") ? "失败" : "成功";
+                    sb.append("[工具结果 (").append(toolName).append("): ").append(status).append("]\n");
+                }
             }
         }
         return sb.toString().trim();

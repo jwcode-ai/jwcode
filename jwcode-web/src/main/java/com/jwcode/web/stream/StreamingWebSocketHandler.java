@@ -243,8 +243,54 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         lastPongTime.put(conn, System.currentTimeMillis());
         lastActivityTime.put(conn, System.currentTimeMillis());
         
-        // 发送认证请求
-        sendMessage(conn, MessageType.AUTH_REQUIRED, "Token required");
+        // 检查是否是重连：从 handshake 中提取 sessionId（如果有）
+        String reconnectingSessionId = null;
+        if (handshake != null) {
+            Map<String, String> pathParams = parseQueryParams(handshake.getResourceDescriptor());
+            reconnectingSessionId = pathParams.get("sessionId");
+        }
+        
+        // 如果是重连（提供了 sessionId），更新 activeSessionConnections 映射
+        if (reconnectingSessionId != null && !reconnectingSessionId.isEmpty()) {
+            WebSocket oldConn = activeSessionConnections.put(reconnectingSessionId, conn);
+            if (oldConn != null) {
+                logger.info("WebSocket 重连: sessionId=" + reconnectingSessionId 
+                    + ", 旧连接已替换 (oldConn open=" + oldConn.isOpen() + ")");
+            }
+            connectionSessions.put(conn, reconnectingSessionId);
+            logger.info("WebSocket 重连成功: sessionId=" + reconnectingSessionId);
+            
+            // 重连成功，发送确认消息
+            sendMessage(conn, MessageType.CONNECTED, "{\"sessionId\":\"" + escapeJson(reconnectingSessionId) + "\",\"reconnected\":true}");
+        } else {
+            // 新连接，发送认证请求
+            sendMessage(conn, MessageType.AUTH_REQUIRED, "Token required");
+        }
+    }
+    
+    /**
+     * 解析 URL 查询参数
+     */
+    private Map<String, String> parseQueryParams(String resourceDescriptor) {
+        Map<String, String> params = new java.util.HashMap<>();
+        if (resourceDescriptor == null || resourceDescriptor.isEmpty()) {
+            return params;
+        }
+        int queryStart = resourceDescriptor.indexOf('?');
+        if (queryStart < 0) {
+            return params;
+        }
+        String query = resourceDescriptor.substring(queryStart + 1);
+        String[] pairs = query.split("&");
+        for (String pair : pairs) {
+            int eqIdx = pair.indexOf('=');
+            if (eqIdx > 0) {
+                String key = pair.substring(0, eqIdx);
+                String value = pair.substring(eqIdx + 1);
+                params.put(key, value);
+            }
+        }
+        return params;
     }
     
     @Override
