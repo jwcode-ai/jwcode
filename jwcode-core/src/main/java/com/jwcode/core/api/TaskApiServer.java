@@ -64,6 +64,10 @@ public class TaskApiServer {
         // 启动 WebSocket 服务器
         wsServer = new TaskWebSocketServer(WS_PORT);
         wsServer.start();
+        
+        // 配置 StepMessageBroadcaster 使用 WebSocket 服务器
+        StepMessageBroadcaster.setWebSocketServer(wsServer);
+        System.out.println("[TaskApiServer] StepMessageBroadcaster configured");
     }
     
     /**

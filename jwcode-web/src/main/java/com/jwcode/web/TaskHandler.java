@@ -9,6 +9,8 @@ import com.jwcode.core.task.TaskStatus;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 
+import com.fasterxml.jackson.databind.node.ObjectNode;
+
 import java.io.IOException;
 import java.io.OutputStream;
 import java.util.List;
@@ -57,7 +59,7 @@ public class TaskHandler implements HttpHandler {
                     if (taskId != null) {
                         handleUpdateTask(exchange, taskId);
                     } else {
-                        sendJson(exchange, 400, Map.of("error", "Task ID required"));
+                        sendError(exchange, 400, "Task ID required");
                     }
                     break;
                     
@@ -65,7 +67,7 @@ public class TaskHandler implements HttpHandler {
                     if (taskId != null) {
                         handlePatchTask(exchange, taskId);
                     } else {
-                        sendJson(exchange, 400, Map.of("error", "Task ID required"));
+                        sendError(exchange, 400, "Task ID required");
                     }
                     break;
                     
@@ -78,24 +80,24 @@ public class TaskHandler implements HttpHandler {
                     break;
                     
                 default:
-                    sendJson(exchange, 405, Map.of("error", "Method not allowed"));
+                    sendError(exchange, 405, "Method not allowed");
             }
         } catch (Exception e) {
-            sendJson(exchange, 500, Map.of("error", e.getMessage()));
+            sendError(exchange, 500, e.getMessage());
         }
     }
     
     private void handleListTasks(HttpExchange exchange) throws IOException {
         List<Task> tasks = taskStore.list();
-        sendJson(exchange, 200, tasks);
+        sendSuccess(exchange, 200, tasks);
     }
     
     private void handleGetTask(HttpExchange exchange, String taskId) throws IOException {
         Task task = taskStore.get(taskId);
         if (task != null) {
-            sendJson(exchange, 200, task);
+            sendSuccess(exchange, 200, task);
         } else {
-            sendJson(exchange, 404, Map.of("error", "Task not found"));
+            sendError(exchange, 404, "Task not found");
         }
     }
     
@@ -115,13 +117,13 @@ public class TaskHandler implements HttpHandler {
         }
         
         Task created = taskStore.create(task);
-        sendJson(exchange, 201, created);
+        sendSuccess(exchange, 201, created);
     }
     
     private void handleUpdateTask(HttpExchange exchange, String taskId) throws IOException {
         Task task = taskStore.get(taskId);
         if (task == null) {
-            sendJson(exchange, 404, Map.of("error", "Task not found"));
+            sendError(exchange, 404, "Task not found");
             return;
         }
         
@@ -145,13 +147,13 @@ public class TaskHandler implements HttpHandler {
         }
         
         Task updated = taskStore.update(task);
-        sendJson(exchange, 200, updated);
+        sendSuccess(exchange, 200, updated);
     }
     
     private void handlePatchTask(HttpExchange exchange, String taskId) throws IOException {
         Task task = taskStore.get(taskId);
         if (task == null) {
-            sendJson(exchange, 404, Map.of("error", "Task not found"));
+            sendError(exchange, 404, "Task not found");
             return;
         }
         
@@ -163,15 +165,15 @@ public class TaskHandler implements HttpHandler {
         }
         
         Task updated = taskStore.update(task);
-        sendJson(exchange, 200, updated);
+        sendSuccess(exchange, 200, updated);
     }
     
     private void handleDeleteTask(HttpExchange exchange, String taskId) throws IOException {
         boolean deleted = taskStore.delete(taskId);
         if (deleted) {
-            sendJson(exchange, 204, null);
+            sendSuccess(exchange, 200, null);
         } else {
-            sendJson(exchange, 404, Map.of("error", "Task not found"));
+            sendError(exchange, 404, "Task not found");
         }
     }
     
@@ -180,22 +182,33 @@ public class TaskHandler implements HttpHandler {
         for (Task t : taskStore.listByStatus(TaskStatus.COMPLETED)) {
             if (taskStore.delete(t.getId())) count++;
         }
-        sendJson(exchange, 200, Map.of("deleted", count));
+        sendSuccess(exchange, 200, Map.of("deleted", count));
     }
     
-    /**
-     * 发送 JSON 响应
-     */
-    private void sendJson(HttpExchange exchange, int status, Object data) throws IOException {
+    private void sendSuccess(HttpExchange exchange, int status, Object data) throws IOException {
         exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
         
-        byte[] bytes;
-        if (data == null) {
-            bytes = new byte[0];
-        } else {
-            bytes = MAPPER.writeValueAsBytes(data);
+        ObjectNode response = MAPPER.createObjectNode();
+        response.put("success", true);
+        if (data != null) {
+            response.set("data", MAPPER.valueToTree(data));
         }
         
+        byte[] bytes = MAPPER.writeValueAsBytes(response);
+        exchange.sendResponseHeaders(status, bytes.length);
+        try (OutputStream os = exchange.getResponseBody()) {
+            os.write(bytes);
+        }
+    }
+    
+    private void sendError(HttpExchange exchange, int status, String message) throws IOException {
+        exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+        
+        ObjectNode response = MAPPER.createObjectNode();
+        response.put("success", false);
+        response.put("error", message);
+        
+        byte[] bytes = MAPPER.writeValueAsBytes(response);
         exchange.sendResponseHeaders(status, bytes.length);
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(bytes);

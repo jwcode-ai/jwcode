@@ -11,6 +11,9 @@ import java.net.InetSocketAddress;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
  * WebSocket Server for real-time task updates
@@ -26,8 +29,21 @@ public class TaskWebSocketServer extends WebSocketServer {
     
     private final CopyOnWriteArraySet<WebSocket> connections = new CopyOnWriteArraySet<>();
     
+    // 心跳定时器
+    private final ScheduledExecutorService heartbeatExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "ws-heartbeat");
+        t.setDaemon(true);
+        return t;
+    });
+    
+    // 心跳间隔（秒）
+    private static final int HEARTBEAT_INTERVAL = 25;
+    
     public TaskWebSocketServer(int port) {
         super(new InetSocketAddress(port));
+        // 设置连接超时检测，防止 java-websocket 自动断开空闲连接
+        // 0 表示禁用超时检测，由我们自己的心跳机制管理
+        this.setConnectionLostTimeout(0);
     }
     
     @Override
@@ -74,6 +90,17 @@ public class TaskWebSocketServer extends WebSocketServer {
     @Override
     public void onStart() {
         System.out.println("[TaskWebSocket] Server started on port " + getPort());
+        // 启动心跳定时器，定期发送 ping 消息保持连接活跃
+        heartbeatExecutor.scheduleAtFixedRate(() -> {
+            try {
+                if (!connections.isEmpty()) {
+                    broadcast(Map.of("type", "ping", "data", String.valueOf(System.currentTimeMillis())));
+                }
+            } catch (Exception e) {
+                System.err.println("[TaskWebSocket] Heartbeat error: " + e.getMessage());
+            }
+        }, HEARTBEAT_INTERVAL, HEARTBEAT_INTERVAL, TimeUnit.SECONDS);
+        System.out.println("[TaskWebSocket] Heartbeat started (interval: " + HEARTBEAT_INTERVAL + "s)");
     }
     
     /**
@@ -144,6 +171,16 @@ public class TaskWebSocketServer extends WebSocketServer {
     @Override
     public void stop() {
         try {
+            // 关闭心跳定时器
+            heartbeatExecutor.shutdown();
+            try {
+                if (!heartbeatExecutor.awaitTermination(3, TimeUnit.SECONDS)) {
+                    heartbeatExecutor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                heartbeatExecutor.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
             super.stop();
             System.out.println("[TaskWebSocket] Server stopped");
         } catch (Exception e) {

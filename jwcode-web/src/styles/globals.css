@@ -79,25 +79,45 @@ body {
   outline-offset: 2px;
 }
 
-/* Button base */
+/* Enhanced Button styles */
 .btn {
-  @apply inline-flex items-center justify-center px-4 py-2 rounded-md font-medium transition-colors;
+  @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium transition-all duration-200;
 }
 
 .btn-primary {
-  @apply bg-accent-green text-white hover:bg-opacity-90;
+  @apply bg-accent-green text-white hover:opacity-90 active:scale-[0.98];
 }
 
 .btn-secondary {
-  @apply bg-dark-surface border border-dark-border text-dark-text hover:bg-dark-hover;
+  @apply bg-dark-surface border border-dark-border text-dark-text hover:bg-dark-hover active:scale-[0.98];
 }
 
-/* Input base */
+.btn-ghost {
+  @apply text-dark-muted hover:text-dark-text hover:bg-dark-hover;
+}
+
+.btn-danger {
+  @apply bg-accent-red text-white hover:opacity-90 active:scale-[0.98];
+}
+
+.btn-sm {
+  @apply px-3 py-1.5 text-sm;
+}
+
+.btn-lg {
+  @apply px-6 py-3 text-lg;
+}
+
+/* Enhanced Input styles */
 .input {
-  @apply w-full px-3 py-2 bg-dark-bg border border-dark-border rounded-md text-dark-text placeholder-dark-muted focus:border-accent-blue focus:outline-none;
+  @apply w-full px-4 py-2.5 bg-dark-bg border border-dark-border rounded-lg text-dark-text placeholder-dark-muted focus:border-accent-blue focus:outline-none focus:ring-2 focus:ring-accent-blue/20 transition-all;
 }
 
-/* Card styles */
+.input-error {
+  @apply border-accent-red focus:border-accent-red focus:ring-accent-red/20;
+}
+
+/* Enhanced Card styles */
 .card {
   @apply bg-dark-surface border border-dark-border rounded-lg p-4;
 }

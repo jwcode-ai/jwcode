@@ -1,65 +1,63 @@
 import { useState, useEffect } from 'react';
 import { FolderTree, Folder, File, ChevronRight, ChevronDown, RefreshCw, Home, Search } from 'lucide-react';
 import type { FileNode } from '../../types';
-
-// Mock data for demo - in production this would come from API
-const mockFileTree: FileNode[] = [
-  {
-    id: '1',
-    name: 'src',
-    path: '/src',
-    type: 'folder',
-    expanded: true,
-    children: [
-      {
-        id: '2',
-        name: 'components',
-        path: '/src/components',
-        type: 'folder',
-        children: [
-          { id: '3', name: 'App.tsx', path: '/src/components/App.tsx', type: 'file' },
-          { id: '4', name: 'index.ts', path: '/src/components/index.ts', type: 'file' },
-        ],
-      },
-      {
-        id: '5',
-        name: 'stores',
-        path: '/src/stores',
-        type: 'folder',
-        children: [
-          { id: '6', name: 'chatStore.ts', path: '/src/stores/chatStore.ts', type: 'file' },
-          { id: '7', name: 'settingsStore.ts', path: '/src/stores/settingsStore.ts', type: 'file' },
-        ],
-      },
-      { id: '8', name: 'main.tsx', path: '/src/main.tsx', type: 'file' },
-      { id: '9', name: 'types.ts', path: '/src/types.ts', type: 'file' },
-    ],
-  },
-  {
-    id: '10',
-    name: 'package.json',
-    path: '/package.json',
-    type: 'file',
-  },
-  {
-    id: '11',
-    name: 'README.md',
-    path: '/README.md',
-    type: 'file',
-  },
-];
+import { api } from '../../services/api';
 
 export function FileTreeView() {
-  const [files, setFiles] = useState<FileNode[]>(mockFileTree);
+  const [files, setFiles] = useState<FileNode[]>([]);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(false);
+  const [_error, setError] = useState<string | null>(null);
 
-  const loadFiles = async () => {
+  const loadFiles = async (path?: string) => {
     setLoading(true);
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 500));
-    setLoading(false);
+    setError(null);
+    try {
+      const result = await api.files.list(path);
+      if (result.success && result.data) {
+        // 后端返回 type: 'file' | 'directory'，需要展开根目录
+        const nodes = result.data.map(node => ({
+          ...node,
+          expanded: false,
+        }));
+        setFiles(nodes);
+      } else {
+        setError(result.error || '加载文件列表失败');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '加载失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadChildren = async (parentNode: FileNode) => {
+    if (parentNode.type !== 'directory') return;
+    try {
+      const result = await api.files.list(parentNode.path);
+      if (result.success && result.data) {
+        const children = result.data.map(node => ({
+          ...node,
+          expanded: false,
+        }));
+        setFiles(prev => updateNodeChildren(prev, parentNode.id, children));
+      }
+    } catch (err) {
+      console.error('Failed to load children:', err);
+    }
+  };
+
+  const updateNodeChildren = (nodes: FileNode[], nodeId: string, children: FileNode[]): FileNode[] => {
+    return nodes.map(node => {
+      if (node.id === nodeId) {
+        return { ...node, children, expanded: true };
+      }
+      if (node.children) {
+        return { ...node, children: updateNodeChildren(node.children, nodeId, children) };
+      }
+      return node;
+    });
   };
 
   useEffect(() => {
@@ -67,9 +65,16 @@ export function FileTreeView() {
   }, []);
 
   const toggleFolder = (nodeId: string) => {
+    const node = findNode(files, nodeId);
+    if (node && node.type === 'directory' && !node.children) {
+      // 首次展开时懒加载子目录
+      loadChildren(node);
+      return;
+    }
+    
     const toggle = (nodes: FileNode[]): FileNode[] => {
       return nodes.map(node => {
-        if (node.id === nodeId && node.type === 'folder') {
+        if (node.id === nodeId && node.type === 'directory') {
           return { ...node, expanded: !node.expanded };
         }
         if (node.children) {
@@ -79,6 +84,17 @@ export function FileTreeView() {
       });
     };
     setFiles(toggle(files));
+  };
+  
+  const findNode = (nodes: FileNode[], nodeId: string): FileNode | null => {
+    for (const node of nodes) {
+      if (node.id === nodeId) return node;
+      if (node.children) {
+        const found = findNode(node.children, nodeId);
+        if (found) return found;
+      }
+    }
+    return null;
   };
 
 
@@ -99,7 +115,7 @@ export function FileTreeView() {
   };
 
   const renderNode = (node: FileNode, depth: number = 0) => {
-    const isFolder = node.type === 'folder';
+    const isDirectory = node.type === 'directory';
     const isExpanded = node.expanded;
     const isSelected = selectedFile === node.path;
 
@@ -111,26 +127,26 @@ export function FileTreeView() {
           }`}
           style={{ paddingLeft: `${depth * 16 + 8}px` }}
           onClick={() => {
-            if (isFolder) {
+            if (isDirectory) {
               toggleFolder(node.id);
             } else {
               setSelectedFile(node.path);
             }
           }}
         >
-          {isFolder && (
+          {isDirectory && (
             <span className="text-dark-muted">
               {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
             </span>
           )}
-          {isFolder ? (
+          {isDirectory ? (
             <Folder size={14} className="text-accent-yellow" />
           ) : (
             <span className="w-[14px]" />
           )}
           <span className="text-sm truncate">{node.name}</span>
         </div>
-        {isFolder && isExpanded && node.children && (
+        {isDirectory && isExpanded && node.children && (
           <div>
             {node.children.map(child => renderNode(child, depth + 1))}
           </div>
@@ -151,7 +167,7 @@ export function FileTreeView() {
         </h2>
         <div className="flex items-center gap-1">
           <button
-            onClick={loadFiles}
+            onClick={() => loadFiles()}
             disabled={loading}
             className="p-1 rounded hover:bg-dark-hover disabled:opacity-50"
             title="刷新"
@@ -160,7 +176,7 @@ export function FileTreeView() {
           </button>
           <button
             onClick={() => {
-              setFiles(mockFileTree.map(f => ({ ...f, expanded: false })));
+              setFiles(files.map(f => ({ ...f, expanded: false })));
               setSelectedFile(null);
             }}
             className="p-1 rounded hover:bg-dark-hover"

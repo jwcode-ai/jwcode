@@ -53,11 +53,7 @@ public class SessionsHandler implements HttpHandler {
      * 列出所有会话 - 从 WebSessionManager 动态获取
      */
     private void listSessions(HttpExchange exchange) throws IOException {
-        ObjectNode response = objectMapper.createObjectNode();
-        response.put("success", true);
-        response.put("count", sessionManager.getAllSessions().size());
-        
-        ArrayNode sessions = response.putArray("sessions");
+        ArrayNode sessions = objectMapper.createArrayNode();
         
         // 从 WebSessionManager 获取真实会话数据
         for (WebSessionManager.WebSession session : sessionManager.getAllSessions()) {
@@ -67,10 +63,15 @@ public class SessionsHandler implements HttpHandler {
             sessionNode.put("createdAt", DateTimeFormatter.ISO_INSTANT.format(
                 Instant.ofEpochMilli(session.getCreatedAt())
             ));
+            sessionNode.put("updatedAt", DateTimeFormatter.ISO_INSTANT.format(Instant.now()));
+            sessionNode.put("messageCount", 0);
             sessions.add(sessionNode);
         }
         
-        // 如果没有会话，返回空数组而不是 null
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("success", true);
+        response.set("data", sessions);
+        
         sendJsonResponse(exchange, 200, response);
     }
     
@@ -82,13 +83,16 @@ public class SessionsHandler implements HttpHandler {
         WebSessionManager.WebSession session = sessionManager.getOrCreateSession(sessionId);
         session.setTitle("新会话 " + sessionId);
         
-        ObjectNode response = objectMapper.createObjectNode();
-        response.put("success", true);
-        response.put("sessionId", sessionId);
-        response.put("title", session.getTitle());
-        response.put("createdAt", DateTimeFormatter.ISO_INSTANT.format(
+        ObjectNode data = objectMapper.createObjectNode();
+        data.put("sessionId", sessionId);
+        data.put("title", session.getTitle());
+        data.put("createdAt", DateTimeFormatter.ISO_INSTANT.format(
             Instant.ofEpochMilli(session.getCreatedAt())
         ));
+        
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("success", true);
+        response.set("data", data);
         response.put("message", "会话创建成功");
         
         sendJsonResponse(exchange, 201, response);
@@ -101,16 +105,17 @@ public class SessionsHandler implements HttpHandler {
         // 从路径中提取 sessionId，如 /api/sessions/session_001
         String sessionId = path.substring(path.lastIndexOf('/') + 1);
         
-        ObjectNode response = objectMapper.createObjectNode();
-        
         if (sessionId.isEmpty() || "sessions".equals(sessionId)) {
-            response.put("success", false);
-            response.put("error", "需要提供 sessionId");
-            sendJsonResponse(exchange, 400, response);
+            ObjectNode errResponse = objectMapper.createObjectNode();
+            errResponse.put("success", false);
+            errResponse.put("error", "需要提供 sessionId");
+            sendJsonResponse(exchange, 400, errResponse);
             return;
         }
         
         sessionManager.removeSession(sessionId);
+        
+        ObjectNode response = objectMapper.createObjectNode();
         response.put("success", true);
         response.put("message", "会话已删除");
         response.put("sessionId", sessionId);

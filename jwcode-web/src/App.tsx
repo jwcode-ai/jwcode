@@ -12,9 +12,12 @@ import { ModelsView } from './components/Models/ModelsView';
 import { ToolsView } from './components/Tools/ToolsView';
 import { SkillsView } from './components/Skills/SkillsView';
 import { AgentsView } from './components/Agents/AgentsView';
+import { TasksView } from './components/Tasks/TasksView';
 import { FileTreeView } from './components/FileTree/FileTreeView';
 import { TerminalView } from './components/Terminal/TerminalView';
 import { MarkdownRenderer } from './components/common/MarkdownRenderer';
+import { SlashCommandMenu } from './components/SlashCommandMenu';
+import { useSlashCommands, parseSlashCommand, SlashCommand } from './hooks/useSlashCommands';
 
 // Tab configuration
 const TABS: Tab[] = [
@@ -25,6 +28,7 @@ const TABS: Tab[] = [
   { id: 'tools', title: '工具', icon: 'Wrench' },
   { id: 'skills', title: '技能', icon: 'Target' },
   { id: 'agents', title: 'Agents', icon: 'Users' },
+  { id: 'tasks', title: '任务', icon: 'FileText' },
   { id: 'settings', title: '设置', icon: 'Settings' },
   { id: 'logs', title: '日志', icon: 'ScrollText' },
 ];
@@ -50,10 +54,11 @@ function App() {
   const [isLogDrawerOpen, setIsLogDrawerOpen] = useState(false);
   const [input, setInput] = useState('');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const createNewSessionRef = useRef<(() => void) | null>(null);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
-  const { 
+  const {
     messages, 
     isGenerating, 
     addMessage, 
@@ -168,7 +173,7 @@ function App() {
               updateStep(lastStep.id, {
                 title: stepData.step || lastStep.title,
                 description: stepData.description || lastStep.description,
-                status: stepData.status || 'running'
+                status: stepData.status === 'start' ? 'running' : (stepData.status || 'running')
               });
               break;
             case 'step_thinking':
@@ -229,13 +234,14 @@ function App() {
           );
 
           if (existing) {
-            appendToLastToolCallArgs(toolId, toolData.args || '', toolIndex);
+            // 后端发送的 args 已经是累积值，直接替换而非追加
+            updateToolCall(toolId, { args: toolData.args || '' });
           } else {
             addToolCall({
               id: toolId,
               index: toolIndex,
               name: toolData.name || 'Unknown',
-              args: toolData.args || {},
+              args: toolData.args || '',
               status: 'running',
               timestamp: Date.now(),
             });
@@ -272,68 +278,6 @@ function App() {
           }
         } catch (e) {
           console.error('Failed to parse tool result:', e);
-        }
-        break;
-        
-      case 'step_start':
-        try {
-          const stepData = JSON.parse(msg.data || '{}');
-          addStep({
-            id: `step-${Date.now()}`,
-            title: stepData.step || '执行中',
-            description: stepData.description || '正在执行...',
-            status: 'running',
-            timestamp: Date.now(),
-          });
-        } catch (e) {
-          console.error('Failed to parse step:', e);
-        }
-        break;
-        
-      case 'step_thinking':
-        try {
-          const stepData = JSON.parse(msg.data || '{}');
-          console.log('[step_thinking] Parsed data:', stepData);
-          const lastMessage = messages[messages.length - 1];
-          console.log('[step_thinking] Last message:', lastMessage?.id, 'steps:', lastMessage?.steps?.length);
-          if (lastMessage?.steps?.length) {
-            const lastStep = lastMessage.steps[lastMessage.steps.length - 1];
-            console.log('[step_thinking] Updating step:', lastStep.id, 'with thought:', stepData.thought);
-            updateStep(lastStep.id, { thought: stepData.thought });
-          } else {
-            console.warn('[step_thinking] No steps found in last message!');
-          }
-        } catch (e) {
-          console.error('Failed to parse step thinking:', e);
-        }
-        break;
-        
-      case 'step_action':
-        try {
-          const stepData = JSON.parse(msg.data || '{}');
-          const lastMessage = messages[messages.length - 1];
-          if (lastMessage?.steps?.length) {
-            const lastStep = lastMessage.steps[lastMessage.steps.length - 1];
-            updateStep(lastStep.id, { action: stepData.action });
-          }
-        } catch (e) {
-          console.error('Failed to parse step action:', e);
-        }
-        break;
-        
-      case 'step_complete':
-        try {
-          const stepData = JSON.parse(msg.data || '{}');
-          const lastMessage = messages[messages.length - 1];
-          if (lastMessage?.steps?.length) {
-            const lastStep = lastMessage.steps[lastMessage.steps.length - 1];
-            updateStep(lastStep.id, { 
-              status: 'success', 
-              result: stepData.result 
-            });
-          }
-        } catch (e) {
-          console.error('Failed to parse step complete:', e);
         }
         break;
         
@@ -402,11 +346,83 @@ function App() {
         wsService.send({ type: 'pong', data: Date.now().toString() });
         break;
     }
-  }, [activeTab, startGeneration, addMessage, appendToLastMessage, setThinking, addStep, updateStep, addToolCall, endGeneration]);
+  }, [activeTab, startGeneration, addMessage, appendToLastMessage, appendToLastMessageThinking, setThinking, addStep, updateStep, addToolCall, appendToLastToolCallArgs, updateToolCall, endGeneration]);
+
+  // Create new session
+  const createNewSession = useCallback(() => {
+    const now = new Date().toISOString();
+    const newSession = {
+      id: `session-${Date.now()}`,
+      title: '新会话',
+      createdAt: now,
+      updatedAt: now,
+      messageCount: 0,
+    };
+    addSession(newSession);
+    clearMessages();
+  }, [addSession, clearMessages]);
+  
+  createNewSessionRef.current = createNewSession;
+  
+  // Slash commands setup
+  const slashCommands = useSlashCommands({
+    activeTab,
+    setActiveTab,
+    createNewSession: () => createNewSessionRef.current?.(),
+    clearMessages,
+    setTheme,
+    toggleTerminal,
+    setLogs,
+    setUnreadLogs,
+  });
+
+  // Execute slash command and show feedback
+  const executeCommand = useCallback((commandName: string, args: string) => {
+    const command = slashCommands.commands.find((cmd) => cmd.name === commandName);
+    if (!command) {
+      addMessage({
+        id: `msg-${Date.now()}`,
+        type: 'assistant',
+        content: `❓ 未知命令: /${commandName}\n\n输入 **/help** 查看所有可用命令。`,
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    if (commandName === 'help') {
+      const helpText = slashCommands.commands
+        .map((cmd) => `**/${cmd.name}** ${cmd.args || ''} — ${cmd.description}`)
+        .join('\n');
+      addMessage({
+        id: `msg-${Date.now()}`,
+        type: 'assistant',
+        content: `📋 **快捷命令列表**\n\n${helpText}\n\n在输入框中输入 "/" 即可唤起命令菜单。`,
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    const result = command.action(args);
+    if (result.message) {
+      addMessage({
+        id: `msg-${Date.now()}`,
+        type: 'assistant',
+        content: result.success ? `✅ ${result.message}` : `⚠️ ${result.message}`,
+        timestamp: Date.now(),
+      });
+    }
+  }, [slashCommands.commands, addMessage]);
 
   // Send message
   const sendMessage = useCallback((content: string) => {
     if (!content.trim() || isGenerating) return;
+    
+    // Handle slash commands
+    const parsed = parseSlashCommand(content);
+    if (parsed) {
+      executeCommand(parsed.command, parsed.args);
+      return;
+    }
     
     addMessage({
       id: `msg-${Date.now()}`,
@@ -420,20 +436,7 @@ function App() {
       sessionId: activeSessionId || `session-${Date.now()}`,
       message: content,
     });
-  }, [isGenerating, addMessage, activeSessionId]);
-
-  // Create new session
-  const createNewSession = useCallback(() => {
-    const newSession = {
-      id: `session-${Date.now()}`,
-      title: '新会话',
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      messageCount: 0,
-    };
-    addSession(newSession);
-    clearMessages();
-  }, [addSession, clearMessages]);
+  }, [isGenerating, addMessage, activeSessionId, executeCommand]);
 
   // Icon component renderer
   const renderIcon = (iconName: string) => {
@@ -460,7 +463,7 @@ function App() {
   const renderMainContent = () => {
     switch (activeTab) {
       case 'chat':
-        return <ChatPanel messages={messages} isGenerating={isGenerating} onSend={sendMessage} input={input} setInput={setInput} messagesEndRef={messagesEndRef} />;
+        return <ChatPanel messages={messages} isGenerating={isGenerating} onSend={sendMessage} input={input} setInput={setInput} messagesEndRef={messagesEndRef} slashCommands={slashCommands} />;
       case 'logs':
         return <LogsPanel logs={logs} onClear={() => setLogs([])} />;
       case 'settings':
@@ -746,9 +749,23 @@ interface ChatPanelProps {
   input: string;
   setInput: (input: string) => void;
   messagesEndRef: React.MutableRefObject<HTMLDivElement | null>;
+  slashCommands: ReturnType<typeof useSlashCommands>;
 }
 
-function ChatPanel({ messages, isGenerating, onSend, input, setInput, messagesEndRef }: ChatPanelProps) {
+function ChatPanel({ messages, isGenerating, onSend, input, setInput, messagesEndRef, slashCommands }: ChatPanelProps) {
+  const {
+    isOpen,
+    setFilter,
+    selectedIndex,
+    setSelectedIndex,
+    filteredCommands,
+    closeMenu,
+    selectNext,
+    selectPrev,
+    executeCommand,
+    containerRef,
+  } = slashCommands;
+
   const handleSend = () => {
     if (input.trim()) {
       onSend(input);
@@ -757,9 +774,77 @@ function ChatPanel({ messages, isGenerating, onSend, input, setInput, messagesEn
   };
   
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Handle slash command menu navigation
+    if (isOpen) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        selectNext();
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        selectPrev();
+        return;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const cmd = filteredCommands[selectedIndex];
+        if (cmd) {
+          const args = input.slice(input.indexOf(cmd.name) + cmd.name.length + 1).trim();
+          const result = executeCommand(cmd, args);
+          if (result.success) {
+            setInput('');
+          } else {
+            // Keep input for error cases so user can fix it
+            setInput('');
+          }
+        }
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeMenu();
+        return;
+      }
+      return;
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
+    }
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const value = e.target.value;
+    setInput(value);
+
+    // Detect slash command trigger
+    if (value === '/') {
+      slashCommands.openMenu();
+      return;
+    }
+
+    if (value.startsWith('/')) {
+      const query = value.slice(1);
+      const spaceIndex = query.indexOf(' ');
+      const commandPart = spaceIndex >= 0 ? query.slice(0, spaceIndex) : query;
+      setFilter(commandPart);
+      if (!isOpen) {
+        slashCommands.openMenu();
+      }
+    } else if (isOpen) {
+      closeMenu();
+    }
+  };
+
+  const handleSelectCommand = (cmd: SlashCommand) => {
+    const args = input.slice(input.indexOf(cmd.name) + cmd.name.length + 1).trim();
+    const result = executeCommand(cmd, args);
+    if (result.success) {
+      setInput('');
+    } else {
+      setInput('');
     }
   };
   
@@ -779,6 +864,9 @@ function ChatPanel({ messages, isGenerating, onSend, input, setInput, messagesEn
                 <span className="text-xs px-3 py-1.5 bg-dark-surface rounded-full text-dark-muted">💡 代码编写</span>
                 <span className="text-xs px-3 py-1.5 bg-dark-surface rounded-full text-dark-muted">🔍 代码分析</span>
                 <span className="text-xs px-3 py-1.5 bg-dark-surface rounded-full text-dark-muted">⚡ 自动化任务</span>
+              </div>
+              <div className="mt-4 text-xs text-dark-muted">
+                输入 <kbd className="px-1 py-0.5 bg-dark-bg rounded border border-dark-border">/</kbd> 查看快捷命令
               </div>
             </div>
           </div>
@@ -803,13 +891,22 @@ function ChatPanel({ messages, isGenerating, onSend, input, setInput, messagesEn
       </div>
       
       {/* Input Area */}
-      <div className="p-4 border-t border-dark-border bg-dark-surface">
+      <div className="p-4 border-t border-dark-border bg-dark-surface relative">
+        <SlashCommandMenu
+          isOpen={isOpen}
+          commands={filteredCommands}
+          selectedIndex={selectedIndex}
+          filter={slashCommands.filter}
+          onSelect={handleSelectCommand}
+          onHover={setSelectedIndex}
+          containerRef={containerRef}
+        />
         <div className="flex gap-3 items-end">
           <textarea
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={handleChange}
             onKeyDown={handleKeyDown}
-            placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
+            placeholder="输入消息... (Enter 发送, Shift+Enter 换行, / 快捷命令)"
             className="flex-1 bg-dark-bg border border-dark-border rounded-lg px-4 py-3 text-dark-text placeholder-dark-muted resize-none focus:border-accent-blue focus:outline-none text-sm"
             rows={2}
           />
@@ -826,7 +923,9 @@ function ChatPanel({ messages, isGenerating, onSend, input, setInput, messagesEn
           <kbd className="px-1.5 py-0.5 bg-dark-bg rounded border border-dark-border">Ctrl</kbd>
           {' + '}
           <kbd className="px-1.5 py-0.5 bg-dark-bg rounded border border-dark-border">Enter</kbd>
-          {' 快速发送'}
+          {' 快速发送 · '}
+          <kbd className="px-1.5 py-0.5 bg-dark-bg rounded border border-dark-border">/</kbd>
+          {' 快捷命令'}
         </div>
       </div>
     </div>
@@ -875,17 +974,12 @@ function MessageBubble({ message }: { message: Message }) {
         )}
         
         {/* Content with Markdown - Fixed line breaks */}
-        {/* 如果 steps 存在，只显示最后一个段落（避免多轮 content 累积重复） */}
         {message.content ? (
             <div className="whitespace-pre-wrap break-words leading-relaxed">
             {isUser ? (
               <span>{message.content.replace(/\n\s*\n+/g, '\n')}</span>
             ) : (
-              <MarkdownRenderer content={(
-                message.steps?.length
-                  ? (message.content.split(/\n\s*\n/).filter(Boolean).pop() || message.content)
-                  : message.content
-              ).replace(/\n\s*\n+/g, '\n')} className="whitespace-pre-wrap" />
+              <MarkdownRenderer content={message.content.replace(/\n\s*\n+/g, '\n')} className="whitespace-pre-wrap" />
             )}
           </div>
         ) : !isUser && message.thinking ? (
@@ -907,6 +1001,38 @@ function MessageBubble({ message }: { message: Message }) {
           })}
         </div>
       </div>
+    </div>
+  );
+}
+
+// Expandable Result Component
+function ExpandableResult({ text, maxLength = 300, preformatted = false }: { text: string; maxLength?: number; preformatted?: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  const needsExpand = text.length > maxLength;
+  
+  if (!needsExpand) {
+    return preformatted
+      ? <pre className="text-xs font-mono bg-dark-bg p-1.5 rounded overflow-x-auto mt-1 text-accent-green">{text}</pre>
+      : <div className="text-dark-text leading-snug">{text}</div>;
+  }
+  
+  return (
+    <div>
+      {preformatted ? (
+        <pre className="text-xs font-mono bg-dark-bg p-1.5 rounded overflow-x-auto mt-1 text-accent-green">
+          {expanded ? text : text.slice(0, maxLength) + '...'}
+        </pre>
+      ) : (
+        <div className="text-dark-text leading-snug">
+          {expanded ? text : text.slice(0, maxLength) + '...'}
+        </div>
+      )}
+      <button
+        onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
+        className="mt-1 text-[10px] px-2 py-0.5 rounded bg-dark-hover text-accent-blue hover:bg-dark-border transition-colors"
+      >
+        {expanded ? '收起' : '展开'}
+      </button>
     </div>
   );
 }
@@ -1017,9 +1143,11 @@ function StepItem({ step, defaultCollapsed = false }: { step: Step; defaultColla
               {toolCall.result !== undefined && toolCall.result !== null && (
                 <div className="ml-2 text-dark-muted">
                   <span className="text-accent-green/70">结果:</span>
-                  <pre className="text-xs font-mono bg-dark-bg p-1.5 rounded overflow-x-auto mt-1 text-accent-green">
-                    {typeof toolCall.result === 'object' ? JSON.stringify(toolCall.result, null, 2) : String(toolCall.result)}
-                  </pre>
+                  <ExpandableResult
+                    text={typeof toolCall.result === 'object' ? JSON.stringify(toolCall.result, null, 2) : String(toolCall.result)}
+                    maxLength={300}
+                    preformatted
+                  />
                 </div>
               )}
             </div>
@@ -1032,9 +1160,7 @@ function StepItem({ step, defaultCollapsed = false }: { step: Step; defaultColla
                 <span>✓</span>
                 <span>结果</span>
               </div>
-              <div className="text-dark-text leading-snug">
-                {step.result}
-              </div>
+              <ExpandableResult text={step.result} maxLength={300} />
             </div>
           )}
         </div>
@@ -1307,6 +1433,8 @@ function renderTabContent(tabId: TabId) {
       return <SkillsView />;
     case 'agents':
       return <AgentsView />;
+    case 'tasks':
+      return <TasksView />;
     case 'files':
       return <FileTreeView />;
     default:

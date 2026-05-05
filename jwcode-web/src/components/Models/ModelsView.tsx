@@ -3,7 +3,7 @@ import { Brain, RefreshCw, Wifi, WifiOff, Activity, AlertTriangle } from 'lucide
 import { api, type Model } from '../../services/api';
 // 本地兼容类型
 interface LocalModelStatus {
-  overallStatus: 'healthy' | 'degraded' | 'error';
+  overallStatus: 'healthy' | 'degraded' | 'unhealthy' | 'error';
   healthRate: number;
   healthyInstances: number;
   totalInstances: number;
@@ -28,15 +28,16 @@ export function ModelsView() {
       ]);
       
       if (modelsRes.success && modelsRes.data) {
-        setModels(modelsRes.data);
+        setModels(modelsRes.data.models || []);
       }
       
       if (systemRes.success && systemRes.data) {
+        const modelStats = systemRes.data.models || { total: 0, online: 0, offline: 0 };
         setStatus({
-          overallStatus: 'healthy',
-          healthRate: 0.95,
-          healthyInstances: modelsRes.data?.length || 0,
-          totalInstances: modelsRes.data?.length || 0,
+          overallStatus: modelStats.offline === 0 ? 'healthy' : modelStats.online > 0 ? 'degraded' : 'unhealthy',
+          healthRate: modelStats.total > 0 ? modelStats.online / modelStats.total : 0,
+          healthyInstances: modelStats.online,
+          totalInstances: modelStats.total,
           totalRequests: 0
         });
       }
@@ -51,11 +52,10 @@ export function ModelsView() {
     loadData();
   }, []);
 
-  const handleToggle = async (modelId: string, currentEnabled: boolean) => {
-    const res = await api.models.update(modelId, { status: currentEnabled ? 'offline' : 'online' });
-    if (res.success) {
-      loadData();
-    }
+  const handleToggle = async (_modelId: string, _currentStatus: string) => {
+    // 模型配置来自YAML，动态切换状态需要后端支持
+    // 目前仅做前端状态刷新
+    await loadData();
   };
 
   const handleRefresh = async (modelId: string) => {
@@ -203,7 +203,7 @@ export function ModelsView() {
                     <RefreshCw size={14} className={refreshing === model.id ? 'animate-spin' : ''} />
                   </button>
                   <button
-                    onClick={() => handleToggle(model.id, model.status === 'online')}
+                    onClick={() => handleToggle(model.id, model.status)}
                     className={`px-3 py-1 rounded text-sm transition-colors ${
                       model.status === 'online'
                         ? 'bg-accent-red/20 text-accent-red hover:bg-accent-red/30'

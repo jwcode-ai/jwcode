@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jwcode.core.agent.Agent;
 import com.jwcode.core.agent.AgentRegistry;
 import com.jwcode.core.agent.parallel.*;
+import com.jwcode.core.api.StepMessageBroadcaster;
 import com.jwcode.core.llm.LLMService;
 import com.jwcode.core.session.Session;
 import com.jwcode.core.tool.context.ToolExecutionContext;
@@ -575,6 +576,12 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
         for (Map<String, Object> config : taskConfigs) {
             SubAgentTask task = buildTaskFromConfig(config);
             tasks.add(task);
+            // 广播 step_start 消息到前端
+            StepMessageBroadcaster.getInstance().broadcastStepStart(
+                task.getTaskId(),
+                task.getName(),
+                task.getTaskDescription()
+            );
         }
         
         try {

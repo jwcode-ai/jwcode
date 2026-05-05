@@ -179,6 +179,13 @@ export const useChatStore = create<ChatState>()(
             return { messages };
           }
 
+          // 在所有 step 的 toolCalls 中查找（包括已完成的 step）
+          for (const step of lastMessage.steps || []) {
+            if (doUpdate(step.toolCalls)) {
+              return { messages };
+            }
+          }
+
           // Fallback 到 message.toolCalls
           if (doUpdate(lastMessage.toolCalls)) {
             return { messages };
@@ -222,6 +229,13 @@ export const useChatStore = create<ChatState>()(
           const runningStep = lastMessage.steps?.find((s) => s.status === 'running');
           if (runningStep && updateToolCall(runningStep.toolCalls)) {
             return { messages };
+          }
+
+          // 在所有 step 的 toolCalls 中查找（包括已完成的 step）
+          for (const step of lastMessage.steps || []) {
+            if (updateToolCall(step.toolCalls)) {
+              return { messages };
+            }
           }
 
           // Fallback 到 message.toolCalls

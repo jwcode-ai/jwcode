@@ -8,9 +8,12 @@ import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpExchange;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.logging.Logger;
 
@@ -69,7 +72,9 @@ public class WebServer {
         server.createContext("/api/models", new ModelInfoHandler());
         // 任务管理 API
         server.createContext("/api/tasks", new TaskHandler(TaskStore.getInstance()));
-        server.createContext("/static", new StaticHandler());
+        server.createContext("/api/files", new FilesHandler());
+        server.createContext("/api/system/status", new SystemStatusHandler());
+        server.createContext("/assets/", new StaticAssetHandler());
         
         server.setExecutor(Executors.newFixedThreadPool(10));
         server.start();
@@ -138,6 +143,75 @@ public class WebServer {
         exchange.sendResponseHeaders(statusCode, bytes.length);
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(bytes);
+        }
+    }
+    
+    static void sendResponse(HttpExchange exchange, int statusCode, byte[] data, String contentType) throws IOException {
+        exchange.getResponseHeaders().set("Content-Type", contentType);
+        exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+        exchange.sendResponseHeaders(statusCode, data.length);
+        try (OutputStream os = exchange.getResponseBody()) {
+            os.write(data);
+        }
+    }
+    
+    /**
+     * 静态资源处理器 - 从 classpath 加载前端构建产物 (JS/CSS/图片等)
+     */
+    static class StaticAssetHandler implements HttpHandler {
+        
+        private static final Map<String, String> CONTENT_TYPES = new HashMap<>();
+        
+        static {
+            CONTENT_TYPES.put("js", "application/javascript");
+            CONTENT_TYPES.put("mjs", "application/javascript");
+            CONTENT_TYPES.put("css", "text/css");
+            CONTENT_TYPES.put("html", "text/html");
+            CONTENT_TYPES.put("htm", "text/html");
+            CONTENT_TYPES.put("svg", "image/svg+xml");
+            CONTENT_TYPES.put("png", "image/png");
+            CONTENT_TYPES.put("jpg", "image/jpeg");
+            CONTENT_TYPES.put("jpeg", "image/jpeg");
+            CONTENT_TYPES.put("gif", "image/gif");
+            CONTENT_TYPES.put("ico", "image/x-icon");
+            CONTENT_TYPES.put("json", "application/json");
+            CONTENT_TYPES.put("woff", "font/woff");
+            CONTENT_TYPES.put("woff2", "font/woff2");
+            CONTENT_TYPES.put("ttf", "font/ttf");
+            CONTENT_TYPES.put("eot", "application/vnd.ms-fontobject");
+            CONTENT_TYPES.put("otf", "font/otf");
+        }
+        
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            String path = exchange.getRequestURI().getPath();
+            // 将 /assets/xxx 映射到 classpath /web/assets/xxx
+            if (!path.startsWith("/assets/")) {
+                sendResponse(exchange, 404, "Not found", "text/plain");
+                return;
+            }
+            String resourcePath = "/web" + path;
+            
+            try (InputStream is = getClass().getResourceAsStream(resourcePath)) {
+                if (is == null) {
+                    sendResponse(exchange, 404, "Not found: " + path, "text/plain");
+                    return;
+                }
+                
+                byte[] data = is.readAllBytes();
+                String contentType = getContentType(resourcePath);
+                sendResponse(exchange, 200, data, contentType);
+            }
+        }
+        
+        private String getContentType(String path) {
+            int dot = path.lastIndexOf('.');
+            if (dot > 0) {
+                String ext = path.substring(dot + 1).toLowerCase();
+                String ct = CONTENT_TYPES.get(ext);
+                if (ct != null) return ct;
+            }
+            return "application/octet-stream";
         }
     }
     

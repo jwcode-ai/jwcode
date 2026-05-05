@@ -56,8 +56,8 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     private static final Logger logger = Logger.getLogger(StreamingWebSocketHandler.class.getName());
     
     // 心跳检测配置
-    private static final long PING_INTERVAL_MS = 30000; // 30发送一次 ping
-    private static final long PONG_TIMEOUT_MS = 10000;   // 10秒内未收到 pong 则断开
+    private static final long PING_INTERVAL_MS = 30000; // 30秒发送一次 ping
+    private static final long PONG_TIMEOUT_MS = 90000;   // 90秒内未收到 pong 则断开
     private static final long CONNECTION_TIMEOUT_MS = 300000; // 5分钟无活动则断开
     
     // 认证配置（从系统配置读取）
@@ -69,6 +69,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     private final Map<String, Session> sessions;
     private final ToolRegistry toolRegistry;
     private final Map<WebSocket, String> connectionSessions;
+    private final Map<String, WebSocket> activeSessionConnections; // sessionId -> 当前活跃连接
     private final Map<WebSocket, Consumer<LogEntry>> logListeners;
     private final Map<WebSocket, Long> lastPongTime;    // 最后收到 pong 的时间
     private final Map<WebSocket, Long> lastActivityTime; // 最后活跃时间
@@ -78,6 +79,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         this.sessions = new ConcurrentHashMap<>();
         this.toolRegistry = toolRegistry;
         this.connectionSessions = new ConcurrentHashMap<>();
+        this.activeSessionConnections = new ConcurrentHashMap<>();
         this.logListeners = new ConcurrentHashMap<>();
         this.lastPongTime = new ConcurrentHashMap<>();
         this.lastActivityTime = new ConcurrentHashMap<>();
@@ -202,6 +204,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
      */
     private void checkHeartbeat() {
         long now = System.currentTimeMillis();
+        java.util.List<WebSocket> toClose = new java.util.ArrayList<>();
         
         for (WebSocket conn : getConnections()) {
             if (!conn.isOpen()) continue;
@@ -210,7 +213,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             Long lastPong = lastPongTime.get(conn);
             if (lastPong != null && (now - lastPong) > PONG_TIMEOUT_MS) {
                 logger.warning("Pong 超时，断开连接: " + conn.getRemoteSocketAddress());
-                conn.close(4001, "Pong timeout");
+                toClose.add(conn);
                 continue;
             }
             
@@ -218,8 +221,17 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             Long lastActivity = lastActivityTime.get(conn);
             if (lastActivity != null && (now - lastActivity) > CONNECTION_TIMEOUT_MS) {
                 logger.warning("连接超时，断开: " + conn.getRemoteSocketAddress());
-                conn.close(4002, "Connection timeout");
+                toClose.add(conn);
+                continue;
             }
+            
+            // 发送心跳 ping
+            sendMessage(conn, MessageType.PING, null);
+        }
+        
+        // 循环结束后再统一关闭，避免并发修改问题
+        for (WebSocket conn : toClose) {
+            conn.close();
         }
     }
     
@@ -237,7 +249,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     
     @Override
     public void onClose(WebSocket conn, int code, String reason, boolean remote) {
-        logger.info("WebSocket 连接关闭: " + conn.getRemoteSocketAddress() + ", reason: " + reason);
+        logger.warning("连接关闭: code=" + code + ", reason=" + reason + ", remote=" + remote);
         
         // 清理监听器
         Consumer<LogEntry> listener = logListeners.remove(conn);
@@ -248,19 +260,29 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         // 清理认证状态
         authenticatedConnections.remove(conn);
         
+        // 清理会话关联（双向映射）
+        String sessionId = connectionSessions.remove(conn);
+        if (sessionId != null) {
+            activeSessionConnections.remove(sessionId);
+        }
+        
         // 清理心跳跟踪数据
         lastPongTime.remove(conn);
         lastActivityTime.remove(conn);
-        connectionSessions.remove(conn);
     }
     
     @Override
     public void onMessage(WebSocket conn, String message) {
-        // 更新最后活跃时间
-        lastActivityTime.put(conn, System.currentTimeMillis());
+        logger.info("收到 WebSocket 消息: " + truncate(message, 100));
+        
+        // 更新最后活跃时间和心跳时间（任何消息都视为有效心跳）
+        long now = System.currentTimeMillis();
+        lastActivityTime.put(conn, now);
+        lastPongTime.put(conn, now);
         
         try {
             ClientMessage clientMsg = parseMessage(message);
+            logger.info("解析消息成功: type=" + clientMsg.type + ", sessionId=" + clientMsg.sessionId + ", message=" + truncate(clientMsg.message, 30));
             
             // 处理认证（不需要认证）
             if ("auth".equals(clientMsg.type)) {
@@ -270,17 +292,23 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             
             // 其他消息需要认证
             if (!isAuthenticated(conn)) {
+                logger.warning("连接未认证: " + conn.getRemoteSocketAddress());
                 sendMessage(conn, MessageType.AUTH_REQUIRED, "Authentication required");
                 return;
             }
             
             switch (clientMsg.type) {
                 case "chat":
+                    logger.info("处理 chat 消息");
                     handleChatMessage(conn, clientMsg);
                     break;
                 case "ping":
                     lastPongTime.put(conn, System.currentTimeMillis());
                     sendMessage(conn, MessageType.PONG, null);
+                    break;
+                case "pong":
+                    // 客户端心跳响应，更新时间戳即可
+                    lastPongTime.put(conn, System.currentTimeMillis());
                     break;
                 case "create_session":
                     handleCreateSession(conn, clientMsg);
@@ -291,7 +319,11 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                 case "unsubscribe_logs":
                     handleUnsubscribeLogs(conn);
                     break;
+                case "notification":
+                    handleNotificationMessage(conn, clientMsg);
+                    break;
                 default:
+                    logger.warning("未知消息类型: " + clientMsg.type);
                     sendMessage(conn, MessageType.ERROR, "Unknown message type: " + clientMsg.type);
             }
         } catch (Exception e) {
@@ -345,34 +377,68 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     }
     
     /**
+     * 处理通知消息 - 广播给所有已连接的客户端
+     */
+    private void handleNotificationMessage(WebSocket sender, ClientMessage msg) {
+        String notificationMessage = msg.message;
+        if (notificationMessage == null || notificationMessage.isEmpty()) {
+            sendMessage(sender, MessageType.ERROR, "通知内容不能为空");
+            return;
+        }
+        
+        logger.info("收到通知广播: " + truncate(notificationMessage, 50));
+        
+        // 广播给所有已连接的客户端（包括发送者自己）
+        for (WebSocket conn : getConnections()) {
+            if (conn.isOpen()) {
+                sendMessage(conn, MessageType.NOTIFICATION, escapeJson(notificationMessage));
+            }
+        }
+        
+        // 同时记录到日志
+        WebSocketLogBroadcaster.getInstance().broadcast(
+            LogEntry.info("通知", "广播: " + truncate(notificationMessage, 50))
+        );
+    }
+    
+    /**
      * 处理聊天消息（流式响应）
      */
     private void handleChatMessage(WebSocket conn, ClientMessage msg) {
+        logger.info("收到聊天消息: sessionId=" + msg.sessionId + ", message=" + truncate(msg.message, 50));
+        
         String sessionId = msg.sessionId;
         Session session = sessions.get(sessionId);
         
         if (session == null) {
+            logger.info("创建新会话: " + sessionId);
             // 创建新会话（包含系统提示词）
             session = createNewSession(sessionId, null);
         }
         
         connectionSessions.put(conn, sessionId);
+        activeSessionConnections.put(sessionId, conn);
         
         // 广播日志：开始处理消息
+        logger.info("开始处理用户消息: " + truncate(msg.message, 50));
         WebSocketLogBroadcaster.getInstance().broadcast(
             LogEntry.info("AI", "开始处理用户消息: " + truncate(msg.message, 50))
         );
         
         // 发送开始标记
+        logger.info("发送 START 标记");
         sendMessage(conn, MessageType.START, null);
         
         // 使用 QueryEngine 执行真实查询
         final WebSocket clientConn = conn;
         final Session clientSession = session;
         final String clientMessage = msg.message;
+        logger.info("启动查询线程, message=" + truncate(clientMessage, 30));
         new Thread(() -> {
             executeQuery(clientConn, clientSession, clientMessage);
         }).start();
+        
+        logger.info("查询线程已启动");
     }
     
     /**
@@ -478,6 +544,17 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     }
     
     /**
+     * 发送消息到客户端（通过 sessionId 查找当前活跃连接）
+     */
+    private void sendMessage(String sessionId, MessageType type, String data) {
+        if (sessionId == null) return;
+        WebSocket conn = activeSessionConnections.get(sessionId);
+        if (conn != null && conn.isOpen()) {
+            sendMessage(conn, type, data);
+        }
+    }
+    
+    /**
      * 发送消息到客户端
      */
     private void sendMessage(WebSocket conn, MessageType type, String data) {
@@ -497,7 +574,12 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                 data != null ? "\"" + escapeJson(data) + "\"" : "null");
         }
         
-        conn.send(json);
+        try {
+            conn.send(json);
+        } catch (Exception e) {
+            logger.warning("发送消息失败: " + conn.getRemoteSocketAddress() + ", error=" + e.getMessage());
+            conn.close(4003, "Send error");
+        }
     }
     
     /**
@@ -531,6 +613,15 @@ public class StreamingWebSocketHandler extends WebSocketServer {
      * 步骤与消息分离：步骤显示在独立容器中，完成后收起或淡化
      */
     private void executeQuery(WebSocket conn, Session session, String message) {
+        // 获取或绑定 sessionId 与当前连接的双向映射
+        String sessionId = connectionSessions.get(conn);
+        if (sessionId == null) {
+            sessionId = session.getId();
+            connectionSessions.put(conn, sessionId);
+        }
+        activeSessionConnections.put(sessionId, conn);
+        final String querySessionId = sessionId;
+        
         try {
             // 从 YAML 配置读取模型信息
             JwcodeConfig config = YamlConfigLoader.getInstance().getConfig();
@@ -551,40 +642,66 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             LLMQueryEngine engine = llmFactory.createQueryEngine(session);
             
             // 创建步骤回调，将步骤信息通过 WebSocket 发送给前端
+            // 使用 querySessionId 而不是 conn，确保连接断开后重连的消息仍能送达
             LLMQueryEngine.StepCallback stepCallback = new LLMQueryEngine.StepCallback() {
                 @Override
                 public void onStepStart(String stepName, String description) {
-                    sendStepStart(conn, stepName, description);
+                    String json = String.format(
+                        "{\"step\":\"%s\",\"description\":\"%s\",\"status\":\"start\"}",
+                        escapeJson(stepName), escapeJson(description)
+                    );
+                    sendMessage(querySessionId, MessageType.STEP_START, json);
+                    WebSocketLogBroadcaster.getInstance().broadcast(
+                        LogEntry.info("Step", "[开始] " + stepName + ": " + description)
+                    );
                 }
                 
                 @Override
                 public void onStepThinking(String stepName, String thought) {
-                    sendStepThinking(conn, stepName, thought);
+                    String json = String.format(
+                        "{\"step\":\"%s\",\"thought\":\"%s\",\"status\":\"thinking\"}",
+                        escapeJson(stepName), escapeJson(thought)
+                    );
+                    sendMessage(querySessionId, MessageType.STEP_THINKING, json);
+                    WebSocketLogBroadcaster.getInstance().broadcast(
+                        LogEntry.info("Thinking", "[思考] " + stepName + ": " + thought)
+                    );
                 }
                 
                 @Override
                 public void onStepAction(String stepName, String action) {
-                    sendStepAction(conn, stepName, action);
+                    String json = String.format(
+                        "{\"step\":\"%s\",\"action\":\"%s\",\"status\":\"action\"}",
+                        escapeJson(stepName), escapeJson(action)
+                    );
+                    sendMessage(querySessionId, MessageType.STEP_ACTION, json);
+                    WebSocketLogBroadcaster.getInstance().broadcast(
+                        LogEntry.tool("[动作] " + stepName + ": " + action)
+                    );
                 }
                 
                 @Override
                 public void onStepComplete(String stepName, String result) {
-                    sendStepComplete(conn, stepName, result);
+                    String json = String.format(
+                        "{\"step\":\"%s\",\"result\":\"%s\",\"status\":\"complete\"}",
+                        escapeJson(stepName), escapeJson(result)
+                    );
+                    sendMessage(querySessionId, MessageType.STEP_COMPLETE, json);
+                    WebSocketLogBroadcaster.getInstance().broadcast(
+                        LogEntry.success("[完成] " + stepName + ": " + result)
+                    );
                 }
                 
                 @Override
                 public void onToolResult(String toolName, String result) {
-                    sendToolResult(conn, toolName, result);
-                }
-                
-                @Override
-                public void onContentChunk(String chunk) {
-                    sendMessage(conn, MessageType.CONTENT, escapeJson(chunk));
-                }
-                
-                @Override
-                public void onThinkingChunk(String chunk) {
-                    sendMessage(conn, MessageType.THINKING, escapeJson(chunk));
+                    String json = String.format(
+                        "{\"toolName\":\"%s\",\"result\":\"%s\"}",
+                        escapeJson(toolName), escapeJson(result)
+                    );
+                    sendMessage(querySessionId, MessageType.TOOL_RESULT, json);
+                    WebSocketLogBroadcaster.getInstance().broadcast(
+                        LogEntry.tool("[工具结果] " + toolName + ": " + truncate(result, 50))
+                    );
                 }
                 
                 @Override
@@ -597,20 +714,20 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                         event.isComplete(),
                         event.getIndex()
                     );
-                    sendMessage(conn, MessageType.TOOL_CALL, json);
+                    sendMessage(querySessionId, MessageType.TOOL_CALL, json);
                 }
             };
             
             // 设置回调
             engine.setStepCallback(stepCallback);
             
-            // 定义流式消费者
+            // 定义流式消费者（不再预先 escapeJson，由 sendMessage 统一处理）
             java.util.function.Consumer<String> contentConsumer = chunk -> {
-                sendMessage(conn, MessageType.CONTENT, escapeJson(chunk));
+                sendMessage(querySessionId, MessageType.CONTENT, chunk);
             };
             
             java.util.function.Consumer<String> thinkingConsumer = chunk -> {
-                sendMessage(conn, MessageType.THINKING, escapeJson(chunk));
+                sendMessage(querySessionId, MessageType.THINKING, chunk);
             };
             
             java.util.function.Consumer<LLMService.StreamToolCallEvent> toolCallConsumer = event -> {
@@ -622,20 +739,20 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                     event.isComplete(),
                     event.getIndex()
                 );
-                sendMessage(conn, MessageType.TOOL_CALL, json);
+                sendMessage(querySessionId, MessageType.TOOL_CALL, json);
             };
             
             // 执行流式查询
             LLMQueryEngine.QueryResult result = engine.queryStream(message, contentConsumer, thinkingConsumer, toolCallConsumer).join();
             
             if (result.isSuccess()) {
-                sendMessage(conn, MessageType.COMPLETE, null);
+                sendMessage(querySessionId, MessageType.COMPLETE, null);
                 WebSocketLogBroadcaster.getInstance().broadcast(
                     LogEntry.success("查询完成")
                 );
             } else {
                 String errorMsg = result.getErrorMessage();
-                sendMessage(conn, MessageType.ERROR, escapeJson(errorMsg));
+                sendMessage(querySessionId, MessageType.ERROR, escapeJson(errorMsg));
                 WebSocketLogBroadcaster.getInstance().broadcast(
                     LogEntry.error("查询失败: " + errorMsg)
                 );
@@ -645,7 +762,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             logger.severe("查询执行失败: " + e.getMessage());
             e.printStackTrace();
             
-            sendMessage(conn, MessageType.ERROR, escapeJson("执行失败: " + e.getMessage()));
+            sendMessage(querySessionId, MessageType.ERROR, escapeJson("执行失败: " + e.getMessage()));
             WebSocketLogBroadcaster.getInstance().broadcast(
                 LogEntry.error("执行异常: " + e.getMessage())
             );
@@ -855,7 +972,8 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         AUTH_REQUIRED,  // 需要认证
         AUTH_SUCCESS,   // 认证成功
         AUTH_FAILED,   // 认证失败
-        LOG             // 日志消息
+        LOG,            // 日志消息
+        NOTIFICATION    // 通知消息
     }
     
     /**

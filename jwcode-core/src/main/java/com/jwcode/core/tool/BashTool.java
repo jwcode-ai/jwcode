@@ -14,6 +14,7 @@ import com.jwcode.core.tool.output.BashOutput;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.*;
@@ -791,9 +792,12 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
             StringBuilder stdoutBuilder, 
             StringBuilder stderrBuilder) {
         
+        // Windows 上使用系统默认编码（如 GBK），避免 UTF-8 解码失败导致乱码
+        Charset outputCharset = isWindows() ? Charset.defaultCharset() : StandardCharsets.UTF_8;
+        
         return CompletableFuture.runAsync(() -> {
             try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                    new InputStreamReader(process.getInputStream(), outputCharset))) {
                 
                 String line;
                 int lineCount = 0;
@@ -821,7 +825,7 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
             
             // 读取错误流
             try (BufferedReader errorReader = new BufferedReader(
-                    new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8))) {
+                    new InputStreamReader(process.getErrorStream(), outputCharset))) {
                 
                 String line;
                 while ((line = errorReader.readLine()) != null) {

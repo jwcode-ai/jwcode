@@ -43,30 +43,29 @@ export interface ToolCall {
 export interface Session {
   id: string;
   title: string;
-  createdAt: number;
-  updatedAt: number;
+  createdAt: string;
+  updatedAt: string;
   messageCount: number;
 }
 
 // Model types
-export type ModelHealthStatus = 'up' | 'down' | 'degraded' | 'starting' | 'unknown';
-
 export interface Model {
   id: string;
   name: string;
   provider: string;
-  providerDisplay: string;
-  endpoint: string;
-  healthStatus: ModelHealthStatus;
-  score: number;
-  successRate: number;
-  avgLatencyMs: number;
-  currentConnections: number;
-  maxConcurrent: number;
-  weight: number;
-  totalRequests: number;
-  uptimeSeconds: number;
-  isActive: boolean;
+  status: 'online' | 'offline' | 'error';
+  load: number;
+  maxLoad: number;
+  tokens: number;
+  maxTokens: number;
+  price: {
+    input: number;
+    output: number;
+  };
+  enabled?: boolean;
+  temperature?: number;
+  contextWindow?: number;
+  isDefault?: boolean;
 }
 
 export interface ModelStatus {
@@ -79,13 +78,20 @@ export interface ModelStatus {
 }
 
 // Tool types
+export interface ToolParam {
+  name: string;
+  type: string;
+  required: boolean;
+  description: string;
+}
+
 export interface Tool {
   id: string;
   name: string;
   description: string;
   category: string;
-  tags: string[];
   enabled: boolean;
+  params?: ToolParam[];
 }
 
 // Skill types
@@ -93,8 +99,10 @@ export interface Skill {
   id: string;
   name: string;
   description: string;
-  tags: string[];
   enabled: boolean;
+  category: string;
+  icon?: string;
+  tags?: string[];
 }
 
 // Agent types
@@ -102,8 +110,9 @@ export interface Agent {
   id: string;
   name: string;
   description: string;
-  toolCount: number;
-  isActive: boolean;
+  color: string;
+  active: boolean;
+  state: 'idle' | 'busy' | 'error';
 }
 
 // Template types
@@ -180,8 +189,36 @@ export interface WSMessage {
   token?: string;
 }
 
+// Task types
+export type TaskStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+
+export interface Task {
+  id: string;
+  title: string;
+  description?: string;
+  status: TaskStatus;
+  priority: number;
+  progress: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateTaskInput {
+  title: string;
+  description?: string;
+  priority?: number;
+}
+
+export interface UpdateTaskInput {
+  title?: string;
+  description?: string;
+  status?: TaskStatus;
+  priority?: number;
+  progress?: number;
+}
+
 // Tab types
-export type TabId = 'chat' | 'terminal' | 'files' | 'models' | 'tools' | 'skills' | 'agents' | 'settings' | 'logs';
+export type TabId = 'chat' | 'terminal' | 'files' | 'models' | 'tools' | 'skills' | 'agents' | 'settings' | 'logs' | 'tasks';
 
 export interface Tab {
   id: TabId;
@@ -195,7 +232,7 @@ export interface FileNode {
   id: string;
   name: string;
   path: string;
-  type: 'file' | 'folder';
+  type: 'file' | 'directory';
   children?: FileNode[];
   expanded?: boolean;
 }

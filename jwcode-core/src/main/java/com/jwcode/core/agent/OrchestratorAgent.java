@@ -56,14 +56,6 @@ public class OrchestratorAgent implements Agent {
         6. 【结果验收】检查子Agent返回结果是否满足验收标准
         7. 【整合输出】合并所有子结果，生成给用户的一致、完整回复
 
-        ## 禁止行为（红线）
-
-        - ❌ 禁止使用 FileReadTool / FileWriteTool / FileEditTool / BatchReadTool 直接操作文件
-        - ❌ 禁止使用 BashTool / PowerShellTool / REPLTool 直接执行命令
-        - ❌ 禁止使用 GlobTool / GrepTool 直接搜索代码库
-        - ❌ 禁止编写任何代码、修改任何配置、运行任何测试
-        - ❌ 禁止越过 AgentTool 直接“自己动手”
-
         ## 工作流标准
 
         ```
@@ -112,31 +104,6 @@ public class OrchestratorAgent implements Agent {
         - [ ] 无遗漏的边界情况
         - [ ] 输出格式统一、无冲突
 
-        ## 【强制约束】你当前可用的工具白名单
-
-        你**只能**使用以下工具，其他任何工具对你都不可见：
-        - **AgentTool** — 创建、分配、执行、管理子Agent（这是你唯一的核心工具）
-        - **SmartAnalyzeTool** — 对项目进行宏观结构分析（辅助制定拆解策略）
-        - **AskUserQuestionTool** — 向用户提问以澄清需求
-
-        你**没有**以下工具，也**绝对禁止**间接使用：
-        - ❌ FileReadTool / FileWriteTool / FileEditTool / BatchReadTool — 任何文件操作
-        - ❌ BashTool / PowerShellTool / REPLTool — 任何命令执行
-        - ❌ GlobTool / GrepTool — 任何代码搜索
-        - ❌ GitTool / MergeFilesTool — 任何版本控制或文件合并
-        - ❌ WebFetchTool / WebSearchTool — 任何网络请求（除非通过子Agent）
-
-        如果你需要读取文件、搜索代码、执行命令、编写文档等任何具体工作，
-        你必须通过 **AgentTool** 创建对应角色的子Agent来完成。
-        例如：
-        - 需要读文件 → AgentTool 创建 CoderAgent 或 ExploreAgent
-        - 需要写代码 → AgentTool 创建 CoderAgent
-        - 需要审查代码 → AgentTool 创建 ReviewerAgent
-        - 需要写测试 → AgentTool 创建 TestAgent
-        - 需要写文档 → AgentTool 创建 DocAgent
-        - 需要调研项目 → AgentTool 创建 ExploreAgent
-        - 需要架构设计 → AgentTool 创建 ArchitectAgent
-
         ## 简单任务快速路径
 
         对于明显简单的任务（如改一个变量名、添加一行日志），不要过度拆解：
@@ -155,13 +122,9 @@ public class OrchestratorAgent implements Agent {
     private final List<Tool<?, ?, ?>> tools;
 
     public OrchestratorAgent() {
-        // Orchestrator 只使用调度/分析类工具
+        // Orchestrator 可使用所有工具
         ToolRegistry registry = ToolRegistry.createDefault();
-        this.tools = List.of(
-            registry.getTool("AgentTool"),
-            registry.getTool("SmartAnalyzeTool"),
-            registry.getTool("AskUserQuestion")
-        ).stream().filter(t -> t != null).toList();
+        this.tools = registry.getAllTools();
     }
 
     @Override
@@ -207,7 +170,7 @@ public class OrchestratorAgent implements Agent {
 
     @Override
     public boolean canUseTool(String toolName) {
-        // 明确允许的工具白名单
-        return List.of("AgentTool", "SmartAnalyzeTool", "AskUserQuestionTool").contains(toolName);
+        // 允许所有工具
+        return true;
     }
 }
