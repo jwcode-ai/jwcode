@@ -115,7 +115,7 @@ export function MarkdownRenderer({ content, className = '' }: MarkdownRendererPr
             const code = String(children).replace(/\n$/, '');
             
             // If it's a code block (has language), use custom renderer
-            if (match) {
+            if (match && match[1]) {
               return <CodeBlock language={match[1]} code={code} />;
             }
             

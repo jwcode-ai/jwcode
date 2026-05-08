@@ -135,9 +135,10 @@ export function TerminalView() {
   return (
     <div 
       className={`flex flex-col bg-[#1e1e1e] border-t border-dark-border ${
-        isFullscreen ? 'fixed inset-0 z-50' : 'h-80'
+        isFullscreen ? 'fixed inset-0 z-50' : 'flex-1 min-h-0'
       }`}
     >
+
       {/* Terminal Header */}
       <div className="flex items-center justify-between px-3 py-1.5 bg-[#252526] border-b border-[#3c3c3c]">
         <div className="flex items-center gap-2">

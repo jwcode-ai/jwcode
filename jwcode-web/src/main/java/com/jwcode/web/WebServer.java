@@ -14,7 +14,7 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.Executors;
+import java.util.concurrent.*;
 import java.util.logging.Logger;
 
 /**
@@ -76,7 +76,21 @@ public class WebServer {
         server.createContext("/api/system/status", new SystemStatusHandler());
         server.createContext("/assets/", new StaticAssetHandler());
         
-        server.setExecutor(Executors.newFixedThreadPool(10));
+        // 使用 ThreadPoolExecutor 替代 newFixedThreadPool，支持有界队列和拒绝策略
+        server.setExecutor(new ThreadPoolExecutor(
+            4, 10, 60, TimeUnit.SECONDS,
+            new LinkedBlockingQueue<>(200),
+            new ThreadFactory() {
+                private int count = 0;
+                @Override
+                public Thread newThread(Runnable r) {
+                    Thread t = new Thread(r, "http-worker-" + count++);
+                    t.setDaemon(true);
+                    return t;
+                }
+            },
+            new ThreadPoolExecutor.CallerRunsPolicy()
+        ));
         server.start();
         
         // 启动 WebSocket 服务器（流式响应）
@@ -140,6 +154,7 @@ public class WebServer {
         byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().set("Content-Type", contentType + "; charset=UTF-8");
         exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+        exchange.getResponseHeaders().set("Cache-Control", "no-cache, no-store, must-revalidate");
         exchange.sendResponseHeaders(statusCode, bytes.length);
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(bytes);
@@ -149,11 +164,13 @@ public class WebServer {
     static void sendResponse(HttpExchange exchange, int statusCode, byte[] data, String contentType) throws IOException {
         exchange.getResponseHeaders().set("Content-Type", contentType);
         exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+        exchange.getResponseHeaders().set("Cache-Control", "no-cache, no-store, must-revalidate");
         exchange.sendResponseHeaders(statusCode, data.length);
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(data);
         }
     }
+
     
     /**
      * 静态资源处理器 - 从 classpath 加载前端构建产物 (JS/CSS/图片等)

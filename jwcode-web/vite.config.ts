@@ -1,9 +1,14 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { inspectorServer } from '@react-dev-inspector/vite-plugin'
 import path from 'path'
 
+// 使用环境变量，支持多环境部署
+const backendUrl = process.env.VITE_BACKEND_URL || 'http://localhost:8080'
+const wsUrl = process.env.VITE_WS_URL || 'ws://localhost:8081'
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), inspectorServer()],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
@@ -13,11 +18,11 @@ export default defineConfig({
     port: 3000,
     proxy: {
       '/api': {
-        target: 'http://localhost:8080',
+        target: backendUrl,
         changeOrigin: true,
       },
       '/ws': {
-        target: 'ws://localhost:8081',
+        target: wsUrl,
         ws: true,
       },
     },
@@ -36,5 +41,7 @@ export default defineConfig({
       },
     },
     chunkSizeWarningLimit: 600,
+    // 生产环境不生成 sourcemap，避免暴露源码
+    sourcemap: false,
   },
 })

@@ -2,213 +2,300 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { Message, Step, ToolCall } from '../types';
 
+const MAX_MESSAGES_PER_SESSION = 200;
+const STORAGE_KEY = 'jwcode-chat-store';
+
 interface ChatState {
-  messages: Message[];
-  currentSessionId: string;
-  isGenerating: boolean;
-  hasError: boolean;
-  
-  // Actions
-  addMessage: (message: Message) => void;
-  updateLastMessage: (content: string) => void;
-  appendToLastMessage: (content: string) => void;
-  setThinking: (thinking: string) => void;
-  appendToLastMessageThinking: (chunk: string) => void;
-  addStep: (step: Step) => void;
-  updateStep: (stepId: string, updates: Partial<Step>) => void;
-  addToolCall: (toolCall: ToolCall) => void;
-  updateToolCall: (toolCallId: string, updates: Partial<ToolCall>) => void;
-  appendToLastToolCallArgs: (toolCallId: string, argsPartial: string, index?: number) => void;
-  startGeneration: () => void;
-  endGeneration: (error?: string) => void;
-  clearMessages: () => void;
-  setCurrentSessionId: (sessionId: string) => void;
+  // 多会话消息存储：sessionId → Message[]
+  messagesBySession: Record<string, Message[]>;
+  // 正在生成的会话集合
+  generatingSessions: string[];
+  // 每个会话独立的输入内容
+  sessionInputs: Record<string, string>;
+
+  // Actions — 全部带 sessionId
+  getMessages: (sessionId: string) => Message[];
+  addMessage: (sessionId: string, message: Message) => void;
+  updateLastMessage: (sessionId: string, content: string) => void;
+  appendToLastMessage: (sessionId: string, content: string) => void;
+  setThinking: (sessionId: string, thinking: string) => void;
+  appendToLastMessageThinking: (sessionId: string, chunk: string) => void;
+  addStep: (sessionId: string, step: Step) => void;
+  updateStep: (sessionId: string, stepId: string, updates: Partial<Step> & { id?: string }) => void;
+  addToolCall: (sessionId: string, toolCall: ToolCall) => void;
+  updateToolCall: (sessionId: string, toolCallId: string, updates: Partial<ToolCall> & { id?: string }) => void;
+  appendToLastToolCallArgs: (sessionId: string, toolCallId: string, argsPartial: string, index?: number) => void;
+  startGeneration: (sessionId: string) => void;
+  endGeneration: (sessionId: string, error?: string) => void;
+  clearMessages: (sessionId: string) => void;
+  removeSession: (sessionId: string) => void;
+  setSessionInput: (sessionId: string, input: string) => void;
+  getSessionInput: (sessionId: string) => string;
+  isGenerating: (sessionId: string) => boolean;
 }
 
 export const useChatStore = create<ChatState>()(
   persist(
-    (set) => ({
-      messages: [],
-      currentSessionId: `session-${Date.now()}`,
-      isGenerating: false,
-      hasError: false,
+    (set, get) => ({
+      messagesBySession: {},
+      generatingSessions: [],
+      sessionInputs: {},
 
-      addMessage: (message) =>
-        set((state) => ({
-          messages: [...state.messages, message],
-        })),
+      getMessages: (sessionId) => {
+        return get().messagesBySession[sessionId] || [];
+      },
 
-      updateLastMessage: (content) =>
+      addMessage: (sessionId, message) =>
         set((state) => {
-          const messages = [...state.messages];
-          const lastMessage = messages[messages.length - 1];
-          if (lastMessage && lastMessage.type === 'assistant') {
-            lastMessage.content = content;
-          }
-          return { messages };
+          const messages = state.messagesBySession[sessionId] || [];
+          const updated = [...messages, message].slice(-MAX_MESSAGES_PER_SESSION);
+          return {
+            messagesBySession: {
+              ...state.messagesBySession,
+              [sessionId]: updated,
+            },
+          };
         }),
 
-      appendToLastMessage: (content) =>
+      updateLastMessage: (sessionId, content) =>
         set((state) => {
-          const messages = [...state.messages];
-          const lastMessage = messages[messages.length - 1];
-          if (lastMessage && lastMessage.type === 'assistant') {
-            lastMessage.content += content;
-          }
-          return { messages };
+          const messages = (state.messagesBySession[sessionId] || []).map((msg, index, arr) =>
+            index === arr.length - 1 && msg.type === 'assistant'
+              ? { ...msg, content }
+              : msg
+          );
+          return {
+            messagesBySession: {
+              ...state.messagesBySession,
+              [sessionId]: messages,
+            },
+          };
         }),
 
-      setThinking: (thinking) =>
+      appendToLastMessage: (sessionId, content) =>
         set((state) => {
-          const messages = [...state.messages];
-          const lastMessage = messages[messages.length - 1];
-          if (lastMessage && lastMessage.type === 'assistant') {
-            // 优先写入最后一条 running Step 的 thought
-            const runningStep = lastMessage.steps?.find((s) => s.status === 'running');
-            if (runningStep) {
-              runningStep.thought = thinking;
-            } else {
-              lastMessage.thinking = thinking;
+          const messages = (state.messagesBySession[sessionId] || []).map((msg, index, arr) =>
+            index === arr.length - 1 && msg.type === 'assistant'
+              ? { ...msg, content: msg.content + content }
+              : msg
+          );
+          return {
+            messagesBySession: {
+              ...state.messagesBySession,
+              [sessionId]: messages,
+            },
+          };
+        }),
+
+      setThinking: (sessionId, thinking) =>
+        set((state) => {
+          const messages = (state.messagesBySession[sessionId] || []).map((msg, index, arr) => {
+            if (index !== arr.length - 1 || msg.type !== 'assistant') return msg;
+            const runningStepIndex = msg.steps?.findIndex((s) => s.status === 'running');
+            if (runningStepIndex !== undefined && runningStepIndex !== -1 && msg.steps && msg.steps[runningStepIndex]) {
+              const newSteps = msg.steps.map((s, i) =>
+                i === runningStepIndex ? { ...s, thought: thinking } : s
+              );
+              return { ...msg, steps: newSteps };
             }
-          }
-          return { messages };
+            return { ...msg, thinking };
+          });
+          return {
+            messagesBySession: {
+              ...state.messagesBySession,
+              [sessionId]: messages,
+            },
+          };
         }),
 
-      appendToLastMessageThinking: (chunk) =>
+      appendToLastMessageThinking: (sessionId, chunk) =>
         set((state) => {
-          const messages = [...state.messages];
-          const lastMessage = messages[messages.length - 1];
-          if (lastMessage && lastMessage.type === 'assistant') {
-            const runningStep = lastMessage.steps?.find((s) => s.status === 'running');
-            if (runningStep) {
-              runningStep.thought = (runningStep.thought || '') + chunk;
-            } else if (lastMessage.steps && lastMessage.steps.length > 0) {
-              // 没有 running step 时，追加到最后一个 step
-              const lastStep = lastMessage.steps[lastMessage.steps.length - 1];
-              lastStep.thought = (lastStep.thought || '') + chunk;
-            } else {
-              lastMessage.thinking = (lastMessage.thinking || '') + chunk;
+          const messages = (state.messagesBySession[sessionId] || []).map((msg, index, arr) => {
+            if (index !== arr.length - 1 || msg.type !== 'assistant') return msg;
+
+            const runningStepIndex = msg.steps?.findIndex((s) => s.status === 'running');
+            if (runningStepIndex !== undefined && runningStepIndex !== -1 && msg.steps && msg.steps[runningStepIndex]) {
+              const newSteps = msg.steps.map((s, i) =>
+                i === runningStepIndex
+                  ? { ...s, thought: (s.thought || '') + chunk }
+                  : s
+              );
+              return { ...msg, steps: newSteps };
             }
-          }
-          return { messages };
+
+            if (msg.steps && msg.steps.length > 0) {
+              const lastStepIndex = msg.steps.length - 1;
+              const newSteps = msg.steps.map((s, i) =>
+                i === lastStepIndex
+                  ? { ...s, thought: (s.thought || '') + chunk }
+                  : s
+              );
+              return { ...msg, steps: newSteps };
+            }
+
+            return { ...msg, thinking: (msg.thinking || '') + chunk };
+          });
+          return {
+            messagesBySession: {
+              ...state.messagesBySession,
+              [sessionId]: messages,
+            },
+          };
         }),
 
-      addStep: (step) =>
+      addStep: (sessionId, step) =>
         set((state) => {
-          const messages = [...state.messages];
-          const lastMessage = messages[messages.length - 1];
-          if (lastMessage && lastMessage.type === 'assistant') {
-            // 将未被任何 step 引用的 toolCalls 转移到新 step
-            const orphanedToolCalls = lastMessage.toolCalls?.filter(tc =>
-              !lastMessage.steps?.some(s => s.toolCalls?.some(stc => stc.id === tc.id))
+          const messages = (state.messagesBySession[sessionId] || []).map((msg, index, arr) => {
+            if (index !== arr.length - 1 || msg.type !== 'assistant') return msg;
+
+            const orphanedToolCalls = msg.toolCalls?.filter(tc =>
+              !msg.steps?.some(s => s.toolCalls?.some(stc => stc.id === tc.id))
             );
 
-            const newStep = { ...step };
+            const newStep: Step = { ...step };
             if (orphanedToolCalls?.length) {
               newStep.toolCalls = [...(newStep.toolCalls || []), ...orphanedToolCalls];
-              lastMessage.toolCalls = lastMessage.toolCalls?.filter(tc =>
-                !orphanedToolCalls.some(otc => otc.id === tc.id)
-              );
             }
 
-            // 将孤儿的 thinking 转移到新 step 的 thought
-            if (lastMessage.thinking && lastMessage.thinking.trim().length > 0) {
-              newStep.thought = (newStep.thought || '') + lastMessage.thinking;
-              lastMessage.thinking = '';
+            let remainingThinking = msg.thinking || '';
+            if (remainingThinking.trim().length > 0) {
+              newStep.thought = (newStep.thought || '') + remainingThinking;
+              remainingThinking = '';
             }
 
-            lastMessage.steps = [...(lastMessage.steps || []), newStep];
-          }
-          return { messages };
-        }),
-
-      updateStep: (stepId, updates) =>
-        set((state) => {
-          const messages = [...state.messages];
-          const lastMessage = messages[messages.length - 1];
-          if (lastMessage && lastMessage.steps) {
-            const stepIndex = lastMessage.steps.findIndex((s) => s.id === stepId);
-            if (stepIndex !== -1) {
-              lastMessage.steps[stepIndex] = { ...lastMessage.steps[stepIndex], ...updates };
-            }
-          }
-          return { messages };
-        }),
-
-      addToolCall: (toolCall) =>
-        set((state) => {
-          const messages = [...state.messages];
-          const lastMessage = messages[messages.length - 1];
-          if (lastMessage && lastMessage.type === 'assistant') {
-            // 优先写入最后一条 running Step 的 toolCalls
-            const runningStep = lastMessage.steps?.find((s) => s.status === 'running');
-            if (runningStep) {
-              runningStep.toolCalls = [...(runningStep.toolCalls || []), toolCall];
-            } else if (lastMessage.steps && lastMessage.steps.length > 0) {
-              // 没有 running step 时，追加到最后一个 step
-              const lastStep = lastMessage.steps[lastMessage.steps.length - 1];
-              lastStep.toolCalls = [...(lastStep.toolCalls || []), toolCall];
-            } else {
-              lastMessage.toolCalls = [...(lastMessage.toolCalls || []), toolCall];
-            }
-          }
-          return { messages };
-        }),
-
-      updateToolCall: (toolCallId, updates) =>
-        set((state) => {
-          const messages = [...state.messages];
-          const lastMessage = messages[messages.length - 1];
-          if (!lastMessage || lastMessage.type !== 'assistant') return { messages };
-
-          // 辅助函数：更新 toolCalls 数组中的指定 toolCall
-          const doUpdate = (toolCalls: ToolCall[] | undefined): boolean => {
-            if (!toolCalls) return false;
-            const toolCallIndex = toolCalls.findIndex((tc) => tc.id === toolCallId);
-            if (toolCallIndex === -1) return false;
-            toolCalls[toolCallIndex] = {
-              ...toolCalls[toolCallIndex],
-              ...updates,
+            return {
+              ...msg,
+              thinking: remainingThinking,
+              toolCalls: orphanedToolCalls?.length
+                ? msg.toolCalls?.filter(tc => !orphanedToolCalls.some(otc => otc.id === tc.id))
+                : msg.toolCalls,
+              steps: [...(msg.steps || []), newStep],
             };
-            return true;
+          });
+          return {
+            messagesBySession: {
+              ...state.messagesBySession,
+              [sessionId]: messages,
+            },
+          };
+        }),
+
+      updateStep: (sessionId, stepId, updates) =>
+        set((state) => {
+          const messages = (state.messagesBySession[sessionId] || []).map((msg, index, arr) => {
+            if (index !== arr.length - 1 || !msg.steps) return msg;
+            const stepIndex = msg.steps.findIndex((s) => s.id === stepId);
+            if (stepIndex === -1) return msg;
+            const newSteps = msg.steps.map((s, i) =>
+              i === stepIndex ? { ...s, ...(updates as Partial<Step>) } as Step : s
+            );
+            return { ...msg, steps: newSteps };
+          });
+          return {
+            messagesBySession: {
+              ...state.messagesBySession,
+              [sessionId]: messages,
+            },
+          };
+        }),
+
+      addToolCall: (sessionId, toolCall) =>
+        set((state) => {
+          const messages = (state.messagesBySession[sessionId] || []).map((msg, index, arr) => {
+            if (index !== arr.length - 1 || msg.type !== 'assistant') return msg;
+
+            const runningStepIndex = msg.steps?.findIndex((s) => s.status === 'running');
+            if (runningStepIndex !== undefined && runningStepIndex !== -1 && msg.steps && msg.steps[runningStepIndex]) {
+              const newSteps = msg.steps.map((s, i) =>
+                i === runningStepIndex
+                  ? { ...s, toolCalls: [...(s.toolCalls || []), toolCall] }
+                  : s
+              );
+              return { ...msg, steps: newSteps };
+            }
+
+            if (msg.steps && msg.steps.length > 0) {
+              const lastStepIndex = msg.steps.length - 1;
+              const newSteps = msg.steps.map((s, i) =>
+                i === lastStepIndex
+                  ? { ...s, toolCalls: [...(s.toolCalls || []), toolCall] }
+                  : s
+              );
+              return { ...msg, steps: newSteps };
+            }
+
+            return { ...msg, toolCalls: [...(msg.toolCalls || []), toolCall] };
+          });
+          return {
+            messagesBySession: {
+              ...state.messagesBySession,
+              [sessionId]: messages,
+            },
+          };
+        }),
+
+      updateToolCall: (sessionId, toolCallId, updates) =>
+        set((state) => {
+          const updateInList = (toolCalls: ToolCall[] | undefined): ToolCall[] | null => {
+            if (!toolCalls) return null;
+            const idx = toolCalls.findIndex((tc) => tc.id === toolCallId);
+            if (idx === -1) return null;
+            return toolCalls.map((tc, i) =>
+              i === idx ? { ...tc, ...(updates as Partial<ToolCall>) } as ToolCall : tc
+            );
           };
 
-          // 优先在 running Step 的 toolCalls 中查找
-          const runningStep = lastMessage.steps?.find((s) => s.status === 'running');
-          if (runningStep && doUpdate(runningStep.toolCalls)) {
-            return { messages };
-          }
+          const messages = (state.messagesBySession[sessionId] || []).map((msg, index, arr) => {
+            if (index !== arr.length - 1 || msg.type !== 'assistant') return msg;
 
-          // 在所有 step 的 toolCalls 中查找（包括已完成的 step）
-          for (const step of lastMessage.steps || []) {
-            if (doUpdate(step.toolCalls)) {
-              return { messages };
+            // Try running step first
+            const runningStepIndex = msg.steps?.findIndex((s) => s.status === 'running');
+            if (runningStepIndex !== undefined && runningStepIndex !== -1 && msg.steps && msg.steps[runningStepIndex]) {
+              const updatedToolCalls = updateInList(msg.steps[runningStepIndex]?.toolCalls);
+              if (updatedToolCalls) {
+                const newSteps = msg.steps.map((s, i) =>
+                  i === runningStepIndex ? { ...s, toolCalls: updatedToolCalls } : s
+                );
+                return { ...msg, steps: newSteps };
+              }
             }
-          }
 
-          // Fallback 到 message.toolCalls
-          if (doUpdate(lastMessage.toolCalls)) {
-            return { messages };
-          }
+            // Try all steps
+            if (msg.steps) {
+              let found = false;
+              const newSteps = msg.steps.map((s) => {
+                if (found) return s;
+                const updated = updateInList(s.toolCalls);
+                if (updated) {
+                  found = true;
+                  return { ...s, toolCalls: updated };
+                }
+                return s;
+              });
+              if (found) return { ...msg, steps: newSteps };
+            }
 
-          return { messages };
+            // Try message-level toolCalls
+            const updatedMsgToolCalls = updateInList(msg.toolCalls);
+            if (updatedMsgToolCalls) {
+              return { ...msg, toolCalls: updatedMsgToolCalls };
+            }
+
+            return msg;
+          });
+
+          return {
+            messagesBySession: {
+              ...state.messagesBySession,
+              [sessionId]: messages,
+            },
+          };
         }),
 
-      appendToLastToolCallArgs: (toolCallId, argsPartial, index) =>
+      appendToLastToolCallArgs: (sessionId, toolCallId, argsPartial, index) =>
         set((state) => {
-          const messages = [...state.messages];
-          const lastMessage = messages[messages.length - 1];
-          if (!lastMessage || lastMessage.type !== 'assistant') return { messages };
-
-          // 辅助函数：更新 toolCalls 数组中的指定 toolCall
-          const updateToolCall = (toolCalls: ToolCall[] | undefined): boolean => {
-            if (!toolCalls) return false;
-            const toolCallIndex = toolCalls.findIndex((tc) =>
-              (index !== undefined && tc.index === index) || tc.id === toolCallId
-            );
-            if (toolCallIndex === -1) return false;
-            const existing = toolCalls[toolCallIndex];
-            let mergedArgs = existing.args;
+          const mergeArgs = (existing: ToolCall): ToolCall => {
+            let mergedArgs: string | Record<string, unknown> = existing.args;
             if (typeof mergedArgs === 'string') {
               mergedArgs = mergedArgs + argsPartial;
             } else if (typeof mergedArgs === 'object' && mergedArgs !== null) {
@@ -221,55 +308,115 @@ export const useChatStore = create<ChatState>()(
             } else {
               mergedArgs = argsPartial;
             }
-            toolCalls[toolCallIndex] = { ...existing, args: mergedArgs };
-            return true;
+            return { ...existing, args: mergedArgs } as ToolCall;
           };
 
-          // 优先在 running Step 的 toolCalls 中查找
-          const runningStep = lastMessage.steps?.find((s) => s.status === 'running');
-          if (runningStep && updateToolCall(runningStep.toolCalls)) {
-            return { messages };
-          }
+          const updateInList = (toolCalls: ToolCall[] | undefined): ToolCall[] | null => {
+            if (!toolCalls) return null;
+            const idx = toolCalls.findIndex((tc) =>
+              (index !== undefined && tc.index === index) || tc.id === toolCallId
+            );
+            if (idx === -1) return null;
+            return toolCalls.map((tc, i) => i === idx ? mergeArgs(tc) : tc);
+          };
 
-          // 在所有 step 的 toolCalls 中查找（包括已完成的 step）
-          for (const step of lastMessage.steps || []) {
-            if (updateToolCall(step.toolCalls)) {
-              return { messages };
+          const messages = (state.messagesBySession[sessionId] || []).map((msg, i, arr) => {
+            if (i !== arr.length - 1 || msg.type !== 'assistant') return msg;
+
+            // Try running step first
+            const runningStepIndex = msg.steps?.findIndex((s) => s.status === 'running');
+            if (runningStepIndex !== undefined && runningStepIndex !== -1 && msg.steps && msg.steps[runningStepIndex]) {
+              const updated = updateInList(msg.steps[runningStepIndex]?.toolCalls);
+              if (updated) {
+                const newSteps = msg.steps.map((s, si) =>
+                  si === runningStepIndex ? { ...s, toolCalls: updated } : s
+                );
+                return { ...msg, steps: newSteps };
+              }
             }
-          }
 
-          // Fallback 到 message.toolCalls
-          if (updateToolCall(lastMessage.toolCalls)) {
-            return { messages };
-          }
+            // Try all steps
+            if (msg.steps) {
+              let found = false;
+              const newSteps = msg.steps.map((s) => {
+                if (found) return s;
+                const updated = updateInList(s.toolCalls);
+                if (updated) {
+                  found = true;
+                  return { ...s, toolCalls: updated };
+                }
+                return s;
+              });
+              if (found) return { ...msg, steps: newSteps };
+            }
 
-          return { messages };
+            // Try message-level toolCalls
+            const updatedMsgToolCalls = updateInList(msg.toolCalls);
+            if (updatedMsgToolCalls) {
+              return { ...msg, toolCalls: updatedMsgToolCalls };
+            }
+
+            return msg;
+          });
+
+          return {
+            messagesBySession: {
+              ...state.messagesBySession,
+              [sessionId]: messages,
+            },
+          };
         }),
 
-      startGeneration: () =>
-        set({
-          isGenerating: true,
-          hasError: false,
+      startGeneration: (sessionId) =>
+        set((state) => ({
+          generatingSessions: state.generatingSessions.includes(sessionId)
+            ? state.generatingSessions
+            : [...state.generatingSessions, sessionId],
+        })),
+
+      endGeneration: (sessionId, _error) =>
+        set((state) => ({
+          generatingSessions: state.generatingSessions.filter((s) => s !== sessionId),
+        })),
+
+      clearMessages: (sessionId) =>
+        set((state) => {
+          const { [sessionId]: _, ...rest } = state.messagesBySession;
+          return { messagesBySession: rest };
         }),
 
-      endGeneration: () =>
-        set({
-          isGenerating: false,
-          hasError: false,
+      removeSession: (sessionId) =>
+        set((state) => {
+          const { [sessionId]: _, ...restMessages } = state.messagesBySession;
+          const { [sessionId]: _input, ...restInputs } = state.sessionInputs;
+          return {
+            messagesBySession: restMessages,
+            sessionInputs: restInputs,
+            generatingSessions: state.generatingSessions.filter((s) => s !== sessionId),
+          };
         }),
 
-      clearMessages: () =>
-        set({
-          messages: [],
-        }),
+      setSessionInput: (sessionId, input) =>
+        set((state) => ({
+          sessionInputs: {
+            ...state.sessionInputs,
+            [sessionId]: input,
+          },
+        })),
 
-      setCurrentSessionId: (sessionId) =>
-        set({ currentSessionId: sessionId }),
+      getSessionInput: (sessionId) => {
+        return get().sessionInputs[sessionId] || '';
+      },
+
+      isGenerating: (sessionId) => {
+        return get().generatingSessions.includes(sessionId);
+      },
     }),
     {
-      name: 'jwcode-chat-storage',
+      name: STORAGE_KEY,
       partialize: (state) => ({
-        currentSessionId: state.currentSessionId,
+        messagesBySession: state.messagesBySession,
+        sessionInputs: state.sessionInputs,
       }),
     }
   )

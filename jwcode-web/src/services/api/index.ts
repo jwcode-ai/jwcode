@@ -2,7 +2,7 @@ import { apiClient } from './client';
 import type { ApiResponse } from './client';
 import type {
   Model, Tool, Skill, Agent, FileNode, Session,
-  Task, TaskStatus, CreateTaskInput, UpdateTaskInput
+  Task, CreateTaskInput, UpdateTaskInput
 } from '../../types';
 
 export { apiClient, type ApiResponse };

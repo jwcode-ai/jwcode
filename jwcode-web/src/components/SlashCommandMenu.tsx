@@ -44,15 +44,18 @@ export const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
           }`}
         >
           <span className="text-lg shrink-0">{cmd.icon}</span>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-dark-text">/{cmd.name}</span>
-              {cmd.args && (
-                <span className="text-xs text-dark-muted">{cmd.args}</span>
-              )}
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-dark-text">/{cmd.name}</span>
+                {cmd.args && (
+                  <span className="text-xs text-dark-muted">{cmd.args}</span>
+                )}
+                {!cmd.local && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent-blue/20 text-accent-blue shrink-0">后端</span>
+                )}
+              </div>
+              <div className="text-xs text-dark-muted truncate">{cmd.description}</div>
             </div>
-            <div className="text-xs text-dark-muted truncate">{cmd.description}</div>
-          </div>
         </button>
       ))}
     </div>

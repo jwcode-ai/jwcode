@@ -69,10 +69,10 @@ public class OpenAILLMService implements LLMService {
             }
             
             String url = normalizeUrl(config.getBaseUrl());
-            log.fine("[OpenAI] ==========================================");
-            log.fine("[OpenAI] Request: POST " + url);
-            log.fine("[OpenAI] Model: " + config.getModel());
-            log.fine("[OpenAI] Message count: " + messages.size());
+            log.info("[OpenAI] ==========================================");
+            log.info("[OpenAI] Request: POST " + url);
+            log.info("[OpenAI] Model: " + config.getModel());
+            log.info("[OpenAI] Message count: " + messages.size());
             
             int maxRetries = 3;  // 增加重试次数到 3
             int attempt = 0;
@@ -84,10 +84,10 @@ public class OpenAILLMService implements LLMService {
                     ObjectNode requestBody = buildRequestBody(messages, tools);
                     String requestJson = mapper.writeValueAsString(requestBody);
                     
-                    // 打印请求参数（DEBUG 级别，避免污染 console）
-                    log.fine("[OpenAI] ---------- Request Body ----------");
-                    log.fine("[OpenAI] " + requestJson);
-                    log.fine("[OpenAI] ---------- End Request Body ----------");
+                    // 打印请求参数（INFO 级别，开启 debug 模式）
+                    log.info("[OpenAI] ---------- Request Body ----------");
+                    log.info("[OpenAI] " + requestJson);
+                    log.info("[OpenAI] ---------- End Request Body ----------");
                     
                     // 发送请求
                     HttpRequest request = HttpRequest.newBuilder()
@@ -245,9 +245,10 @@ public class OpenAILLMService implements LLMService {
             }
             
             String url = normalizeUrl(config.getBaseUrl());
-            log.fine("[OpenAI Stream] Request: POST " + url);
-            log.fine("[OpenAI Stream] Model: " + config.getModel());
-            log.fine("[OpenAI Stream] Message count: " + messages.size());
+            log.info("[OpenAI Stream] ==========================================");
+            log.info("[OpenAI Stream] Request: POST " + url);
+            log.info("[OpenAI Stream] Model: " + config.getModel());
+            log.info("[OpenAI Stream] Message count: " + messages.size());
             
             int maxRetries = 3;
             int attempt = 0;
@@ -260,10 +261,10 @@ public class OpenAILLMService implements LLMService {
                     requestBody.put("stream", true);
                     String requestJson = mapper.writeValueAsString(requestBody);
                     
-                    // 打印请求参数（DEBUG 级别，避免污染 console）
-                    log.fine("[OpenAI Stream] ---------- Request Body ----------");
-                    log.fine("[OpenAI Stream] " + requestJson);
-                    log.fine("[OpenAI Stream] ---------- End Request Body ----------");
+                    // 打印请求参数（INFO 级别，开启 debug 模式）
+                    log.info("[OpenAI Stream] ---------- Request Body ----------");
+                    log.info("[OpenAI Stream] " + requestJson);
+                    log.info("[OpenAI Stream] ---------- End Request Body ----------");
                     
                     // 发送请求
                     HttpRequest request = HttpRequest.newBuilder()
@@ -458,7 +459,7 @@ public class OpenAILLMService implements LLMService {
                         }
                         
                     } catch (Exception e) {
-                        log.fine("[OpenAI Stream] Failed to parse event: " + e.getMessage());
+                        log.info("[OpenAI Stream] Failed to parse event: " + e.getMessage());
                     }
                 }
             }
@@ -475,8 +476,8 @@ public class OpenAILLMService implements LLMService {
             }
         }
         
-        log.fine("[OpenAI Stream] Completed. Content length: " + contentBuffer.length());
-        log.fine("[OpenAI Stream] Finish reason: " + finishReason);
+        log.info("[OpenAI Stream] Completed. Content length: " + contentBuffer.length());
+        log.info("[OpenAI Stream] Finish reason: " + finishReason);
         
         // 构建响应
         LLMResponse.Builder builder = LLMResponse.builder()
@@ -871,7 +872,7 @@ public class OpenAILLMService implements LLMService {
                     if (msg.getRole() == LLMMessage.Role.TOOL) {
                         String toolCallId = msg.getToolCallId();
                         if (toolCallId == null || !validToolCallIds.contains(toolCallId)) {
-                            log.fine("[OpenAI] Skipping orphaned TOOL in filter: " + toolCallId);
+                            log.info("[OpenAI] Skipping orphaned TOOL in filter: " + toolCallId);
                             continue;
                         }
                     }
@@ -1103,7 +1104,7 @@ public class OpenAILLMService implements LLMService {
             url = url.substring(0, url.length() - 1);
         }
         
-        log.fine("[OpenAILLMService] Normalizing URL: " + url);
+        log.info("[OpenAILLMService] Normalizing URL: " + url);
         
         if (url.contains("/chat/completions")) {
             return url;

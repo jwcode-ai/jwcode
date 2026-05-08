@@ -1,6 +1,7 @@
 package com.jwcode.core.llm;
 
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.logging.Logger;
 
 /**
  * Token 预算 — 替代粗暴的 {@code maxIterations}，让 AI 自主规划资源。
@@ -10,6 +11,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * <p>预算紧张时，自动生成建议注入到 system prompt，引导 AI 高效使用上下文。</p>
  */
 public class TokenBudget {
+
+    private static final Logger logger = Logger.getLogger(TokenBudget.class.getName());
 
     private final long totalBudget;
     private final AtomicLong usedPromptTokens = new AtomicLong(0);
@@ -54,6 +57,35 @@ public class TokenBudget {
      */
     public void release(long tokens) {
         reservedTokens.updateAndGet(current -> Math.max(0, current - tokens));
+    }
+
+    /**
+     * 释放指定数量的 token（压缩后调用，将释放的 token 归还到预算池）
+     * 
+     * <p>核心逻辑：按 prompt/completion 比例分摊释放。
+     * 同时重置告警阈值，允许重新触发分级告警。</p>
+     *
+     * @param tokens 要释放的 token 数量
+     */
+    public void releaseTokens(long tokens) {
+        if (tokens <= 0) return;
+        long totalUsed = getUsedTotal();
+        if (totalUsed <= 0) return;
+        
+        // 按 prompt/completion 比例分摊释放
+        long promptUsed = usedPromptTokens.get();
+        long completionUsed = usedCompletionTokens.get();
+        long promptToRelease = Math.min(tokens * promptUsed / totalUsed, promptUsed);
+        long completionToRelease = Math.min(tokens - promptToRelease, completionUsed);
+        
+        usedPromptTokens.addAndGet(-promptToRelease);
+        usedCompletionTokens.addAndGet(-completionToRelease);
+        
+        // 重置告警阈值，允许重新触发分级告警
+        lastAdvisedRatio = 0.0;
+        
+        logger.fine("[TokenBudget] Released " + tokens + " tokens (prompt=" + promptToRelease 
+            + ", completion=" + completionToRelease + "), remaining=" + getRemaining());
     }
 
     /**

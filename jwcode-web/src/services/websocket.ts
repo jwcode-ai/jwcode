@@ -12,9 +12,7 @@ class WebSocketService {
   private errorHandlers: Set<ConnectionHandler> = new Set();
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
-  private reconnectDelay = 3000;
   private isManualClose = false;
-  private token: string | null = null;
   private authenticated = false;
   private sessionId: string | null = null; // 当前会话ID，用于重连恢复
   
@@ -43,7 +41,7 @@ class WebSocketService {
   }
 
   connect(): void {
-    if (this.ws?.readyState === WebSocket.OPEN) {
+    if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) {
       return;
     }
 
@@ -183,7 +181,6 @@ class WebSocketService {
   }
 
   setToken(token: string): void {
-    this.token = token;
     // 保存到localStorage
     localStorage.setItem('auth_token', token);
   }

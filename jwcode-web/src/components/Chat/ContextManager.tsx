@@ -1,11 +1,13 @@
 import { useCallback, useState } from 'react';
 import { useTokenStore } from '../../stores/tokenStore';
 import { useChatStore } from '../../stores/chatStore';
-import { Trash2, Info, Sliders, ChevronDown, ChevronUp, Gauge, Zap, Scissors } from 'lucide-react';
+import { Trash2, ChevronDown, ChevronUp, Gauge, Scissors } from 'lucide-react';
 
 export function ContextManager() {
-  const { currentUsage, maxContextTokens, showTokenInfo, setShowTokenInfo, pruneContext, resetUsage } = useTokenStore();
-  const { messages } = useChatStore();
+  const { currentUsage, maxContextTokens, showTokenInfo, setShowTokenInfo, pruneContext } = useTokenStore();
+  const messagesBySession = useChatStore((s) => s.messagesBySession);
+  // 使用当前激活会话的消息
+  const messages = Object.values(messagesBySession).flat();
   const [expanded, setExpanded] = useState(false);
   const [pruneRatio, setPruneRatio] = useState(0.5);
 
@@ -27,13 +29,10 @@ export function ContextManager() {
 
   const handlePrune = useCallback(() => {
     const result = pruneContext(pruneRatio);
-    // Also clear some messages from the chat store
-    if (result.cutMessages > 0 && messages.length > result.cutMessages + 2) {
-      const keepMessages = messages.slice(0, 1); // Keep system message
-      const recentMessages = messages.slice(-Math.max(2, messages.length - result.cutMessages));
-      useChatStore.getState().setMessages([...keepMessages, ...recentMessages]);
-    }
-  }, [pruneRatio, pruneContext, messages]);
+    // ContextManager 不再直接操作 chatStore 的消息
+    // 裁剪由 tokenStore 的 pruneContext 处理
+    console.log(`[ContextManager] Pruned ${result.cutMessages} messages, recovered ${result.recoveredTokens} tokens`);
+  }, [pruneRatio, pruneContext]);
 
   if (!showTokenInfo) {
     // Mini indicator bar
@@ -91,7 +90,7 @@ export function ContextManager() {
             </div>
             <div className="bg-dark-bg rounded p-2 text-center">
               <div className="text-[10px] text-dark-muted">总计</div>
-              <div className="text-sm font-mono" className={getStatusColor()}>
+              <div className={`text-sm font-mono ${getStatusColor()}`}>
                 {currentUsage.totalTokens.toLocaleString()}
               </div>
             </div>

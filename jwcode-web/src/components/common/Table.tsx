@@ -53,19 +53,17 @@ export function Table<T extends { id?: string }>({
         <tbody className="divide-y divide-dark-border">
           {loading ? (
             // 加载状态
-            columns.map((col, i) => (
-              <tr key={i}>
-                <td colSpan={columns.length} className="px-4 py-8">
-                  <div className="flex items-center justify-center gap-2 text-dark-muted">
-                    <div className="w-4 h-4 border-2 border-dark-border border-t-accent-blue rounded-full animate-spin" />
-                    <span>加载中...</span>
-                  </div>
-                </td>
-              </tr>
-            ))
+            <tr key="loading">
+              <td colSpan={columns.length} className="px-4 py-8">
+                <div className="flex items-center justify-center gap-2 text-dark-muted">
+                  <div className="w-4 h-4 border-2 border-dark-border border-t-accent-blue rounded-full animate-spin" />
+                  <span>加载中...</span>
+                </div>
+              </td>
+            </tr>
           ) : data.length === 0 ? (
             // 空状态
-            <tr>
+            <tr key="empty">
               <td colSpan={columns.length} className="px-4 py-8 text-center text-dark-muted">
                 {emptyText}
               </td>
@@ -147,11 +145,3 @@ export function DataTable<T extends { id?: string }>({
     </div>
   );
 }
-
-// 使用示例:
-// const columns = [
-//   { key: 'name', title: '名称' },
-//   { key: 'status', title: '状态', render: (v) => <Badge>{v}</Badge> },
-//   { key: 'actions', title: '操作', render: (_, row) => <button>编辑</button> },
-// ];
-// <Table columns={columns} data={users} />;

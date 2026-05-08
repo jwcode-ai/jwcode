@@ -1,5 +1,8 @@
 import { useCallback, useMemo, useState, useRef, useEffect } from 'react';
 import { TabId } from '../types';
+import { useCommandStore, BackendCommand } from '../stores/commandStore';
+import wsService from '../services/websocket';
+import { useSessionStore } from '../stores/sessionStore';
 
 export interface SlashCommand {
   id: string;
@@ -7,11 +10,12 @@ export interface SlashCommand {
   description: string;
   args?: string;
   icon: string;
+  /** true = 本地执行, false = 发送到后端执行 */
+  local: boolean;
   action: (args: string) => { success: boolean; message?: string };
 }
 
 export interface UseSlashCommandsOptions {
-  activeTab: TabId;
   setActiveTab: (tab: TabId) => void;
   createNewSession: () => void;
   clearMessages: () => void;
@@ -23,7 +27,6 @@ export interface UseSlashCommandsOptions {
 
 export function useSlashCommands(options: UseSlashCommandsOptions) {
   const {
-    activeTab,
     setActiveTab,
     createNewSession,
     clearMessages,
@@ -32,6 +35,9 @@ export function useSlashCommands(options: UseSlashCommandsOptions) {
     setLogs,
     setUnreadLogs,
   } = options;
+
+  // 从 store 获取后端命令
+  const backendCommands = useCommandStore((s) => s.backendCommands);
 
   const [isOpen, setIsOpen] = useState(false);
   const [filter, setFilter] = useState('');
@@ -45,6 +51,7 @@ export function useSlashCommands(options: UseSlashCommandsOptions) {
       name: 'chat',
       description: '切换到对话面板',
       icon: '💬',
+      local: true,
       action: () => {
         setActiveTab('chat');
         return { success: true, message: '已切换到对话面板' };
@@ -55,6 +62,7 @@ export function useSlashCommands(options: UseSlashCommandsOptions) {
       name: 'terminal',
       description: '切换到终端面板',
       icon: '💻',
+      local: true,
       action: () => {
         setActiveTab('terminal');
         return { success: true, message: '已切换到终端面板' };
@@ -65,6 +73,7 @@ export function useSlashCommands(options: UseSlashCommandsOptions) {
       name: 'files',
       description: '切换到文件面板',
       icon: '📁',
+      local: true,
       action: () => {
         setActiveTab('files');
         return { success: true, message: '已切换到文件面板' };
@@ -75,6 +84,7 @@ export function useSlashCommands(options: UseSlashCommandsOptions) {
       name: 'models',
       description: '切换到模型面板',
       icon: '🧠',
+      local: true,
       action: () => {
         setActiveTab('models');
         return { success: true, message: '已切换到模型面板' };
@@ -85,6 +95,7 @@ export function useSlashCommands(options: UseSlashCommandsOptions) {
       name: 'tools',
       description: '切换到工具面板',
       icon: '🔧',
+      local: true,
       action: () => {
         setActiveTab('tools');
         return { success: true, message: '已切换到工具面板' };
@@ -95,6 +106,7 @@ export function useSlashCommands(options: UseSlashCommandsOptions) {
       name: 'skills',
       description: '切换到技能面板',
       icon: '🎯',
+      local: true,
       action: () => {
         setActiveTab('skills');
         return { success: true, message: '已切换到技能面板' };
@@ -105,6 +117,7 @@ export function useSlashCommands(options: UseSlashCommandsOptions) {
       name: 'agents',
       description: '切换到 Agents 面板',
       icon: '👥',
+      local: true,
       action: () => {
         setActiveTab('agents');
         return { success: true, message: '已切换到 Agents 面板' };
@@ -115,6 +128,7 @@ export function useSlashCommands(options: UseSlashCommandsOptions) {
       name: 'tasks',
       description: '切换到任务面板',
       icon: '📋',
+      local: true,
       action: () => {
         setActiveTab('tasks');
         return { success: true, message: '已切换到任务面板' };
@@ -125,6 +139,7 @@ export function useSlashCommands(options: UseSlashCommandsOptions) {
       name: 'settings',
       description: '切换到设置面板',
       icon: '⚙️',
+      local: true,
       action: () => {
         setActiveTab('settings');
         return { success: true, message: '已切换到设置面板' };
@@ -135,6 +150,7 @@ export function useSlashCommands(options: UseSlashCommandsOptions) {
       name: 'logs',
       description: '切换到日志面板',
       icon: '📜',
+      local: true,
       action: () => {
         setActiveTab('logs');
         setUnreadLogs(0);
@@ -147,6 +163,7 @@ export function useSlashCommands(options: UseSlashCommandsOptions) {
       name: 'new',
       description: '创建新会话',
       icon: '✨',
+      local: true,
       action: () => {
         createNewSession();
         return { success: true, message: '新会话已创建' };
@@ -157,6 +174,7 @@ export function useSlashCommands(options: UseSlashCommandsOptions) {
       name: 'clear',
       description: '清空当前会话消息',
       icon: '🗑️',
+      local: true,
       action: () => {
         clearMessages();
         return { success: true, message: '消息已清空' };
@@ -168,6 +186,7 @@ export function useSlashCommands(options: UseSlashCommandsOptions) {
       description: '切换主题 (dark/light/auto)',
       args: '<dark|light|auto>',
       icon: '🎨',
+      local: true,
       action: (args) => {
         const theme = args.trim().toLowerCase() as 'dark' | 'light' | 'auto';
         if (!theme || !['dark', 'light', 'auto'].includes(theme)) {
@@ -182,6 +201,7 @@ export function useSlashCommands(options: UseSlashCommandsOptions) {
       name: 'terminal-toggle',
       description: '切换底部终端面板显示',
       icon: '🔲',
+      local: true,
       action: () => {
         toggleTerminal();
         return { success: true, message: '终端面板已切换' };
@@ -192,6 +212,7 @@ export function useSlashCommands(options: UseSlashCommandsOptions) {
       name: 'clear-logs',
       description: '清空日志',
       icon: '📭',
+      local: true,
       action: () => {
         setLogs([]);
         setUnreadLogs(0);
@@ -203,21 +224,52 @@ export function useSlashCommands(options: UseSlashCommandsOptions) {
       name: 'help',
       description: '显示所有快捷命令',
       icon: '❓',
+      local: true,
       action: () => {
         return { success: true, message: '' };
       },
     },
   ], [setActiveTab, createNewSession, clearMessages, setTheme, toggleTerminal, setLogs, setUnreadLogs]);
 
+  // 将后端命令转换为 SlashCommand 格式
+  const backendSlashCommands: SlashCommand[] = useMemo(() => {
+    return backendCommands.map((bc: BackendCommand) => ({
+      id: `backend-${bc.name}`,
+      name: bc.name,
+      description: bc.description || bc.usage || '后端命令',
+      icon: '🔌',
+      local: false,
+      action: (args: string) => {
+        // 后端命令通过 WebSocket 发送到后端执行
+        const sessionId = useSessionStore.getState().activeSessionId;
+        if (sessionId) {
+          wsService.setSessionId(sessionId);
+          wsService.send({
+            type: 'chat',
+            sessionId,
+            message: `/${bc.name}${args ? ' ' + args : ''}`,
+          });
+          return { success: true, message: `已发送命令 /${bc.name}` };
+        }
+        return { success: false, message: '无活跃会话' };
+      },
+    }));
+  }, [backendCommands]);
+
+  const allCommands = useMemo(() => {
+    // 合并本地命令和后端命令，后端命令排后面
+    return [...commands, ...backendSlashCommands];
+  }, [commands, backendSlashCommands]);
+
   const filteredCommands = useMemo(() => {
-    if (!filter) return commands;
+    if (!filter) return allCommands;
     const lowerFilter = filter.toLowerCase();
-    return commands.filter(
+    return allCommands.filter(
       (cmd) =>
         cmd.name.toLowerCase().includes(lowerFilter) ||
         cmd.description.toLowerCase().includes(lowerFilter)
     );
-  }, [commands, filter]);
+  }, [allCommands, filter]);
 
   const openMenu = useCallback(() => {
     setIsOpen(true);
@@ -291,7 +343,7 @@ export function parseSlashCommand(input: string): { command: string; args: strin
 
   const withoutSlash = trimmed.slice(1);
   const parts = withoutSlash.split(/\s+/);
-  const command = parts[0];
+  const command = parts[0] || '';
   const args = parts.slice(1).join(' ');
 
   return { command, args };

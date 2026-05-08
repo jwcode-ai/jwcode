@@ -23,8 +23,26 @@ import java.util.logging.Logger;
  *   <li>摘要失败时优雅降级为 {@link ContextWindowManager} 截断策略</li>
  *   <li>预留 4K tokens 安全余量，确保压缩后还能继续对话</li>
  * </ul>
+ *
+ * <p>Token 银行联动：压缩成功后通过 {@link CompactCallback} 通知释放 Token 预算。</p>
  */
 public class SimpleCompactionStrategy {
+
+    /**
+     * 压缩回调接口 — 用于 Token 银行联动。
+     * 压缩成功后调用，通知释放对应数量的 Token 预算。
+     */
+    @FunctionalInterface
+    public interface CompactCallback {
+        /**
+         * 压缩完成回调
+         *
+         * @param originalSize  原始消息数
+         * @param compactedSize 压缩后消息数
+         * @param estimatedTokensSaved 估计节省的 token 数
+         */
+        void onCompacted(int originalSize, int compactedSize, long estimatedTokensSaved);
+    }
 
     private static final Logger logger = Logger.getLogger(SimpleCompactionStrategy.class.getName());
 

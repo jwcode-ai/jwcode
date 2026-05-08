@@ -153,4 +153,16 @@ public sealed interface ObservationEvent {
             this(taskId, question, Instant.now());
         }
     }
+
+    /**
+     * 上下文压缩 — 自动压缩发生时通知前端
+     */
+    record ContextCompressed(int originalCount, int compressedCount,
+                             long estimatedTokensSaved, String summary,
+                             Instant timestamp) implements ObservationEvent {
+        public ContextCompressed(int originalCount, int compressedCount,
+                                 long estimatedTokensSaved, String summary) {
+            this(originalCount, compressedCount, estimatedTokensSaved, summary, Instant.now());
+        }
+    }
 }

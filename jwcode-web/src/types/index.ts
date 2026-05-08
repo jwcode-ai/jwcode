@@ -48,6 +48,16 @@ export interface Session {
   messageCount: number;
 }
 
+// 会话 Tab 类型
+export interface SessionTab {
+  id: string;
+  title: string;
+  createdAt: number;
+}
+
+// 分屏布局模式（已简化为仅单屏）
+export type SplitLayout = 'single';
+
 // Model types
 export interface Model {
   id: string;
@@ -172,6 +182,7 @@ export type WSMessageType =
   | 'subscribe_logs'
   | 'unsubscribe_logs'
   | 'chat'
+  | 'plan'
   | 'create_session'
   | 'ping'
   | 'pong'
@@ -179,7 +190,18 @@ export type WSMessageType =
   | 'auth_required'
   | 'auth_success'
   | 'auth_failed'
-  | 'ack';
+  | 'ack'
+  | 'get_commands'
+  | 'commands_list'
+  // Plan 模式消息
+  | 'plan_start'
+  | 'plan_thinking'
+  | 'plan_tasks'
+  | 'plan_task_start'
+  | 'plan_task_update'
+  | 'plan_task_result'
+  | 'plan_complete'
+  | 'plan_error';
 
 export interface WSMessage {
   type: WSMessageType;
@@ -218,7 +240,7 @@ export interface UpdateTaskInput {
 }
 
 // Tab types
-export type TabId = 'chat' | 'terminal' | 'files' | 'models' | 'tools' | 'skills' | 'agents' | 'settings' | 'logs' | 'tasks';
+export type TabId = 'chat' | 'plan' | 'terminal' | 'files' | 'models' | 'tools' | 'skills' | 'agents' | 'settings' | 'logs' | 'tasks';
 
 export interface Tab {
   id: TabId;
@@ -235,4 +257,39 @@ export interface FileNode {
   type: 'file' | 'directory';
   children?: FileNode[];
   expanded?: boolean;
+}
+
+// === Plan 模式相关类型 ===
+
+export type PlanPhase = 'idle' | 'planning' | 'executing' | 'result';
+
+export interface PlanTask {
+  id: string;
+  title: string;
+  description: string;
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+  agentType: string;
+  dependencies: string[];
+  result?: string;
+  error?: string;
+  startedAt?: number;
+  completedAt?: number;
+  progress?: number;
+  logs?: string[];
+}
+
+export interface Plan {
+  id: string;
+  sessionId: string;
+  phase: PlanPhase;
+  goal: string;
+  tasks: PlanTask[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface MessageQueueItem {
+  id: string;
+  content: string;
+  timestamp: number;
 }

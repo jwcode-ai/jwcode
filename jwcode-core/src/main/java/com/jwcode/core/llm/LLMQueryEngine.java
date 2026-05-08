@@ -51,6 +51,8 @@ public class LLMQueryEngine {
     private final TaskLifecycleManager taskLifecycleManager;
     private long lastSeenCompactCount = 0;
     private String pendingBudgetAdvice;
+    // 【Token 银行】记录上次压缩时的消息数，用于计算释放的 token
+    private int lastCompactMessageCount = 0;
     // 去重：记录已注册的 StepCallbackAdapter，防止重复订阅导致日志重复
     private StepCallbackAdapter stepCallbackAdapter;
     // 【修复】压缩冷却时间：避免短时间内多次压缩
@@ -362,17 +364,38 @@ public class LLMQueryEngine {
         }
 
         // 【修复】自动触发上下文压缩（当预算使用超过 70% 时，且满足冷却时间）
+        // 使用 ContextWindowManager 统一压缩入口，包含 TokenBudget 释放和事件通知
         long now = System.currentTimeMillis();
         if (tokenBudget.usageRatio() > 0.70 && session.getMessages().size() > 10 
             && (now - lastCompactTime) > COMPACT_COOLDOWN_MS) {
             logger.info("[LLMQueryEngine] Token budget usage=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100)
                 + ", auto-compacting context...");
             int beforeCount = session.getMessages().size();
-            List<Message> compacted = compactionStrategy.compact(session.getMessages());
+            // 使用 ContextWindowManager 统一压缩入口
+            ContextWindowManager windowManager = createContextWindowManager();
+            List<Message> compacted = windowManager.prepareMessages(session.getMessages());
             if (compacted != null && compacted.size() < beforeCount) {
-                session.clearMessages();
-                compacted.forEach(session::addMessage);
+                session.setMessages(compacted);
+                session.markCompacted();
                 lastCompactTime = now; // 更新压缩时间
+                
+                // Token 银行：释放对应数量的 Token 预算
+                int messagesRemoved = beforeCount - compacted.size();
+                long estimatedTokensSaved = (long) messagesRemoved * 500;
+                if (estimatedTokensSaved > 0) {
+                    tokenBudget.releaseTokens(estimatedTokensSaved);
+                    logger.info("[LLMQueryEngine] Token 银行: 自动压缩释放 " + estimatedTokensSaved 
+                        + " tokens (移除了 " + messagesRemoved + " 条消息)");
+                }
+                
+                // 发布压缩事件通知
+                pipeline.publish(new ObservationEvent.ContextCompressed(
+                    beforeCount,
+                    compacted.size(),
+                    estimatedTokensSaved,
+                    "Token 使用率 " + String.format("%.0f%%", tokenBudget.usageRatio() * 100) + "，自动触发上下文压缩"
+                ));
+                
                 logger.info("[LLMQueryEngine] Auto-compacted: " + beforeCount + " -> " + session.getMessages().size()
                     + " messages, budget after compact=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100));
             } else {
@@ -610,18 +633,38 @@ public class LLMQueryEngine {
         }
 
         // 自动触发上下文压缩（当预算使用超过 70% 时）
-        // 【修复】增加冷却时间检查，避免频繁压缩导致上下文丢失
+        // 使用 ContextWindowManager 统一压缩入口，包含 TokenBudget 释放和事件通知
         long now = System.currentTimeMillis();
         if (tokenBudget.usageRatio() > 0.70 && session.getMessages().size() > 10
             && (now - lastCompactTime) > COMPACT_COOLDOWN_MS) {
             logger.info("[LLMQueryEngine] Token budget usage=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100)
                 + ", auto-compacting context...");
             int beforeCount = session.getMessages().size();
-            List<Message> compacted = compactionStrategy.compact(session.getMessages());
+            // 使用 ContextWindowManager 统一压缩入口
+            ContextWindowManager windowManager = createContextWindowManager();
+            List<Message> compacted = windowManager.prepareMessages(session.getMessages());
             if (compacted != null && compacted.size() < beforeCount) {
-                session.clearMessages();
-                compacted.forEach(session::addMessage);
+                session.setMessages(compacted);
+                session.markCompacted();
                 lastCompactTime = now; // 更新压缩时间
+                
+                // Token 银行：释放对应数量的 Token 预算
+                int messagesRemoved = beforeCount - compacted.size();
+                long estimatedTokensSaved = (long) messagesRemoved * 500;
+                if (estimatedTokensSaved > 0) {
+                    tokenBudget.releaseTokens(estimatedTokensSaved);
+                    logger.info("[LLMQueryEngine] Token 银行: 自动压缩释放 " + estimatedTokensSaved 
+                        + " tokens (移除了 " + messagesRemoved + " 条消息)");
+                }
+                
+                // 发布压缩事件通知
+                pipeline.publish(new ObservationEvent.ContextCompressed(
+                    beforeCount,
+                    compacted.size(),
+                    estimatedTokensSaved,
+                    "Token 使用率 " + String.format("%.0f%%", tokenBudget.usageRatio() * 100) + "，自动触发上下文压缩"
+                ));
+                
                 logger.info("[LLMQueryEngine] Auto-compacted: " + beforeCount + " -> " + session.getMessages().size()
                     + " messages, budget=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100));
             } else {
@@ -1097,6 +1140,17 @@ public class LLMQueryEngine {
             // 修复：压缩后的消息需要写回 session，否则下一轮会使用原始消息列表
             session.setMessages(messages);
             session.markCompacted();
+            
+            // 【Token 银行】压缩联动：释放对应数量的 Token 预算
+            // 估算：每条消息约 500 tokens（含 system prompt 和工具结果）
+            int messagesRemoved = originalCount - messages.size();
+            long estimatedTokensSaved = (long) messagesRemoved * 500;
+            if (estimatedTokensSaved > 0) {
+                tokenBudget.releaseTokens(estimatedTokensSaved);
+                logger.info("[LLMQueryEngine] Token 银行: 压缩释放 " + estimatedTokensSaved 
+                    + " tokens (移除了 " + messagesRemoved + " 条消息), 当前使用率=" 
+                    + String.format("%.1f%%", tokenBudget.usageRatio() * 100));
+            }
         }
         
         List<LLMMessage> result = new ArrayList<>();

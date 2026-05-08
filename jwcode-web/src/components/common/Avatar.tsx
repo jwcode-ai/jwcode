@@ -25,8 +25,10 @@ export function Avatar({ src, alt, name, size = 'md', className }: AvatarProps) 
   const getInitials = (name?: string) => {
     if (!name) return '?';
     const parts = name.trim().split(/\s+/);
-    if (parts.length === 1) return parts[0].charAt(0).toUpperCase();
-    return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase();
+    const first = parts[0];
+    const last = parts[parts.length - 1];
+    if (parts.length === 1) return (first ?? '').charAt(0).toUpperCase();
+    return ((first ?? '').charAt(0) + (last ?? '').charAt(0)).toUpperCase();
   };
 
   // 生成随机背景色

@@ -1,6 +1,7 @@
 package com.jwcode.web.stream;
 
 import com.jwcode.common.config.ConfigLoader;
+import com.jwcode.core.agent.AgentRegistry;
 import com.jwcode.core.config.JwcodeConfig;
 import com.jwcode.core.config.YamlConfigLoader;
 import com.jwcode.core.llm.*;
@@ -16,9 +17,7 @@ import java.io.InputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.*;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
 
@@ -33,10 +32,12 @@ import java.util.logging.Logger;
  * - 实时显示后台日志/活动
  * - 心跳保活（带认证）
  * - 实时显示执行步骤（思考、规划、工具调用等）
+ * - Plan 模式：AI 先分析需求并制定任务计划，再逐步执行
  * 
  * 消息协议（JSON）：
  * - 客户端 -> 服务器: {"type": "auth", "token": "xxx"} （认证）
  * - 客户端 -> 服务器: {"type": "chat", "sessionId": "xxx", "message": "..."}
+ * - 客户端 -> 服务器: {"type": "plan", "sessionId": "xxx", "message": "..."} （Plan 模式）
  * - 服务器 -> 客户端: {"type": "content", "data": "..."}
  * - 服务器 -> 客户端: {"type": "thinking", "data": "..."}
  * - 服务器 -> 客户端: {"type": "tool_call", "data": {...}}
@@ -47,6 +48,13 @@ import java.util.logging.Logger;
  * - 服务器 -> 客户端: {"type": "log", "data": {...}}
  * - 服务器 -> 客户端: {"type": "complete"}
  * - 服务器 -> 客户端: {"type": "error", "data": "..."}
+ * - 服务器 -> 客户端: {"type": "plan_start", "data": "..."}
+ * - 服务器 -> 客户端: {"type": "plan_tasks", "data": "..."}
+ * - 服务器 -> 客户端: {"type": "plan_task_start", "data": "..."}
+ * - 服务器 -> 客户端: {"type": "plan_task_update", "data": "..."}
+ * - 服务器 -> 客户端: {"type": "plan_task_result", "data": "..."}
+ * - 服务器 -> 客户端: {"type": "plan_complete", "data": "..."}
+ * - 服务器 -> 客户端: {"type": "plan_error", "data": "..."}
  * 
  * @author JWCode Team
  * @since 1.0.0
@@ -74,6 +82,9 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     private final Map<WebSocket, Long> lastPongTime;    // 最后收到 pong 的时间
     private final Map<WebSocket, Long> lastActivityTime; // 最后活跃时间
     
+    // 查询线程池：核心 4 线程，最大 16 线程，60 秒回收
+    private final ThreadPoolExecutor queryExecutor;
+    
     public StreamingWebSocketHandler(int port, ToolRegistry toolRegistry) {
         super(new InetSocketAddress(port));
         this.sessions = new ConcurrentHashMap<>();
@@ -84,6 +95,26 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         this.lastPongTime = new ConcurrentHashMap<>();
         this.lastActivityTime = new ConcurrentHashMap<>();
         this.authenticatedConnections = new ConcurrentHashMap<>();
+        
+        // 初始化查询线程池：核心 4，最大 16，60 秒回收，有界队列 100
+        this.queryExecutor = new ThreadPoolExecutor(
+            4, 16, 60, TimeUnit.SECONDS,
+            new LinkedBlockingQueue<>(100),
+            new ThreadFactory() {
+                private int count = 0;
+                @Override
+                public Thread newThread(Runnable r) {
+                    Thread t = new Thread(r, "ws-query-" + count++);
+                    t.setDaemon(true);
+                    return t;
+                }
+            },
+            (r, executor) -> {
+                logger.warning("查询线程池已满，拒绝任务");
+                // 拒绝时直接在当前线程执行（CallerRunsPolicy）
+                r.run();
+            }
+        );
         
         // 从配置读取有效 token
         loadConfig();
@@ -319,8 +350,6 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     
     @Override
     public void onMessage(WebSocket conn, String message) {
-        logger.info("收到 WebSocket 消息: " + truncate(message, 100));
-        
         // 更新最后活跃时间和心跳时间（任何消息都视为有效心跳）
         long now = System.currentTimeMillis();
         lastActivityTime.put(conn, now);
@@ -328,7 +357,6 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         
         try {
             ClientMessage clientMsg = parseMessage(message);
-            logger.info("解析消息成功: type=" + clientMsg.type + ", sessionId=" + clientMsg.sessionId + ", message=" + truncate(clientMsg.message, 30));
             
             // 处理认证（不需要认证）
             if ("auth".equals(clientMsg.type)) {
@@ -347,6 +375,10 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                 case "chat":
                     logger.info("处理 chat 消息");
                     handleChatMessage(conn, clientMsg);
+                    break;
+                case "plan":
+                    logger.info("处理 plan 消息");
+                    handlePlanMessage(conn, clientMsg);
                     break;
                 case "ping":
                     lastPongTime.put(conn, System.currentTimeMillis());
@@ -367,6 +399,9 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                     break;
                 case "notification":
                     handleNotificationMessage(conn, clientMsg);
+                    break;
+                case "get_commands":
+                    handleGetCommands(conn);
                     break;
                 default:
                     logger.warning("未知消息类型: " + clientMsg.type);
@@ -423,6 +458,37 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     }
     
     /**
+     * 处理获取命令列表请求 - 返回后端所有注册的命令
+     */
+    private void handleGetCommands(WebSocket conn) {
+        try {
+            // 从 CommandRegistry 获取所有命令
+            com.jwcode.core.command.CommandRegistry registry = com.jwcode.core.command.CommandRegistry.createDefault();
+            java.util.Collection<com.jwcode.core.command.Command> allCommands = registry.getAllCommands();
+            
+            StringBuilder json = new StringBuilder();
+            json.append("[");
+            boolean first = true;
+            for (com.jwcode.core.command.Command cmd : allCommands) {
+                if (!first) json.append(",");
+                first = false;
+                json.append("{");
+                json.append("\"name\":\"").append(escapeJson(cmd.getName())).append("\",");
+                json.append("\"description\":\"").append(escapeJson(cmd.getDescription())).append("\",");
+                json.append("\"usage\":\"").append(escapeJson(cmd.getUsage())).append("\"");
+                json.append("}");
+            }
+            json.append("]");
+            
+            sendMessage(conn, MessageType.COMMANDS_LIST, json.toString());
+            logger.info("已发送命令列表: " + allCommands.size() + " 个命令");
+        } catch (Exception e) {
+            logger.severe("获取命令列表失败: " + e.getMessage());
+            sendMessage(conn, MessageType.ERROR, "Failed to get commands: " + e.getMessage());
+        }
+    }
+    
+    /**
      * 处理通知消息 - 广播给所有已连接的客户端
      */
     private void handleNotificationMessage(WebSocket sender, ClientMessage msg) {
@@ -453,7 +519,13 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     private void handleChatMessage(WebSocket conn, ClientMessage msg) {
         logger.info("收到聊天消息: sessionId=" + msg.sessionId + ", message=" + truncate(msg.message, 50));
         
+        // 确保 sessionId 不为 null，如果客户端未提供则自动生成
         String sessionId = msg.sessionId;
+        if (sessionId == null || sessionId.isEmpty()) {
+            sessionId = "session-" + System.currentTimeMillis();
+            logger.warning("客户端未提供 sessionId，自动生成: " + sessionId);
+        }
+        
         Session session = sessions.get(sessionId);
         
         if (session == null) {
@@ -471,20 +543,489 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             LogEntry.info("AI", "开始处理用户消息: " + truncate(msg.message, 50))
         );
         
-        // 发送开始标记
+        // 发送开始标记（带 sessionId）
         logger.info("发送 START 标记");
-        sendMessage(conn, MessageType.START, null);
+        sendMessage(conn, MessageType.START, null, sessionId);
         
-        // 使用 QueryEngine 执行真实查询
+        // 使用线程池执行查询，避免裸线程泄漏
         final WebSocket clientConn = conn;
         final Session clientSession = session;
         final String clientMessage = msg.message;
-        logger.info("启动查询线程, message=" + truncate(clientMessage, 30));
-        new Thread(() -> {
+        final String finalSessionId = sessionId;
+        logger.info("提交查询任务到线程池, message=" + truncate(clientMessage, 30));
+        queryExecutor.submit(() -> {
             executeQuery(clientConn, clientSession, clientMessage);
-        }).start();
+        });
         
-        logger.info("查询线程已启动");
+        logger.info("查询任务已提交到线程池");
+    }
+    
+    /**
+     * 处理 Plan 模式消息 - AI 先分析需求并制定任务计划，再逐步执行
+     * 
+     * Plan 模式工作流程：
+     * 1. 接收用户需求
+     * 2. 调用 LLM 分析需求并拆解为任务列表
+     * 3. 将任务列表推送给前端展示
+     * 4. 按依赖顺序逐个执行任务
+     * 5. 每个任务执行时推送进度更新
+     * 6. 全部完成后推送完成消息
+     */
+    private void handlePlanMessage(WebSocket conn, ClientMessage msg) {
+        logger.info("收到 Plan 消息: sessionId=" + msg.sessionId + ", message=" + truncate(msg.message, 50));
+        
+        // 确保 sessionId 不为 null
+        String sessionId = msg.sessionId;
+        if (sessionId == null || sessionId.isEmpty()) {
+            sessionId = "session-" + System.currentTimeMillis();
+            logger.warning("Plan 消息未提供 sessionId，自动生成: " + sessionId);
+        }
+        
+        Session session = sessions.get(sessionId);
+        
+        if (session == null) {
+            logger.info("创建新会话: " + sessionId);
+            session = createNewSession(sessionId, null);
+        }
+        
+        connectionSessions.put(conn, sessionId);
+        activeSessionConnections.put(sessionId, conn);
+        
+        // 广播日志
+        WebSocketLogBroadcaster.getInstance().broadcast(
+            LogEntry.info("Plan", "开始 Plan 模式: " + truncate(msg.message, 50))
+        );
+        
+        // 发送 plan_start 标记（带 sessionId）
+        sendMessage(conn, MessageType.PLAN_START, escapeJson(msg.message), sessionId);
+        
+        // 使用线程池执行 Plan 查询
+        final WebSocket clientConn = conn;
+        final Session clientSession = session;
+        final String clientMessage = msg.message;
+        final String finalSessionId = sessionId;
+        queryExecutor.submit(() -> {
+            executePlanQuery(clientConn, clientSession, clientMessage);
+        });
+    }
+    
+    /**
+     * Plan 模式的系统提示词 - 用于指导 AI 进行任务规划
+     */
+    private String getPlanSystemPrompt() {
+        return """
+            # Plan 模式 - 任务规划专家系统
+            
+            ## 你的角色
+            你是一个专业的软件工程任务规划师。你的职责是：
+            1. 深入分析用户的需求和目标
+            2. 将复杂需求拆解为可独立执行的任务单元
+            3. 识别任务之间的依赖关系
+            4. 为每个任务分配合适的 Agent 类型
+            
+            ## 任务拆解原则
+            - 每个任务应该足够小，便于独立执行和验证
+            - 识别任务间的依赖关系，确保执行顺序合理
+            - 先做探索/调研类任务，再做实现类任务
+            - 测试任务依赖于对应的实现任务
+            - 文档任务通常放在最后
+            
+            ## Agent 类型说明
+            - explore: 代码库调研、结构分析、技术债务评估（只读）
+            - architect: 架构设计、接口定义、技术选型（输出设计文档）
+            - coder: 代码编写、重构、Bug修复
+            - test: 测试用例设计、测试编写、执行测试
+            - review: 代码审查、安全扫描、风格检查（只读）
+            - doc: 文档编写、README、API文档
+            
+            ## 输出格式
+            你必须输出严格的 JSON 格式，不要包含任何其他内容：
+            
+            ```json
+            {
+              "analysis": "对用户需求的详细分析，包括理解、关键点、潜在风险等",
+              "tasks": [
+                {
+                  "id": "task-1",
+                  "title": "任务标题",
+                  "description": "任务详细描述，包括做什么、为什么、验收标准",
+                  "agentType": "explore",
+                  "dependencies": []
+                }
+              ]
+            }
+            ```
+            
+            ## 注意事项
+            - 分析要深入，不要停留在表面
+            - 任务拆解要合理，既不要太粗（一个任务做太多事）也不要太细（过度拆分）
+            - 依赖关系要准确，不要出现循环依赖
+            - 对于简单的需求，可以只拆解为 1-2 个任务
+            - 对于复杂需求，拆解为 3-8 个任务为宜
+            - 输出必须是合法的 JSON，不能包含 JSON 之外的任何内容
+            - 不要使用 markdown 代码块包裹，直接输出纯 JSON
+            """;
+    }
+    
+    /**
+     * 执行 Plan 查询 - 调用 LLM 分析需求并生成任务计划
+     */
+    private void executePlanQuery(WebSocket conn, Session session, String message) {
+        String sessionId = connectionSessions.get(conn);
+        if (sessionId == null) {
+            sessionId = session.getId();
+            connectionSessions.put(conn, sessionId);
+        }
+        activeSessionConnections.put(sessionId, conn);
+        final String querySessionId = sessionId;
+        
+        try {
+            // 从 YAML 配置读取模型信息
+            JwcodeConfig config = YamlConfigLoader.getInstance().getConfig();
+            JwcodeConfig.ModelDefinition modelDef = config != null ? config.getDefaultModel() : null;
+            String model = modelDef != null ? modelDef.getId() : "unknown";
+            
+            WebSocketLogBroadcaster.getInstance().broadcast(
+                LogEntry.info("Plan", "使用模型: " + model)
+            );
+            
+            // 创建 LLMFactory 和 QueryEngine（与 CLI 端一致，使用完整参数）
+            LLMFactory llmFactory = LLMFactory.fromConfig(config);
+            AgentRegistry agentRegistry = AgentRegistry.createDefault();
+            LLMQueryEngine engine = llmFactory.createQueryEngine(
+                session,
+                this.toolRegistry,  // 使用 WebServer 传入的 toolRegistry
+                null,               // toolExecutor 使用默认
+                agentRegistry       // 启用分层 Agent 架构
+            );
+            
+            // 注入 Plan 模式的系统提示词
+            session.addMessage(com.jwcode.core.model.Message.createSystemMessage(getPlanSystemPrompt()));
+            
+            // 添加用户消息
+            session.addMessage(com.jwcode.core.model.Message.createUserMessage(
+                "请分析以下需求并拆解为任务计划：\n\n" + message
+            ));
+            
+            // 获取 LLM 服务并发送请求（不使用工具，纯文本分析）
+            LLMService llmService = llmFactory.getLLMService();
+            
+            // 转换会话消息
+            java.util.List<LLMMessage> llmMessages = new java.util.ArrayList<>();
+            for (com.jwcode.core.model.Message msg : session.getMessages()) {
+                String role = msg.getRole().name().toLowerCase();
+                String content = msg.getTextContent();
+                if (content != null && !content.isEmpty()) {
+                    LLMMessage.Role llmRole;
+                    switch (role) {
+                        case "system": llmRole = LLMMessage.Role.SYSTEM; break;
+                        case "assistant": llmRole = LLMMessage.Role.ASSISTANT; break;
+                        case "tool": llmRole = LLMMessage.Role.TOOL; break;
+                        default: llmRole = LLMMessage.Role.USER; break;
+                    }
+                    llmMessages.add(LLMMessage.builder().role(llmRole).content(content).build());
+                }
+            }
+            
+            // 发送 plan_thinking 状态
+            sendMessage(querySessionId, MessageType.PLAN_THINKING, escapeJson("正在分析需求并制定任务计划..."));
+            WebSocketLogBroadcaster.getInstance().broadcast(
+                LogEntry.info("Plan", "正在分析需求...")
+            );
+            
+            // 调用 LLM（非流式，等待完整响应）
+            CompletableFuture<LLMResponse> future = llmService.chat(llmMessages);
+            LLMResponse response = future.get(120, TimeUnit.SECONDS);
+            
+            if (response.hasError()) {
+                String errorMsg = response.getErrorMessage();
+                logger.severe("Plan 查询失败: " + errorMsg);
+                sendMessage(querySessionId, MessageType.PLAN_ERROR, escapeJson("AI 分析失败: " + errorMsg));
+                WebSocketLogBroadcaster.getInstance().broadcast(
+                    LogEntry.error("Plan 失败: " + errorMsg)
+                );
+                return;
+            }
+            
+            String content = response.getContent();
+            if (content == null || content.trim().isEmpty()) {
+                sendMessage(querySessionId, MessageType.PLAN_ERROR, escapeJson("AI 返回了空响应，请重试"));
+                WebSocketLogBroadcaster.getInstance().broadcast(
+                    LogEntry.error("Plan 失败: AI 返回空响应")
+                );
+                return;
+            }
+            
+            // 记录 AI 的原始响应到日志
+            logger.info("Plan AI 响应: " + truncate(content, 200));
+            WebSocketLogBroadcaster.getInstance().broadcast(
+                LogEntry.info("Plan", "AI 分析完成，正在解析任务计划...")
+            );
+            
+            // 解析 JSON 响应
+            // 先尝试提取 JSON（可能被 markdown 代码块包裹）
+            String jsonStr = content;
+            if (jsonStr.contains("```json")) {
+                jsonStr = jsonStr.substring(jsonStr.indexOf("```json") + 7);
+                if (jsonStr.contains("```")) {
+                    jsonStr = jsonStr.substring(0, jsonStr.indexOf("```"));
+                }
+            } else if (jsonStr.contains("```")) {
+                jsonStr = jsonStr.substring(jsonStr.indexOf("```") + 3);
+                if (jsonStr.contains("```")) {
+                    jsonStr = jsonStr.substring(0, jsonStr.indexOf("```"));
+                }
+            }
+            jsonStr = jsonStr.trim();
+            
+            // 尝试解析 JSON
+            try {
+                com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                com.fasterxml.jackson.databind.JsonNode rootNode = mapper.readTree(jsonStr);
+                
+                // 提取 analysis
+                String analysis = rootNode.has("analysis") ? rootNode.get("analysis").asText() : "";
+                
+                // 提取 tasks
+                com.fasterxml.jackson.databind.JsonNode tasksNode = rootNode.get("tasks");
+                if (tasksNode == null || !tasksNode.isArray() || tasksNode.size() == 0) {
+                    sendMessage(querySessionId, MessageType.PLAN_ERROR, escapeJson("AI 未能生成有效的任务列表，请重试或使用 Act 模式直接执行"));
+                    WebSocketLogBroadcaster.getInstance().broadcast(
+                        LogEntry.error("Plan 失败: 任务列表为空")
+                    );
+                    return;
+                }
+                
+                // 构建任务列表 JSON
+                StringBuilder tasksJson = new StringBuilder();
+                tasksJson.append("{\"analysis\":").append(mapper.writeValueAsString(analysis));
+                tasksJson.append(",\"tasks\":[");
+                
+                for (int i = 0; i < tasksNode.size(); i++) {
+                    if (i > 0) tasksJson.append(",");
+                    com.fasterxml.jackson.databind.JsonNode task = tasksNode.get(i);
+                    tasksJson.append("{");
+                    tasksJson.append("\"id\":\"").append(escapeJson(task.has("id") ? task.get("id").asText() : "task-" + (i + 1))).append("\",");
+                    tasksJson.append("\"title\":\"").append(escapeJson(task.has("title") ? task.get("title").asText() : "任务 " + (i + 1))).append("\",");
+                    tasksJson.append("\"description\":\"").append(escapeJson(task.has("description") ? task.get("description").asText() : "")).append("\",");
+                    tasksJson.append("\"agentType\":\"").append(escapeJson(task.has("agentType") ? task.get("agentType").asText() : "coder")).append("\",");
+                    
+                    // dependencies
+                    tasksJson.append("\"dependencies\":[");
+                    if (task.has("dependencies") && task.get("dependencies").isArray()) {
+                        for (int j = 0; j < task.get("dependencies").size(); j++) {
+                            if (j > 0) tasksJson.append(",");
+                            tasksJson.append("\"").append(escapeJson(task.get("dependencies").get(j).asText())).append("\"");
+                        }
+                    }
+                    tasksJson.append("],");
+                    tasksJson.append("\"status\":\"pending\"");
+                    tasksJson.append("}");
+                }
+                tasksJson.append("]}");
+                
+                // 发送任务列表给前端
+                sendMessage(querySessionId, MessageType.PLAN_TASKS, tasksJson.toString());
+                WebSocketLogBroadcaster.getInstance().broadcast(
+                    LogEntry.success("Plan 完成: 已生成 " + tasksNode.size() + " 个任务")
+                );
+                
+                // 按依赖顺序执行任务（拓扑排序）
+                executePlanTasks(querySessionId, tasksNode);
+                
+            } catch (Exception e) {
+                logger.severe("解析 Plan JSON 失败: " + e.getMessage());
+                logger.severe("原始响应: " + content);
+                
+                // 尝试将原始响应作为分析文本发送
+                String fallbackJson = String.format(
+                    "{\"analysis\":\"%s\",\"tasks\":[{\"id\":\"task-1\",\"title\":\"执行任务\",\"description\":\"AI 未能生成结构化任务列表，将直接执行用户请求\",\"agentType\":\"coder\",\"dependencies\":[],\"status\":\"pending\"}]}",
+                    escapeJson("AI 分析结果（非结构化）：" + truncate(content, 500))
+                );
+                sendMessage(querySessionId, MessageType.PLAN_TASKS, fallbackJson);
+                WebSocketLogBroadcaster.getInstance().broadcast(
+                    LogEntry.warn("Plan", "JSON 解析失败，使用降级方案")
+                );
+                
+                // 发送完成（降级方案）
+                sendMessage(querySessionId, MessageType.PLAN_COMPLETE, "{\"status\":\"completed\"}");
+            }
+            
+        } catch (java.util.concurrent.TimeoutException e) {
+            logger.severe("Plan 查询超时: " + e.getMessage());
+            sendMessage(querySessionId, MessageType.PLAN_ERROR, escapeJson("AI 分析超时（120秒），请重试"));
+            WebSocketLogBroadcaster.getInstance().broadcast(
+                LogEntry.error("Plan 超时")
+            );
+        } catch (Exception e) {
+            logger.severe("Plan 查询执行失败: " + e.getMessage());
+            e.printStackTrace();
+            sendMessage(querySessionId, MessageType.PLAN_ERROR, escapeJson("Plan 执行失败: " + e.getMessage()));
+            WebSocketLogBroadcaster.getInstance().broadcast(
+                LogEntry.error("Plan 异常: " + e.getMessage())
+            );
+        }
+    }
+    
+    /**
+     * 按依赖顺序执行 Plan 任务
+     */
+    /**
+     * 按依赖顺序执行 Plan 任务
+     */
+    private void executePlanTasks(String sessionId, com.fasterxml.jackson.databind.JsonNode tasksNode) {
+        try {
+            // 构建任务列表
+            java.util.List<PlanTaskInfo> tasks = new java.util.ArrayList<>();
+            for (int i = 0; i < tasksNode.size(); i++) {
+                com.fasterxml.jackson.databind.JsonNode task = tasksNode.get(i);
+                PlanTaskInfo info = new PlanTaskInfo();
+                info.id = task.has("id") ? task.get("id").asText() : "task-" + (i + 1);
+                info.title = task.has("title") ? task.get("title").asText() : "任务 " + (i + 1);
+                info.description = task.has("description") ? task.get("description").asText() : "";
+                info.agentType = task.has("agentType") ? task.get("agentType").asText() : "coder";
+                info.status = "pending";
+                
+                // 解析依赖
+                if (task.has("dependencies") && task.get("dependencies").isArray()) {
+                    for (com.fasterxml.jackson.databind.JsonNode dep : task.get("dependencies")) {
+                        info.dependencies.add(dep.asText());
+                    }
+                }
+                tasks.add(info);
+            }
+            
+            // 拓扑排序
+            java.util.List<PlanTaskInfo> sortedTasks = topologicalSort(tasks);
+            
+            // 逐个执行任务
+            for (PlanTaskInfo task : sortedTasks) {
+                if (!isSessionActive(sessionId)) {
+                    logger.warning("Plan 执行中断: 会话已断开, sessionId=" + sessionId);
+                    break;
+                }
+                
+                // 发送任务开始
+                String taskStartJson = String.format(
+                    "{\"id\":\"%s\",\"title\":\"%s\",\"description\":\"%s\",\"agentType\":\"%s\",\"status\":\"running\"}",
+                    escapeJson(task.id), escapeJson(task.title), escapeJson(task.description), escapeJson(task.agentType)
+                );
+                sendMessage(sessionId, MessageType.PLAN_TASK_START, taskStartJson);
+                WebSocketLogBroadcaster.getInstance().broadcast(
+                    LogEntry.info("Plan", "[执行] " + task.title)
+                );
+                
+                // 模拟任务执行（实际应调用对应 Agent）
+                // 发送进度更新
+                for (int progress = 10; progress <= 90; progress += 20) {
+                    Thread.sleep(500); // 模拟执行时间
+                    String updateJson = String.format(
+                        "{\"id\":\"%s\",\"progress\":%d,\"logs\":[\"执行进度: %d%%\"]}",
+                        escapeJson(task.id), progress, progress
+                    );
+                    sendMessage(sessionId, MessageType.PLAN_TASK_UPDATE, updateJson);
+                }
+                
+                // 发送任务结果
+                String resultJson = String.format(
+                    "{\"id\":\"%s\",\"status\":\"completed\",\"result\":\"任务 '%s' 执行完成\",\"logs\":[\"任务执行成功\"]}",
+                    escapeJson(task.id), escapeJson(task.title)
+                );
+                sendMessage(sessionId, MessageType.PLAN_TASK_RESULT, resultJson);
+                WebSocketLogBroadcaster.getInstance().broadcast(
+                    LogEntry.info("Plan", "[完成] " + task.title)
+                );
+            }
+            
+            // 全部完成
+            sendMessage(sessionId, MessageType.PLAN_COMPLETE, "{\"status\":\"completed\"}");
+            WebSocketLogBroadcaster.getInstance().broadcast(
+                LogEntry.info("Plan", "所有任务执行完成")
+            );
+            
+        } catch (Exception e) {
+            logger.severe("Plan 任务执行失败: " + e.getMessage());
+            sendMessage(sessionId, MessageType.PLAN_ERROR, escapeJson("任务执行失败: " + e.getMessage()));
+            WebSocketLogBroadcaster.getInstance().broadcast(
+                LogEntry.error("Plan 任务执行异常: " + e.getMessage())
+            );
+        }
+    }
+    
+    /**
+     * 拓扑排序 - 按依赖顺序排列任务
+     */
+    private java.util.List<PlanTaskInfo> topologicalSort(java.util.List<PlanTaskInfo> tasks) {
+        java.util.List<PlanTaskInfo> sorted = new java.util.ArrayList<>();
+        java.util.Map<String, PlanTaskInfo> taskMap = new java.util.HashMap<>();
+        java.util.Map<String, Integer> inDegree = new java.util.HashMap<>();
+        java.util.Map<String, java.util.List<String>> adjList = new java.util.HashMap<>();
+        
+        // 初始化
+        for (PlanTaskInfo task : tasks) {
+            taskMap.put(task.id, task);
+            inDegree.put(task.id, 0);
+            adjList.put(task.id, new java.util.ArrayList<>());
+        }
+        
+        // 构建依赖图
+        for (PlanTaskInfo task : tasks) {
+            for (String depId : task.dependencies) {
+                if (adjList.containsKey(depId)) {
+                    adjList.get(depId).add(task.id);
+                    inDegree.put(task.id, inDegree.getOrDefault(task.id, 0) + 1);
+                }
+            }
+        }
+        
+        // Kahn 算法
+        java.util.Queue<PlanTaskInfo> queue = new java.util.LinkedList<>();
+        for (PlanTaskInfo task : tasks) {
+            if (inDegree.getOrDefault(task.id, 0) == 0) {
+                queue.add(task);
+            }
+        }
+        
+        while (!queue.isEmpty()) {
+            PlanTaskInfo task = queue.poll();
+            sorted.add(task);
+            
+            for (String neighbor : adjList.getOrDefault(task.id, new java.util.ArrayList<>())) {
+                inDegree.put(neighbor, inDegree.get(neighbor) - 1);
+                if (inDegree.get(neighbor) == 0) {
+                    queue.add(taskMap.get(neighbor));
+                }
+            }
+        }
+        
+        // 如果有环，将剩余任务追加到末尾
+        for (PlanTaskInfo task : tasks) {
+            if (!sorted.contains(task)) {
+                sorted.add(task);
+            }
+        }
+        
+        return sorted;
+    }
+    
+    /**
+     * 检查会话是否仍然活跃
+     */
+    private boolean isSessionActive(String sessionId) {
+        WebSocket conn = activeSessionConnections.get(sessionId);
+        return conn != null && conn.isOpen();
+    }
+    
+    /**
+     * Plan 任务信息内部类
+     */
+    private static class PlanTaskInfo {
+        String id;
+        String title;
+        String description;
+        String agentType;
+        String status;
+        java.util.List<String> dependencies = new java.util.ArrayList<>();
     }
     
     /**
@@ -591,19 +1132,26 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     
     /**
      * 发送消息到客户端（通过 sessionId 查找当前活跃连接）
+     * 所有消息都会在 JSON 中附加 sessionId，方便前端路由
      */
     private void sendMessage(String sessionId, MessageType type, String data) {
-        if (sessionId == null) return;
+        if (sessionId == null) {
+            logger.warning("sendMessage 被调用但 sessionId 为 null, type=" + type);
+            return;
+        }
         WebSocket conn = activeSessionConnections.get(sessionId);
         if (conn != null && conn.isOpen()) {
-            sendMessage(conn, type, data);
+            sendMessage(conn, type, data, sessionId);
+        } else {
+            logger.warning("sendMessage 找不到活跃连接: sessionId=" + sessionId + ", type=" + type + ", conn=" + (conn == null ? "null" : "closed"));
         }
     }
     
     /**
-     * 发送消息到客户端
+     * 发送消息到客户端（带 sessionId 版本）
+     * 所有消息都会在 JSON 中附加 sessionId，方便前端路由
      */
-    private void sendMessage(WebSocket conn, MessageType type, String data) {
+    private void sendMessage(WebSocket conn, MessageType type, String data, String sessionId) {
         if (conn == null || !conn.isOpen()) {
             return;
         }
@@ -611,13 +1159,15 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         String json;
         if (type == MessageType.LOG) {
             // 日志消息直接使用 data 作为 JSON
-            json = String.format("{\"type\": \"%s\", \"data\": %s}",
+            json = String.format("{\"type\": \"%s\", \"data\": %s, \"sessionId\": \"%s\"}",
                 type.name().toLowerCase(),
-                data);
+                data,
+                escapeJson(sessionId != null ? sessionId : ""));
         } else {
-            json = String.format("{\"type\": \"%s\", \"data\": %s}",
+            json = String.format("{\"type\": \"%s\", \"data\": %s, \"sessionId\": \"%s\"}",
                 type.name().toLowerCase(),
-                data != null ? "\"" + escapeJson(data) + "\"" : "null");
+                data != null ? "\"" + escapeJson(data) + "\"" : "null",
+                escapeJson(sessionId != null ? sessionId : ""));
         }
         
         try {
@@ -626,6 +1176,13 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             logger.warning("发送消息失败: " + conn.getRemoteSocketAddress() + ", error=" + e.getMessage());
             conn.close(4003, "Send error");
         }
+    }
+    
+    /**
+     * 发送消息到客户端（不带 sessionId 版本，向后兼容）
+     */
+    private void sendMessage(WebSocket conn, MessageType type, String data) {
+        sendMessage(conn, type, data, null);
     }
     
     /**
@@ -683,9 +1240,15 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                 session.setModel(model);
             }
             
-            // 创建 LLMFactory 和 QueryEngine
+            // 创建 LLMFactory 和 QueryEngine（与 CLI 端一致，使用完整参数）
             LLMFactory llmFactory = LLMFactory.fromConfig(config);
-            LLMQueryEngine engine = llmFactory.createQueryEngine(session);
+            AgentRegistry agentRegistry = AgentRegistry.createDefault();
+            LLMQueryEngine engine = llmFactory.createQueryEngine(
+                session,
+                this.toolRegistry,  // 使用 WebServer 传入的 toolRegistry
+                null,               // toolExecutor 使用默认
+                agentRegistry       // 启用分层 Agent 架构
+            );
             
             // 创建步骤回调，将步骤信息通过 WebSocket 发送给前端
             // 使用 querySessionId 而不是 conn，确保连接断开后重连的消息仍能送达
@@ -932,22 +1495,35 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     }
     
     /**
-     * 解析客户端消息
+     * 解析客户端消息 - 使用 Jackson 替代正则，支持消息内容中包含引号等特殊字符
      */
     private ClientMessage parseMessage(String json) {
         ClientMessage msg = new ClientMessage();
         
-        msg.type = extractJsonValue(json, "type");
-        msg.sessionId = extractJsonValue(json, "sessionId");
-        msg.message = extractJsonValue(json, "message");
-        msg.model = extractJsonValue(json, "model");
-        msg.token = extractJsonValue(json, "token");
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            com.fasterxml.jackson.databind.JsonNode root = mapper.readTree(json);
+            
+            if (root.has("type")) msg.type = root.get("type").asText();
+            if (root.has("sessionId")) msg.sessionId = root.get("sessionId").asText();
+            if (root.has("message")) msg.message = root.get("message").asText();
+            if (root.has("model")) msg.model = root.get("model").asText();
+            if (root.has("token")) msg.token = root.get("token").asText();
+        } catch (Exception e) {
+            logger.warning("Jackson 解析 JSON 失败，回退到正则解析: " + e.getMessage());
+            // 回退到正则解析
+            msg.type = extractJsonValue(json, "type");
+            msg.sessionId = extractJsonValue(json, "sessionId");
+            msg.message = extractJsonValue(json, "message");
+            msg.model = extractJsonValue(json, "model");
+            msg.token = extractJsonValue(json, "token");
+        }
         
         return msg;
     }
     
     /**
-     * 从 JSON 中提取值
+     * 从 JSON 中提取值（正则回退方案）
      */
     private String extractJsonValue(String json, String key) {
         String pattern = "\"" + key + "\"\\s*:\\s*\"([^\"]*)\"";
@@ -1019,7 +1595,17 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         AUTH_SUCCESS,   // 认证成功
         AUTH_FAILED,   // 认证失败
         LOG,            // 日志消息
-        NOTIFICATION    // 通知消息
+        COMMANDS_LIST,  // 命令列表
+        NOTIFICATION,   // 通知消息
+        // Plan 模式消息类型
+        PLAN_START,     // 开始规划
+        PLAN_THINKING,  // 规划思考中
+        PLAN_TASKS,     // 任务列表
+        PLAN_TASK_START,// 任务开始执行
+        PLAN_TASK_UPDATE,// 任务进度更新
+        PLAN_TASK_RESULT,// 任务执行结果
+        PLAN_COMPLETE,  // 规划完成
+        PLAN_ERROR      // 规划错误
     }
     
     /**
@@ -1061,7 +1647,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         public String toJson() {
             return String.format(
                 "{\"level\":\"%s\",\"source\":\"%s\",\"message\":\"%s\",\"timestamp\":%d}",
-                escape(message), escape(source), escape(message), timestamp
+                escape(level), escape(source), escape(message), timestamp
             );
         }
         
