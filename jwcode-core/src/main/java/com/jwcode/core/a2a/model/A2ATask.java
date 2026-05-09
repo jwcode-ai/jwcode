@@ -71,6 +71,8 @@ public class A2ATask {
     public enum TaskStatus {
         /** 等待执行 */
         PENDING,
+        /** 已分配（已指派给 Agent，等待 Agent 确认） */
+        ASSIGNED,
         /** 正在执行 */
         RUNNING,
         /** 执行成功 */
@@ -78,7 +80,9 @@ public class A2ATask {
         /** 执行失败 */
         FAILED,
         /** 已取消 */
-        CANCELLED
+        CANCELLED,
+        /** 超时 */
+        TIMEOUT
     }
 
     // ==================== Getters ====================

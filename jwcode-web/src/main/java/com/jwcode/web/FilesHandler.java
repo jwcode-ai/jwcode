@@ -24,7 +24,27 @@ import java.util.List;
 public class FilesHandler implements HttpHandler {
 
     /** 项目根目录，所有文件操作必须在此目录下 */
-    static final Path PROJECT_ROOT = Paths.get(System.getProperty("user.dir")).toAbsolutePath().normalize();
+    private static Path PROJECT_ROOT = Paths.get(System.getProperty("user.dir")).toAbsolutePath().normalize();
+
+    /**
+     * 更新项目根目录
+     * @param newRoot 新的项目根目录路径
+     */
+    public static void setProjectRoot(String newRoot) {
+        if (newRoot != null && !newRoot.trim().isEmpty()) {
+            Path resolved = Paths.get(newRoot).toAbsolutePath().normalize();
+            if (Files.exists(resolved) && Files.isDirectory(resolved)) {
+                PROJECT_ROOT = resolved;
+            }
+        }
+    }
+
+    /**
+     * 获取当前项目根目录
+     */
+    public static Path getProjectRoot() {
+        return PROJECT_ROOT;
+    }
 
     private static final ObjectMapper objectMapper = new ObjectMapper();
 

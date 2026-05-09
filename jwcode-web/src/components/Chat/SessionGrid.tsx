@@ -1,4 +1,4 @@
-import { memo, useRef } from 'react';
+import { memo } from 'react';
 import { SessionTab, TabId, LogEntry } from '../../types';
 import { ChatPanel } from './ChatPanel';
 import { useChatStore } from '../../stores/chatStore';
@@ -40,9 +40,6 @@ export const SessionGrid = memo(function SessionGrid({
   const setSessionInput = useChatStore((s) => s.setSessionInput);
   const getSessionInput = useChatStore((s) => s.getSessionInput);
 
-  // 每个面板独立的 ref
-  const messagesEndRefs = useRef<Record<string, HTMLDivElement>>({});
-
   return (
     <div className="flex-1 flex flex-col overflow-hidden min-h-0">
       {tabs
@@ -60,9 +57,6 @@ export const SessionGrid = memo(function SessionGrid({
               onSend={(content) => onSend(tab.id, content)}
               input={input}
               setInput={(val) => setSessionInput(tab.id, val)}
-              messagesEndRef={{
-                current: messagesEndRefs.current[tab.id] || null,
-              } as React.MutableRefObject<HTMLDivElement | null>}
               sessionId={tab.id}
               activeTab={activeTab}
               setActiveTab={setActiveTab}

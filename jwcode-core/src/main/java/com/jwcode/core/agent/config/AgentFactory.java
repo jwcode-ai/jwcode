@@ -33,7 +33,7 @@ public class AgentFactory {
     
     private final ToolRegistry toolRegistry;
     private final Map<String, AgentConfig> configCache;
-    private final Map<String, ConfigurableAgent> agentCache;
+    private final Map<String, AgentConfigWrapper> agentCache;
     private final Path configDirectory;
     private final WatchService watchService;
     private boolean watching = false;
@@ -123,7 +123,7 @@ public class AgentFactory {
     /**
      * 创建 Agent 实例
      */
-    public ConfigurableAgent createAgent(String name) {
+    public AgentConfigWrapper createAgent(String name) {
         // 检查缓存
         if (agentCache.containsKey(name)) {
             return agentCache.get(name);
@@ -135,7 +135,7 @@ public class AgentFactory {
             return null;
         }
         
-        ConfigurableAgent agent = buildAgent(config);
+        AgentConfigWrapper agent = buildAgent(config);
         agentCache.put(name, agent);
         return agent;
     }
@@ -143,7 +143,7 @@ public class AgentFactory {
     /**
      * 根据配置构建 Agent
      */
-    private ConfigurableAgent buildAgent(AgentConfig config) {
+    private AgentConfigWrapper buildAgent(AgentConfig config) {
         // 解析工具
         List<Tool<?, ?, ?>> tools = config.getTools().stream()
             .map(toolName -> toolRegistry.getTool(toolName))
@@ -158,7 +158,7 @@ public class AgentFactory {
         );
         modelConfig.setTopP(config.getModel().getTopP());
         
-        return new ConfigurableAgent(
+        return new AgentConfigWrapper(
             config.getId(),
             config.getName(),
             config.getDescription(),

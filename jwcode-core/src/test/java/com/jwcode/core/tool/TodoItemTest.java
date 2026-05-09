@@ -43,7 +43,7 @@ class TodoItemTest {
 
     @Test
     void testTodoItemToMarkdown() {
-        TodoItem item = new TodoItem("1", "测试任务", "in_progress", "high");
+        TodoItem item = new TodoItem("1", "测试任务", "测试任务进行中", "in_progress", "high");
         String markdown = item.toMarkdown();
         
         assertTrue(markdown.contains("[~]")); // in_progress 状态

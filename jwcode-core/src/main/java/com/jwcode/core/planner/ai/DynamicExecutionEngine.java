@@ -1,5 +1,6 @@
 package com.jwcode.core.planner.ai;
 
+import com.jwcode.core.a2a.model.StepStatus;
 import com.jwcode.core.agent.Agent;
 import com.jwcode.core.planner.AdaptiveExecutionMonitor;
 import com.jwcode.core.planner.ExecutionPlan;
@@ -276,7 +277,7 @@ public class DynamicExecutionEngine {
             if (!result.isSuccess()) {
                 context.getPlan().getSteps().stream()
                     .filter(s -> s.getStepNumber() == result.getStepNumber())
-                    .forEach(s -> s.setStatus(PlanStep.StepStatus.PENDING));
+                    .forEach(s -> s.setStatus(StepStatus.PENDING));
             }
         }
         

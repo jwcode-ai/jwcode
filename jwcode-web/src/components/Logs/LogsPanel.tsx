@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, useRef, useCallback, useEffect } from 'react';
 import { ScrollText } from 'lucide-react';
 import { LogEntry } from '../../types';
 
@@ -25,10 +25,45 @@ const levelIcons: Record<string, string> = {
 };
 
 export const LogsPanel = memo(function LogsPanel({ logs, onClear, compact }: LogsPanelProps) {
+  // 自动滚动 ref 和状态
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const isAtBottomRef = useRef(true);
+
+  const checkIsAtBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return true;
+    const threshold = 50;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, []);
+
+  // 监听滚动事件
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const handleScroll = () => {
+      isAtBottomRef.current = checkIsAtBottom();
+    };
+    el.addEventListener('scroll', handleScroll, { passive: true });
+    return () => el.removeEventListener('scroll', handleScroll);
+  }, [checkIsAtBottom]);
+
+  // logs 变化时自动滚动到底部
+  useEffect(() => {
+    if (isAtBottomRef.current) {
+      scrollToBottom();
+    }
+  }, [logs, scrollToBottom]);
+
   return (
-    <div className={`flex-1 flex flex-col overflow-hidden ${compact ? 'p-2' : 'p-4'}`}>
+    <div className={`flex flex-col min-h-0 ${compact ? 'flex-1 p-2' : 'flex-1 overflow-hidden p-4'}`}>
       {!compact && (
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between mb-4 shrink-0">
           <h2 className="text-lg font-semibold flex items-center gap-2">
             <ScrollText size={18} className="text-accent-blue" />
             后台日志
@@ -43,7 +78,15 @@ export const LogsPanel = memo(function LogsPanel({ logs, onClear, compact }: Log
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto font-mono text-xs space-y-0.5">
+      <div
+        ref={scrollRef}
+        className="flex-1 overflow-y-auto min-h-0 font-mono text-xs space-y-0.5"
+        style={{
+          scrollbarWidth: 'thin',
+          scrollbarColor: '#30363d transparent',
+        }}
+      >
+
         {logs.length === 0 ? (
           <div className="text-center text-dark-muted py-12">
             <ScrollText size={48} className="mx-auto mb-2 opacity-50" />
@@ -79,3 +122,5 @@ export const LogsPanel = memo(function LogsPanel({ logs, onClear, compact }: Log
     </div>
   );
 });
+
+

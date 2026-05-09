@@ -2,6 +2,7 @@ import { memo, useState, useMemo } from 'react';
 import { ChevronDown, ChevronUp, ListChecks } from 'lucide-react';
 import { PlanTask } from '../../types';
 import { usePlanStore } from '../../stores/planStore';
+import { TaskTree } from '../Plan/TaskTree';
 
 const AGENT_ICONS: Record<string, string> = {
   coder: '💻',
@@ -26,9 +27,12 @@ interface SessionTaskBoardProps {
   sessionId: string;
 }
 
+type TaskViewMode = 'list' | 'tree';
+
 export const SessionTaskBoard = memo(function SessionTaskBoard({ sessionId }: SessionTaskBoardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<TaskViewMode>('list');
 
   const plan = usePlanStore((s) => s.plansBySession[sessionId]);
   const phase = usePlanStore((s) => s.planPhasesBySession[sessionId] || 'idle');
@@ -106,69 +110,113 @@ export const SessionTaskBoard = memo(function SessionTaskBoard({ sessionId }: Se
 
       {/* Expanded content */}
       {isExpanded && (
-        <div className="px-4 pb-3 space-y-1.5 max-h-[240px] overflow-y-auto">
-          {/* 按状态分组显示 */}
-          {phase === 'planning' && tasks.length === 0 && (
-            <div className="text-[11px] text-dark-muted text-center py-2">
-              AI 正在分析任务...
+        <div className="px-4 pb-3">
+          {/* 视图切换 */}
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex bg-dark-bg rounded p-0.5">
+              <button
+                onClick={(e) => { e.stopPropagation(); setViewMode('list'); }}
+                className={`px-2 py-1 text-[10px] rounded transition-all ${
+                  viewMode === 'list'
+                    ? 'bg-accent-blue text-white'
+                    : 'text-dark-muted hover:text-dark-text'
+                }`}
+              >
+                列表
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); setViewMode('tree'); }}
+                className={`px-2 py-1 text-[10px] rounded transition-all ${
+                  viewMode === 'tree'
+                    ? 'bg-accent-blue text-white'
+                    : 'text-dark-muted hover:text-dark-text'
+                }`}
+              >
+                树形
+              </button>
             </div>
-          )}
+            {viewMode === 'tree' && (
+              <span className="text-[10px] text-dark-muted">
+                {tasks.length} 个顶层任务
+              </span>
+            )}
+          </div>
 
-          {/* Running tasks first */}
-          {grouped.running.map((task) => (
-            <TaskItem
-              key={task.id}
-              task={task}
-              isSelected={task.id === selectedTaskId}
-              onClick={() => setSelectedTaskId(selectedTaskId === task.id ? null : task.id)}
-              formatDuration={formatDuration}
-            />
-          ))}
+          <div className="max-h-[240px] overflow-y-auto space-y-1.5">
+            {phase === 'planning' && tasks.length === 0 && (
+              <div className="text-[11px] text-dark-muted text-center py-2">
+                AI 正在分析任务...
+              </div>
+            )}
 
-          {/* Pending tasks */}
-          {grouped.pending.slice(0, 5).map((task) => (
-            <TaskItem
-              key={task.id}
-              task={task}
-              isSelected={task.id === selectedTaskId}
-              onClick={() => setSelectedTaskId(selectedTaskId === task.id ? null : task.id)}
-              formatDuration={formatDuration}
-            />
-          ))}
+            {viewMode === 'tree' ? (
+              /* 树形视图 */
+              <TaskTree
+                tasks={tasks}
+                activeTaskId={selectedTaskId}
+                onTaskClick={(task) => setSelectedTaskId(selectedTaskId === task.id ? null : task.id)}
+              />
+            ) : (
+              /* 列表视图（原有逻辑） */
+              <>
+                {/* Running tasks first */}
+                {grouped.running.map((task) => (
+                  <TaskItem
+                    key={task.id}
+                    task={task}
+                    isSelected={task.id === selectedTaskId}
+                    onClick={() => setSelectedTaskId(selectedTaskId === task.id ? null : task.id)}
+                    formatDuration={formatDuration}
+                  />
+                ))}
 
-          {/* Completed tasks (show only last 3) */}
-          {grouped.completed.slice(-3).map((task) => (
-            <TaskItem
-              key={task.id}
-              task={task}
-              isSelected={task.id === selectedTaskId}
-              onClick={() => setSelectedTaskId(selectedTaskId === task.id ? null : task.id)}
-              formatDuration={formatDuration}
-            />
-          ))}
+                {/* Pending tasks */}
+                {grouped.pending.slice(0, 5).map((task) => (
+                  <TaskItem
+                    key={task.id}
+                    task={task}
+                    isSelected={task.id === selectedTaskId}
+                    onClick={() => setSelectedTaskId(selectedTaskId === task.id ? null : task.id)}
+                    formatDuration={formatDuration}
+                  />
+                ))}
 
-          {/* Failed tasks */}
-          {grouped.failed.map((task) => (
-            <TaskItem
-              key={task.id}
-              task={task}
-              isSelected={task.id === selectedTaskId}
-              onClick={() => setSelectedTaskId(selectedTaskId === task.id ? null : task.id)}
-              formatDuration={formatDuration}
-            />
-          ))}
+                {/* Completed tasks (show only last 3) */}
+                {grouped.completed.slice(-3).map((task) => (
+                  <TaskItem
+                    key={task.id}
+                    task={task}
+                    isSelected={task.id === selectedTaskId}
+                    onClick={() => setSelectedTaskId(selectedTaskId === task.id ? null : task.id)}
+                    formatDuration={formatDuration}
+                  />
+                ))}
 
-          {/* 如果任务太多，显示省略 */}
-          {grouped.pending.length > 5 && (
-            <div className="text-[10px] text-dark-muted text-center">
-              还有 {grouped.pending.length - 5} 个待处理任务...
-            </div>
-          )}
-          {grouped.completed.length > 3 && (
-            <div className="text-[10px] text-dark-muted text-center">
-              还有 {grouped.completed.length - 3} 个已完成任务...
-            </div>
-          )}
+                {/* Failed tasks */}
+                {grouped.failed.map((task) => (
+                  <TaskItem
+                    key={task.id}
+                    task={task}
+                    isSelected={task.id === selectedTaskId}
+                    onClick={() => setSelectedTaskId(selectedTaskId === task.id ? null : task.id)}
+                    formatDuration={formatDuration}
+                  />
+                ))}
+
+                {/* 如果任务太多，显示省略 */}
+                {grouped.pending.length > 5 && (
+                  <div className="text-[10px] text-dark-muted text-center">
+                    还有 {grouped.pending.length - 5} 个待处理任务...
+                  </div>
+                )}
+                {grouped.completed.length > 3 && (
+                  <div className="text-[10px] text-dark-muted text-center">
+                    还有 {grouped.completed.length - 3} 个已完成任务...
+                  </div>
+                )}
+              </>
+            )}
+          </div>
         </div>
       )}
     </div>

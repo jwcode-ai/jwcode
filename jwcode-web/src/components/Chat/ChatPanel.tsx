@@ -1,4 +1,5 @@
 import { memo } from 'react';
+import { useAutoScroll } from '../../hooks/useAutoScroll';
 import { MessageSquare, Send, ListChecks, Zap } from 'lucide-react';
 import { Message, TabId, LogEntry } from '../../types';
 import { MessageBubble } from './MessageBubble';
@@ -14,7 +15,6 @@ interface ChatPanelProps {
   onSend: (content: string) => void;
   input: string;
   setInput: (input: string) => void;
-  messagesEndRef: React.MutableRefObject<HTMLDivElement | null>;
   compact?: boolean;
   sessionId: string; // 用于 SessionTaskBoard
   // 独立 slash commands 所需的回调
@@ -29,12 +29,15 @@ interface ChatPanelProps {
 }
 
 export const ChatPanel = memo(function ChatPanel({
-  messages, isGenerating, onSend, input, setInput, messagesEndRef, sessionId,
+  messages, isGenerating, onSend, input, setInput, sessionId,
   setActiveTab, createNewSession, clearMessages, setTheme, toggleTerminal, setLogs, setUnreadLogs,
 }: ChatPanelProps) {
 
   const mode = usePlanStore((s) => s.mode);
   const setMode = usePlanStore((s) => s.setMode);
+
+  // 智能自动滚动：新消息时自动滚到底部，用户手动滚动时暂停
+  const { containerRef: scrollContainerRef } = useAutoScroll([messages, isGenerating]);
 
   // 每个 ChatPanel 独立创建 slashCommands 实例，互不干扰
   const slashCommands = useSlashCommands({
@@ -145,7 +148,7 @@ export const ChatPanel = memo(function ChatPanel({
   return (
     <div className="flex-1 flex flex-col overflow-hidden min-h-0">
       {/* 消息区域：占满剩余空间，内容少时也能撑开 */}
-      <div className="flex-1 overflow-auto min-h-0 flex flex-col">
+      <div ref={scrollContainerRef} className="flex-1 overflow-auto min-h-0 flex flex-col">
         {messages.length === 0 ? (
           /* 欢迎页：flex-1 确保撑满 flex 容器 */
           <div className="flex-1 flex items-center justify-center p-4">
@@ -168,7 +171,6 @@ export const ChatPanel = memo(function ChatPanel({
         ) : (
           /* 消息列表：有消息时用 p-4 space-y-2 布局 */
           <div className="p-4 space-y-2">
-            <div id="scroll-anchor" />
             {messages.map(message => (
               <MessageBubble key={message.id} message={message} />
             ))}
@@ -182,7 +184,6 @@ export const ChatPanel = memo(function ChatPanel({
                 <span className="text-sm">AI 正在思考...</span>
               </div>
             )}
-            <div ref={messagesEndRef} />
           </div>
         )}
       </div>

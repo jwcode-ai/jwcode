@@ -5,8 +5,10 @@ import com.jwcode.core.a2a.A2AFacade;
 import com.jwcode.core.a2a.model.A2ATask;
 import com.jwcode.core.a2a.model.AgentCard;
 import com.jwcode.core.a2a.model.TaskOutput;
+import com.jwcode.core.api.PlanTaskBroadcaster;
 import com.jwcode.core.config.ResourcePromptLoader;
 import com.jwcode.core.llm.LLMService;
+import com.jwcode.core.model.PlanTask;
 import com.jwcode.core.planner.IntentAnalyzer;
 import com.jwcode.core.planner.IntentAnalyzer.AnalysisResult;
 import com.jwcode.core.planner.IntentAnalyzer.TaskType;
@@ -56,6 +58,12 @@ public class EnhancedOrchestratorAgent {
     private LLMService llmService;
     private ToolRegistry toolRegistry;
     private ToolExecutor toolExecutor;
+
+    // Plan 模式广播器（用于向前端推送任务状态）
+    private PlanTaskBroadcaster planTaskBroadcaster;
+
+    // 当前会话 ID（用于 WebSocket 消息路由）
+    private String sessionId;
 
     // 当前执行上下文
     private String currentTaskId;
@@ -267,6 +275,12 @@ public class EnhancedOrchestratorAgent {
         this.recommendations.clear();
         this.contextBus.clear();
 
+        // 广播 plan_start 消息到前端
+        if (planTaskBroadcaster != null && sessionId != null) {
+            planTaskBroadcaster.broadcastPlanStart(sessionId,
+                "开始分析用户请求: " + analysis.getSummary());
+        }
+
         StringBuilder sb = new StringBuilder();
 
         // 输出任务分析结果
@@ -361,6 +375,24 @@ public class EnhancedOrchestratorAgent {
             sb.append("- Failed: ").append(completedSubTasks.size() - successCount).append("\n");
         }
 
+        // 广播 plan_tasks — 发送完整的任务树到前端
+        if (planTaskBroadcaster != null && sessionId != null) {
+            List<PlanTask> taskTree = buildPlanTaskTree();
+            try {
+                com.fasterxml.jackson.databind.ObjectMapper mapper =
+                    new com.fasterxml.jackson.databind.ObjectMapper();
+                String tasksJson = mapper.writeValueAsString(taskTree);
+                planTaskBroadcaster.broadcastPlanTasks(sessionId, tasksJson);
+            } catch (Exception e) {
+                logger.warning("Failed to serialize plan task tree: " + e.getMessage());
+            }
+        }
+
+        // 广播 plan_complete — 全部任务完成
+        if (planTaskBroadcaster != null && sessionId != null) {
+            planTaskBroadcaster.broadcastPlanComplete(sessionId, "任务执行完成");
+        }
+
         return sb.toString();
     }
 
@@ -382,7 +414,7 @@ public class EnhancedOrchestratorAgent {
     }
 
     /**
-     * 执行单个子任务（同步）
+     * 执行单个子任务（同步），并在执行过程中广播任务状态到前端
      */
     private TaskOutput executeSingleTask(String agentName, AnalysisResult analysis) {
         if (a2aFacade == null) {
@@ -414,6 +446,11 @@ public class EnhancedOrchestratorAgent {
 
         logger.info("Submitting task " + task.getTaskId() + " to agent " + agentName);
 
+        // 广播 plan_task_start — 子任务开始执行
+        if (planTaskBroadcaster != null && sessionId != null) {
+            planTaskBroadcaster.broadcastPlanTaskStart(sessionId, task.getTaskId(), agentName.toLowerCase());
+        }
+
         LocalDateTime stepStart = LocalDateTime.now();
         TaskOutput output;
         try {
@@ -435,6 +472,14 @@ public class EnhancedOrchestratorAgent {
             output.getSummary(),
             stepDuration
         ));
+
+        // 广播 plan_task_result — 子任务完成/失败
+        if (planTaskBroadcaster != null && sessionId != null) {
+            String status = output.isSuccess() ? "completed" : "failed";
+            String result = output.getSummary();
+            String error = output.isSuccess() ? null : output.getSummary();
+            planTaskBroadcaster.broadcastPlanTaskResult(sessionId, task.getTaskId(), status, result, error);
+        }
 
         // 记录时间线
         timeline.add(new TimelineEntry(
@@ -827,6 +872,101 @@ public class EnhancedOrchestratorAgent {
             4. Verify results
             5. Generate report
             """;
+    }
+
+    // ==================== Setters for PlanTaskBroadcaster & SessionId ====================
+
+    /**
+     * 设置 PlanTaskBroadcaster（用于向前端广播任务状态）
+     */
+    public void setPlanTaskBroadcaster(PlanTaskBroadcaster broadcaster) {
+        this.planTaskBroadcaster = broadcaster;
+    }
+
+    /**
+     * 设置当前会话 ID（用于 WebSocket 消息路由）
+     */
+    public void setSessionId(String sessionId) {
+        this.sessionId = sessionId;
+    }
+
+    /**
+     * 获取当前会话 ID
+     */
+    public String getSessionId() {
+        return sessionId;
+    }
+
+    /**
+     * 构建 PlanTask 树形结构，用于发送到前端
+     */
+    public List<PlanTask> buildPlanTaskTree() {
+        List<PlanTask> tasks = new ArrayList<>();
+
+        // 主任务
+        PlanTask mainTask = PlanTask.builder()
+                .id(currentTaskId != null ? currentTaskId : "task-" + System.currentTimeMillis())
+                .title(currentTaskGoal != null ? currentTaskGoal : "未命名任务")
+                .description(currentTaskGoal != null ? currentTaskGoal : "")
+                .status("pending")
+                .agentType("orchestrator")
+                .build();
+
+        // 从已完成的子任务构建子任务列表
+        List<PlanTask> subTaskList = new ArrayList<>();
+        for (SubTaskResult st : completedSubTasks) {
+            String agentType = st.getTaskType().toLowerCase();
+            PlanTask subTask = PlanTask.builder()
+                    .id(st.getTaskId())
+                    .title(st.getTaskType() + ": " + truncate(st.getDescription(), 60))
+                    .description(st.getDescription())
+                    .status(st.getStatus() == Status.SUCCESS ? "completed" : "failed")
+                    .agentType(agentType)
+                    .result(st.getStatus() == Status.SUCCESS ? st.getOutput() : null)
+                    .error(st.getStatus() != Status.SUCCESS ? st.getOutput() : null)
+                    .startedAt(System.currentTimeMillis() - st.getDuration().toMillis())
+                    .completedAt(System.currentTimeMillis())
+                    .progress(100)
+                    .build();
+            subTaskList.add(subTask);
+        }
+
+        // 如果没有已完成的子任务，添加默认子任务占位
+        if (subTaskList.isEmpty()) {
+            // 根据任务类型添加默认子任务
+            String[] defaultAgents = {"explorer", "architect", "coder", "tester", "reviewer"};
+            for (String agent : defaultAgents) {
+                PlanTask subTask = PlanTask.builder()
+                        .id(agent + "-" + System.currentTimeMillis())
+                        .title(getAgentDisplayName(agent) + ": 待执行")
+                        .description("等待执行")
+                        .status("pending")
+                        .agentType(agent)
+                        .build();
+                subTaskList.add(subTask);
+            }
+        }
+
+        mainTask.setChildren(subTaskList);
+        tasks.add(mainTask);
+
+        return tasks;
+    }
+
+    /**
+     * 获取 Agent 显示名称
+     */
+    private String getAgentDisplayName(String agentType) {
+        switch (agentType.toLowerCase()) {
+            case "explorer": return "调研分析";
+            case "architect": return "方案设计";
+            case "coder": return "编码实现";
+            case "tester": return "测试验证";
+            case "reviewer": return "代码审查";
+            case "debug": return "调试诊断";
+            case "documenter": return "文档编写";
+            default: return agentType;
+        }
     }
 
     // ==================== Getters ====================

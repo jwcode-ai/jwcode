@@ -23,8 +23,13 @@ import java.util.logging.Logger;
  *   <li>成功时返回：执行结果（不包含中间重试过程）</li>
  * </ul>
  * </p>
+ *
+ * <p>【重构】使用泛型 {@code <T>} 替代原始 {@code Supplier<Object>}，
+ * 提供编译期类型安全。</p>
+ *
+ * @param <T> 操作结果的类型
  */
-public class ToolAgent {
+public class ToolAgent<T> {
 
     private static final Logger logger = Logger.getLogger(ToolAgent.class.getName());
 
@@ -55,13 +60,13 @@ public class ToolAgent {
      * 执行工具操作（同步，带自修复）。
      *
      * @param toolName  工具名称
-     * @param operation 操作
+     * @param operation 类型安全操作
      * @return ToolAgentResult（不包含原始命令、堆栈跟踪）
      */
-    public ToolAgentResult execute(String toolName, Supplier<Object> operation) {
+    public ToolAgentResult execute(String toolName, Supplier<T> operation) {
         long startTime = System.currentTimeMillis();
         try {
-            Object result = retryOrchestrator.executeWithRetry(
+            T result = retryOrchestrator.executeWithRetry(
                 operation, DEFAULT_SELF_HEAL_POLICY, retryStrategy);
             long elapsed = System.currentTimeMillis() - startTime;
             logger.info("[ToolAgent] " + toolName + " 执行成功 (" + elapsed + "ms)");
@@ -85,11 +90,11 @@ public class ToolAgent {
      * 执行工具操作（异步，带自修复）。
      *
      * @param toolName  工具名称
-     * @param operation 异步操作
-     * @return CompletableFuture<ToolAgentResult>
+     * @param operation 类型安全异步操作
+     * @return CompletableFuture&lt;ToolAgentResult&gt;
      */
     public CompletableFuture<ToolAgentResult> executeAsync(String toolName,
-                                                            Supplier<CompletableFuture<Object>> operation) {
+                                                            Supplier<CompletableFuture<T>> operation) {
         long startTime = System.currentTimeMillis();
         return retryOrchestrator.executeWithRetryAsync(operation, DEFAULT_SELF_HEAL_POLICY, retryStrategy)
             .thenApply(result -> {
@@ -121,14 +126,16 @@ public class ToolAgent {
     /**
      * 创建带自定义重试策略的 ToolAgent。
      */
-    public static ToolAgent withCustomRetry(RetryPolicy policy, RetryStrategy strategy) {
-        return new ToolAgent(new RetryOrchestrator(), strategy);
+    @SuppressWarnings("unchecked")
+    public static <T> ToolAgent<T> withCustomRetry(RetryPolicy policy, RetryStrategy strategy) {
+        return new ToolAgent<>(new RetryOrchestrator(), strategy);
     }
 
     /**
      * 创建快速失败 ToolAgent（不重试）。
      */
-    public static ToolAgent fastFail() {
-        return new ToolAgent(new RetryOrchestrator(), RetryStrategy.noRetry());
+    @SuppressWarnings("unchecked")
+    public static <T> ToolAgent<T> fastFail() {
+        return new ToolAgent<>(new RetryOrchestrator(), RetryStrategy.noRetry());
     }
 }

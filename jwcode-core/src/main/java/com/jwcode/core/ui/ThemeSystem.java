@@ -3,6 +3,7 @@ package com.jwcode.core.ui;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Logger;
 
 /**
  * ThemeSystem - 主题系统
@@ -14,6 +15,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * @since 1.0.0
  */
 public class ThemeSystem {
+    
+    private static final Logger logger = Logger.getLogger(ThemeSystem.class.getName());
     
     // ANSI 转义代码
     public static final String RESET = "\u001B[0m";
@@ -264,19 +267,18 @@ public class ThemeSystem {
      * 列出所有主题
      */
     public static void listThemes() {
-        System.out.println("可用主题:");
-        System.out.println("  1. DARK  - 暗色主题");
-        System.out.println("  2. LIGHT - 亮色主题");
+        logger.info("可用主题:");
+        logger.info("  1. DARK  - 暗色主题");
+        logger.info("  2. LIGHT - 亮色主题");
         
         if (!customThemes.isEmpty()) {
-            System.out.println("  自定义主题:");
+            logger.info("  自定义主题:");
             for (ThemeConfig config : customThemes.values()) {
-                System.out.println("     - " + config.name);
+                logger.info("     - " + config.name);
             }
         }
         
-        System.out.println();
-        System.out.println("当前主题：" + currentTheme);
+        logger.info("当前主题：" + currentTheme);
     }
     
     /**

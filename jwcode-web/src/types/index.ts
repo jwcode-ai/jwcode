@@ -201,7 +201,18 @@ export type WSMessageType =
   | 'plan_task_update'
   | 'plan_task_result'
   | 'plan_complete'
-  | 'plan_error';
+  | 'plan_error'
+  // TodoWrite 消息
+  | 'todo_update'
+  | 'todo_item_done'
+  | 'todo_progress'
+  // Plan Mode 管理消息
+  | 'plan_mode_enter'
+  | 'plan_mode_exit'
+  // 工作目录切换消息
+  | 'workspace'
+  | 'workspace_changed';
+
 
 export interface WSMessage {
   type: WSMessageType;
@@ -261,7 +272,7 @@ export interface FileNode {
 
 // === Plan 模式相关类型 ===
 
-export type PlanPhase = 'idle' | 'planning' | 'executing' | 'result';
+export type PlanPhase = 'idle' | 'planning' | 'executing' | 'result' | 'error';
 
 export interface PlanTask {
   id: string;
@@ -270,6 +281,8 @@ export interface PlanTask {
   status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
   agentType: string;
   dependencies: string[];
+  /** 子任务列表（树形结构支持） */
+  children?: PlanTask[];
   result?: string;
   error?: string;
   startedAt?: number;

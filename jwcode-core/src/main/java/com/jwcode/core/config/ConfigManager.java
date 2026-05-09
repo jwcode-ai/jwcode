@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 /**
@@ -24,6 +25,8 @@ import java.util.stream.Collectors;
  * 查找顺序: Runtime → Project → User → System
  */
 public class ConfigManager {
+    
+    private static final Logger logger = Logger.getLogger(ConfigManager.class.getName());
     
     private static final String CONFIG_DIR = ".jwcode";
     private static final String CONFIG_FILE_YAML = "config.yaml";
@@ -153,14 +156,12 @@ public class ConfigManager {
             Map<String, String> flatMap = flattenMap(map, "");
             target.putAll(flatMap);
             
-            System.out.println("配置已加载: " + path + " (" + flatMap.size() + " 项)");
+            logger.info("配置已加载: " + path + " (" + flatMap.size() + " 项)");
             
         } catch (IOException e) {
-            System.err.println("加载配置失败: " + path + " - " + e.getMessage());
-            e.printStackTrace();
+            logger.severe("加载配置失败: " + path + " - " + e.getMessage());
         } catch (Exception e) {
-            System.err.println("解析配置失败: " + path + " - " + e.getMessage());
-            e.printStackTrace();
+            logger.severe("解析配置失败: " + path + " - " + e.getMessage());
         }
     }
     

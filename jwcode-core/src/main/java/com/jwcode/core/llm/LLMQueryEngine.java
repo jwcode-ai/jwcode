@@ -13,6 +13,8 @@ import com.jwcode.core.tool.context.ToolExecutionContext;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -60,6 +62,10 @@ public class LLMQueryEngine {
     private static final long COMPACT_COOLDOWN_MS = 30000; // 30秒冷却时间
     // 【Phase 5】Agent 感知：当前 Agent 注册表，用于工具过滤和提示词注入
     private AgentRegistry agentRegistry;
+    // 【Phase 5】Agent 桥接器：连接 LLMQueryEngine 与 EnhancedOrchestratorAgent
+    private com.jwcode.core.agent.AgentBridge agentBridge;
+    // CompactorAgent 引用（用于语义级上下文压缩）
+    private com.jwcode.core.agent.CompactorAgent compactorAgent;
     private static final ObjectMapper MAPPER = new ObjectMapper()
             .registerModule(new JavaTimeModule());
     
@@ -86,6 +92,64 @@ public class LLMQueryEngine {
         this.tokenBudget = TokenBudget.of(this.config.getTokenBudget());
         this.compactionStrategy = new SimpleCompactionStrategy(llmService);
         this.taskLifecycleManager = new TaskLifecycleManager(llmService, this.pipeline);
+        // 创建 AgentBridge（如果 agentRegistry 可用）
+        initAgentBridge();
+        // 创建 CompactorAgent（用于语义级上下文压缩）
+        initCompactorAgent();
+    }
+
+    /**
+     * 初始化 CompactorAgent — 用于智能语义压缩
+     */
+    private void initCompactorAgent() {
+        try {
+            this.compactorAgent = new com.jwcode.core.agent.CompactorAgent(
+                llmService, compactionStrategy
+            );
+            logger.info("[LLMQueryEngine] CompactorAgent initialized");
+        } catch (Exception e) {
+            logger.warning("[LLMQueryEngine] Failed to init CompactorAgent: " + e.getMessage());
+            this.compactorAgent = null;
+        }
+    }
+
+    /**
+     * 初始化 AgentBridge — 连接 LLMQueryEngine 与 EnhancedOrchestratorAgent
+     */
+    private void initAgentBridge() {
+        if (agentRegistry == null) {
+            this.agentBridge = null;
+            return;
+        }
+        try {
+            // 从 toolExecutor 获取 ToolRegistry（通过反射方式兼容）
+            com.jwcode.core.tool.ToolRegistry toolReg = null;
+            if (toolExecutor != null) {
+                try {
+                    // ToolExecutor 内部持有 ToolRegistry，尝试通过反射获取
+                    var field = toolExecutor.getClass().getDeclaredField("toolRegistry");
+                    field.setAccessible(true);
+                    toolReg = (com.jwcode.core.tool.ToolRegistry) field.get(toolExecutor);
+                } catch (Exception e) {
+                    logger.fine("Cannot extract ToolRegistry from ToolExecutor: " + e.getMessage());
+                }
+            }
+            this.agentBridge = new com.jwcode.core.agent.AgentBridge(
+                this, agentRegistry, llmService, toolReg, toolExecutor
+            );
+            logger.info("[LLMQueryEngine] AgentBridge initialized, orchestratorAvailable="
+                + agentBridge.isOrchestratorAvailable());
+        } catch (Exception e) {
+            logger.warning("[LLMQueryEngine] Failed to init AgentBridge: " + e.getMessage());
+            this.agentBridge = null;
+        }
+    }
+
+    /**
+     * 获取 AgentBridge
+     */
+    public com.jwcode.core.agent.AgentBridge getAgentBridge() {
+        return agentBridge;
     }
     
     /**
@@ -178,6 +242,9 @@ public class LLMQueryEngine {
         
         // 添加系统提示，强调文件编辑前必须先读取
         addFileEditGuidelines();
+        
+        // 注入环境信息（操作系统、工作目录、系统时间等），让 AI 了解当前环境
+        injectEnvironmentInfo();
         
         // 开始对话循环，初始空回复计数为 0
         return runConversationLoop(0, 0);
@@ -303,6 +370,49 @@ public class LLMQueryEngine {
             """;
         
         session.addMessage(Message.createSystemMessage(guidelines));
+    }
+
+    /**
+     * 注入环境信息到系统提示
+     *
+     * <p>让 AI 知晓当前的运行环境：操作系统、Java版本、系统时间、工作目录等。
+     * 这样 AI 在回答"当前工作目录是什么"等问题时能给出准确的答案，
+     * 而不是返回 JVM 启动目录。</p>
+     *
+     * <p>使用去重标记 [ENV_INFO] 避免每次迭代重复注入。</p>
+     */
+    private void injectEnvironmentInfo() {
+        String marker = "[ENV_INFO]";
+        if (hasRecentSystemPrompt(marker)) {
+            return;
+        }
+
+        String osName = System.getProperty("os.name", "Unknown");
+        String osVersion = System.getProperty("os.version", "Unknown");
+        String osArch = System.getProperty("os.arch", "Unknown");
+        String javaVersion = System.getProperty("java.version", "Unknown");
+        String userName = System.getProperty("user.name", "Unknown");
+        String workingDir = session.getWorkingDirectory();
+
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+            .withZone(ZoneId.systemDefault());
+        String currentTime = formatter.format(Instant.now());
+
+        String envInfo = """
+            %s
+            【当前环境信息】
+            - 操作系统：%s %s (%s)
+            - Java 版本：%s
+            - 当前用户：%s
+            - 当前时间：%s
+            - 工作目录：%s
+
+            注意：以上环境信息随用户操作动态更新。当用户询问"当前工作目录"、
+            "现在时间"、"操作系统"等问题时，请以上述信息为准。
+            """.formatted(marker, osName, osVersion, osArch, javaVersion, userName, currentTime, workingDir);
+
+        session.addMessage(Message.createSystemMessage(envInfo));
+        logger.info("[LLMQueryEngine] 已注入环境信息 | OS=" + osName + " | 工作目录=" + workingDir);
     }
 
     /**

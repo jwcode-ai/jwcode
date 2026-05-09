@@ -1,45 +1,34 @@
 package com.jwcode.core.tool;
 
+import com.jwcode.core.plan.PlanModeManager;
 import com.jwcode.core.tool.input.ExitPlanModeInput;
 import com.jwcode.core.tool.output.ExitPlanModeOutput;
 import com.jwcode.core.tool.context.ToolExecutionContext;
 
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.logging.Logger;
 
 /**
- * ExitPlanModeV2 工具
- * 用于退出计划模式，返回正常对话模式
+ * ExitPlanModeV2Tool — 退出计划模式工具（增强版）。
+ * 
+ * <p>退出 Plan Mode 后：</p>
+ * <ul>
+ *   <li>恢复所有工具的写权限</li>
+ *   <li>Plan 文件内容由 ExitPlanMode 从文件系统读取（不接受 plan 内容作为参数）</li>
+ *   <li>退出后自动请求用户审批 plan</li>
+ * </ul>
+ * 
+ * <p>设计取舍：</p>
+ * <ul>
+ *   <li><b>不接受 plan 内容作为参数</b> — 避免重复（plan 已写进文件），强制持久化，强制结构化</li>
+ *   <li><b>需要 confirmed=true</b> — 防止误退出</li>
+ *   <li><b>不要用 AskUserQuestion 问"我的 plan 行不行"</b> — ExitPlanMode 本身就请求用户审批</li>
+ * </ul>
  */
 public class ExitPlanModeV2Tool implements Tool<ExitPlanModeInput, ExitPlanModeOutput, Void> {
     
-    private static final String STATE_FILE = ".jwcode/state.json";
-    private volatile String currentMode = "normal"; // normal, plan, act
-    
-    public ExitPlanModeV2Tool() {
-        // 初始化时读取当前模式
-        loadCurrentMode();
-    }
-    
-    private void loadCurrentMode() {
-        // 从状态文件读取当前模式
-        try {
-            java.nio.file.Path path = java.nio.file.Paths.get(
-                    System.getProperty("user.dir"), STATE_FILE);
-            if (java.nio.file.Files.exists(path)) {
-                String content = java.nio.file.Files.readString(path);
-                // 简单解析（实际使用 Jackson）
-                if (content.contains("\"mode\"")) {
-                    int start = content.indexOf("\"mode\"") + 7;
-                    int end = content.indexOf("\"", start);
-                    if (end > start) {
-                        currentMode = content.substring(start, end);
-                    }
-                }
-            }
-        } catch (Exception e) {
-            // 忽略错误，使用默认值
-        }
-    }
+    private static final Logger logger = Logger.getLogger(ExitPlanModeV2Tool.class.getName());
     
     @Override
     public String getName() {
@@ -48,14 +37,28 @@ public class ExitPlanModeV2Tool implements Tool<ExitPlanModeInput, ExitPlanModeO
     
     @Override
     public String getDescription() {
-        return "Exit from plan mode and return to normal mode with a summary of the plan.";
+        return "Exit from plan mode and return to normal mode. " +
+               "The plan content is read from the plan file (not passed as parameter). " +
+               "This inherently requests user approval of the plan.";
     }
     
     @Override
     public String getPrompt() {
-        return "Use this tool when you want to exit plan mode. " +
-               "This tool requires confirmation (confirmed=true) to actually exit. " +
-               "Provide a summary of what was planned.";
+        return """
+            **ExitPlanModeV2** — 退出计划模式
+            
+            退出 Plan Mode 并返回正常模式。Plan 内容从文件系统读取，不接受 plan 内容作为参数。
+            
+            **重要**：
+            - 不要用 AskUserQuestion 问"我的 plan 行不行" — ExitPlanMode 本身就请求用户审批
+            - 需要 confirmed=true 才能退出
+            - Plan 文件必须在调用前已写入
+            
+            **标准流程**：
+            1. 写 plan 到指定文件
+            2. 调用 ExitPlanModeV2(confirmed=true, summary="...")
+            3. 等待用户审批
+            """;
     }
     
     @Override
@@ -65,50 +68,60 @@ public class ExitPlanModeV2Tool implements Tool<ExitPlanModeInput, ExitPlanModeO
             java.util.function.Consumer<ToolProgress<Void>> onProgress) {
         
         return CompletableFuture.supplyAsync(() -> {
-            // 检查是否在计划模式
-            if (!"plan".equals(currentMode)) {
-                return ToolResult.success(ExitPlanModeOutput.failure("当前不在计划模式"));
-            }
-            
-            // 检查是否确认
-            Boolean confirmed = input.confirmed();
-            if (confirmed == null || !confirmed) {
-                return ToolResult.success(ExitPlanModeOutput.failure("需要确认才能退出计划模式"));
-            }
-            
-            // 执行退出
             try {
-                // 保存摘要
-                String summary = input.summary() != null ? input.summary() : "计划完成";
-                saveSummary(summary);
+                // 检查是否在计划模式
+                PlanModeManager modeManager = PlanModeManager.getInstance();
+                if (!modeManager.isPlanMode()) {
+                    return ToolResult.<ExitPlanModeOutput>success(ExitPlanModeOutput.failure("当前不在计划模式"));
+                }
                 
-                // 更新模式
-                currentMode = "normal";
-                saveMode("normal");
+                // 检查是否确认
+                Boolean confirmed = input != null ? input.confirmed() : null;
+                if (confirmed == null || !confirmed) {
+                    return ToolResult.<ExitPlanModeOutput>success(ExitPlanModeOutput.failure("需要确认才能退出计划模式"));
+                }
                 
-                return ToolResult.success(ExitPlanModeOutput.success("normal", summary));
+                // 执行退出
+                String summary = input != null && input.summary() != null 
+                    ? input.summary() 
+                    : "计划完成";
+                
+                boolean success = modeManager.exitPlanMode(summary);
+                
+                if (success) {
+                    logger.info("Exited Plan Mode: " + summary);
+                    
+                    // 读取 plan 文件内容（如果有）
+                    String planContent = readPlanFile();
+                    
+                    return ToolResult.<ExitPlanModeOutput>success(ExitPlanModeOutput.success("normal", summary, planContent));
+                } else {
+                    return ToolResult.<ExitPlanModeOutput>error("退出计划模式失败");
+                }
                 
             } catch (Exception e) {
-                return ToolResult.error("退出计划模式失败: " + e.getMessage());
+                logger.warning("ExitPlanMode failed: " + e.getMessage());
+                return ToolResult.<ExitPlanModeOutput>error("退出计划模式失败: " + e.getMessage());
             }
         });
     }
+
     
-    private void saveSummary(String summary) throws Exception {
-        java.nio.file.Path path = java.nio.file.Paths.get(
-                System.getProperty("user.dir"), STATE_FILE);
-        java.nio.file.Files.createDirectories(path.getParent());
-        
-        String content = "{\"mode\":\"normal\",\"summary\":\"" + 
-                summary.replace("\"", "\\\"") + "\"}";
-        java.nio.file.Files.writeString(path, content);
-    }
-    
-    private void saveMode(String mode) throws Exception {
-        java.nio.file.Path path = java.nio.file.Paths.get(
-                System.getProperty("user.dir"), STATE_FILE);
-        String content = "{\"mode\":\"" + mode + "\"}";
-        java.nio.file.Files.writeString(path, content);
+    /**
+     * 从 plan 文件读取内容
+     * ExitPlanMode 不接受 plan 内容作为参数，而是从文件系统读取
+     */
+    private String readPlanFile() {
+        try {
+            java.nio.file.Path planPath = java.nio.file.Paths.get(
+                    System.getProperty("user.dir"), ".jwcode", "plan.md");
+            if (java.nio.file.Files.exists(planPath)) {
+                return java.nio.file.Files.readString(planPath);
+            }
+        } catch (Exception e) {
+            logger.fine("No plan file found: " + e.getMessage());
+        }
+        return null;
     }
     
     @Override
@@ -144,22 +157,13 @@ public class ExitPlanModeV2Tool implements Tool<ExitPlanModeInput, ExitPlanModeO
         return false;
     }
     
-    /**
-     * 获取当前模式
-     */
-    public String getCurrentMode() {
-        return currentMode;
+    @Override
+    public Set<SideEffect> getSideEffects() {
+        return Set.of(SideEffect.SESSION_MUTATION);
     }
     
-    /**
-     * 设置为计划模式
-     */
-    public void enterPlanMode() {
-        currentMode = "plan";
-        try {
-            saveMode("plan");
-        } catch (Exception e) {
-            // 忽略错误
-        }
+    @Override
+    public ToolCategory getCategory() {
+        return ToolCategory.METACOGNITION;
     }
 }

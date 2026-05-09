@@ -8,22 +8,28 @@ import java.util.List;
  * TodoWrite 工具输入参数
  * 用于创建、更新或删除待办事项
  * 
- * 支持两种格式：
- * 1. 简单的字符串格式（向后兼容）
- * 2. 结构化的 TodoItem 格式（推荐）
+ * <p>支持两种格式：</p>
+ * <ol>
+ *   <li>简单的字符串格式（向后兼容）</li>
+ *   <li>结构化的 TodoItem 格式（推荐）</li>
+ * </ol>
  * 
- * 修复记录：2026/4/30 - 添加 @JsonAlias 支持 action 作为 operation 的别名
+ * <p>新增字段：</p>
+ * <ul>
+ *   <li><b>status</b> — 待办事项状态（pending/in_progress/completed）</li>
+ *   <li><b>activeForm</b> — 进行时态显示文本</li>
+ * </ul>
  */
 public record TodoWriteInput(
     
-    /** 操作类型: "add", "edit", "delete", "replace_all" */
+    /** 操作类型: "add", "edit", "delete", "replace_all", "mark" */
     @JsonProperty("operation")
-    @JsonAlias("action")  // 【修复】支持 action 作为 operation 的别名
+    @JsonAlias("action")
     String operation,
     
     /** 待办事项内容（简单字符串格式） */
     @JsonProperty("todo")
-    @JsonAlias("todos")   // 【修复】兼容 LLM 可能传入的 todos 字段
+    @JsonAlias("todos")
     String todo,
     
     /** 索引位置（用于编辑或删除） */
@@ -33,6 +39,14 @@ public record TodoWriteInput(
     /** 要编辑的新内容 */
     @JsonProperty("newContent")
     String newContent,
+    
+    /** 待办事项状态: pending, in_progress, completed */
+    @JsonProperty("status")
+    String status,
+    
+    /** 进行时态显示文本（用于 in_progress 状态） */
+    @JsonProperty("activeForm")
+    String activeForm,
     
     /** 完整的待办事项列表（结构化格式，用于 replace_all） */
     @JsonProperty("todos")
@@ -69,10 +83,10 @@ public record TodoWriteInput(
     
     /**
      * 便捷方法：兼容获取 operation
-     * 如果 action 不为 null 但 operation 为 null，返回 action
-     * 这是一个额外的容错层，防止 Jackson 别名解析失败
      */
     public String getOperation() {
         return operation;
     }
 }
+
+

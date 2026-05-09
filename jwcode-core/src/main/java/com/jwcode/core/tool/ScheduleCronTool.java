@@ -6,6 +6,7 @@ import com.jwcode.core.tool.context.ToolExecutionContext;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -49,6 +50,43 @@ public class ScheduleCronTool implements Tool<CronInput, CronOutput, CronOutput.
     }
     
     @Override
+    public JsonNode getInputSchema() {
+        try {
+            return MAPPER.readTree("""
+                {
+                  "type": "object",
+                  "properties": {
+                    "action": {
+                      "type": "string",
+                      "enum": ["create", "delete", "list"],
+                      "description": "操作类型: create=创建定时任务, delete=删除定时任务, list=列出所有任务"
+                    },
+                    "id": {
+                      "type": "string",
+                      "description": "任务ID（delete操作必填）"
+                    },
+                    "cronExpression": {
+                      "type": "string",
+                      "description": "cron表达式，5-6个字段，如 '0 9 * * *'（create操作必填）"
+                    },
+                    "command": {
+                      "type": "string",
+                      "description": "要执行的命令（create操作必填）"
+                    },
+                    "description": {
+                      "type": "string",
+                      "description": "任务描述（可选）"
+                    }
+                  },
+                  "required": ["action"]
+                }
+                """);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+    
+    @Override
     public String getPrompt() {
         return "Use this tool to create, delete, and list scheduled cron jobs. " +
                "The tool operates on a file at the root of your project called .jwcode/crons.json. " +
@@ -63,17 +101,14 @@ public class ScheduleCronTool implements Tool<CronInput, CronOutput, CronOutput.
         
         return CompletableFuture.supplyAsync(() -> {
             try {
-                // 根据参数判断操作类型
-                if (input.id() != null && !input.id().isEmpty()) {
-                    // 删除或列出单个任务
-                    return handleDelete(input);
-                } else if (input.cronExpression() != null) {
-                    // 创建任务
-                    return handleCreate(input);
-                } else {
-                    // 列出所有任务
-                    return handleList();
-                }
+                // 根据 action 参数判断操作类型
+                String action = input.action() != null ? input.action().trim().toLowerCase() : "";
+                return switch (action) {
+                    case "create" -> handleCreate(input);
+                    case "delete" -> handleDelete(input);
+                    case "list", "" -> handleList();
+                    default -> ToolResult.error("未知操作类型: " + action + "，支持: create / delete / list");
+                };
             } catch (Exception e) {
                 return ToolResult.error("操作失败: " + e.getMessage());
             }
@@ -187,17 +222,39 @@ public class ScheduleCronTool implements Tool<CronInput, CronOutput, CronOutput.
         if (input == null) {
             return ToolValidationResult.invalid("输入不能为空");
         }
-        return ToolValidationResult.valid();
+        String action = input.action() != null ? input.action().trim().toLowerCase() : "list";
+        return switch (action) {
+            case "create" -> {
+                if (input.cronExpression() == null || input.cronExpression().isBlank())
+                    yield ToolValidationResult.invalid("create 操作需要 cronExpression 参数");
+                if (input.command() == null || input.command().isBlank())
+                    yield ToolValidationResult.invalid("create 操作需要 command 参数");
+                if (!isValidCronExpression(input.cronExpression()))
+                    yield ToolValidationResult.invalid("无效的 cron 表达式: " + input.cronExpression());
+                yield ToolValidationResult.valid();
+            }
+            case "delete" -> {
+                if (input.id() == null || input.id().isBlank())
+                    yield ToolValidationResult.invalid("delete 操作需要 id 参数");
+                yield ToolValidationResult.valid();
+            }
+            case "list" -> ToolValidationResult.valid();
+            default -> ToolValidationResult.invalid("未知操作类型: " + action + "，支持: create / delete / list");
+        };
     }
     
     @Override
     public boolean isReadOnly(CronInput input) {
-        return input.id() != null && input.cronExpression() == null;
+        if (input == null) return true;
+        String action = input.action() != null ? input.action().trim().toLowerCase() : "list";
+        return action.equals("list");
     }
     
     @Override
     public boolean isDestructive(CronInput input) {
-        return input.id() != null && input.cronExpression() == null;
+        if (input == null) return false;
+        String action = input.action() != null ? input.action().trim().toLowerCase() : "";
+        return action.equals("delete");
     }
     
     @Override

@@ -1,5 +1,6 @@
 package com.jwcode.core.planner;
 
+import com.jwcode.core.a2a.model.StepStatus;
 import com.jwcode.core.agent.parallel.SubAgentResult;
 
 import java.util.*;
@@ -176,10 +177,6 @@ public class AdaptiveExecutionMonitor {
         volatile long executionTime;
         volatile StepStatus status;
         SubAgentResult result;
-    }
-    
-    private enum StepStatus {
-        PENDING, RUNNING, COMPLETED, FAILED
     }
     
     public enum EventType {

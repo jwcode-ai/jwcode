@@ -1,5 +1,6 @@
 package com.jwcode.core.planner;
 
+import com.jwcode.core.a2a.model.StepStatus;
 import com.jwcode.core.agent.parallel.SubAgentResult;
 import com.jwcode.core.planner.ai.ReplanningStrategy;
 import org.slf4j.Logger;
@@ -176,10 +177,6 @@ public class LayeredTaskRepresentation {
     }
 
     // ==================== 数据类 ====================
-
-    public enum StepStatus {
-        PENDING, RUNNING, COMPLETED, FAILED
-    }
 
     public record ToolExecutionRecord(
         String toolName,

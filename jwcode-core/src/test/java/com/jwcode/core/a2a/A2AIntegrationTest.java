@@ -170,7 +170,7 @@ public class A2AIntegrationTest {
 
     @Test
     @Order(6)
-    @DisplayName("LocalAgentDispatcher 任务提交")
+    @DisplayName("LocalAgentDispatcher 任务提交 — 无 LLMService 时应返回失败")
     void testLocalAgentDispatcherTaskSubmit() {
         AgentRegistry registry = AgentRegistry.createDefault();
         AgentDispatcher dispatcher = new LocalAgentDispatcher(registry);
@@ -185,14 +185,15 @@ public class A2AIntegrationTest {
             .updatedAt(LocalDateTime.now())
             .build();
 
+        // 没有 LLMService 时 submitTaskSync 应返回失败而非假成功
         TaskOutput output = dispatcher.submitTaskSync("Coder", task);
         assertNotNull(output);
-        assertTrue(output.isSuccess());
+        assertFalse(output.isSuccess(), "Without LLMService, task should fail, not silently succeed");
     }
 
     @Test
     @Order(7)
-    @DisplayName("LocalAgentDispatcher 异步任务")
+    @DisplayName("LocalAgentDispatcher 异步任务 — 无 LLMService 时应抛出异常")
     void testLocalAgentDispatcherAsync() throws Exception {
         AgentRegistry registry = AgentRegistry.createDefault();
         AgentDispatcher dispatcher = new LocalAgentDispatcher(registry);
@@ -208,9 +209,8 @@ public class A2AIntegrationTest {
             .build();
 
         CompletableFuture<TaskOutput> future = dispatcher.submitTask("Coder", task);
-        TaskOutput output = future.get(5, TimeUnit.SECONDS);
-        assertNotNull(output);
-        assertTrue(output.isSuccess());
+        // 没有 LLMService 时应抛出 IllegalStateException
+        assertThrows(java.util.concurrent.ExecutionException.class, () -> future.get(5, TimeUnit.SECONDS));
     }
 
     // ==================== A2A 配置测试 ====================

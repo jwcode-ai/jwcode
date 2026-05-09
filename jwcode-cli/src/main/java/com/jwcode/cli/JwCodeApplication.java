@@ -6,6 +6,8 @@ import com.jwcode.cli.log.LogConfigurator;
 import com.jwcode.cli.log.ProgressIndicator;
 import com.jwcode.core.agent.AgentRegistry;
 import com.jwcode.core.config.JwcodeConfig;
+import com.jwcode.core.tool.ToolRegistry;
+import com.jwcode.core.tool.ToolExecutor;
 import com.jwcode.core.config.SystemPromptLoader;
 import com.jwcode.core.llm.*;
 import com.jwcode.core.model.Message;
@@ -59,6 +61,9 @@ public class JwCodeApplication implements AutoCloseable {
     
     /**
      * 初始化会话 — 从 main() 下沉的会话选择/创建逻辑
+     *
+     * <p>【修复】使用 JLine3Terminal.readLine() 替代 java.util.Scanner，
+     * 保持终端体验一致性。</p>
      */
     private void initializeSession(String[] args) {
         // 解析启动参数
@@ -84,10 +89,9 @@ public class JwCodeApplication implements AutoCloseable {
                     + " (" + activeSession.getMessageCount() + " 条消息)");
                 System.out.println("  2. 新建会话");
                 System.out.println();
-                System.out.print("请选择 [1]: ");
                 
-                java.util.Scanner scanner = new java.util.Scanner(System.in);
-                String choice = scanner.nextLine().trim();
+                // 【修复】使用 JLine3Terminal 替代 java.util.Scanner
+                String choice = readSessionChoice();
                 if ("2".equals(choice)) {
                     forceNew = true;
                 }
@@ -100,6 +104,37 @@ public class JwCodeApplication implements AutoCloseable {
             newSession.setTitle("会话 " + newSession.getId().substring(0, 8));
             sm.setActiveSession(newSession.getId());
             System.out.println(CliLogger.GREEN + "✓ 已创建新会话: " + newSession.getTitle() + CliLogger.RESET);
+        }
+    }
+    
+    /**
+     * 使用 JLine3Terminal 读取会话选择，如果终端不可用则回退到 System.console()
+     */
+    private String readSessionChoice() {
+        // 优先使用 JLine3Terminal
+        if (terminal != null) {
+            try {
+                return terminal.readLine("请选择 [1]: ");
+            } catch (Exception e) {
+                CliLogger.getInstance().debug("JLine3 readLine failed, falling back: " + e.getMessage());
+            }
+        }
+        
+        // 回退到 System.console()
+        try {
+            java.io.Console console = System.console();
+            if (console != null) {
+                String line = console.readLine("请选择 [1]: ");
+                return line != null ? line.trim() : "";
+            }
+        } catch (Exception e) {
+            // 忽略
+        }
+        
+        // 最终回退：使用 System.in
+        try (java.util.Scanner fallback = new java.util.Scanner(System.in)) {
+            System.out.print("请选择 [1]: ");
+            return fallback.nextLine().trim();
         }
     }
     
@@ -138,9 +173,25 @@ public class JwCodeApplication implements AutoCloseable {
         }
     }
     
+    /**
+     * 初始化插件服务 — 加载并注册所有可用插件
+     */
+    private void initializePluginService() {
+        try {
+            com.jwcode.core.plugins.PluginService pluginService = 
+                new com.jwcode.core.plugins.PluginService();
+            CliLogger.getInstance().info("插件服务初始化完成");
+        } catch (Exception e) {
+            CliLogger.getInstance().warn("插件服务初始化失败: " + e.getMessage());
+        }
+    }
+    
     private void initializeLLMQueryEngine() {
         LogConfigurator.configureQuietMode();
         CliLogger logger = CliLogger.getInstance();
+        
+        // 初始化插件服务
+        initializePluginService();
         
         // 检查配置文件是否存在
         if (!configManager.isConfigured()) {
@@ -184,10 +235,13 @@ public class JwCodeApplication implements AutoCloseable {
                 + " | registered=" + agentRegistry.listAgentIds());
 
             // 创建 LLM 查询引擎（传入 AgentRegistry 启用分层架构）
+            // 创建 ToolRegistry 和 ToolExecutor，确保工具系统正常工作
+            ToolRegistry toolRegistry = ToolRegistry.createDefault();
+            ToolExecutor toolExecutor = new ToolExecutor(toolRegistry);
             this.llmQueryEngine = llmFactory.createQueryEngine(
                 session,
-                null,  // toolRegistry — 使用默认
-                null,  // toolExecutor — 使用默认
+                toolRegistry,
+                toolExecutor,
                 agentRegistry
             );
             
@@ -1296,6 +1350,9 @@ public class JwCodeApplication implements AutoCloseable {
      * 主入口
      */
     public static void main(String[] args) {
+        // 安装 JUL → SLF4J 桥接，统一日志框架
+        com.jwcode.core.log.LoggingBridge.install();
+
         try (JwCodeApplication app = new JwCodeApplication(args)) {
             app.run(args);
         }

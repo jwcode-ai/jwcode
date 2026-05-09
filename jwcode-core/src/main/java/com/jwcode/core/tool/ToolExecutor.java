@@ -1,6 +1,7 @@
 package com.jwcode.core.tool;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.jwcode.core.plan.PlanModeManager;
 import com.jwcode.core.tool.context.ToolExecutionContext;
 import com.jwcode.core.tool.permission.PermissionChecker;
 
@@ -136,8 +137,8 @@ public class ToolExecutor {
             );
         }
         
-        // 检查权限
-        if (permissionChecker != null && !hasPermission(tool, input)) {
+        // 【修复】检查权限 — 同时检查 PlanModeManager 和 PermissionChecker
+        if (!hasPermission(tool, input)) {
             String error = "没有权限执行工具: " + toolName;
             logger.warning(error);
             return CompletableFuture.completedFuture(ToolResult.error(error));
@@ -253,8 +254,27 @@ public class ToolExecutor {
     
     /**
      * 检查权限
+     * 
+     * <p>集成 PlanModeManager 的 Plan Mode 权限隔离：</p>
+     * <ul>
+     *   <li>Plan Mode 下只允许只读工具</li>
+     *   <li>Plan Mode 下禁用写工具（FileWrite、FileEdit、Bash 等）</li>
+     *   <li>非 Plan Mode 下所有工具都允许</li>
+     * </ul>
      */
     private <I, O, P> boolean hasPermission(Tool<I, O, P> tool, I input) {
+        // 1. Plan Mode 权限检查
+        PlanModeManager modeManager = PlanModeManager.getInstance();
+        if (modeManager.isPlanMode()) {
+            PlanModeManager.PermissionResult planResult = modeManager.checkToolPermission(tool, input);
+            if (planResult.isDenied()) {
+                logger.warning("Plan Mode 权限拒绝: " + tool.getName() + " - " + planResult.getReason());
+                return false;
+            }
+            return true;
+        }
+        
+        // 2. 非 Plan Mode 下的常规权限检查
         // 只读工具通常不需要额外权限检查
         if (tool.isReadOnly(input)) {
             return true;
@@ -268,6 +288,7 @@ public class ToolExecutor {
         
         return true;
     }
+
     
     /**
      * 工具调用请求记录

@@ -159,26 +159,10 @@ public class SystemPromptAssembler {
     }
 
     /**
-     * 获取动态环境信息
+     * 获取动态环境信息（委托给 SystemPromptLoader）
      */
     private String getEnvironmentInfo() {
-        String osName = System.getProperty("os.name", "Unknown");
-        String osVersion = System.getProperty("os.version", "Unknown");
-        String osArch = System.getProperty("os.arch", "Unknown");
-        String workingDir = System.getProperty("user.dir", "Unknown");
-        String javaVersion = System.getProperty("java.version", "Unknown");
-
-        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
-            .withZone(ZoneId.systemDefault());
-        String currentTime = formatter.format(Instant.now());
-
-        return """
-            [Environment Information]
-            Operating System: %s %s (%s)
-            Java Version: %s
-            Current Time: %s
-            Working Directory: %s
-            """.formatted(osName, osVersion, osArch, javaVersion, currentTime, workingDir);
+        return SystemPromptLoader.getEnvironmentInfo();
     }
 
     /**

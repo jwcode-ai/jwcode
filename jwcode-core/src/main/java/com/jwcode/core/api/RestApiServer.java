@@ -232,14 +232,14 @@ public class RestApiServer {
         // It already embeds the API endpoints and serves the React frontend.
         // Only start RestApiServer standalone for development/testing.
         if (Boolean.getBoolean("jwcode.webserver.enabled")) {
-            System.out.println("WebServer is enabled. RestApiServer should not start independently.");
-            System.out.println("Use WebServer as the unified entry point.");
+            logger.info("WebServer is enabled. RestApiServer should not start independently.");
+            logger.info("Use WebServer as the unified entry point.");
             return;
         }
         int port = args.length > 0 ? Integer.parseInt(args[0]) : 8080;
         RestApiServer server = new RestApiServer(port);
         server.start();
-        System.out.println("API Server running at http://localhost:" + port);
+        logger.info("API Server running at http://localhost:" + port);
     }
     
     // ============ 辅助方法 ============

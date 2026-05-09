@@ -3,15 +3,43 @@ package com.jwcode.core.tool;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jwcode.core.plan.PlanModeManager;
 import com.jwcode.core.tool.context.ToolExecutionContext;
 
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.logging.Logger;
 
 /**
- * EnterPlanModeTool - 进入计划模式工具
+ * EnterPlanModeTool — 进入计划模式工具（增强版）。
+ * 
+ * <p>进入 Plan Mode 后：</p>
+ * <ul>
+ *   <li>禁用写操作：FileWrite、FileEdit、Bash、PowerShell 等全部不可用</li>
+ *   <li>只剩探索性工具：Read、Glob、Grep、WebFetch 等</li>
+ *   <li>可以自由探索代码、设计方案，但不能改任何东西</li>
+ * </ul>
+ * 
+ * <p>何时使用：</p>
+ * <ul>
+ *   <li>实现新功能</li>
+ *   <li>重构现有代码</li>
+ *   <li>有多种合理方案的任务</li>
+ *   <li>涉及 2-3 文件以上的修改</li>
+ *   <li>架构层面的决策</li>
+ *   <li>用户需求模糊需要先探索</li>
+ * </ul>
+ * 
+ * <p>何时不使用：</p>
+ * <ul>
+ *   <li>修一个 typo</li>
+ *   <li>加一行 console.log</li>
+ *   <li>加一个明确需求的小功能</li>
+ * </ul>
  */
 public class EnterPlanModeTool implements Tool<EnterPlanModeTool.Input, EnterPlanModeTool.Output, EnterPlanModeTool.Progress> {
     
+    private static final Logger logger = Logger.getLogger(EnterPlanModeTool.class.getName());
     private static final ObjectMapper MAPPER = new ObjectMapper();
     
     @Override
@@ -21,7 +49,33 @@ public class EnterPlanModeTool implements Tool<EnterPlanModeTool.Input, EnterPla
     
     @Override
     public String getDescription() {
-        return "进入计划模式";
+        return "进入计划模式（Plan Mode）。Plan Mode 下只允许只读操作，禁止写文件和执行命令。";
+    }
+    
+    @Override
+    public String getPrompt() {
+        return """
+            **EnterPlanMode** — 进入计划模式
+            
+            进入 Plan Mode 后，你将只能使用只读工具（Read、Glob、Grep、WebFetch 等），
+            所有写操作（FileWrite、FileEdit、Bash、PowerShell 等）将被禁用。
+            
+            **何时使用**：
+            - 实现新功能 / 重构代码 / 架构决策
+            - 有多种合理方案的任务
+            - 涉及 2-3 文件以上的修改
+            - 用户需求模糊需要先探索
+            
+            **何时不使用**：
+            - 修 typo / 加 console.log / 简单小功能
+            
+            **标准流程**：
+            1. 进入 Plan Mode
+            2. 探索代码（Glob/Grep/Read）
+            3. 需要时用 AskUserQuestion 澄清需求
+            4. 写 plan 到指定文件
+            5. 调用 ExitPlanMode 请求审批
+            """;
     }
     
     @Override
@@ -31,7 +85,10 @@ public class EnterPlanModeTool implements Tool<EnterPlanModeTool.Input, EnterPla
                {
                  "type": "object",
                  "properties": {
-                   "task": {"type": "string", "description": "任务描述"}
+                   "task": {
+                     "type": "string",
+                     "description": "任务描述 — 说明为什么需要进入 Plan Mode"
+                   }
                  },
                  "required": ["task"]
                }
@@ -57,8 +114,68 @@ public class EnterPlanModeTool implements Tool<EnterPlanModeTool.Input, EnterPla
             Input args,
             ToolExecutionContext context,
             java.util.function.Consumer<ToolProgress<Progress>> onProgress) {
-        return CompletableFuture.completedFuture(ToolResult.success(new Output()));
+        
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                String taskDescription = args != null && args.task != null 
+                    ? args.task 
+                    : "未指定任务";
+                
+                // 通过 PlanModeManager 进入 Plan Mode
+                PlanModeManager modeManager = PlanModeManager.getInstance();
+                boolean success = modeManager.enterPlanMode(taskDescription);
+                
+                if (success) {
+                    logger.info("Entered Plan Mode: " + taskDescription);
+                    return ToolResult.success(new Output(true, "plan", 
+                        "已进入计划模式（Plan Mode）。\n" +
+                        "你现在可以自由探索代码、设计方案，但不能修改任何文件或执行命令。\n" +
+                        "完成规划后，请调用 ExitPlanMode 退出计划模式。"));
+                } else {
+                    return ToolResult.error("进入计划模式失败");
+                }
+                
+            } catch (Exception e) {
+                logger.warning("EnterPlanMode failed: " + e.getMessage());
+                return ToolResult.error("进入计划模式失败: " + e.getMessage());
+            }
+        });
     }
+    
+    @Override
+    public ToolValidationResult validate(Input input) {
+        if (input == null || input.task == null || input.task.trim().isEmpty()) {
+            return ToolValidationResult.invalid("必须提供任务描述（task 参数）");
+        }
+        return ToolValidationResult.valid();
+    }
+    
+    @Override
+    public boolean isReadOnly(Input input) {
+        return false; // 模式切换本身不是只读操作
+    }
+    
+    @Override
+    public boolean isDestructive(Input input) {
+        return false;
+    }
+    
+    @Override
+    public boolean requiresApproval(Input input) {
+        return false;
+    }
+    
+    @Override
+    public Set<SideEffect> getSideEffects() {
+        return Set.of(SideEffect.SESSION_MUTATION);
+    }
+    
+    @Override
+    public ToolCategory getCategory() {
+        return ToolCategory.METACOGNITION;
+    }
+    
+    // ==================== 输入/输出类型 ====================
     
     public static class Input {
         public String task;
@@ -67,6 +184,19 @@ public class EnterPlanModeTool implements Tool<EnterPlanModeTool.Input, EnterPla
     public static class Output {
         public boolean success;
         public String mode;
+        public String message;
+        
+        public Output() {
+            this.success = true;
+            this.mode = "plan";
+            this.message = "";
+        }
+        
+        public Output(boolean success, String mode, String message) {
+            this.success = success;
+            this.mode = mode;
+            this.message = message;
+        }
     }
     
     public static class Progress {}

@@ -19,15 +19,25 @@ public record ExitPlanModeOutput(
     @JsonProperty("summary")
     String summary,
     
+    /** Plan 文件内容（从文件系统读取） */
+    @JsonProperty("planContent")
+    String planContent,
+    
     /** 错误信息（如果有） */
     @JsonProperty("error")
     String error
 ) {
     public static ExitPlanModeOutput success(String mode, String summary) {
-        return new ExitPlanModeOutput(true, mode, summary, null);
+        return new ExitPlanModeOutput(true, mode, summary, null, null);
+    }
+    
+    public static ExitPlanModeOutput success(String mode, String summary, String planContent) {
+        return new ExitPlanModeOutput(true, mode, summary, planContent, null);
     }
     
     public static ExitPlanModeOutput failure(String error) {
-        return new ExitPlanModeOutput(false, "plan", null, error);
+        return new ExitPlanModeOutput(false, "plan", null, null, error);
     }
 }
+
+

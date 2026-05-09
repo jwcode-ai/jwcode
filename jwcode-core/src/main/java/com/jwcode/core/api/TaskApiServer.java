@@ -3,9 +3,14 @@ package com.jwcode.core.api;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.jwcode.core.agent.EnhancedOrchestratorAgent;
+import com.jwcode.core.llm.LLMService;
+import com.jwcode.core.session.SessionManager;
 import com.jwcode.core.task.Task;
 import com.jwcode.core.task.TaskStore;
 import com.jwcode.core.task.TaskStatus;
+import com.jwcode.core.tool.ToolExecutor;
+import com.jwcode.core.tool.ToolRegistry;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
@@ -16,6 +21,7 @@ import java.net.InetSocketAddress;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executors;
+import java.util.logging.Logger;
 
 /**
  * Task REST API Server + WebSocket Server
@@ -27,6 +33,8 @@ import java.util.concurrent.Executors;
  */
 public class TaskApiServer {
     
+    private static final Logger logger = Logger.getLogger(TaskApiServer.class.getName());
+    
     private static final int HTTP_PORT = 8084;
     private static final int WS_PORT = 8081;
     private static final ObjectMapper MAPPER = new ObjectMapper()
@@ -37,8 +45,38 @@ public class TaskApiServer {
     private HttpServer httpServer;
     private TaskWebSocketServer wsServer;
     
+    // 核心依赖（由外部注入）
+    private EnhancedOrchestratorAgent orchestrator;
+    private LLMService llmService;
+    private ToolExecutor toolExecutor;
+    private ToolRegistry toolRegistry;
+    private SessionManager sessionManager;
+    
     public TaskApiServer(TaskStore taskStore) {
         this.taskStore = taskStore;
+    }
+    
+    /**
+     * 设置核心依赖
+     */
+    public void setOrchestrator(EnhancedOrchestratorAgent orchestrator) {
+        this.orchestrator = orchestrator;
+    }
+    
+    public void setLlmService(LLMService llmService) {
+        this.llmService = llmService;
+    }
+    
+    public void setToolExecutor(ToolExecutor toolExecutor) {
+        this.toolExecutor = toolExecutor;
+    }
+    
+    public void setToolRegistry(ToolRegistry toolRegistry) {
+        this.toolRegistry = toolRegistry;
+    }
+    
+    public void setSessionManager(SessionManager sessionManager) {
+        this.sessionManager = sessionManager;
     }
     
     /**
@@ -59,7 +97,7 @@ public class TaskApiServer {
         httpServer.setExecutor(Executors.newFixedThreadPool(4));
         httpServer.start();
         
-        System.out.println("[TaskApiServer] HTTP Server started on port " + HTTP_PORT);
+        logger.info("HTTP Server started on port " + HTTP_PORT);
         
         // 启动 WebSocket 服务器
         wsServer = new TaskWebSocketServer(WS_PORT);
@@ -67,7 +105,24 @@ public class TaskApiServer {
         
         // 配置 StepMessageBroadcaster 使用 WebSocket 服务器
         StepMessageBroadcaster.setWebSocketServer(wsServer);
-        System.out.println("[TaskApiServer] StepMessageBroadcaster configured");
+        logger.info("StepMessageBroadcaster configured");
+
+        // 配置 PlanTaskBroadcaster 使用 WebSocket 服务器
+        PlanTaskBroadcaster.setWebSocketServer(wsServer);
+        logger.info("PlanTaskBroadcaster configured");
+        
+        // 创建 WebSocket 消息处理器并注入到 WebSocket 服务器
+        // 这样前端发送的 chat/plan 消息会被正确路由到 Orchestrator 或 LLMQueryEngine
+        if (orchestrator != null && llmService != null) {
+            SessionManager sm = sessionManager != null ? sessionManager : new SessionManager();
+            WebSocketMessageHandler handler = new WebSocketMessageHandler(
+                sm, orchestrator, llmService, toolExecutor, toolRegistry, wsServer
+            );
+            wsServer.setMessageHandler(handler);
+            logger.info("WebSocketMessageHandler configured and injected");
+        } else {
+            logger.warning("WebSocketMessageHandler not configured - missing dependencies");
+        }
     }
     
     /**
@@ -76,11 +131,11 @@ public class TaskApiServer {
     public void stop() {
         if (httpServer != null) {
             httpServer.stop(0);
-            System.out.println("[TaskApiServer] HTTP Server stopped");
+            logger.info("HTTP Server stopped");
         }
         if (wsServer != null) {
             wsServer.stop();
-            System.out.println("[TaskApiServer] WebSocket Server stopped");
+            logger.info("WebSocket Server stopped");
         }
     }
     
@@ -308,9 +363,9 @@ public class TaskApiServer {
         TaskApiServer server = new TaskApiServer(taskStore);
         server.start();
         
-        System.out.println("[TaskApiServer] HTTP: http://localhost:8084");
-        System.out.println("[TaskApiServer] WebSocket: ws://localhost:8081");
-        System.out.println("[TaskApiServer] Press Ctrl+C to stop");
+        logger.info("HTTP: http://localhost:8084");
+        logger.info("WebSocket: ws://localhost:8081");
+        logger.info("Press Ctrl+C to stop");
         
         // 添加关闭钩子
         Runtime.getRuntime().addShutdownHook(new Thread(server::stop));

@@ -11,6 +11,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 /**
@@ -32,6 +33,8 @@ import java.util.stream.Collectors;
  * @since 1.0.0
  */
 public class ConfigTool implements Tool<ConfigTool.Input, ConfigTool.Output, ConfigTool.Progress> {
+    
+    private static final Logger logger = Logger.getLogger(ConfigTool.class.getName());
     
     public static final String NAME = "Config";
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -226,14 +229,14 @@ public class ConfigTool implements Tool<ConfigTool.Input, ConfigTool.Output, Con
             } catch (NullPointerException e) {
                 output.success = false;
                 output.message = "配置管理器内部错误: " + e.getMessage();
-                e.printStackTrace();
+                logger.severe("ConfigTool NPE: " + e.getMessage());
             } catch (IllegalArgumentException e) {
                 output.success = false;
                 output.message = "参数错误: " + e.getMessage();
             } catch (Exception e) {
                 output.success = false;
                 output.message = "操作失败: " + e.getMessage();
-                e.printStackTrace();
+                logger.severe("ConfigTool error: " + e.getMessage());
             }
             
             ToolResult<Output> result = new ToolResult<>(output);

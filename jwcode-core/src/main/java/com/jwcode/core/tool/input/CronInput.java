@@ -7,6 +7,10 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  */
 public record CronInput(
     
+    /** 操作类型：create / delete / list */
+    @JsonProperty("action")
+    String action,
+    
     /** 定时任务 ID（用于删除） */
     @JsonProperty("id")
     String id,

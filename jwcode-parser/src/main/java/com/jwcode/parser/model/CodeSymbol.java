@@ -19,6 +19,8 @@ public class CodeSymbol {
     private String parent;
     private List<String> children;
     private List<String> modifiers;
+    /** 返回类型（用于方法和字段） */
+    private String returnType;
     
     public enum SymbolKind {
         CLASS, INTERFACE, METHOD, FUNCTION, 

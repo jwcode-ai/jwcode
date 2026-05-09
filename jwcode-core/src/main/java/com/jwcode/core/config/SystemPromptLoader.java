@@ -111,10 +111,20 @@ public class SystemPromptLoader {
      * @return 包含系统版本、当前时间、工作目录等的环境信息字符串
      */
     public static String getEnvironmentInfo() {
+        return getEnvironmentInfo(System.getProperty("user.dir", "Unknown"));
+    }
+
+    /**
+     * 获取动态环境信息（使用指定的工作目录）
+     *
+     * @param workingDirectory 指定的工作目录路径
+     * @return 包含系统版本、当前时间、工作目录等的环境信息字符串
+     */
+    public static String getEnvironmentInfo(String workingDirectory) {
         String osName = System.getProperty("os.name", "Unknown");
         String osVersion = System.getProperty("os.version", "Unknown");
         String osArch = System.getProperty("os.arch", "Unknown");
-        String workingDir = System.getProperty("user.dir", "Unknown");
+        String dir = workingDirectory != null ? workingDirectory : System.getProperty("user.dir", "Unknown");
         String javaVersion = System.getProperty("java.version", "Unknown");
 
         DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
@@ -129,7 +139,7 @@ public class SystemPromptLoader {
             Working Directory: %s
 
             You are allowed to change the working directory when needed (e.g., via Shell/BashTool cwd parameter or cd commands).
-            """.formatted(osName, osVersion, osArch, javaVersion, currentTime, workingDir);
+            """.formatted(osName, osVersion, osArch, javaVersion, currentTime, dir);
     }
     
     /**

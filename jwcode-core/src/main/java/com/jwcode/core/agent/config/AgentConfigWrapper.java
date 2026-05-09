@@ -7,15 +7,15 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * ConfigurableAgent - 可配置的 Agent 实现
+ * AgentConfigWrapper - 基于 AgentConfig 创建的可配置 Agent 实例。
  * 
- * 功能说明：
- * 基于 AgentConfig 创建的 Agent 实例，支持动态配置。
+ * <p>功能说明：</p>
+ * 将 AgentConfig 包装为 Agent 接口的实现，支持动态配置和权限控制。
  * 
  * @author JWCode Team
  * @since 1.0.0
  */
-public class ConfigurableAgent implements Agent {
+public class AgentConfigWrapper implements Agent {
     
     private final String id;
     private final String name;
@@ -26,7 +26,7 @@ public class ConfigurableAgent implements Agent {
     private final ModelConfig modelConfig;
     private final AgentConfig.PermissionConfig permissions;
     
-    public ConfigurableAgent(String id, String name, String description,
+    public AgentConfigWrapper(String id, String name, String description,
                             String systemPrompt, List<Tool<?, ?, ?>> tools,
                             Map<String, Object> config, ModelConfig modelConfig,
                             AgentConfig.PermissionConfig permissions) {

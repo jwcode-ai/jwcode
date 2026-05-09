@@ -3,6 +3,9 @@ import { persist } from 'zustand/middleware';
 import { Settings, AdvancedSettings } from '../types';
 
 interface SettingsState extends Settings, AdvancedSettings {
+  // 工作目录
+  workspaceDir: string;
+
   // Actions
   setTheme: (theme: 'dark' | 'light' | 'auto') => void;
   setLanguage: (language: string) => void;
@@ -15,6 +18,7 @@ interface SettingsState extends Settings, AdvancedSettings {
   setCompressionEnabled: (enabled: boolean) => void;
   setCompressionMaxMessages: (value: number) => void;
   setCompressionTokenThreshold: (value: number) => void;
+  setWorkspaceDir: (dir: string) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -33,6 +37,7 @@ export const useSettingsStore = create<SettingsState>()(
         maxMessages: 50,
         tokenThreshold: 4000,
       },
+      workspaceDir: 'c:\\Users\\HUAWEI\\Desktop\\jwcode',
 
       setTheme: (theme) => set({ theme }),
       setLanguage: (language) => set({ language }),
@@ -54,6 +59,7 @@ export const useSettingsStore = create<SettingsState>()(
         set((state) => ({
           compression: { ...state.compression, tokenThreshold },
         })),
+      setWorkspaceDir: (dir) => set({ workspaceDir: dir }),
     }),
     {
       name: 'jwcode-settings-storage',

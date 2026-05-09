@@ -42,7 +42,7 @@ public class Session {
     private Instant updatedAt;
     private String title;
     private final List<Message> messages;
-    private final String workingDirectory;
+    private String workingDirectory;
     private String model;
     private final Map<String, Object> metadata;
     private final List<SessionInsight> insights;
@@ -85,6 +85,10 @@ public class Session {
     public String getTitle() { return title; }
     public void setTitle(String title) { this.title = title; this.updatedAt = Instant.now(); }
     public String getWorkingDirectory() { return workingDirectory; }
+    public void setWorkingDirectory(String workingDirectory) { 
+        this.workingDirectory = workingDirectory != null ? workingDirectory : System.getProperty("user.dir"); 
+        this.updatedAt = Instant.now(); 
+    }
     public String getModel() { return model; }
     public void setModel(String model) { this.model = model; this.updatedAt = Instant.now(); }
     

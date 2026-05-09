@@ -85,6 +85,14 @@ public class TaskOutput {
             Collections.emptyList(), Collections.emptyList());
     }
 
+    /**
+     * 创建失败输出
+     */
+    public static TaskOutput failure(String errorMessage) {
+        return new TaskOutput("Task failed: " + errorMessage, Collections.emptyMap(),
+            Collections.emptyList(), List.of("ERROR: " + errorMessage));
+    }
+
     // ==================== Builder ====================
 
     public static Builder builder() {

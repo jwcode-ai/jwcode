@@ -273,11 +273,14 @@ public class LocalAgentDispatcher implements AgentDispatcher {
         try {
             return submitTask(agentName, task).get(5, TimeUnit.MINUTES);
         } catch (TimeoutException e) {
-            task.fail("Task timeout");
-            return TaskOutput.success("Task timeout: " + task.getTaskId());
+            task.fail("Task timeout: " + task.getTaskId());
+            logger.severe("LocalDispatcher: task " + task.getTaskId() + " timed out after 5 minutes");
+            return TaskOutput.failure("Task timeout after 5 minutes: " + task.getTaskId());
         } catch (Exception e) {
-            task.fail(e.getMessage());
-            return TaskOutput.success("Task failed: " + e.getMessage());
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            task.fail(cause.getMessage());
+            logger.severe("LocalDispatcher: task " + task.getTaskId() + " failed: " + cause.getMessage());
+            return TaskOutput.failure("Task failed: " + cause.getMessage());
         }
     }
 
@@ -335,26 +338,24 @@ public class LocalAgentDispatcher implements AgentDispatcher {
      * </ol>
      */
     private TaskOutput executeSubAgentTask(String agentName, A2ATask task) {
-        // 如果没有 LLMService，回退到模拟执行
+        // 【修复】LLMService 不可用时抛出明确的 IllegalStateException，不再静默返回假成功
         if (llmService == null) {
-            logger.warning("LocalDispatcher: LLMService not available, falling back to mock execution for " + agentName);
-            sleepQuietly(100);
-            return TaskOutput.success(
-                "Task executed by " + agentName + ": " + task.getDescription(),
-                Map.of("agentName", agentName, "taskId", task.getTaskId())
-            );
+            String msg = "LLMService not available for agent '" + agentName
+                + "' (task: " + task.getTaskId() + "). "
+                + "Cannot execute sub-agent task without LLM service. "
+                + "Please check LLM configuration (api key, endpoint, model).";
+            logger.severe(msg);
+            throw new IllegalStateException(msg);
         }
 
         // 1. 获取子Agent实例
         String agentId = agentName.toLowerCase();
         Agent subAgent = agentRegistry.get(agentId);
         if (subAgent == null) {
-            logger.warning("LocalDispatcher: Agent '" + agentId + "' not found in registry, using mock");
-            sleepQuietly(100);
-            return TaskOutput.success(
-                "Task executed by " + agentName + ": " + task.getDescription(),
-                Map.of("agentName", agentName, "taskId", task.getTaskId())
-            );
+            String msg = "Agent '" + agentId + "' not found in registry for task: " + task.getTaskId()
+                + ". Available agents: " + agentRegistry.listAgentIds();
+            logger.severe(msg);
+            throw new IllegalArgumentException(msg);
         }
 
         logger.info("LocalDispatcher: executing sub-agent task via LLM | agent=" + agentName

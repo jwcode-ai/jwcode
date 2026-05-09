@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
+import { useState, useEffect, useCallback, lazy, Suspense, startTransition } from 'react';
 import { MessageSquare, Terminal, FolderTree, Settings, Brain, Wrench, Target, Users, FileText, ScrollText, LucideIcon, Menu, X, ChevronDown, ChevronUp, ListChecks } from 'lucide-react';
 import { useChatStore } from './stores/chatStore';
 import { useSessionStore } from './stores/sessionStore';
@@ -57,7 +57,14 @@ function App() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const { toggleTerminal } = useTerminalStore();
-  const { theme, setTheme } = useSettingsStore();
+  const { theme, setTheme, workspaceDir, setWorkspaceDir } = useSettingsStore();
+
+  // 使用 startTransition 包裹 Tab 切换，避免懒加载组件在同步事件中 suspend
+  const handleTabChange = useCallback((tabId: TabId) => {
+    startTransition(() => {
+      setActiveTab(tabId);
+    });
+  }, []);
 
   // 全局错误捕获：将未捕获的错误显示到日志面板
   useEffect(() => {
@@ -199,10 +206,47 @@ function App() {
     }
   }, []);
 
+  // 切换工作目录：用户输入新路径后重置所有会话
+  const handleWorkspaceChange = useCallback(() => {
+    const newDir = window.prompt('请输入新的工作目录路径：', workspaceDir);
+    if (newDir && newDir.trim() && newDir.trim() !== workspaceDir) {
+      const trimmed = newDir.trim();
+      // 1. 保存新目录到前端 store
+      setWorkspaceDir(trimmed);
+
+      // 2. 通过 WebSocket 通知后端切换工作目录
+      wsService.send({
+        type: 'workspace',
+        message: trimmed,
+      });
+
+      // 3. 重置所有会话 — 直接操作 store 内部状态
+      const store = useSessionStore.getState();
+      // 清空所有 session 的消息和计划
+      store.sessionTabs.forEach(t => {
+        useChatStore.getState().clearMessages(t.id);
+        usePlanStore.getState().clearPlan(t.id);
+      });
+      // 直接重置 sessionTabs 和 sessions 为空
+      useSessionStore.setState({
+        sessionTabs: [],
+        sessions: [],
+        activeSessionId: null,
+      });
+
+      // 4. 创建新会话
+      setTimeout(() => {
+        useSessionStore.getState().addSessionTab('对话 1');
+      }, 0);
+    }
+  }, [workspaceDir, setWorkspaceDir]);
+
+
   const handleClearLogs = () => {
     setLogs([]);
     setUnreadLogs(0);
   };
+
 
   // 任务概览组件（右侧面板顶部）- 按当前 session 显示
   function TaskOverview() {
@@ -262,6 +306,9 @@ function App() {
           {planPhase === 'result' && (
             <span className="text-[10px] text-accent-green">✅ 已完成</span>
           )}
+          {planPhase === 'error' && (
+            <span className="text-[10px] text-accent-red">❌ 规划失败</span>
+          )}
         </div>
       </div>
     );
@@ -288,7 +335,7 @@ function App() {
               onSend={sendMessage}
               onSwitch={handleSwitchSession}
               activeTab={activeTab}
-              setActiveTab={setActiveTab}
+              setActiveTab={handleTabChange}
               createNewSession={handleNewSession}
               clearMessages={handleClearMessages}
               setTheme={setTheme}
@@ -353,7 +400,7 @@ function App() {
                 <button
                   key={tab.id}
                   onClick={() => {
-                    setActiveTab(tab.id);
+                    handleTabChange(tab.id);
                     if (isLogTab) setUnreadLogs(0);
                     setIsMobileMenuOpen(false);
                   }}
@@ -403,7 +450,7 @@ function App() {
                   <button
                     key={tab.id}
                     onClick={() => {
-                      setActiveTab(tab.id);
+                      handleTabChange(tab.id);
                       setIsMobileMenuOpen(false);
                     }}
                     className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-left transition-all ${
@@ -428,7 +475,24 @@ function App() {
           </div>
 
           {/* 右侧面板 - 响应式宽度，小屏隐藏 */}
-          <div className="hidden lg:flex flex-col bg-dark-surface border-l border-dark-border overflow-hidden shrink-0 w-80 xl:w-80 2xl:w-96">
+          <div className="hidden lg:flex flex-col bg-dark-surface border-l border-dark-border overflow-hidden shrink-0 min-h-0 w-80 xl:w-80 2xl:w-96">
+
+            {/* Working Directory Section - 点击可切换 */}
+            <div
+              className="shrink-0 border-b border-dark-border px-4 py-2.5 cursor-pointer hover:bg-dark-hover transition-colors"
+              onClick={handleWorkspaceChange}
+              title="点击切换工作目录"
+            >
+              <div className="flex items-center gap-1.5 mb-1">
+                <FolderTree size={14} className="text-accent-blue shrink-0" />
+                <span className="text-xs font-semibold text-dark-text">工作目录</span>
+                <span className="text-[10px] text-accent-blue ml-auto">切换</span>
+              </div>
+              <div className="text-[11px] text-dark-muted truncate font-mono pl-5">
+                {workspaceDir}
+              </div>
+            </div>
+
 
             {/* Task Overview Section */}
             <div className="shrink-0 border-b border-dark-border">
@@ -438,7 +502,7 @@ function App() {
                   任务概览
                 </h3>
                 <button
-                  onClick={() => setActiveTab('plan')}
+                  onClick={() => handleTabChange('plan')}
                   className="text-[10px] text-accent-blue hover:underline"
                 >
                   查看全部 →
@@ -446,6 +510,7 @@ function App() {
               </div>
               <TaskOverview />
             </div>
+
 
             {/* Log Section Header (collapsible) */}
             <div
@@ -470,7 +535,7 @@ function App() {
 
             {/* Log Content (collapsible) - 展开时占满剩余空间，折叠时完全隐藏 */}
             {isLogDrawerOpen && (
-              <div className="flex-1 overflow-hidden min-h-0">
+              <div className="flex-1 flex flex-col overflow-hidden min-h-0">
                 <LogsPanel logs={logs} onClear={handleClearLogs} compact />
               </div>
             )}

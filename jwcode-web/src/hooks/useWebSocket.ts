@@ -82,6 +82,7 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
             console.log('[WS] plan_tasks:', rawData);
             const data = JSON.parse(rawData || '{}');
             const tasks: PlanTask[] = data.tasks || [];
+            const analysis = data.analysis || '';
             const currentPlan = planStore.getPlan(sessionId);
             if (currentPlan) {
               planStore.setPlan(sessionId, {
@@ -89,6 +90,20 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
                 tasks,
                 phase: 'executing',
               });
+            } else {
+              // 如果 currentPlan 不存在（例如页面刷新后恢复），创建一个新的
+              planStore.startPlanning(sessionId, analysis || '任务计划');
+              // startPlanning 是异步的，需要再调用 setPlan 设置 tasks
+              setTimeout(() => {
+                const newPlan = planStore.getPlan(sessionId);
+                if (newPlan) {
+                  planStore.setPlan(sessionId, {
+                    ...newPlan,
+                    tasks,
+                    phase: 'executing',
+                  });
+                }
+              }, 0);
             }
             break;
           }
@@ -147,7 +162,8 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
 
           case 'plan_error':
             console.error('[Plan] Error:', rawData);
-            planStore.setPhase(sessionId, 'result');
+            // 将错误信息保存到 plan 中，phase 设为 'error' 以便前端显示错误状态
+            planStore.setPhase(sessionId, 'error');
             break;
         }
       } catch (e) {
@@ -345,6 +361,15 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
 
       case 'ping':
         wsService.send({ type: 'pong', data: Date.now().toString() });
+        break;
+
+      case 'workspace_changed':
+        try {
+          const wsData = JSON.parse(msg.data || '{}');
+          console.log('[WS] 工作目录已切换:', wsData.oldDir, '->', wsData.newDir);
+        } catch (e) {
+          console.log('[WS] 工作目录已切换:', msg.data);
+        }
         break;
     }
   }, [activeTab, chatStore, ensureStep, setLogs, setUnreadLogs]);

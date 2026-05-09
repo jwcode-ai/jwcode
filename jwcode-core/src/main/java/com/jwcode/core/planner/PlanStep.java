@@ -1,5 +1,6 @@
 package com.jwcode.core.planner;
 
+import com.jwcode.core.a2a.model.StepStatus;
 import com.jwcode.core.agent.Agent;
 
 import java.util.ArrayList;
@@ -26,14 +27,6 @@ public class PlanStep {
     private long estimatedTimeMs;
     private String actualOutput;
     private String errorMessage;
-    
-    public enum StepStatus {
-        PENDING,      // 等待执行
-        RUNNING,      // 执行中
-        COMPLETED,    // 完成
-        FAILED,       // 失败
-        SKIPPED       // 跳过
-    }
     
     public PlanStep() {
         this.dependencies = new ArrayList<>();

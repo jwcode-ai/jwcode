@@ -68,8 +68,6 @@ public class ToolRegistry {
             }
         }
         
-        // 记录工具注册日志
-        logger.info("[ToolRegistry] 注册工具: " + name);
         
         return this;
     }
