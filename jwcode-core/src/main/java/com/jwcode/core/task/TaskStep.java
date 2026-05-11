@@ -12,6 +12,9 @@ public class TaskStep {
 
     private int index;
     private String description;
+    private String action;
+    private String stepPrompt;
+    private String agentType;
     private TaskStepStatus status;
     private String result;
     private String error;
@@ -28,9 +31,21 @@ public class TaskStep {
         this.description = description;
     }
 
+    public TaskStep(int index, String description, String action, String stepPrompt, String agentType) {
+        this();
+        this.index = index;
+        this.description = description;
+        this.action = action;
+        this.stepPrompt = stepPrompt;
+        this.agentType = agentType;
+    }
+
     // Getters
     public int getIndex() { return index; }
     public String getDescription() { return description; }
+    public String getAction() { return action; }
+    public String getStepPrompt() { return stepPrompt; }
+    public String getAgentType() { return agentType; }
     public TaskStepStatus getStatus() { return status; }
     public String getResult() { return result; }
     public String getError() { return error; }
@@ -40,6 +55,9 @@ public class TaskStep {
     // Setters
     public void setIndex(int index) { this.index = index; }
     public void setDescription(String description) { this.description = description; }
+    public void setAction(String action) { this.action = action; }
+    public void setStepPrompt(String stepPrompt) { this.stepPrompt = stepPrompt; }
+    public void setAgentType(String agentType) { this.agentType = agentType; }
     public void setStatus(TaskStepStatus status) { this.status = status; }
     public void setResult(String result) { this.result = result; }
     public void setError(String error) { this.error = error; }

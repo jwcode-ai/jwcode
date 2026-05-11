@@ -140,6 +140,27 @@ public class Session {
     }
 
     /**
+     * 移除内容包含指定关键词的系统消息
+     * 用于工作目录切换时清除旧的 [ENV_INFO] 消息，确保下次注入获取最新环境信息
+     *
+     * @param keyword 要匹配的关键词
+     * @return 被移除的消息数量
+     */
+    public int removeSystemMessagesContaining(String keyword) {
+        int before = messages.size();
+        messages.removeIf(msg ->
+            msg.getRole() == Message.Role.SYSTEM
+                && msg.getTextContent() != null
+                && msg.getTextContent().contains(keyword)
+        );
+        int removed = before - messages.size();
+        if (removed > 0) {
+            this.updatedAt = Instant.now();
+        }
+        return removed;
+    }
+
+    /**
      * 标记会话已被压缩，用于通知 LLMQueryEngine 重置 TokenBudget
      */
     public synchronized void markCompacted() {

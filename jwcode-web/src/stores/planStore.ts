@@ -29,6 +29,18 @@ interface PlanState {
   // 消息队列（全局，按 session 排队）
   messageQueue: MessageQueueItem[];
 
+  // 当前步骤提示（全局）
+  currentStepPrompt: {
+    sessionId: string;
+    taskId: string;
+    stepIndex: number;
+    stepNumber: number;
+    description: string;
+    action: string;
+    stepPrompt: string;
+    agentType: string;
+  } | null;
+
   // Actions
   startPlanning: (sessionId: string, goal: string) => void;
   setPlan: (sessionId: string, plan: Plan) => void;
@@ -38,6 +50,10 @@ interface PlanState {
   setPhase: (sessionId: string, phase: PlanPhase) => void;
   getPlan: (sessionId: string) => Plan | null;
   getPhase: (sessionId: string) => PlanPhase;
+
+  // Step prompt
+  setCurrentStepPrompt: (prompt: PlanState['currentStepPrompt']) => void;
+  clearCurrentStepPrompt: () => void;
 
   // Plan Mode 管理
   setMode: (mode: PlanMode) => void;
@@ -63,6 +79,9 @@ export const usePlanStore = create<PlanState>()(
       currentPlanContent: null,
       modeHistory: [],
       messageQueue: [],
+
+      // 当前步骤提示
+      currentStepPrompt: null,
 
       startPlanning: (sessionId, goal) =>
         set((state) => ({
@@ -249,6 +268,12 @@ export const usePlanStore = create<PlanState>()(
         set({ messageQueue: rest });
         return first || null;
       },
+
+      // === 步骤提示 ===
+
+      setCurrentStepPrompt: (prompt) => set({ currentStepPrompt: prompt }),
+
+      clearCurrentStepPrompt: () => set({ currentStepPrompt: null }),
 
       clearPlan: (sessionId) =>
         set((state) => {

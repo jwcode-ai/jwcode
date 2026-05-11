@@ -22,7 +22,6 @@ import java.util.logging.Logger;
  * <p>设计取舍：</p>
  * <ul>
  *   <li><b>不接受 plan 内容作为参数</b> — 避免重复（plan 已写进文件），强制持久化，强制结构化</li>
- *   <li><b>需要 confirmed=true</b> — 防止误退出</li>
  *   <li><b>不要用 AskUserQuestion 问"我的 plan 行不行"</b> — ExitPlanMode 本身就请求用户审批</li>
  * </ul>
  */
@@ -45,19 +44,43 @@ public class ExitPlanModeV2Tool implements Tool<ExitPlanModeInput, ExitPlanModeO
     @Override
     public String getPrompt() {
         return """
-            **ExitPlanModeV2** — 退出计划模式
+            **ExitPlanModeV2** — 退出计划模式并提交任务清单
             
             退出 Plan Mode 并返回正常模式。Plan 内容从文件系统读取，不接受 plan 内容作为参数。
             
             **重要**：
-            - 不要用 AskUserQuestion 问"我的 plan 行不行" — ExitPlanMode 本身就请求用户审批
-            - 需要 confirmed=true 才能退出
+            - 不要用 AskUserQuestion 问"我的 plan 行不行" — ExitPlanModeV2 本身就请求用户审批
             - Plan 文件必须在调用前已写入
             
             **标准流程**：
-            1. 写 plan 到指定文件
-            2. 调用 ExitPlanModeV2(confirmed=true, summary="...")
+            1. 将结构化任务清单写入 plan 文件（必须是以下 JSON 格式）
+            2. 调用 ExitPlanModeV2(summary="任务摘要")
             3. 等待用户审批
+            
+            **结构化任务清单格式（必须严格遵守）**：
+            ```json
+            {
+              "goal": "用户原始需求描述",
+              "tasks": [
+                {
+                  "id": "task-1",
+                  "action": "简洁动词+名词",
+                  "description": "详细步骤说明（包含工具名、文件路径）",
+                  "agentType": "explorer|coder|tester|reviewer|debug|architect|doc",
+                  "dependencies": [],
+                  "expectedOutput": "可验证的验收标准",
+                  "estimatedTimeMs": 30000
+                }
+              ],
+              "reasoning": "整体规划思路"
+            }
+            ```
+            
+            **⚠️ 执行诚信铁律**：
+            - Plan 中的每个任务描述必须基于你在 Plan Mode 中实际探索的结果
+            - 不得声称完成了你未曾实际调用的工具操作
+            - 任何写操作（FileWrite/FileEdit/Bash）在 Plan Mode 中都是被禁用的 — 你只能规划它们
+            - 如果探索不足，必须如实反映在 reasoning 中
             """;
     }
     
@@ -75,13 +98,7 @@ public class ExitPlanModeV2Tool implements Tool<ExitPlanModeInput, ExitPlanModeO
                     return ToolResult.<ExitPlanModeOutput>success(ExitPlanModeOutput.failure("当前不在计划模式"));
                 }
                 
-                // 检查是否确认
-                Boolean confirmed = input != null ? input.confirmed() : null;
-                if (confirmed == null || !confirmed) {
-                    return ToolResult.<ExitPlanModeOutput>success(ExitPlanModeOutput.failure("需要确认才能退出计划模式"));
-                }
-                
-                // 执行退出
+                // 执行退出（不再要求 confirmed=true）
                 String summary = input != null && input.summary() != null 
                     ? input.summary() 
                     : "计划完成";

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.jwcode.core.agent.EnhancedOrchestratorAgent;
+import com.jwcode.core.config.SystemPromptLoader;
 import com.jwcode.core.llm.LLMService;
 import com.jwcode.core.llm.LLMQueryEngine;
 import com.jwcode.core.llm.LLMQueryEngine.EngineConfig;
@@ -227,12 +228,22 @@ public class WebSocketMessageHandler {
         // 2. 同步更新 System property，确保 SystemPromptLoader 和 LLMQueryEngine 获取正确目录
         System.setProperty("user.dir", trimmed);
 
-        // 3. 添加工作目录变更的系统通知消息
+        // 3. 清除旧的 [ENV_INFO] 环境信息消息，确保下次注入获取最新工作目录
+        int removed = session.removeSystemMessagesContaining("[ENV_INFO]");
+        if (removed > 0) {
+            logger.fine("[WSHandler] 已清除会话中 " + removed + " 条旧环境信息消息");
+        }
+
+        // 4. 立即注入新的环境信息（含正确的工作目录）
+        String freshEnvInfo = SystemPromptLoader.getEnvironmentInfo(trimmed);
+        session.addMessage(Message.createSystemMessage(freshEnvInfo));
+
+        // 5. 添加工作目录变更的系统通知消息
         session.addMessage(Message.createSystemMessage(
                 "[系统通知] 工作目录已切换为：" + trimmed + "。所有文件操作请基于此目录进行。"
         ));
 
-        // 4. 清除旧的 LLMQueryEngine 缓存（下次查询会重新创建，获取新的环境信息）
+        // 6. 清除旧的 LLMQueryEngine 缓存（下次查询会重新创建，获取新的环境信息）
         LLMQueryEngine oldEngine = queryEngines.remove(session.getId());
         if (oldEngine != null) {
             logger.info("[WSHandler] Cleared cached LLMQueryEngine for session: " + session.getId());

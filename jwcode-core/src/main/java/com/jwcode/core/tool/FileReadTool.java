@@ -186,7 +186,7 @@ public class FileReadTool implements Tool<FileReadInput, FileReadOutput, FileRea
     }
     
     /**
-     * 解析文件路径
+     * 解析文件路径（带工作区安全校验）。
      */
     private Path resolveFilePath(String filePath, ToolExecutionContext context) {
         Path path = Paths.get(filePath);
@@ -199,7 +199,12 @@ public class FileReadTool implements Tool<FileReadInput, FileReadOutput, FileRea
             }
         }
         
-        return path.normalize();
+        Path resolved = path.normalize().toAbsolutePath();
+        
+        // 【工作区安全】校验路径在工作区内
+        context.validatePath(resolved, getName());
+        
+        return resolved;
     }
     
     /**

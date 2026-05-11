@@ -1,6 +1,6 @@
 import { memo, useState, useRef, useCallback } from 'react';
 import { SessionTab } from '../../types';
-import { Plus, X } from 'lucide-react';
+import { X } from 'lucide-react';
 
 interface SessionTabsProps {
   tabs: SessionTab[];
@@ -16,7 +16,7 @@ export const SessionTabs = memo(function SessionTabs({
   activeSessionId,
   onSwitch,
   onClose,
-  onNew,
+  onNew: _onNew,
   onRename,
 }: SessionTabsProps) {
 
@@ -104,17 +104,6 @@ export const SessionTabs = memo(function SessionTabs({
         })}
       </div>
 
-      {/* Actions */}
-      <div className="flex items-center gap-1 shrink-0">
-        {/* New session */}
-        <button
-          onClick={onNew}
-          className="p-1 rounded-md text-dark-muted hover:text-dark-text hover:bg-dark-hover transition-all"
-          title="新建会话"
-        >
-          <Plus size={14} />
-        </button>
-      </div>
     </div>
   );
 

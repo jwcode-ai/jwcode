@@ -166,9 +166,30 @@ public class TaskLifecycleManager {
             task.setStatus(TaskStatus.EXECUTING);
             logger.info("[TaskLifecycle] 开始步骤 [{}/{}]: {}",
                 next.getIndex() + 1, task.getSteps().size(), next.getDescription());
+            // 发布步骤提示给前端，让AI知道该步骤做什么
+            publishStepPrompt(session, task, next);
         } else {
             // 无下一步，检查是否全部完成
             checkTaskCompletion(session);
+        }
+    }
+
+    /**
+     * 启动第一个步骤 — 任务规划完成后调用
+     */
+    public void startFirstStep(Session session) {
+        ActiveTask task = session.getActiveTask();
+        if (task == null) return;
+
+        if (task.getCurrentStepIndex() < 0) {
+            task.advanceToNextStep();
+            TaskStep firstStep = task.getCurrentStep();
+            if (firstStep != null) {
+                task.setStatus(TaskStatus.EXECUTING);
+                logger.info("[TaskLifecycle] 启动首个步骤 [{}/{}]: {}",
+                    firstStep.getIndex() + 1, task.getSteps().size(), firstStep.getDescription());
+                publishStepPrompt(session, task, firstStep);
+            }
         }
     }
 
@@ -334,7 +355,14 @@ public class TaskLifecycleManager {
                     List<TaskStep> steps = new ArrayList<>();
                     for (int i = 0; i < planSteps.size(); i++) {
                         PlanStep ps = planSteps.get(i);
-                        steps.add(new TaskStep(i, ps.getDescription() != null ? ps.getDescription() : ps.getAction()));
+                        TaskStep ts = new TaskStep(
+                            i,
+                            ps.getDescription() != null ? ps.getDescription() : ps.getAction(),
+                            ps.getAction(),
+                            ps.getStepPrompt(),
+                            ps.getAgentType()
+                        );
+                        steps.add(ts);
                     }
 
                     task.setSteps(steps);
@@ -437,6 +465,52 @@ public class TaskLifecycleManager {
         } catch (Exception e) {
             logger.warn("发布等待输入事件失败", e);
         }
+    }
+
+    /**
+     * 发布步骤AI提示 — 进入每个步骤时向AI注入上下文提示
+     */
+    private void publishStepPrompt(Session session, ActiveTask task, TaskStep step) {
+        String sessionId = session != null ? session.getId() : null;
+
+        // 通过 ObservationPipeline 发布
+        if (pipeline != null) {
+            try {
+                pipeline.publish(new ObservationEvent.StepPrompt(
+                    task.getTaskId(),
+                    step.getIndex(),
+                    step.getDescription(),
+                    step.getAction(),
+                    step.getStepPrompt(),
+                    step.getAgentType()
+                ));
+            } catch (Exception e) {
+                logger.warn("发布步骤提示事件失败", e);
+            }
+        }
+
+        // 同时通过 PlanTaskBroadcaster 直接广播到前端 WebSocket
+        try {
+            com.jwcode.core.api.PlanTaskBroadcaster broadcaster = 
+                com.jwcode.core.api.PlanTaskBroadcaster.getInstance();
+            if (com.jwcode.core.api.PlanTaskBroadcaster.isConfigured()) {
+                broadcaster.broadcastStepPrompt(
+                    sessionId,
+                    task.getTaskId(),
+                    step.getIndex(),
+                    step.getDescription(),
+                    step.getAction(),
+                    step.getStepPrompt(),
+                    step.getAgentType()
+                );
+            }
+        } catch (Exception e) {
+            logger.warn("广播步骤提示到前端失败", e);
+        }
+
+        logger.info("[TaskLifecycle] 发布步骤提示 [{}/{}]: {}",
+            step.getIndex() + 1, task.getSteps().size(), 
+            step.getStepPrompt() != null ? step.getStepPrompt().substring(0, Math.min(80, step.getStepPrompt().length())) : "无提示");
     }
 
     // ==================== LLM 语义意图检测 ====================

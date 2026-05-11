@@ -9,6 +9,7 @@ import { PlanTimeline } from './PlanTimeline';
 import { PlanSummary } from './PlanSummary';
 import { PlanSkeleton } from './PlanSkeleton';
 import { TaskTree } from './TaskTree';
+import { StepProgressBar } from './StepProgressBar';
 
 type ViewMode = 'kanban' | 'timeline' | 'tree';
 
@@ -29,6 +30,7 @@ export function PlanPanel() {
   const mode = usePlanStore((s) => s.mode);
   const currentPlanContent = usePlanStore((s) => s.currentPlanContent);
   const modeHistory = usePlanStore((s) => s.modeHistory);
+  const currentStepPrompt = usePlanStore((s) => s.currentStepPrompt);
   const setMode = usePlanStore((s) => s.setMode);
   const clearPlan = usePlanStore((s) => s.clearPlan);
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
@@ -225,6 +227,16 @@ export function PlanPanel() {
 
       {/* Plan content preview (collapsible) */}
       {renderPlanContentPreview()}
+
+      {/* Step Progress Bar */}
+      {currentPlan.tasks.length > 0 && (
+        <div className="px-4 py-3 border-b border-dark-border bg-dark-surface/30 shrink-0">
+          <StepProgressBar
+            tasks={currentPlan.tasks}
+            currentStepPrompt={currentStepPrompt}
+          />
+        </div>
+      )}
 
       {/* Header */}
       <div className="px-4 py-3 border-b border-dark-border bg-dark-surface shrink-0">

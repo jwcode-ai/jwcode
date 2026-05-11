@@ -120,7 +120,7 @@ public class AIPlanner {
                 String aiResponse = callAI(prompt).join();
                 
                 // 3. 解析子任务
-                List<PlanStep> steps = parseDecompositionResponse(aiResponse);
+                List<PlanStep> steps = parseDecompositionResponse(aiResponse, taskDescription);
                 
                 // 4. 验证和调整
                 steps = validateAndAdjustSteps(steps, analysis);
@@ -218,80 +218,86 @@ public class AIPlanner {
         }
         
         return String.format("""
+            ⚠️ CRITICAL FORMAT RULE — READ THIS FIRST ⚠️
+            Your ENTIRE response MUST be a single valid JSON object, starting with { and ending with }.
+            NO markdown fences. NO text before {. NO text after }.
+            If your response is not valid JSON, it will be rejected and you will have to retry.
+            ALL fields are required — use [] for empty arrays, 0 for unknown numbers, "" for unknown strings.
+            
             你是一位专业的软件开发任务规划专家。请深度分析以下任务并提供详细的评估报告。
             
             任务描述: %s
             %s
             %s
             
-            请提供以下分析（严格 JSON 格式，不要包含 markdown 代码块标记）:
+            输出以下 JSON（严格遵守字段名和类型）:
             
             {
               "intent": {
-                "type": "任务类型 (CREATE/DEBUG/REFACTOR/ANALYZE/TEST/LEARN/INTEGRATE/DEPLOY/GENERAL)",
-                "confidence": 置信度0-1,
-                "description": "意图详细描述",
-                "targetFiles": ["可能涉及的文件"],
-                "targetModules": ["可能涉及的模块"],
-                "technologies": ["相关技术栈"],
-                "implicitRequirements": ["隐含需求"]
+                "type": "GENERAL",
+                "confidence": 0.5,
+                "description": "",
+                "targetFiles": [],
+                "targetModules": [],
+                "technologies": [],
+                "implicitRequirements": []
               },
               "complexity": {
-                "overallScore": 总体复杂度1-10,
-                "technicalComplexity": 技术复杂度1-10,
-                "codeVolume": 代码量复杂度1-10,
-                "dependencyComplexity": 依赖复杂度1-10,
-                "integrationComplexity": 集成复杂度1-10,
-                "testingComplexity": 测试复杂度1-10,
-                "reasoning": "复杂度评估理由",
-                "factors": ["影响复杂度的因素"]
+                "overallScore": 5,
+                "technicalComplexity": 5,
+                "codeVolume": 5,
+                "dependencyComplexity": 5,
+                "integrationComplexity": 5,
+                "testingComplexity": 5,
+                "reasoning": "",
+                "factors": []
               },
               "risk": {
-                "overallLevel": "风险等级 (LOW/MEDIUM/HIGH/CRITICAL)",
-                "risks": [
-                  {
-                    "id": "risk-1",
-                    "description": "风险描述",
-                    "level": "风险等级",
-                    "probability": 概率0-1,
-                    "impact": 影响0-1,
-                    "mitigation": "缓解措施"
-                  }
-                ],
-                "mitigationStrategies": ["整体缓解策略"],
-                "watchPoints": ["需要特别关注的点"]
+                "overallLevel": "MEDIUM",
+                "risks": [],
+                "mitigationStrategies": [],
+                "watchPoints": []
               },
               "estimation": {
-                "estimatedTimeMs": 预估时间毫秒数,
-                "minTimeMs": 最短时间毫秒数,
-                "maxTimeMs": 最长时间毫秒数,
-                "estimatedInputTokens": 预估输入token数,
-                "estimatedOutputTokens": 预估输出token数,
-                "estimatedSubTasks": 预估子任务数,
-                "minSubTasks": 最小子任务数,
-                "maxSubTasks": 最大子任务数,
-                "confidence": 预估置信度0-1,
-                "reasoning": "预估依据"
+                "estimatedTimeMs": 60000,
+                "minTimeMs": 10000,
+                "maxTimeMs": 300000,
+                "estimatedInputTokens": 1000,
+                "estimatedOutputTokens": 2000,
+                "estimatedSubTasks": 3,
+                "minSubTasks": 1,
+                "maxSubTasks": 5,
+                "confidence": 0.5,
+                "reasoning": ""
               },
               "strategy": {
-                "recommendedMode": "推荐执行模式 (SERIAL/PARALLEL/ADAPTIVE/CONSERVATIVE)",
-                "recommendedParallelism": 推荐并行度,
-                "requiresReplanning": 是否需要重规划布尔值,
-                "replanningTriggers": ["重规划触发条件"],
-                "criticalPathDescription": "关键路径说明",
-                "optimizationTips": ["优化建议"],
-                "requiresHumanConfirmation": 是否需要人工确认布尔值,
-                "confirmationPoints": ["需要确认的点"]
+                "recommendedMode": "SERIAL",
+                "recommendedParallelism": 1,
+                "requiresReplanning": false,
+                "replanningTriggers": [],
+                "criticalPathDescription": "",
+                "optimizationTips": [],
+                "requiresHumanConfirmation": false,
+                "confirmationPoints": []
               },
-              "confidence": 整体分析置信度0-1,
-              "reasoning": "整体思考过程"
+              "confidence": 0.5,
+              "reasoning": ""
             }
             
-            注意：
-            1. 所有数值必须合理，不能为 null
-            2. 数组可以为空但不能为 null
-            3. 时间预估单位为毫秒
-            4. 复杂度评分 1-10，1 最简单，10 最复杂
+            ## 字段说明
+            - intent.type: CREATE/DEBUG/REFACTOR/ANALYZE/TEST/LEARN/INTEGRATE/DEPLOY/GENERAL
+            - risk.overallLevel: LOW/MEDIUM/HIGH/CRITICAL
+            - risk.risks[].level: LOW/MEDIUM/HIGH/CRITICAL
+            - strategy.recommendedMode: SERIAL/PARALLEL/ADAPTIVE/CONSERVATIVE
+            - 所有分数 1-10, 置信度 0-1, 时间单位毫秒
+            - 布尔值使用 true/false (小写)
+            
+            ## 禁止事项 (VIOLATION = 回复无效)
+            1. ❌ 不得在 JSON 外添加任何文字（不含解释、不含问候、不含标记）
+            2. ❌ 不得用 ```json ``` 包裹
+            3. ❌ 不得虚构不存在的项目信息 — 不确定就用默认值
+            4. ❌ 不得省略任何字段 — 每个字段都必须出现
+            5. ❌ 不得返回 null — 数组为空写 []，对象为空写 {}
             """, taskDescription, contextStr, historicalInsights);
     }
     
@@ -300,6 +306,11 @@ public class AIPlanner {
      */
     private String buildDecompositionPrompt(String taskDescription, TaskAnalysis analysis) {
         return String.format("""
+            ⚠️ CRITICAL FORMAT RULE — READ THIS FIRST ⚠️
+            Your ENTIRE response MUST be a single valid JSON object, starting with { and ending with }.
+            NO markdown fences. NO text before {. NO text after }.
+            If your response is not valid JSON, it will be rejected.
+            
             你是一位专业的任务分解专家。请将以下任务分解为可执行的子任务。
             
             原始任务: %s
@@ -310,30 +321,46 @@ public class AIPlanner {
             - 预估子任务数: %d-%d
             - 推荐并行度: %d
             
-            请生成子任务列表（严格 JSON 格式，不要包含 markdown 代码块标记）:
-            
+            输出以下 JSON:
+
             {
               "subTasks": [
                 {
                   "id": "task-1",
-                  "action": "任务名称（简洁动词+名词）",
-                  "description": "详细描述",
-                  "agentType": "推荐Agent类型 (analyzer/coder/debug/test/reviewer/architect)",
-                  "priority": 优先级1-10,
-                  "dependencies": ["依赖的任务id，可为空数组"],
-                  "expectedOutput": "预期输出",
-                  "estimatedTimeMs": 预估耗时毫秒数
+                  "action": "读取配置文件",
+                  "description": "使用 Read 工具读取 config.json 的内容",
+                  "agentType": "explorer",
+                  "priority": 8,
+                  "dependencies": [],
+                  "expectedOutput": "配置文件内容及结构说明",
+                  "estimatedTimeMs": 30000,
+                  "stepPrompt": "你需要使用文件读取工具打开 config.json 文件，分析其结构并记录所有配置项的键值对"
                 }
               ],
-              "reasoning": "分解思考过程"
+              "reasoning": "任务分解思路"
             }
-            
-            要求:
-            1. 子任务粒度适中，每个任务预估耗时 30秒-5分钟
-            2. 明确依赖关系，避免循环依赖
-            3. 尽可能支持并行执行
-            4. 任务编号格式: task-1, task-2, ...
-            5. 依赖使用 id 引用，不要依赖后续任务
+
+            ## 字段说明
+            - id: 格式 "task-N" (N 从 1 开始递增)
+            - action: 简洁的动词+名词，如 "读取配置文件"、"编写单元测试"
+            - description: 具体要做什么，包含工具名或文件路径
+            - agentType: coder/test/reviewer/debug/doc/explorer/architect
+            - priority: 1-10, 数字越大优先级越高
+            - dependencies: 依赖的 task id 列表，无依赖写 []
+            - expectedOutput: 可验证的验收标准（具体、可检查）
+            - estimatedTimeMs: 预估毫秒数 (30000=30秒, 300000=5分钟)
+            - stepPrompt: 进入此步骤时向AI注入的上下文提示，说明这个步骤的背景、目标、需要关注的要点和预期产出。用中文写，50-200字。
+            - reasoning: 简要说明分解思路
+
+            ## 硬性要求 (VIOLATION = 回复无效)
+            1. ❌ 不得在 JSON 外添加任何文字
+            2. ❌ 不得用 ```json ``` 包裹
+            3. ❌ subTasks 数组不能为空 — 至少包含1个任务
+            4. ❌ 不得生成无法验证的模糊任务（如"优化代码"、"改进性能"）
+            5. ❌ 依赖关系不能有循环 — 必须是 DAG
+            6. ❌ 每个任务必须有明确的 expectedOutput (验收标准)
+            7. ❌ 不得依赖后续任务 (task-2 不能依赖 task-3)
+            8. ❌ 每个任务必须有 stepPrompt (AI上下文提示)
             """,
             taskDescription,
             analysis.getIntent().getType(),
@@ -360,25 +387,43 @@ public class AIPlanner {
     }
     
     /**
-     * 解析分析响应
+     * 解析分析响应（带增强容错）
      */
     private TaskAnalysis parseAnalysisResponse(String aiResponse) throws Exception {
-        // 清理响应，移除可能的 markdown 代码块标记
-        String cleaned = aiResponse.replaceAll("```json\\s*", "").replaceAll("```\\s*", "").trim();
+        String cleaned = extractJson(aiResponse);
         
-        JsonNode root = objectMapper.readTree(cleaned);
-        return objectMapper.treeToValue(root, TaskAnalysis.class);
+        try {
+            JsonNode root = objectMapper.readTree(cleaned);
+            return objectMapper.treeToValue(root, TaskAnalysis.class);
+        } catch (Exception e) {
+            log.warn("[AIPlanner] JSON 解析失败，尝试修复: " + e.getMessage());
+            // 尝试修复常见 JSON 问题
+            String repaired = repairJson(cleaned);
+            JsonNode root = objectMapper.readTree(repaired);
+            return objectMapper.treeToValue(root, TaskAnalysis.class);
+        }
     }
     
     /**
-     * 解析分解响应
+     * 解析分解响应（带增强容错）
      */
-    private List<PlanStep> parseDecompositionResponse(String aiResponse) throws Exception {
-        // 清理响应
-        String cleaned = aiResponse.replaceAll("```json\\s*", "").replaceAll("```\\s*", "").trim();
+    private List<PlanStep> parseDecompositionResponse(String aiResponse, String taskDescription) throws Exception {
+        String cleaned = extractJson(aiResponse);
         
-        JsonNode root = objectMapper.readTree(cleaned);
+        JsonNode root;
+        try {
+            root = objectMapper.readTree(cleaned);
+        } catch (Exception e) {
+            log.warn("[AIPlanner] 子任务 JSON 解析失败，尝试修复: " + e.getMessage());
+            String repaired = repairJson(cleaned);
+            root = objectMapper.readTree(repaired);
+        }
+        
         JsonNode subTasksNode = root.get("subTasks");
+        if (subTasksNode == null || !subTasksNode.isArray() || subTasksNode.size() == 0) {
+            log.warn("[AIPlanner] subTasks 为空或不存在，使用默认单任务");
+            return List.of(createFallbackStep(taskDescription));
+        }
         
         List<PlanStep> steps = new ArrayList<>();
         for (int i = 0; i < subTasksNode.size(); i++) {
@@ -386,19 +431,75 @@ public class AIPlanner {
             
             PlanStep step = PlanStep.builder()
                 .stepNumber(i + 1)
-                .action(taskNode.get("action").asText())
-                .description(taskNode.get("description").asText())
-                .agentType(taskNode.get("agentType").asText())
+                .action(taskNode.has("action") ? taskNode.get("action").asText() : ("任务步骤 " + (i + 1)))
+                .description(taskNode.has("description") ? taskNode.get("description").asText() : taskNode.toString())
+                .agentType(taskNode.has("agentType") ? taskNode.get("agentType").asText() : "coder")
                 .priority(taskNode.has("priority") ? taskNode.get("priority").asInt() : 5)
                 .dependencies(parseDependencies(taskNode.get("dependencies")))
                 .expectedOutput(taskNode.has("expectedOutput") ? taskNode.get("expectedOutput").asText() : "")
                 .estimatedTimeMs(taskNode.has("estimatedTimeMs") ? taskNode.get("estimatedTimeMs").asLong() : 60000)
+                .stepPrompt(taskNode.has("stepPrompt") ? taskNode.get("stepPrompt").asText() : 
+                    ("执行步骤" + (i + 1) + "：" + (taskNode.has("action") ? taskNode.get("action").asText() : "任务")))
                 .build();
             
             steps.add(step);
         }
         
         return steps;
+    }
+    
+    /**
+     * 从 AI 响应中提取 JSON（去除 markdown 代码块、前后文字）
+     */
+    private String extractJson(String aiResponse) {
+        String cleaned = aiResponse.trim();
+        
+        // 移除 markdown 代码块
+        cleaned = cleaned.replaceAll("(?i)```json\\s*", "").replaceAll("(?i)```\\s*", "");
+        
+        // 找到第一个 { 和最后一个 }
+        int firstBrace = cleaned.indexOf('{');
+        int lastBrace = cleaned.lastIndexOf('}');
+        
+        if (firstBrace >= 0 && lastBrace > firstBrace) {
+            cleaned = cleaned.substring(firstBrace, lastBrace + 1);
+        }
+        
+        return cleaned.trim();
+    }
+    
+    /**
+     * 修复常见 JSON 问题
+     */
+    private String repairJson(String json) {
+        // 移除尾部逗号 (在 ] 或 } 之前)
+        json = json.replaceAll(",\\s*([}\\]])", "$1");
+        // 修复单引号为双引号 (简单情况)
+        // 移除注释 (// ...)
+        json = json.replaceAll("//[^\n]*", "");
+        // 移除注释 (/* ... */)
+        json = json.replaceAll("/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/", "");
+        // 移除尾部逗号后的换行
+        json = json.replaceAll(",\\s*\n\\s*([}\\]])", "\n$1");
+        
+        return json.trim();
+    }
+    
+    /**
+     * 创建 fallback 步骤
+     */
+    private PlanStep createFallbackStep(String taskDescription) {
+        return PlanStep.builder()
+            .stepNumber(1)
+            .action("执行任务")
+            .description(taskDescription)
+            .agentType("coder")
+            .priority(5)
+            .dependencies(List.of())
+            .expectedOutput("任务完成")
+            .estimatedTimeMs(120000)
+            .stepPrompt("请执行以下任务：" + taskDescription + "。按照用户的要求完成所有必要的工作，并在完成后汇报结果。")
+            .build();
     }
     
     private List<String> parseDependencies(JsonNode depsNode) {

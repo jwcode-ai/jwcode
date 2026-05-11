@@ -43,26 +43,24 @@ public class SystemPromptLoader {
      * @return 系统提示词内容，如果无法加载则返回默认提示词
      */
     public static String getSystemPrompt() {
-        return getSystemPrompt(null);
+        return getSystemPrompt(null, null);
     }
 
     /**
-     * 获取系统提示词（支持工具自描述聚合）
-     *
-     * <p>当 {@code ~/.jwcode/system-prompt/} 目录存在时，使用 {@link SystemPromptAssembler}
-     * 自动组装；否则回退到内置默认提示词。</p>
+     * 获取系统提示词（支持工具自描述聚合，并指定工作目录）
      *
      * @param toolRegistry 工具注册表，用于聚合工具自描述；可为 null
+     * @param workingDirectory 指定的工作目录，用于环境信息注入
      * @return 系统提示词内容
      */
-    public static String getSystemPrompt(ToolRegistry toolRegistry) {
+    public static String getSystemPrompt(ToolRegistry toolRegistry, String workingDirectory) {
         Path promptDir = SystemPromptAssembler.getDefaultPromptDir();
         if (Files.exists(promptDir) && Files.isDirectory(promptDir)) {
-            SystemPromptAssembler assembler = new SystemPromptAssembler(promptDir, toolRegistry);
+            SystemPromptAssembler assembler = new SystemPromptAssembler(promptDir, toolRegistry, workingDirectory);
             return assembler.assemble();
         }
         String basePrompt = getBasePrompt();
-        String envInfo = getEnvironmentInfo();
+        String envInfo = getEnvironmentInfo(workingDirectory);
         return envInfo + "\n\n" + basePrompt;
     }
     

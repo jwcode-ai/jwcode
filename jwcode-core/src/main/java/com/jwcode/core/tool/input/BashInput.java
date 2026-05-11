@@ -66,15 +66,26 @@ public record BashInput(
     }
     
     /**
-     * 检查是否是危险命令
+     * 检查是否是危险命令（含自毁命令）
      */
     public boolean isDangerousCommand() {
         if (command == null) return false;
         
         String[] dangerousPatterns = {
+            // Unix 危险模式
             "rm -rf /", "rm -rf /*", "dd if=/dev/zero",
             ":(){ :|:& };:", "> /dev/sda", "mkfs.",
-            "chmod -R 777 /", "chown -R", "mv /* /dev/null"
+            "chmod -R 777 /", "chown -R", "mv /* /dev/null",
+            // Windows 自毁模式 —— 会杀死 JWCode 自身所在的 JVM 进程
+            "taskkill /f /im java",        // taskkill /F /IM java.exe
+            "taskkill /f /im javaw",       // taskkill /F /IM javaw.exe
+            "taskkill /f /im jp2launcher", // Eclipse/IDE launcher
+            "stop-process -name java",     // PowerShell: Stop-Process -Name java
+            "stop-process -name javaw",    // PowerShell: Stop-Process -Name javaw
+            "stop-process java",           // PowerShell 缩写
+            "kill -9",                     // Unix: 强制杀进程（可能杀自己）
+            "killall java",                // Unix: 杀所有 Java
+            "pkill java",                  // Unix: 杀所有 Java
         };
         
         String lowerCmd = command.toLowerCase();
@@ -83,6 +94,24 @@ public record BashInput(
                 return true;
             }
         }
+        
+        // 额外检测：taskkill 通过 PID 杀进程（可能是当前进程）
+        if (lowerCmd.contains("taskkill") && lowerCmd.contains("/pid")) {
+            return true;
+        }
+        
+        // 检测 wmic process delete（Windows 进程删除）
+        if (lowerCmd.contains("wmic") && lowerCmd.contains("process") && 
+            (lowerCmd.contains("delete") || lowerCmd.contains("call terminate"))) {
+            return true;
+        }
+        
+        // 检测 PowerShell 杀进程的更多变体
+        if ((lowerCmd.contains("get-process") || lowerCmd.contains("ps ")) && 
+            (lowerCmd.contains("stop-process") || lowerCmd.contains("kill"))) {
+            return true;
+        }
+        
         return false;
     }
 }

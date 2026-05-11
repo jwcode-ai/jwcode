@@ -667,8 +667,10 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             - doc: 文档编写、README、API文档
 
             ## 输出格式（严格遵守）
-            你必须 ONLY 输出一个合法的 JSON 对象，不要包含任何其他内容（不要有 markdown、不要有代码块标记、不要有解释、不要有问候语）。
+            你必须 ONLY 输出一个合法的 JSON 对象。你的回复从第一个字符到最后一个字符必须是有效的 JSON。
+            不要添加任何前缀、后缀、解释、问候语或 markdown 格式。
 
+            输出结构如下（严格遵守字段名和类型）：
             {
               "analysis": "对用户需求的详细分析，包括理解、关键点、潜在风险等",
               "tasks": [
@@ -682,11 +684,34 @@ public class StreamingWebSocketHandler extends WebSocketServer {
               ]
             }
 
+            ## 行为约束（必须遵守）
+            1. **诚实原则**：你只能基于实际分析得出的结论来生成任务清单。
+               不得虚构、猜测或编造不存在的文件、模块或代码结构。
+               如果对项目的某些细节不确定，在 analysis 中明确标注"需要进一步确认"。
+            
+            2. **禁止空谈**：每个任务必须有明确的、可验证的验收标准。
+               不要生成"优化代码"、"改进性能"这种无法验证的模糊任务。
+            
+            3. **禁止跳跃**：tasks 数组必须至少包含 1 个任务。
+               如果需求过于简单无法拆分，也必须包含 1 个任务来描述执行方式。
+               绝对禁止返回空 tasks 数组。
+
             ## 绝对禁止
-            - 禁止输出 JSON 之外的任何字符（包括 markdown 代码块标记、bash 命令、解释文字）
-            - 禁止使用 ```json 或 ``` 包裹 JSON
-            - 不要输出任何分析过程或思考过程
-            - 只输出纯 JSON，第一个字符必须是 {，最后一个字符必须是 }
+            - 禁止输出 JSON 之外的任何字符（包括 markdown 代码块标记如 ```json 或 ```、bash 命令、解释文字、问候语）
+            - 禁止在 JSON 前后添加任何文字说明
+            - 禁止使用 markdown 代码块包裹 JSON
+            - 禁止输出不完整的 JSON（必须能被 JSON.parse 解析）
+            - 禁止返回空的 tasks 数组
+            - 禁止编造不存在的项目信息
+            - 你的回复第一个字符必须是 {，最后一个字符必须是 }
+            
+            ## 自检清单（输出前必须逐条确认）
+            □ 回复的第一个字符是 { 吗？
+            □ 回复的最后一个字符是 } 吗？
+            □ 整个回复能被 JSON.parse() 成功解析吗？
+            □ tasks 数组非空吗？
+            □ 每个 task 都有 id, title, description, agentType, dependencies 字段吗？
+            □ 没有包含任何 markdown 标记或解释文字吗？
             """;
     }
     
@@ -1279,6 +1304,17 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             // 更新所有已有会话的工作目录，并添加系统通知消息
             for (Session s : sessions.values()) {
                 s.setWorkingDirectory(normalizedDir);
+                
+                // 清除旧的 [ENV_INFO] 环境信息消息，确保 LLMQueryEngine 下次注入时获取最新工作目录
+                int removed = s.removeSystemMessagesContaining("[ENV_INFO]");
+                if (removed > 0) {
+                    logger.fine("已清除会话 " + s.getId() + " 中 " + removed + " 条旧环境信息消息");
+                }
+                
+                // 立即注入新的环境信息（含正确的工作目录），不等 LLMQueryEngine 下次查询
+                String freshEnvInfo = com.jwcode.core.config.SystemPromptLoader.getEnvironmentInfo(normalizedDir);
+                s.addMessage(com.jwcode.core.model.Message.createSystemMessage(freshEnvInfo));
+                
                 // 添加工作目录变更的系统通知，让 AI 感知到目录已变
                 s.addMessage(com.jwcode.core.model.Message.createSystemMessage(
                     "[系统通知] 工作目录已切换为：" + normalizedDir + "。所有文件操作请基于此目录进行。"
@@ -1311,9 +1347,9 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     private Session createNewSession(String sessionId, String model) {
         Session session = new Session(sessionId, this.defaultWorkingDirectory);
         
-        // 加载并添加系统提示词
+        // 加载并添加系统提示词（使用会话的工作目录，确保环境信息准确）
         try {
-            String systemPrompt = com.jwcode.core.config.SystemPromptLoader.getSystemPrompt();
+            String systemPrompt = com.jwcode.core.config.SystemPromptLoader.getSystemPrompt(null, this.defaultWorkingDirectory);
             if (systemPrompt != null && !systemPrompt.isEmpty()) {
                 com.jwcode.core.model.Message systemMessage = 
                     com.jwcode.core.model.Message.createSystemMessage(systemPrompt);

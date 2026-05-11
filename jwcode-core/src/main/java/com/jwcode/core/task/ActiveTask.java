@@ -81,6 +81,16 @@ public class ActiveTask {
     }
 
     /**
+     * 获取当前步骤的AI提示词
+     */
+    @JsonIgnore
+    public String getCurrentStepPrompt() {
+        TaskStep current = getCurrentStep();
+        if (current == null) return null;
+        return current.getStepPrompt();
+    }
+
+    /**
      * 推进到下一步
      */
     public TaskStep advanceToNextStep() {

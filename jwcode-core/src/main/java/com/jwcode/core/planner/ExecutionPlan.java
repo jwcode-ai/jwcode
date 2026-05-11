@@ -4,6 +4,7 @@ import com.jwcode.core.agent.parallel.SubAgentTask;
 import com.jwcode.core.agent.parallel.SubAgentResult;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -71,17 +72,22 @@ public class ExecutionPlan {
      */
     public List<SubAgentTask> toSubAgentTasks() {
         return steps.stream()
-            .map(step -> SubAgentTask.builder()
-                .taskId(planId + "_step_" + step.getStepNumber())
-                .instruction(step.getDescription())
-                .agentType(step.getAgentType())
-                .priority(step.getPriority())
-                .dependencies(step.getDependencies())
-                .context(step.getContext())
-                .build())
+            .map(step -> {
+                Map<String, Object> ctx = new HashMap<>(step.getContext());
+                ctx.put("stepPrompt", step.getStepPrompt());
+                ctx.put("action", step.getAction());
+                return SubAgentTask.builder()
+                    .taskId(planId + "_step_" + step.getStepNumber())
+                    .instruction(step.getDescription())
+                    .agentType(step.getAgentType())
+                    .priority(step.getPriority())
+                    .dependencies(step.getDependencies())
+                    .context(ctx)
+                    .build();
+            })
             .collect(Collectors.toList());
     }
-    
+
     /**
      * 获取可以并行执行的步骤组
      */
@@ -139,7 +145,11 @@ public class ExecutionPlan {
                 step.getAction(),
                 agent,
                 deps));
-            sb.append("   ").append(step.getDescription()).append("\n\n");
+            sb.append("   ").append(step.getDescription()).append("\n");
+            if (step.getStepPrompt() != null && !step.getStepPrompt().isEmpty()) {
+                sb.append("   💡 AI提示: ").append(step.getStepPrompt()).append("\n");
+            }
+            sb.append("\n");
         }
         
         if (!validationIssues.isEmpty()) {
@@ -166,6 +176,13 @@ public class ExecutionPlan {
             .count() * 20000L; // 并行步骤假设20秒
         
         return Math.max(serialTime, parallelTime);
+    }
+    
+    /**
+     * 验证计划是否有效：必须包含至少一个步骤
+     */
+    public boolean isValid() {
+        return steps != null && !steps.isEmpty();
     }
     
     // Builder
@@ -195,6 +212,9 @@ public class ExecutionPlan {
         public Builder createdAt(long createdAt) { this.createdAt = createdAt; return this; }
         
         public ExecutionPlan build() {
+            if (steps == null || steps.isEmpty()) {
+                throw new IllegalStateException("ExecutionPlan 必须至少包含一个执行步骤 (PlanStep)");
+            }
             ExecutionPlan plan = new ExecutionPlan();
             plan.planId = this.planId;
             plan.originalRequest = this.originalRequest;

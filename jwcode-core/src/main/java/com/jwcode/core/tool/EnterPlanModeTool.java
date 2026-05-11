@@ -73,8 +73,14 @@ public class EnterPlanModeTool implements Tool<EnterPlanModeTool.Input, EnterPla
             1. 进入 Plan Mode
             2. 探索代码（Glob/Grep/Read）
             3. 需要时用 AskUserQuestion 澄清需求
-            4. 写 plan 到指定文件
-            5. 调用 ExitPlanMode 请求审批
+            4. 生成结构化任务清单（每个任务必须有 id/action/description/agentType/dependencies/expectedOutput）
+            5. 调用 ExitPlanModeV2 请求审批
+            
+            **⚠️ Plan Mode 铁律**：
+            - 你只能探索和规划，不得声称自己完成了任何写操作
+            - 任何声称"已完成"的声明必须附带对应工具调用的证据
+            - 如果无法完成某项操作，如实说明 — 撒谎比失败更严重
+            - 返回的任务清单必须是结构化 JSON 格式（见 ExitPlanModeV2）
             """;
     }
     

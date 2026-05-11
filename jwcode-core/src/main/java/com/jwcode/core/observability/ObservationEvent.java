@@ -165,4 +165,16 @@ public sealed interface ObservationEvent {
             this(originalCount, compressedCount, estimatedTokensSaved, summary, Instant.now());
         }
     }
+
+    /**
+     * 步骤AI提示 — 进入新步骤时向AI注入上下文提示
+     */
+    record StepPrompt(String taskId, int stepIndex, String description,
+                      String action, String stepPrompt, String agentType,
+                      Instant timestamp) implements ObservationEvent {
+        public StepPrompt(String taskId, int stepIndex, String description,
+                         String action, String stepPrompt, String agentType) {
+            this(taskId, stepIndex, description, action, stepPrompt, agentType, Instant.now());
+        }
+    }
 }

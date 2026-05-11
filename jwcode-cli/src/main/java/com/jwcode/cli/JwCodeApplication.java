@@ -221,8 +221,8 @@ public class JwCodeApplication implements AutoCloseable {
                 logger.info("Created and activated new session: " + session.getId());
             }
             
-            // 加载并添加系统提示词
-            String systemPrompt = SystemPromptLoader.getSystemPrompt();
+            // 加载并添加系统提示词（使用会话的工作目录）
+            String systemPrompt = SystemPromptLoader.getSystemPrompt(null, session.getWorkingDirectory());
             if (systemPrompt != null && !systemPrompt.isEmpty()) {
                 session.addMessage(Message.createSystemMessage(systemPrompt));
                 logger.debug("System prompt loaded: " + SystemPromptLoader.getPromptInfo());

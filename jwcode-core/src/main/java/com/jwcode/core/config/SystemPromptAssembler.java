@@ -37,14 +37,20 @@ public class SystemPromptAssembler {
 
     private final Path promptDir;
     private final ToolRegistry toolRegistry;
+    private final String workingDirectory;
 
     public SystemPromptAssembler(ToolRegistry toolRegistry) {
-        this(getDefaultPromptDir(), toolRegistry);
+        this(getDefaultPromptDir(), toolRegistry, null);
     }
 
     public SystemPromptAssembler(Path promptDir, ToolRegistry toolRegistry) {
+        this(promptDir, toolRegistry, null);
+    }
+
+    public SystemPromptAssembler(Path promptDir, ToolRegistry toolRegistry, String workingDirectory) {
         this.promptDir = promptDir;
         this.toolRegistry = toolRegistry;
+        this.workingDirectory = workingDirectory;
     }
 
     /**
@@ -159,9 +165,12 @@ public class SystemPromptAssembler {
     }
 
     /**
-     * 获取动态环境信息（委托给 SystemPromptLoader）
+     * 获取动态环境信息（委托给 SystemPromptLoader），使用构造时指定的工作目录
      */
     private String getEnvironmentInfo() {
+        if (workingDirectory != null) {
+            return SystemPromptLoader.getEnvironmentInfo(workingDirectory);
+        }
         return SystemPromptLoader.getEnvironmentInfo();
     }
 

@@ -241,6 +241,33 @@ public class PlanTaskBroadcaster {
         }
     }
 
+    /**
+     * 广播 step_prompt — 进入步骤时向AI注入的上下文提示
+     */
+    public void broadcastStepPrompt(String sessionId, String taskId, int stepIndex,
+                                     String description, String action, String stepPrompt, String agentType) {
+        if (!enabled || wsServer == null || sessionId == null) return;
+        try {
+            StringBuilder json = new StringBuilder();
+            json.append("{\"taskId\":\"").append(escapeJson(taskId)).append("\"");
+            json.append(",\"stepIndex\":").append(stepIndex);
+            json.append(",\"stepNumber\":").append(stepIndex + 1);
+            json.append(",\"description\":\"").append(escapeJson(description)).append("\"");
+            json.append(",\"action\":\"").append(escapeJson(action != null ? action : "")).append("\"");
+            json.append(",\"stepPrompt\":\"").append(escapeJson(stepPrompt != null ? stepPrompt : "")).append("\"");
+            json.append(",\"agentType\":\"").append(escapeJson(agentType != null ? agentType : "")).append("\"");
+            json.append("}");
+            wsServer.broadcast(Map.of(
+                    "type", "step_prompt",
+                    "sessionId", sessionId,
+                    "data", json.toString()
+            ));
+            logger.info("[PlanBroadcaster] step_prompt: session=" + sessionId + " step=" + (stepIndex + 1));
+        } catch (Exception e) {
+            logger.log(Level.WARNING, "Failed to broadcast step_prompt", e);
+        }
+    }
+
     // ==================== 工具方法 ====================
 
     /**

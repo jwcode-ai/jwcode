@@ -27,6 +27,8 @@ public class PlanStep {
     private long estimatedTimeMs;
     private String actualOutput;
     private String errorMessage;
+    /** AI提示词 - 进入此步骤时向AI注入的上下文提示 */
+    private String stepPrompt;
     
     public PlanStep() {
         this.dependencies = new ArrayList<>();
@@ -54,6 +56,7 @@ public class PlanStep {
     public long getEstimatedTimeMs() { return estimatedTimeMs; }
     public String getActualOutput() { return actualOutput; }
     public String getErrorMessage() { return errorMessage; }
+    public String getStepPrompt() { return stepPrompt; }
     
     // Setters
     public void setStepNumber(int stepNumber) { this.stepNumber = stepNumber; }
@@ -70,6 +73,7 @@ public class PlanStep {
     public void setEstimatedTimeMs(long estimatedTimeMs) { this.estimatedTimeMs = estimatedTimeMs; }
     public void setActualOutput(String actualOutput) { this.actualOutput = actualOutput; }
     public void setErrorMessage(String errorMessage) { this.errorMessage = errorMessage; }
+    public void setStepPrompt(String stepPrompt) { this.stepPrompt = stepPrompt; }
     
     /**
      * 添加依赖
@@ -113,6 +117,7 @@ public class PlanStep {
         private long estimatedTimeMs;
         private String actualOutput;
         private String errorMessage;
+        private String stepPrompt;
         
         public Builder stepNumber(int stepNumber) { this.stepNumber = stepNumber; return this; }
         public Builder action(String action) { this.action = action; return this; }
@@ -128,6 +133,7 @@ public class PlanStep {
         public Builder estimatedTimeMs(long estimatedTimeMs) { this.estimatedTimeMs = estimatedTimeMs; return this; }
         public Builder actualOutput(String actualOutput) { this.actualOutput = actualOutput; return this; }
         public Builder errorMessage(String errorMessage) { this.errorMessage = errorMessage; return this; }
+        public Builder stepPrompt(String stepPrompt) { this.stepPrompt = stepPrompt; return this; }
         
         public PlanStep build() {
             PlanStep step = new PlanStep();
@@ -145,6 +151,7 @@ public class PlanStep {
             step.estimatedTimeMs = this.estimatedTimeMs;
             step.actualOutput = this.actualOutput;
             step.errorMessage = this.errorMessage;
+            step.stepPrompt = this.stepPrompt;
             return step;
         }
     }

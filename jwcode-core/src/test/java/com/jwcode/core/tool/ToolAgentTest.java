@@ -6,8 +6,13 @@ import com.jwcode.core.a2a.retry.RetryOrchestrator;
 import com.jwcode.core.a2a.retry.RetryStrategy;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
@@ -179,5 +184,153 @@ class ToolAgentTest {
         @SuppressWarnings("unchecked")
         List<String> list = (List<String>) result.getResult();
         assertEquals(3, list.size());
+    }
+
+    // ==================== 工作区安全校验测试 ====================
+
+    @TempDir
+    Path tempDir;
+
+    private Path createWorkspace() throws IOException {
+        Path ws = tempDir.resolve("project");
+        Files.createDirectories(ws);
+        Files.createFile(ws.resolve("pom.xml"));
+        Files.createDirectories(ws.resolve("src"));
+        return ws;
+    }
+
+    @Test
+    @DisplayName("withWorkspace 应创建带工作区守卫的 ToolAgent")
+    void withWorkspace_createsGuardedAgent() throws IOException {
+        Path ws = createWorkspace();
+        ToolAgent<String> agent = ToolAgent.withWorkspace(ws);
+
+        assertNotNull(agent);
+        assertTrue(agent.hasWorkspaceGuard());
+        assertEquals(ws.normalize().toAbsolutePath(), agent.getWorkspaceRoot());
+    }
+
+    @Test
+    @DisplayName("executeWithPathCheck 应允许工作区内的路径操作")
+    void executeWithPathCheck_validPath() throws IOException {
+        Path ws = createWorkspace();
+        ToolAgent<String> agent = ToolAgent.withWorkspace(ws);
+
+        Path validPath = ws.resolve("pom.xml");
+        ToolAgentResult result = agent.executeWithPathCheck("FileReadTool", validPath,
+            () -> "file content");
+
+        assertTrue(result.isSuccess());
+        assertEquals("file content", result.getResult());
+    }
+
+    @Test
+    @DisplayName("executeWithPathCheck 应拦截工作区外的路径操作")
+    void executeWithPathCheck_outsidePath() throws IOException {
+        Path ws = createWorkspace();
+        ToolAgent<String> agent = ToolAgent.withWorkspace(ws);
+
+        Path outsidePath = ws.resolve("../secret.txt").normalize();
+        AtomicInteger operationCalled = new AtomicInteger(0);
+
+        ToolAgentResult result = agent.executeWithPathCheck("FileReadTool", outsidePath,
+            () -> {
+                operationCalled.incrementAndGet();
+                return "should not reach here";
+            });
+
+        assertFalse(result.isSuccess(), "工作区外的操作应失败");
+        assertEquals(0, operationCalled.get(), "操作不应被执行");
+        assertNotNull(result.getErrorSummary());
+        assertEquals("WORKSPACE_ACCESS_DENIED", result.getErrorSummary().getErrorType());
+    }
+
+    @Test
+    @DisplayName("executeWithPathCheck(rawPath) 应解析相对路径并校验")
+    void executeWithPathCheck_relativePath() throws IOException {
+        Path ws = createWorkspace();
+        ToolAgent<String> agent = ToolAgent.withWorkspace(ws);
+
+        // 相对路径 "pom.xml" 基于 ws 解析
+        ToolAgentResult result = agent.executeWithPathCheck("FileReadTool",
+            "pom.xml", ws, () -> "content");
+
+        assertTrue(result.isSuccess());
+    }
+
+    @Test
+    @DisplayName("executeWithPathCheck(rawPath) 应拦截相对路径穿越")
+    void executeWithPathCheck_relativeTraversal() throws IOException {
+        Path ws = createWorkspace();
+        ToolAgent<String> agent = ToolAgent.withWorkspace(ws);
+
+        AtomicInteger operationCalled = new AtomicInteger(0);
+        ToolAgentResult result = agent.executeWithPathCheck("FileReadTool",
+            "../secret.txt", ws, () -> {
+                operationCalled.incrementAndGet();
+                return "should not reach";
+            });
+
+        assertFalse(result.isSuccess());
+        assertEquals(0, operationCalled.get());
+        assertEquals("WORKSPACE_ACCESS_DENIED", result.getErrorSummary().getErrorType());
+    }
+
+    @Test
+    @DisplayName("没有工作区守卫时，executeWithPathCheck 应放行所有路径")
+    void executeWithPathCheck_noGuard() throws IOException {
+        Path ws = createWorkspace();
+        ToolAgent<String> agent = new ToolAgent<>(); // 无守卫
+
+        Path outsidePath = ws.resolve("../secret.txt").normalize();
+        ToolAgentResult result = agent.executeWithPathCheck("FileReadTool", outsidePath,
+            () -> "pass through");
+
+        // 无守卫时不拦截，由工具自身处理
+        assertTrue(result.isSuccess());
+    }
+
+    @Test
+    @DisplayName("validatePath 应在路径越界时返回错误摘要")
+    void validatePath_returnsErrorSummary() throws IOException {
+        Path ws = createWorkspace();
+        ToolAgent<String> agent = ToolAgent.withWorkspace(ws);
+
+        Optional<ErrorSummary> error = agent.validatePath(
+            ws.resolve("../../../etc/passwd").normalize(), "TestTool");
+        assertTrue(error.isPresent());
+        assertEquals("WORKSPACE_ACCESS_DENIED", error.get().getErrorType());
+        assertFalse(error.get().isRetryable());
+    }
+
+    @Test
+    @DisplayName("validatePath 应在路径合法时返回空")
+    void validatePath_returnsEmpty() throws IOException {
+        Path ws = createWorkspace();
+        ToolAgent<String> agent = ToolAgent.withWorkspace(ws);
+
+        Optional<ErrorSummary> error = agent.validatePath(
+            ws.resolve("src"), "TestTool");
+        assertTrue(error.isEmpty());
+    }
+
+    @Test
+    @DisplayName("fastFailWithWorkspace 应创建快速失败且带守卫的 ToolAgent")
+    void fastFailWithWorkspace() throws IOException {
+        Path ws = createWorkspace();
+        ToolAgent<String> agent = ToolAgent.fastFailWithWorkspace(ws);
+
+        assertTrue(agent.hasWorkspaceGuard());
+        assertEquals(ws.normalize().toAbsolutePath(), agent.getWorkspaceRoot());
+
+        // 快速失败行为
+        AtomicInteger counter = new AtomicInteger(0);
+        ToolAgentResult result = agent.execute("FastTool", () -> {
+            counter.incrementAndGet();
+            throw new RuntimeException("fail");
+        });
+
+        assertFalse(result.isSuccess());
+        assertEquals(1, counter.get(), "fastFail 应只尝试1次");
     }
 }

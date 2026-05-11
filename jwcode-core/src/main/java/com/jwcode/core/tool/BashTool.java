@@ -451,16 +451,31 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
         Process process = null;
         
         try {
+            // 【纵深防御】运行时检测：命令是否会杀死当前 JVM 进程
+            String selfKillBlockReason = checkSelfKillCommand(input.command());
+            if (selfKillBlockReason != null) {
+                logger.severe("[BashTool] 拒绝执行自毁命令: " + selfKillBlockReason);
+                return ToolResult.error("⛔ 安全拦截：该命令会终止 JWCode 自身进程！\n" +
+                    "  原因: " + selfKillBlockReason + "\n" +
+                    "  当前 JVM PID: " + ProcessHandle.current().pid() + "\n" +
+                    "  提示: 请勿使用 taskkill/java 终止命令，如需释放内存请使用其他方式。");
+            }
+            
             // 准备命令
             List<String> commandParts = prepareCommand(input.command());
             
             // 构建进程构建器
             ProcessBuilder processBuilder = new ProcessBuilder(commandParts);
             
-            // 设置工作目录
+            // 设置工作目录（带工作区安全校验）
             if (input.cwd() != null && !input.cwd().isEmpty()) {
-                processBuilder.directory(Path.of(input.cwd()).toFile());
+                Path cwdPath = Path.of(input.cwd()).normalize().toAbsolutePath();
+                // 【工作区安全】校验 cwd 在工作区内
+                context.validatePath(cwdPath, getName());
+                processBuilder.directory(cwdPath.toFile());
             } else if (context.getWorkingDirectory() != null) {
+                // workingDirectory 在会话创建时已固定，但再次校验以确保安全
+                context.validatePath(context.getWorkingDirectory(), getName());
                 processBuilder.directory(context.getWorkingDirectory().toFile());
             }
             
@@ -980,6 +995,57 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
         public Input(String command) {
             this.command = command;
         }
+    }
+    
+    /**
+     * 【纵深防御】运行时检测命令是否会杀死当前 JVM 进程
+     * 
+     * 这是 BashInput.isDangerousCommand() 模式匹配之后的第二道防线。
+     * 即使 AI 绕过模式匹配（如使用模糊参数），此方法也会在执行前拦截。
+     * 
+     * @return 拦截原因（null 表示安全）
+     */
+    private String checkSelfKillCommand(String command) {
+        if (command == null) return null;
+        
+        long currentPid = ProcessHandle.current().pid();
+        String currentPidStr = String.valueOf(currentPid);
+        String lowerCmd = command.toLowerCase();
+        
+        // 检测1：taskkill 直接针对当前进程 PID
+        // 如: taskkill /F /PID 12345
+        if (lowerCmd.contains("taskkill") && lowerCmd.contains(currentPidStr)) {
+            return "命令包含当前 JVM 进程 PID (" + currentPidStr + ")，执行将终止 JWCode";
+        }
+        
+        // 检测2：taskkill /IM java* —— 会杀死所有 Java 进程（包括自己）
+        if (lowerCmd.contains("taskkill") && 
+            (lowerCmd.contains("/im java") || lowerCmd.contains("/im javaw") ||
+             lowerCmd.contains("/im jp2launcher"))) {
+            return "taskkill /IM java* 会杀死所有 Java 进程，包括当前 JWCode 进程 (PID=" + currentPidStr + ")";
+        }
+        
+        // 检测3：PowerShell Stop-Process 针对 Java
+        if ((lowerCmd.contains("stop-process") || lowerCmd.contains("kill ")) && 
+            (lowerCmd.contains("java") || lowerCmd.contains("javaw")) &&
+            (lowerCmd.contains("-name") || lowerCmd.contains("-processname"))) {
+            return "Stop-Process -Name java* 会杀死所有 Java 进程，包括当前 JWCode 进程 (PID=" + currentPidStr + ")";
+        }
+        
+        // 检测4：PowerShell Get-Process java | Stop-Process 管道模式
+        if (lowerCmd.contains("get-process") && lowerCmd.contains("java") && 
+            (lowerCmd.contains("stop-process") || lowerCmd.contains("kill"))) {
+            return "Get-Process java | Stop-Process 会杀死所有 Java 进程，包括当前 JWCode (PID=" + currentPidStr + ")";
+        }
+        
+        // 检测5：wmic process delete
+        if (lowerCmd.contains("wmic") && lowerCmd.contains("process") && 
+            lowerCmd.contains("java") && 
+            (lowerCmd.contains("delete") || lowerCmd.contains("call terminate"))) {
+            return "wmic process delete 会终止 Java 进程，包括当前 JWCode (PID=" + currentPidStr + ")";
+        }
+        
+        return null;
     }
     
     /**

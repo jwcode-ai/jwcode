@@ -37,6 +37,7 @@ public class SessionManager {
     private static final Logger logger = LoggerFactory.getLogger(SessionManager.class);
     private static final String SESSIONS_DIR = ".jwcode/sessions";
     private static final String SESSION_EXTENSION = ".json";
+    private static final String ACTIVE_SESSION_FILE = ".jwcode/active_session";
     
     private static final ObjectMapper objectMapper = new ObjectMapper()
             .registerModule(new JavaTimeModule())
@@ -90,6 +91,7 @@ public class SessionManager {
         this.sessions = new ConcurrentHashMap<>();
         initializeSessionsDir();
         loadAllSessions();
+        restoreActiveSession();
     }
     
     /**
@@ -118,6 +120,7 @@ public class SessionManager {
         sessions.put(sessionId, session);
         activeSessionId = sessionId;
         saveSession(session);
+        persistActiveSessionId();
         logger.info("Created new session: {}", sessionId);
         return session;
     }
@@ -212,6 +215,7 @@ public class SessionManager {
                 // 如果删除的是当前活动会话，清空活动会话
                 if (sessionId.equals(activeSessionId)) {
                     activeSessionId = null;
+                    deleteActiveSessionFile();
                 }
                 return true;
             } catch (IOException e) {
@@ -271,6 +275,7 @@ public class SessionManager {
             }
         }
         this.activeSessionId = sessionId;
+        persistActiveSessionId();
         logger.info("Set active session: {}", sessionId);
         return this;
     }
@@ -280,6 +285,7 @@ public class SessionManager {
      */
     public void clearActiveSession() {
         this.activeSessionId = null;
+        deleteActiveSessionFile();
     }
     
     /**
@@ -376,5 +382,66 @@ public class SessionManager {
      */
     public Path getSessionsDir() {
         return sessionsDir;
+    }
+
+    // ==================== Active Session 持久化 ====================
+
+    /**
+     * 持久化当前活动会话 ID 到文件
+     */
+    private void persistActiveSessionId() {
+        try {
+            Path activeFile = Paths.get(System.getProperty("user.home"), ACTIVE_SESSION_FILE);
+            Path parentDir = activeFile.getParent();
+            if (!Files.exists(parentDir)) {
+                Files.createDirectories(parentDir);
+            }
+            Files.writeString(activeFile, activeSessionId);
+            logger.debug("Persisted active session ID: {}", activeSessionId);
+        } catch (IOException e) {
+            logger.warn("Failed to persist active session ID", e);
+        }
+    }
+
+    /**
+     * 从文件恢复活动会话 ID
+     */
+    private void restoreActiveSession() {
+        try {
+            Path activeFile = Paths.get(System.getProperty("user.home"), ACTIVE_SESSION_FILE);
+            if (!Files.exists(activeFile)) {
+                logger.debug("No active session file found, starting fresh");
+                return;
+            }
+            String savedId = Files.readString(activeFile).trim();
+            if (savedId.isEmpty()) {
+                return;
+            }
+            // 验证该会话确实已加载（文件可能已被删除）
+            if (sessions.containsKey(savedId)) {
+                this.activeSessionId = savedId;
+                logger.info("Restored active session: {} (workingDirectory: {})",
+                        savedId, sessions.get(savedId).getWorkingDirectory());
+            } else {
+                // 会话文件可能被手动删除，清理无效的 active_session 记录
+                logger.warn("Active session '{}' not found in loaded sessions, clearing stale reference", savedId);
+                deleteActiveSessionFile();
+            }
+        } catch (IOException e) {
+            logger.warn("Failed to restore active session ID", e);
+        }
+    }
+
+    /**
+     * 删除活动会话 ID 文件
+     */
+    private void deleteActiveSessionFile() {
+        try {
+            Path activeFile = Paths.get(System.getProperty("user.home"), ACTIVE_SESSION_FILE);
+            Files.deleteIfExists(activeFile);
+            logger.debug("Deleted active session file");
+        } catch (IOException e) {
+            logger.warn("Failed to delete active session file", e);
+        }
     }
 }

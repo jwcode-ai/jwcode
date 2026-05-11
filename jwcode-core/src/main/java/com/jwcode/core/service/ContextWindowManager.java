@@ -77,6 +77,17 @@ public class ContextWindowManager {
      * @return 处理后的消息列表
      */
     public List<Message> prepareMessages(List<Message> messages) {
+        return prepareMessages(messages, false);
+    }
+    
+    /**
+     * 准备消息列表，确保不超过上下文窗口限制
+     * 
+     * @param messages 原始消息列表
+     * @param force 强制压缩（绕过 token 估算检查），用于 TokenBudget 已耗尽等紧急场景
+     * @return 处理后的消息列表
+     */
+    public List<Message> prepareMessages(List<Message> messages, boolean force) {
         if (messages == null || messages.isEmpty()) {
             return messages;
         }
@@ -85,14 +96,23 @@ public class ContextWindowManager {
         int estimatedTokens = estimateTokens(messages);
         
         // 只检查 token 是否超限，不再检查消息数限制
-        if (estimatedTokens <= contextLimit - SAFETY_MARGIN) {
+        // 【修复】force=true 时绕过估算检查，解决 TokenBudget 与 estimateTokens 口径不一致
+        // 导致紧急压缩被跳过的问题（estimateTokens 启发式低估了实际 token 数）
+        if (!force && estimatedTokens <= contextLimit - SAFETY_MARGIN) {
             return messages;
         }
         
-        logger.info(String.format(
-            "上下文窗口超限: 估计 Token 数=%d, 消息数=%d, 限制=%d. 开始压缩...",
-            estimatedTokens, messages.size(), contextLimit
-        ));
+        if (force) {
+            logger.info(String.format(
+                "[ContextWindowManager] 强制压缩: 估计 Token 数=%d, 消息数=%d, 限制=%d. 开始压缩...",
+                estimatedTokens, messages.size(), contextLimit
+            ));
+        } else {
+            logger.info(String.format(
+                "上下文窗口超限: 估计 Token 数=%d, 消息数=%d, 限制=%d. 开始压缩...",
+                estimatedTokens, messages.size(), contextLimit
+            ));
+        }
         
         List<Message> compressed;
         // 优先尝试 LLM 语义压缩（若配置了 strategy 且消息足够多）

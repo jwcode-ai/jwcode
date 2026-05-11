@@ -357,6 +357,24 @@ public class LLMQueryEngine {
             如果发现某个步骤已经完成或不需要，可以直接删除。
             如果发现后续步骤需要提前执行，可以直接调整顺序。
             
+            【关键】执行诚信规则（绝对禁止）：
+            
+            1. **禁止谎报完成**：绝对不能声称完成了某个步骤而实际上没有执行相应的工具调用。
+               标注"✅ 步骤 X 完成"之前，必须已经实际执行了该步骤所需的全部工具操作。
+            
+            2. **禁止虚构结果**：绝对不能编造文件内容、命令输出、或任何你没有实际获取到的信息。
+               如果工具调用失败，必须如实报告失败，而不是假装成功。
+            
+            3. **禁止跳跃执行**：必须按照任务清单的顺序逐个执行步骤。
+               不得在未执行步骤 1-3 的情况下直接声称步骤 4 完成。
+            
+            4. **完成必须有证据**：每个步骤完成后，在回复中附上实际的执行结果摘要
+              （如读取到的文件内容片段、命令执行的输出摘要、修改的文件路径列表）。
+              没有证据的"完成"声明将被视为无效。
+            
+            5. **失败必须上报**：如果某个步骤尝试多次仍无法完成，必须明确标记为失败
+              并说明原因，不得悄悄跳过或假装完成。
+            
             【重要】大任务拆分规则：
             
             当任务涉及多个独立子任务（如"同时修改多个不相关文件"、"并行分析多个模块"），你必须使用 AgentTool 创建子 Agent 并行执行：
@@ -461,29 +479,24 @@ public class LLMQueryEngine {
                 "任务清单已制定完成，请从第一个待办步骤开始执行。每完成一步请汇报进度。"
             ));
             activeTask.setStatus(com.jwcode.core.task.TaskStatus.EXECUTING);
-            activeTask.advanceToNextStep();
+            // 使用 TaskLifecycleManager 启动首个步骤，会自动发布步骤提示
+            taskLifecycleManager.startFirstStep(session);
         }
 
-        // 检查 Token 预算
-        if (tokenBudget.isExhausted()) {
-            logger.warning("[LLMQueryEngine] Token budget exhausted: " + tokenBudget);
-            triggerStepComplete("LLM查询", "Token 预算已耗尽");
-            return CompletableFuture.completedFuture(
-                QueryResult.error("Token 预算已耗尽，任务被迫终止。请使用 /compact 压缩上下文后重试。")
-            );
-        }
-
-        // 【修复】自动触发上下文压缩（当预算使用超过 70% 时，且满足冷却时间）
+        // 【修复】自动触发上下文压缩（优先于耗尽检查，给压缩一次拯救机会）
         // 使用 ContextWindowManager 统一压缩入口，包含 TokenBudget 释放和事件通知
+        // 注意：预算已耗尽时绕过冷却时间，执行紧急压缩
         long now = System.currentTimeMillis();
+        boolean budgetExhausted = tokenBudget.isExhausted();
         if (tokenBudget.usageRatio() > 0.70 && session.getMessages().size() > 10 
-            && (now - lastCompactTime) > COMPACT_COOLDOWN_MS) {
-            logger.info("[LLMQueryEngine] Token budget usage=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100)
-                + ", auto-compacting context...");
+            && ((now - lastCompactTime) > COMPACT_COOLDOWN_MS || budgetExhausted)) {
+            String compactReason = budgetExhausted ? "EMERGENCY (budget exhausted)" : "usage=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100);
+            logger.info("[LLMQueryEngine] Auto-compacting context, reason=" + compactReason + "...");
             int beforeCount = session.getMessages().size();
             // 使用 ContextWindowManager 统一压缩入口
+            // 【修复】budgetExhausted 时传 force=true，绕过 estimateTokens 启发式检查
             ContextWindowManager windowManager = createContextWindowManager();
-            List<Message> compacted = windowManager.prepareMessages(session.getMessages());
+            List<Message> compacted = windowManager.prepareMessages(session.getMessages(), budgetExhausted);
             if (compacted != null && compacted.size() < beforeCount) {
                 session.setMessages(compacted);
                 session.markCompacted();
@@ -511,9 +524,18 @@ public class LLMQueryEngine {
             } else {
                 logger.warning("[LLMQueryEngine] Auto-compact skipped: result size not reduced (before=" + beforeCount + ")");
             }
-        } else if (tokenBudget.usageRatio() > 0.70 && (now - lastCompactTime) <= COMPACT_COOLDOWN_MS) {
+        } else if (tokenBudget.usageRatio() > 0.70 && (now - lastCompactTime) <= COMPACT_COOLDOWN_MS && !budgetExhausted) {
             logger.info("[LLMQueryEngine] Auto-compact skipped: cooldown period active (" 
                 + ((COMPACT_COOLDOWN_MS - (now - lastCompactTime)) / 1000) + "s remaining)");
+        }
+
+        // 压缩后再次检查 Token 预算（放在压缩之后，给压缩一次拯救机会）
+        if (tokenBudget.isExhausted()) {
+            logger.warning("[LLMQueryEngine] Token budget exhausted: " + tokenBudget);
+            triggerStepComplete("LLM查询", "Token 预算已耗尽");
+            return CompletableFuture.completedFuture(
+                QueryResult.error("Token 预算已耗尽，任务被迫终止。请使用 /compact 压缩上下文后重试。")
+            );
         }
 
         // Token 预算紧张时缓存建议（将在 convertSessionMessages 中临时注入，不保存到 session 历史）
@@ -712,6 +734,9 @@ public class LLMQueryEngine {
         session.addMessage(Message.createUserMessage(prompt));
         addFileEditGuidelines();
         
+        // 注入环境信息（操作系统、工作目录、系统时间等），让 AI 了解当前环境
+        injectEnvironmentInfo();
+        
         return runStreamConversationLoop(0, 0, contentConsumer, thinkingConsumer, toolCallConsumer);
     }
     
@@ -729,30 +754,20 @@ public class LLMQueryEngine {
             logger.info("[LLMQueryEngine] Context compacted detected, TokenBudget reset.");
         }
 
-        // 检查 Token 预算
-        if (tokenBudget.isExhausted()) {
-            logger.warning("[LLMQueryEngine] Token budget exhausted: " + tokenBudget);
-            triggerStepComplete("LLM查询", "Token 预算已耗尽");
-            // 【修复】Token 耗尽时，通过 contentConsumer 发送结束信号给前端
-            if (contentConsumer != null) {
-                contentConsumer.accept("\n\n---\n⚠️ **Token 预算已耗尽，任务被迫终止。**\n\n请使用 `/compact` 压缩上下文后重试，或开始新会话。\n\n[FINISH]");
-            }
-            return CompletableFuture.completedFuture(
-                QueryResult.error("Token 预算已耗尽，任务被迫终止。请使用 /compact 压缩上下文后重试。")
-            );
-        }
-
-        // 自动触发上下文压缩（当预算使用超过 70% 时）
+        // 自动触发上下文压缩（优先于耗尽检查，给压缩一次拯救机会）
         // 使用 ContextWindowManager 统一压缩入口，包含 TokenBudget 释放和事件通知
+        // 注意：预算已耗尽时绕过冷却时间，执行紧急压缩
         long now = System.currentTimeMillis();
+        boolean budgetExhausted = tokenBudget.isExhausted();
         if (tokenBudget.usageRatio() > 0.70 && session.getMessages().size() > 10
-            && (now - lastCompactTime) > COMPACT_COOLDOWN_MS) {
-            logger.info("[LLMQueryEngine] Token budget usage=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100)
-                + ", auto-compacting context...");
+            && ((now - lastCompactTime) > COMPACT_COOLDOWN_MS || budgetExhausted)) {
+            String compactReason = budgetExhausted ? "EMERGENCY (budget exhausted)" : "usage=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100);
+            logger.info("[LLMQueryEngine] Auto-compacting context, reason=" + compactReason + "...");
             int beforeCount = session.getMessages().size();
             // 使用 ContextWindowManager 统一压缩入口
+            // 【修复】budgetExhausted 时传 force=true，绕过 estimateTokens 启发式检查
             ContextWindowManager windowManager = createContextWindowManager();
-            List<Message> compacted = windowManager.prepareMessages(session.getMessages());
+            List<Message> compacted = windowManager.prepareMessages(session.getMessages(), budgetExhausted);
             if (compacted != null && compacted.size() < beforeCount) {
                 session.setMessages(compacted);
                 session.markCompacted();
@@ -780,9 +795,22 @@ public class LLMQueryEngine {
             } else {
                 logger.warning("[LLMQueryEngine] Auto-compact skipped: result size not reduced (before=" + beforeCount + ")");
             }
-        } else if (tokenBudget.usageRatio() > 0.70 && (now - lastCompactTime) <= COMPACT_COOLDOWN_MS) {
+        } else if (tokenBudget.usageRatio() > 0.70 && (now - lastCompactTime) <= COMPACT_COOLDOWN_MS && !budgetExhausted) {
             logger.info("[LLMQueryEngine] Auto-compact skipped: cooldown period active ("
                 + ((COMPACT_COOLDOWN_MS - (now - lastCompactTime)) / 1000) + "s remaining)");
+        }
+
+        // 压缩后再次检查 Token 预算
+        if (tokenBudget.isExhausted()) {
+            logger.warning("[LLMQueryEngine] Token budget exhausted: " + tokenBudget);
+            triggerStepComplete("LLM查询", "Token 预算已耗尽");
+            // 【修复】Token 耗尽时，通过 contentConsumer 发送结束信号给前端
+            if (contentConsumer != null) {
+                contentConsumer.accept("\n\n---\n⚠️ **Token 预算已耗尽，任务被迫终止。**\n\n请使用 `/compact` 压缩上下文后重试，或开始新会话。\n\n[FINISH]");
+            }
+            return CompletableFuture.completedFuture(
+                QueryResult.error("Token 预算已耗尽，任务被迫终止。请使用 /compact 压缩上下文后重试。")
+            );
         }
 
         // Token 预算紧张时缓存建议（将在 convertSessionMessages 中临时注入，不保存到 session 历史）

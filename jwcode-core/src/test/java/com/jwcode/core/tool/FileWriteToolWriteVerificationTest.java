@@ -16,21 +16,27 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * FileWriteTool 写入功能验证测试
  * 专门测试文件是否能够正确写入，验证之前的"文件创建成功"但实际未写入的问题
+ * 
+ * <p>【工作区安全】所有测试文件写入在工作目录内，通过 WorkspaceGuard 校验。</p>
  */
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class FileWriteToolWriteVerificationTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
-    private static final String DESKTOP_PATH = "C:/Users/HUAWEI/Desktop";
     private static final String TEST_FILE_PREFIX = "jwcode_write_test_";
     
     private ToolExecutor executor;
     private ToolExecutionContext context;
+    private Path testDir; // 测试用临时目录（在工作区内）
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         executor = new ToolExecutor();
-        context = new ToolExecutionContext(null, Path.of(System.getProperty("user.dir")), null);
+        // 在项目目录下创建临时测试目录，确保在工作区内
+        Path userDir = Path.of(System.getProperty("user.dir"));
+        testDir = userDir.resolve("target/test-writes");
+        Files.createDirectories(testDir);
+        context = new ToolExecutionContext(null, userDir, null);
     }
 
     @AfterEach
@@ -40,9 +46,8 @@ class FileWriteToolWriteVerificationTest {
     }
 
     private void cleanupTestFiles() throws Exception {
-        Path desktopPath = Paths.get(DESKTOP_PATH);
-        if (Files.exists(desktopPath)) {
-            try (var stream = Files.list(desktopPath)) {
+        if (Files.exists(testDir)) {
+            try (var stream = Files.list(testDir)) {
                 stream.filter(p -> p.getFileName().toString().startsWith(TEST_FILE_PREFIX))
                       .forEach(p -> {
                           try {
@@ -65,7 +70,7 @@ class FileWriteToolWriteVerificationTest {
         System.out.println("\n========== 测试1: 直接调用 call() 方法 ==========");
         
         String fileName = TEST_FILE_PREFIX + "direct_call.txt";
-        String filePath = Paths.get(DESKTOP_PATH, fileName).toString();
+        String filePath = testDir.resolve(fileName).toString();
         String content = "测试时间: " + LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME) + "\n" +
                         "这是直接调用 call() 方法写入的内容\n" +
                         "第三行内容";
@@ -86,7 +91,7 @@ class FileWriteToolWriteVerificationTest {
         assertTrue(result.getData().success, "success 标志应为 true");
         
         // 验证文件是否真的存在
-        Path actualFilePath = Paths.get(filePath);
+        Path actualFilePath = Path.of(filePath);
         assertTrue(Files.exists(actualFilePath), "文件应该存在: " + filePath);
         
         // 验证文件内容
@@ -102,7 +107,7 @@ class FileWriteToolWriteVerificationTest {
         System.out.println("\n========== 测试2: ToolExecutor + JSON 输入 ==========");
         
         String fileName = TEST_FILE_PREFIX + "executor_json.txt";
-        String filePath = Paths.get(DESKTOP_PATH, fileName).toString();
+        String filePath = testDir.resolve(fileName).toString();
         String content = "测试时间: " + LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME) + "\n" +
                         "这是通过 ToolExecutor.execute() 写入的内容\n" +
                         "第三行内容";
@@ -128,7 +133,7 @@ class FileWriteToolWriteVerificationTest {
         assertTrue(result.isSuccess(), "写入应该成功");
         
         // 验证文件
-        Path actualFilePath = Paths.get(filePath);
+        Path actualFilePath = Path.of(filePath);
         assertTrue(Files.exists(actualFilePath), "文件应该存在: " + filePath);
         
         String actualContent = Files.readString(actualFilePath);
@@ -142,7 +147,7 @@ class FileWriteToolWriteVerificationTest {
         System.out.println("\n========== 测试3: 使用 file_path 字段名 ==========");
         
         String fileName = TEST_FILE_PREFIX + "file_path_field.txt";
-        String filePath = Paths.get(DESKTOP_PATH, fileName).toString();
+        String filePath = testDir.resolve(fileName).toString();
         String content = "使用 file_path 字段名写入的内容\n" +
                         "测试时间: " + LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
         
@@ -163,7 +168,7 @@ class FileWriteToolWriteVerificationTest {
         // 验证
         assertTrue(result.isSuccess(), "使用 file_path 字段名写入应该成功");
         
-        Path actualFilePath = Paths.get(filePath);
+        Path actualFilePath = Path.of(filePath);
         assertTrue(Files.exists(actualFilePath), "文件应该存在");
         
         String actualContent = Files.readString(actualFilePath);
@@ -177,7 +182,7 @@ class FileWriteToolWriteVerificationTest {
         System.out.println("\n========== 测试4: 验证写入后文件可读取 ==========");
         
         String fileName = TEST_FILE_PREFIX + "readable.txt";
-        String filePath = Paths.get(DESKTOP_PATH, fileName).toString();
+        String filePath = testDir.resolve(fileName).toString();
         String content = "这是一个测试文件\n" +
                         "用于验证写入后可以正常读取\n" +
                         "包含中文内容: 你好世界\n" +
@@ -192,7 +197,7 @@ class FileWriteToolWriteVerificationTest {
         System.out.println("  写入成功: " + writeResult.getData().path);
         
         // 读取文件验证
-        Path actualFilePath = Paths.get(filePath);
+        Path actualFilePath = Path.of(filePath);
         assertTrue(Files.exists(actualFilePath), "文件应该存在");
         
         String actualContent = Files.readString(actualFilePath);
@@ -214,7 +219,7 @@ class FileWriteToolWriteVerificationTest {
         System.out.println("\n========== 测试5: 自动创建父目录 ==========");
         
         String fileName = TEST_FILE_PREFIX + "auto_created_dir/test_sub_dir/file.txt";
-        String filePath = Paths.get(DESKTOP_PATH, fileName).toString();
+        String filePath = testDir.resolve(fileName).toString();
         String content = "测试自动创建父目录\n" +
                         "时间: " + LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
         
@@ -232,7 +237,7 @@ class FileWriteToolWriteVerificationTest {
         
         assertTrue(result.isSuccess(), "自动创建父目录应该成功");
         
-        Path actualFilePath = Paths.get(filePath);
+        Path actualFilePath = Path.of(filePath);
         assertTrue(Files.exists(actualFilePath), "文件应该存在");
         
         String actualContent = Files.readString(actualFilePath);

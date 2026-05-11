@@ -375,9 +375,8 @@ public class LocalAgentDispatcher implements AgentDispatcher {
             ));
         }
 
-        // 注入任务描述
+        // 构建任务提示词（将由 engine.query() 自动添加到 session，避免重复）
         String taskPrompt = buildTaskPrompt(agentName, task);
-        subSession.addMessage(com.jwcode.core.model.Message.createUserMessage(taskPrompt));
 
         // 3. 创建 LLMQueryEngine
         ToolExecutor executor = this.toolExecutor != null
@@ -396,7 +395,7 @@ public class LocalAgentDispatcher implements AgentDispatcher {
         // 切换到子Agent（让工具过滤生效）
         agentRegistry.switchTo(agentId);
 
-        // 4. 执行查询
+        // 4. 执行查询（query() 内部会自动 addMessage + injectEnvironmentInfo + injectAgentSystemPrompt）
         try {
             LLMQueryEngine.QueryResult result = engine.query(taskPrompt).get(5, TimeUnit.MINUTES);
 

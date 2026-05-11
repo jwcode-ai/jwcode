@@ -149,6 +149,14 @@ public class FileWriteTool implements Tool<FileWriteTool.Input, FileWriteTool.Ou
                     filePath = context.getWorkingDirectory().resolve(resolvedPath);
                 }
                 
+                // 规范化路径
+                filePath = filePath.normalize().toAbsolutePath();
+                
+                // 【工作区安全】校验路径在工作区内
+                if (context != null) {
+                    context.validatePath(filePath, getName());
+                }
+                
                 Path parentDir = filePath.getParent();
                 if (parentDir != null && !Files.exists(parentDir)) {
                     Files.createDirectories(parentDir);

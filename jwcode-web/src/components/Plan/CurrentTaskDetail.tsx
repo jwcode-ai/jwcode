@@ -1,5 +1,7 @@
 import { memo, useEffect, useRef } from 'react';
 import { PlanTask } from '../../types';
+import { usePlanStore } from '../../stores/planStore';
+import { AlertCircle, ArrowRight } from 'lucide-react';
 
 interface CurrentTaskDetailProps {
   task: PlanTask | null;
@@ -13,6 +15,7 @@ export const CurrentTaskDetail = memo(function CurrentTaskDetail({
   totalTasks,
 }: CurrentTaskDetailProps) {
   const logEndRef = useRef<HTMLDivElement>(null);
+  const currentStepPrompt = usePlanStore((s) => s.currentStepPrompt);
 
   // Auto-scroll logs
   useEffect(() => {
@@ -100,6 +103,27 @@ export const CurrentTaskDetail = memo(function CurrentTaskDetail({
               style={{ width: `${task.progress}%` }}
             />
           </div>
+        </div>
+      )}
+
+      {/* Step Prompt - AI指引 */}
+      {currentStepPrompt && currentStepPrompt.taskId === task.id && (
+        <div className="px-4 py-3 border-b border-purple-500/20 bg-purple-500/5">
+          <div className="flex items-center gap-2 mb-2">
+            <AlertCircle size={14} className="text-purple-400 shrink-0" />
+            <span className="text-xs font-medium text-purple-300">
+              🤖 AI 步骤指引
+            </span>
+          </div>
+          <p className="text-xs text-purple-200/80 leading-relaxed">
+            {currentStepPrompt.stepPrompt}
+          </p>
+          {currentStepPrompt.action && (
+            <div className="flex items-center gap-1.5 mt-2 text-[10px] text-purple-400/60">
+              <ArrowRight size={10} />
+              <span>动作: {currentStepPrompt.action}</span>
+            </div>
+          )}
         </div>
       )}
 

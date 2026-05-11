@@ -95,6 +95,12 @@ export const TaskCard = memo(function TaskCard({ task, isActive, onClick }: Task
           <span className="text-lg shrink-0">{agentIcon}</span>
           <div className="min-w-0">
             <div className="flex items-center gap-1.5">
+              {/* 步骤编号 */}
+              {task.stepNumber && (
+                <span className="text-[10px] font-bold text-dark-muted bg-dark-bg px-1 py-0.5 rounded">
+                  #{task.stepNumber}
+                </span>
+              )}
               <span className="text-sm font-medium text-dark-text truncate">
                 {task.title}
               </span>

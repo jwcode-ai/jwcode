@@ -1,4 +1,4 @@
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, startTransition } from 'react';
 import wsService from '../services/websocket';
 import { useChatStore } from '../stores/chatStore';
 import { useSessionStore } from '../stores/sessionStore';
@@ -44,7 +44,15 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
   }, [getLatestStep, chatStore]);
 
   // Handle WebSocket messages
+  // 使用 startTransition 包裹，避免 lazy 组件在同步更新中 suspend 导致 React 报错
   const handleWSMessage = useCallback((msg: { type: string; data?: string; sessionId?: string }) => {
+    startTransition(() => {
+      _handleWSMessage(msg);
+    });
+  }, [activeTab, chatStore, ensureStep, setLogs, setUnreadLogs]);
+
+  // 实际的 WebSocket 消息处理逻辑（被 startTransition 包裹调用）
+  const _handleWSMessage = useCallback((msg: { type: string; data?: string; sessionId?: string }) => {
     const rawType = msg.type;
     const rawData = msg.data;
 
@@ -165,6 +173,22 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
             // 将错误信息保存到 plan 中，phase 设为 'error' 以便前端显示错误状态
             planStore.setPhase(sessionId, 'error');
             break;
+
+          case 'step_prompt': {
+            const data = JSON.parse(rawData || '{}');
+            console.log('[WS] step_prompt: step', data.stepNumber, data.action);
+            planStore.setCurrentStepPrompt({
+              sessionId,
+              taskId: data.taskId || '',
+              stepIndex: data.stepIndex || 0,
+              stepNumber: data.stepNumber || 1,
+              description: data.description || '',
+              action: data.action || '',
+              stepPrompt: data.stepPrompt || '',
+              agentType: data.agentType || '',
+            });
+            break;
+          }
         }
       } catch (e) {
         console.error(`Failed to handle ${rawType}:`, e);

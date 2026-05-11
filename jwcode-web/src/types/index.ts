@@ -202,6 +202,8 @@ export type WSMessageType =
   | 'plan_task_result'
   | 'plan_complete'
   | 'plan_error'
+  // 步骤提示消息
+  | 'step_prompt'
   // TodoWrite 消息
   | 'todo_update'
   | 'todo_item_done'
@@ -289,6 +291,12 @@ export interface PlanTask {
   completedAt?: number;
   progress?: number;
   logs?: string[];
+  /** 步骤编号（从1开始） */
+  stepNumber?: number;
+  /** 步骤动作（动词+名词） */
+  action?: string;
+  /** AI提示词 - 进入此步骤时向AI注入的上下文提示 */
+  stepPrompt?: string;
 }
 
 export interface Plan {

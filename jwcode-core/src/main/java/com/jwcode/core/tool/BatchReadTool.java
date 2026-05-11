@@ -230,7 +230,12 @@ public class BatchReadTool implements Tool<BatchReadInput, BatchReadOutput, Batc
                 path = workingDir.resolve(path);
             }
         }
-        return path.normalize();
+        Path resolved = path.normalize().toAbsolutePath();
+        
+        // 【工作区安全】校验路径在工作区内
+        context.validatePath(resolved, getName());
+        
+        return resolved;
     }
 
     private boolean isBinaryFile(Path filePath) {
