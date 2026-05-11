@@ -213,7 +213,13 @@ export type WSMessageType =
   | 'plan_mode_exit'
   // 工作目录切换消息
   | 'workspace'
-  | 'workspace_changed';
+  | 'workspace_changed'
+  // 生成控制消息
+  | 'stop'
+  | 'pause'
+  | 'resume'
+  | 'generation_paused'
+  | 'generation_resumed';
 
 
 export interface WSMessage {

@@ -1,4 +1,5 @@
-import { memo } from 'react';
+import { memo, useState } from 'react';
+import { Plus, Minus } from 'lucide-react';
 import { Message } from '../../types';
 import { MarkdownRenderer } from '../common/MarkdownRenderer';
 import { StepItem } from './StepItem';
@@ -12,6 +13,7 @@ export const MessageBubble = memo(function MessageBubble({
   message,
 }: MessageBubbleProps) {
   const isUser = message.type === 'user';
+  const [isThinkingCollapsed, setIsThinkingCollapsed] = useState(true);
 
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} animate-fade-in`}>
@@ -33,12 +35,27 @@ export const MessageBubble = memo(function MessageBubble({
 
         {/* Fallback: 没有 steps 时才独立展示 thinking / toolCalls */}
         {!message.steps?.length && message.thinking && (
-          <div className="mb-1 p-1.5 bg-dark-bg border border-dark-border rounded-lg">
-            <div className="text-xs text-accent-blue mb-0.5 flex items-center gap-1">
-              <span>💭</span>
-              <span>思考过程</span>
+          <div className="mb-1 bg-dark-bg border border-dark-border rounded-lg overflow-hidden">
+            <div
+              className="flex items-center gap-1.5 px-2 py-1.5 cursor-pointer hover:bg-dark-hover/30 transition-colors select-none"
+              onClick={() => setIsThinkingCollapsed(!isThinkingCollapsed)}
+            >
+              {isThinkingCollapsed ? <Plus size={13} className="text-accent-blue" /> : <Minus size={13} className="text-accent-blue" />}
+              <span className="text-xs text-accent-blue flex items-center gap-1">
+                <span>💭</span>
+                <span>思考过程</span>
+              </span>
+              {isThinkingCollapsed && (
+                <span className="text-[10px] text-dark-muted ml-1 truncate max-w-[200px]">
+                  {message.thinking.slice(0, 60).replace(/\n/g, ' ')}...
+                </span>
+              )}
             </div>
-            <div className="text-sm text-dark-muted italic">{message.thinking.replace(/\n\s*\n+/g, '\n')}</div>
+            {!isThinkingCollapsed && (
+              <div className="px-2 pb-2 text-sm text-dark-muted italic border-t border-dark-border/50 pt-1.5">
+                {message.thinking.replace(/\n\s*\n+/g, '\n')}
+              </div>
+            )}
           </div>
         )}
 

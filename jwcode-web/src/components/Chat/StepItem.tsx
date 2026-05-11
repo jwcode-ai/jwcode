@@ -10,6 +10,7 @@ interface StepItemProps {
 
 export const StepItem = memo(function StepItem({ step, defaultCollapsed = false }: StepItemProps) {
   const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
+  const [isThoughtCollapsed, setIsThoughtCollapsed] = useState(true);
 
   const statusColors = {
     pending: 'bg-dark-hover text-dark-muted',
@@ -62,16 +63,27 @@ export const StepItem = memo(function StepItem({ step, defaultCollapsed = false 
             </div>
           )}
 
-          {/* 1. Thought - 💭 思考过程 */}
+          {/* 1. Thought - 💭 思考过程（可折叠） */}
           {step.thought && (
             <div className="py-1 px-3 text-xs border-l-2 border-accent-blue pl-2 bg-accent-blue/5 rounded-r">
-              <div className="flex items-center gap-1 text-accent-blue mb-0.5">
+              <div
+                className="flex items-center gap-1 text-accent-blue cursor-pointer hover:opacity-80 select-none"
+                onClick={() => setIsThoughtCollapsed(!isThoughtCollapsed)}
+              >
+                <span>{isThoughtCollapsed ? <Plus size={12} /> : <Minus size={12} />}</span>
                 <span>💭</span>
                 <span>思考</span>
+                {isThoughtCollapsed && (
+                  <span className="text-[10px] text-dark-muted ml-1 truncate max-w-[160px]">
+                    {step.thought.slice(0, 50).replace(/\n/g, ' ')}...
+                  </span>
+                )}
               </div>
-              <div className="text-dark-muted italic whitespace-pre-wrap leading-snug">
-                {step.thought.replace(/\n\s*\n+/g, '\n')}
-              </div>
+              {!isThoughtCollapsed && (
+                <div className="text-dark-muted italic whitespace-pre-wrap leading-snug mt-1">
+                  {step.thought.replace(/\n\s*\n+/g, '\n')}
+                </div>
+              )}
             </div>
           )}
 

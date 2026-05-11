@@ -151,8 +151,10 @@ function App() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleNewSession = useCallback(() => {
-    const newId = addSessionTab();
-    wsService.setSessionId(newId);
+    startTransition(() => {
+      const newId = addSessionTab();
+      wsService.setSessionId(newId);
+    });
   }, [addSessionTab]);
 
   const handleSwitchSession = useCallback((sessionId: string) => {
@@ -180,6 +182,9 @@ function App() {
 
     if (isGen) return;
 
+    // 发送新消息时清除暂停状态
+    useChatStore.getState().resumeGeneration(sessionId);
+
     wsService.setSessionId(sessionId);
 
     useChatStore.getState().addMessage(sessionId, {
@@ -204,6 +209,24 @@ function App() {
         message: content.trim(),
       });
     }
+  }, []);
+
+  // 停止生成
+  const stopGeneration = useCallback((sessionId: string) => {
+    wsService.send({ type: 'stop', sessionId });
+    useChatStore.getState().endGeneration(sessionId);
+  }, []);
+
+  // 暂停生成
+  const pauseGeneration = useCallback((sessionId: string) => {
+    wsService.send({ type: 'pause', sessionId });
+    useChatStore.getState().pauseGeneration(sessionId);
+  }, []);
+
+  // 恢复生成
+  const resumeGeneration = useCallback((sessionId: string) => {
+    wsService.send({ type: 'resume', sessionId });
+    useChatStore.getState().resumeGeneration(sessionId);
   }, []);
 
   // 切换工作目录：用户输入新路径后重置所有会话
@@ -333,6 +356,9 @@ function App() {
               tabs={visibleTabs}
               activeSessionId={activeSessionId}
               onSend={sendMessage}
+              onStop={stopGeneration}
+              onPause={pauseGeneration}
+              onResume={resumeGeneration}
               onSwitch={handleSwitchSession}
               activeTab={activeTab}
               setActiveTab={handleTabChange}

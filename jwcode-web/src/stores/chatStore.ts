@@ -10,6 +10,8 @@ interface ChatState {
   messagesBySession: Record<string, Message[]>;
   // 正在生成的会话集合
   generatingSessions: string[];
+  // 已暂停的会话集合
+  pausedSessions: string[];
   // 每个会话独立的输入内容
   sessionInputs: Record<string, string>;
 
@@ -27,11 +29,14 @@ interface ChatState {
   appendToLastToolCallArgs: (sessionId: string, toolCallId: string, argsPartial: string, index?: number) => void;
   startGeneration: (sessionId: string) => void;
   endGeneration: (sessionId: string, error?: string) => void;
+  pauseGeneration: (sessionId: string) => void;
+  resumeGeneration: (sessionId: string) => void;
   clearMessages: (sessionId: string) => void;
   removeSession: (sessionId: string) => void;
   setSessionInput: (sessionId: string, input: string) => void;
   getSessionInput: (sessionId: string) => string;
   isGenerating: (sessionId: string) => boolean;
+  isPaused: (sessionId: string) => boolean;
 }
 
 export const useChatStore = create<ChatState>()(
@@ -39,6 +44,7 @@ export const useChatStore = create<ChatState>()(
     (set, get) => ({
       messagesBySession: {},
       generatingSessions: [],
+      pausedSessions: [],
       sessionInputs: {},
 
       getMessages: (sessionId) => {
@@ -377,6 +383,19 @@ export const useChatStore = create<ChatState>()(
       endGeneration: (sessionId, _error) =>
         set((state) => ({
           generatingSessions: state.generatingSessions.filter((s) => s !== sessionId),
+          pausedSessions: state.pausedSessions.filter((s) => s !== sessionId),
+        })),
+
+      pauseGeneration: (sessionId) =>
+        set((state) => ({
+          pausedSessions: state.pausedSessions.includes(sessionId)
+            ? state.pausedSessions
+            : [...state.pausedSessions, sessionId],
+        })),
+
+      resumeGeneration: (sessionId) =>
+        set((state) => ({
+          pausedSessions: state.pausedSessions.filter((s) => s !== sessionId),
         })),
 
       clearMessages: (sessionId) =>
@@ -410,6 +429,10 @@ export const useChatStore = create<ChatState>()(
 
       isGenerating: (sessionId) => {
         return get().generatingSessions.includes(sessionId);
+      },
+
+      isPaused: (sessionId) => {
+        return get().pausedSessions.includes(sessionId);
       },
     }),
     {

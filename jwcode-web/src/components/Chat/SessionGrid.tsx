@@ -7,6 +7,9 @@ interface SessionGridProps {
   tabs: SessionTab[];
   activeSessionId: string | null;
   onSend: (sessionId: string, content: string) => void;
+  onStop: (sessionId: string) => void;
+  onPause: (sessionId: string) => void;
+  onResume: (sessionId: string) => void;
   onSwitch: (sessionId: string) => void;
   // 传递给每个 ChatPanel 用于独立创建 slashCommands
   activeTab: TabId;
@@ -23,6 +26,9 @@ export const SessionGrid = memo(function SessionGrid({
   tabs,
   activeSessionId,
   onSend,
+  onStop,
+  onPause,
+  onResume,
   activeTab,
   setActiveTab,
   createNewSession,
@@ -37,6 +43,7 @@ export const SessionGrid = memo(function SessionGrid({
   // 这样当 messagesBySession 或 generatingSessions 变化时，React 会触发重渲染
   const messagesBySession = useChatStore((s) => s.messagesBySession);
   const generatingSessions = useChatStore((s) => s.generatingSessions);
+  const pausedSessions = useChatStore((s) => s.pausedSessions);
   const setSessionInput = useChatStore((s) => s.setSessionInput);
   const getSessionInput = useChatStore((s) => s.getSessionInput);
 
@@ -47,6 +54,7 @@ export const SessionGrid = memo(function SessionGrid({
         .map((tab) => {
           const messages = messagesBySession[tab.id] || [];
           const generating = generatingSessions.includes(tab.id);
+          const paused = pausedSessions.includes(tab.id);
           const input = getSessionInput(tab.id);
 
           return (
@@ -54,7 +62,11 @@ export const SessionGrid = memo(function SessionGrid({
               key={tab.id}
               messages={messages}
               isGenerating={generating}
+              isPaused={paused}
               onSend={(content) => onSend(tab.id, content)}
+              onStop={() => onStop(tab.id)}
+              onPause={() => onPause(tab.id)}
+              onResume={() => onResume(tab.id)}
               input={input}
               setInput={(val) => setSessionInput(tab.id, val)}
               sessionId={tab.id}

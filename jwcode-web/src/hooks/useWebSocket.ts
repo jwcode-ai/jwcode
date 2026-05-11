@@ -322,6 +322,14 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
         chatStore.getState().endGeneration(sessionId);
         break;
 
+      case 'generation_paused':
+        chatStore.getState().pauseGeneration(sessionId);
+        break;
+
+      case 'generation_resumed':
+        chatStore.getState().resumeGeneration(sessionId);
+        break;
+
       case 'error':
         chatStore.getState().endGeneration(sessionId);
         chatStore.getState().addMessage(sessionId, {

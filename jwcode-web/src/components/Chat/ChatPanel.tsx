@@ -1,6 +1,6 @@
 import { memo } from 'react';
 import { useAutoScroll } from '../../hooks/useAutoScroll';
-import { MessageSquare, Send, ListChecks, Zap } from 'lucide-react';
+import { MessageSquare, Send, ListChecks, Zap, Square, Pause, Play } from 'lucide-react';
 import { Message, TabId, LogEntry } from '../../types';
 import { MessageBubble } from './MessageBubble';
 import { SlashCommandMenu } from '../SlashCommandMenu';
@@ -12,7 +12,11 @@ import { SessionTaskBoard } from './SessionTaskBoard';
 interface ChatPanelProps {
   messages: Message[];
   isGenerating: boolean;
+  isPaused: boolean;
   onSend: (content: string) => void;
+  onStop: () => void;
+  onPause: () => void;
+  onResume: () => void;
   input: string;
   setInput: (input: string) => void;
   compact?: boolean;
@@ -29,7 +33,7 @@ interface ChatPanelProps {
 }
 
 export const ChatPanel = memo(function ChatPanel({
-  messages, isGenerating, onSend, input, setInput, sessionId,
+  messages, isGenerating, isPaused, onSend, onStop, onPause, onResume, input, setInput, sessionId,
   setActiveTab, createNewSession, clearMessages, setTheme, toggleTerminal, setLogs, setUnreadLogs,
 }: ChatPanelProps) {
 
@@ -243,23 +247,71 @@ export const ChatPanel = memo(function ChatPanel({
             value={input}
             onChange={handleChange}
             onKeyDown={handleKeyDown}
-            placeholder="输入消息... (Enter 发送, Shift+Enter 换行, / 快捷命令)"
+            placeholder={isPaused ? '已暂停，点击恢复继续...' : isGenerating ? 'AI 正在生成中...' : '输入消息... (Enter 发送, Shift+Enter 换行, / 快捷命令)'}
             className="flex-1 bg-dark-bg border border-dark-border rounded-lg px-3 sm:px-4 py-2.5 sm:py-3 text-dark-text placeholder-dark-muted resize-none focus:border-accent-blue focus:outline-none text-sm min-h-[40px] max-h-[40vh]"
             rows={1}
+            disabled={isGenerating}
             onInput={(e) => {
               const target = e.currentTarget;
               target.style.height = 'auto';
               target.style.height = Math.min(target.scrollHeight, window.innerHeight * 0.4) + 'px';
             }}
           />
-          <button
-            onClick={handleSend}
-            disabled={!input.trim() || isGenerating}
-            className="px-4 py-3 bg-accent-green text-white rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2"
-          >
-            <Send size={16} />
-            <span className="hidden sm:inline">发送</span>
-          </button>
+          {/* 按钮区域：根据状态显示不同按钮 */}
+          {isGenerating ? (
+            <div className="flex gap-1.5 shrink-0">
+              {isPaused ? (
+                <>
+                  {/* 暂停中：恢复 + 终止 */}
+                  <button
+                    onClick={onResume}
+                    className="px-3 py-3 bg-accent-green text-white rounded-lg hover:opacity-90 transition-all flex items-center gap-1.5"
+                    title="恢复生成"
+                  >
+                    <Play size={16} />
+                    <span className="hidden sm:inline">恢复</span>
+                  </button>
+                  <button
+                    onClick={onStop}
+                    className="px-3 py-3 bg-accent-red text-white rounded-lg hover:opacity-90 transition-all flex items-center gap-1.5"
+                    title="终止生成"
+                  >
+                    <Square size={16} />
+                    <span className="hidden sm:inline">终止</span>
+                  </button>
+                </>
+              ) : (
+                <>
+                  {/* 生成中：暂停 + 终止 */}
+                  <button
+                    onClick={onPause}
+                    className="px-3 py-3 bg-accent-yellow text-white rounded-lg hover:opacity-90 transition-all flex items-center gap-1.5"
+                    title="暂停生成"
+                  >
+                    <Pause size={16} />
+                    <span className="hidden sm:inline">暂停</span>
+                  </button>
+                  <button
+                    onClick={onStop}
+                    className="px-3 py-3 bg-accent-red text-white rounded-lg hover:opacity-90 transition-all flex items-center gap-1.5"
+                    title="终止生成"
+                  >
+                    <Square size={16} />
+                    <span className="hidden sm:inline">终止</span>
+                  </button>
+                </>
+              )}
+            </div>
+          ) : (
+            <button
+              onClick={handleSend}
+              disabled={!input.trim()}
+              className="px-4 py-3 bg-accent-green text-white rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2"
+            >
+              <Send size={16} />
+              <span className="hidden sm:inline">发送</span>
+            </button>
+          )}
         </div>
         <div className="mt-2 text-xs text-dark-muted text-center flex items-center justify-center gap-3">
           <span>
