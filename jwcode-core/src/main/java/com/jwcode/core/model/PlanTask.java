@@ -1,7 +1,9 @@
 package com.jwcode.core.model;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * PlanTask — 计划任务模型（支持树形层级结构）
@@ -19,6 +21,8 @@ public class PlanTask {
     private List<String> dependencies;
     /** 子任务列表（树形结构支持） */
     private List<PlanTask> children;
+    /** 任务上下文（文件路径、依赖模块、约束条件等） */
+    private Map<String, String> context;
     private String result;
     private String error;
     private Long startedAt;
@@ -29,6 +33,7 @@ public class PlanTask {
     public PlanTask() {
         this.dependencies = new ArrayList<>();
         this.children = new ArrayList<>();
+        this.context = new HashMap<>();
     }
 
     public PlanTask(String id, String title, String description, String status, String agentType) {
@@ -60,6 +65,7 @@ public class PlanTask {
         private Long completedAt;
         private Integer progress;
         private List<String> logs;
+        private Map<String, String> context;
 
         PlanTaskBuilder() {}
 
@@ -77,6 +83,7 @@ public class PlanTask {
         public PlanTaskBuilder completedAt(Long completedAt) { this.completedAt = completedAt; return this; }
         public PlanTaskBuilder progress(Integer progress) { this.progress = progress; return this; }
         public PlanTaskBuilder logs(List<String> logs) { this.logs = logs; return this; }
+        public PlanTaskBuilder context(Map<String, String> context) { this.context = context; return this; }
 
         public PlanTask build() {
             PlanTask task = new PlanTask();
@@ -93,6 +100,7 @@ public class PlanTask {
             task.completedAt = this.completedAt;
             task.progress = this.progress;
             task.logs = this.logs;
+            task.context = this.context != null ? new HashMap<>(this.context) : new HashMap<>();
             return task;
         }
     }
@@ -137,4 +145,7 @@ public class PlanTask {
 
     public List<String> getLogs() { return logs; }
     public void setLogs(List<String> logs) { this.logs = logs; }
+
+    public Map<String, String> getContext() { return context; }
+    public void setContext(Map<String, String> context) { this.context = context; }
 }

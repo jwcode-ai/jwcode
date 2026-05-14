@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jwcode.core.agent.Agent;
 import com.jwcode.core.planner.PlanStep;
+import com.jwcode.core.planner.LayeredTaskRepresentation;
 import com.jwcode.core.llm.*;
 import com.jwcode.core.session.Session;
 import org.slf4j.Logger;
@@ -135,6 +136,29 @@ public class AIPlanner {
                 return createFallbackDecomposition(taskDescription);
             }
         });
+    }
+    
+    /**
+     * 【Phase 4 接线】分解任务并返回完整的分层任务表征。
+     * 
+     * <p>内部调用 decompose() 获取子任务列表，然后将结果包装为
+     * {@link LayeredTaskRepresentation}，确保三层（Goal/Planning/Execution）完整。</p>
+     * 
+     * @param taskDescription 任务描述
+     * @param analysis 任务分析结果
+     * @return 包含三层结构的 LayeredTaskRepresentation
+     */
+    public CompletableFuture<LayeredTaskRepresentation> decomposeLayered(
+            String taskDescription, TaskAnalysis analysis) {
+        return decompose(taskDescription, analysis)
+            .thenApply(steps -> {
+                LayeredTaskRepresentation layered = new LayeredTaskRepresentation(taskDescription);
+                layered.getPlanningLayer().setSteps(steps);
+                log.info("[AIPlanner] 分层任务表征已创建 | goal='{}' | steps={}",
+                    taskDescription.substring(0, Math.min(50, taskDescription.length())),
+                    steps.size());
+                return layered;
+            });
     }
     
     /**

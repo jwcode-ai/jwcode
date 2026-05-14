@@ -567,9 +567,32 @@ public class ParallelAgentExecutor {
             
             logger.fine("[ParallelAgent] Task completed: " + taskId + " in " + executionTime + "ms");
             
-            // 持久化子 Agent 执行上下文（事件级）
+            // 【Phase 2 接线】持久化子 Agent 完整对话轮次到 context.jsonl
             if (contextStore != null) {
                 String agentId = task.getTaskId();
+                
+                // 构建消息记录
+                SubAgentContextStore.MessageRecord userMsg = new SubAgentContextStore.MessageRecord();
+                userMsg.role = "user";
+                userMsg.content = prompt;
+                userMsg.timestamp = java.time.Instant.now().toString();
+                
+                SubAgentContextStore.MessageRecord assistantMsg = new SubAgentContextStore.MessageRecord();
+                assistantMsg.role = "assistant";
+                assistantMsg.content = result;
+                assistantMsg.timestamp = java.time.Instant.now().toString();
+                
+                // 记录完整轮次（用户提示 + AI 响应）
+                SubAgentContextStore.TurnRecord turnRecord = SubAgentContextStore.TurnRecord.builder()
+                    .turnId(UUID.randomUUID().toString())
+                    .timestamp(java.time.Instant.now())
+                    .recordType(SubAgentContextStore.RecordType.MESSAGE)
+                    .messages(java.util.List.of(userMsg, assistantMsg))
+                    .metadata(Map.of("agentType", task.getAgentType() != null ? task.getAgentType() : "unknown"))
+                    .build();
+                contextStore.appendTurn(agentId, turnRecord);
+                
+                // 同时记录 task_completed 事件
                 contextStore.appendEvent(agentId, "task_completed",
                     Map.of("taskId", taskId, "agentId", agent.getId(),
                            "durationMs", executionTime, "success", true));

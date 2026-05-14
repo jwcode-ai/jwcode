@@ -231,37 +231,39 @@ function App() {
 
   // 切换工作目录：用户输入新路径后重置所有会话
   const handleWorkspaceChange = useCallback(() => {
-    const newDir = window.prompt('请输入新的工作目录路径：', workspaceDir);
-    if (newDir && newDir.trim() && newDir.trim() !== workspaceDir) {
-      const trimmed = newDir.trim();
-      // 1. 保存新目录到前端 store
-      setWorkspaceDir(trimmed);
+    startTransition(() => {
+      const newDir = window.prompt('请输入新的工作目录路径：', workspaceDir);
+      if (newDir && newDir.trim() && newDir.trim() !== workspaceDir) {
+        const trimmed = newDir.trim();
+        // 1. 保存新目录到前端 store
+        setWorkspaceDir(trimmed);
 
-      // 2. 通过 WebSocket 通知后端切换工作目录
-      wsService.send({
-        type: 'workspace',
-        message: trimmed,
-      });
+        // 2. 通过 WebSocket 通知后端切换工作目录
+        wsService.send({
+          type: 'workspace',
+          message: trimmed,
+        });
 
-      // 3. 重置所有会话 — 直接操作 store 内部状态
-      const store = useSessionStore.getState();
-      // 清空所有 session 的消息和计划
-      store.sessionTabs.forEach(t => {
-        useChatStore.getState().clearMessages(t.id);
-        usePlanStore.getState().clearPlan(t.id);
-      });
-      // 直接重置 sessionTabs 和 sessions 为空
-      useSessionStore.setState({
-        sessionTabs: [],
-        sessions: [],
-        activeSessionId: null,
-      });
+        // 3. 重置所有会话 — 直接操作 store 内部状态
+        const store = useSessionStore.getState();
+        // 清空所有 session 的消息和计划
+        store.sessionTabs.forEach(t => {
+          useChatStore.getState().clearMessages(t.id);
+          usePlanStore.getState().clearPlan(t.id);
+        });
+        // 直接重置 sessionTabs 和 sessions 为空
+        useSessionStore.setState({
+          sessionTabs: [],
+          sessions: [],
+          activeSessionId: null,
+        });
 
-      // 4. 创建新会话
-      setTimeout(() => {
-        useSessionStore.getState().addSessionTab('对话 1');
-      }, 0);
-    }
+        // 4. 创建新会话
+        setTimeout(() => {
+          useSessionStore.getState().addSessionTab('对话 1');
+        }, 0);
+      }
+    });
   }, [workspaceDir, setWorkspaceDir]);
 
 
@@ -272,6 +274,7 @@ function App() {
 
 
   // 任务概览组件（右侧面板顶部）- 按当前 session 显示
+  // 展示任务列表、生命周期状态、上下文信息
   function TaskOverview() {
     const plansBySession = usePlanStore((s) => s.plansBySession);
     const planPhasesBySession = usePlanStore((s) => s.planPhasesBySession);
@@ -296,43 +299,158 @@ function App() {
       );
     }
 
-    const total = currentPlan.tasks.length;
-    const completed = currentPlan.tasks.filter((t) => t.status === 'completed').length;
-    const running = currentPlan.tasks.filter((t) => t.status === 'running').length;
+    // 收集所有任务（含嵌套子任务）
+    const allTasks = currentPlan.tasks || [];
+    const flattenTasks = (tasks: typeof allTasks): typeof allTasks => {
+      const result: typeof allTasks = [];
+      for (const t of tasks) {
+        result.push(t);
+        if (t.children?.length) result.push(...flattenTasks(t.children));
+      }
+      return result;
+    };
+    const flatTasks = flattenTasks(allTasks);
+
+    const total = flatTasks.length;
+    const completed = flatTasks.filter((t) => t.status === 'completed').length;
+    const running = flatTasks.filter((t) => t.status === 'running').length;
+    const failed = flatTasks.filter((t) => t.status === 'failed').length;
     const progress = total > 0 ? Math.round((completed / total) * 100) : 0;
 
+    // 生命周期状态配置
+    const lifecycleConfig: Record<string, { icon: string; color: string; bg: string; label: string }> = {
+      pending: { icon: '⏳', color: 'text-gray-400', bg: 'bg-gray-500/10', label: '等待' },
+      running: { icon: '🔄', color: 'text-blue-400', bg: 'bg-blue-500/10', label: '执行中' },
+      completed: { icon: '✅', color: 'text-green-400', bg: 'bg-green-500/10', label: '完成' },
+      failed: { icon: '❌', color: 'text-red-400', bg: 'bg-red-500/10', label: '失败' },
+      skipped: { icon: '⏭️', color: 'text-gray-500', bg: 'bg-gray-500/5', label: '跳过' },
+    };
+
     return (
-      <div className="px-4 pb-3">
-        <div className="flex items-center justify-between mb-1.5">
-          <span className="text-[11px] text-dark-muted truncate max-w-[180px]">
-            {currentPlan.goal}
-          </span>
-          <span className="text-[10px] text-dark-muted shrink-0 ml-2">
-            {completed}/{total}
-          </span>
-        </div>
-        <div className="w-full h-1.5 bg-dark-bg rounded-full overflow-hidden">
-          <div
-            className={`h-full rounded-full transition-all duration-500 ${
-              running > 0 ? 'bg-accent-blue' : 'bg-accent-green'
-            }`}
-            style={{ width: `${progress}%` }}
-          />
-        </div>
-        <div className="flex items-center gap-2 mt-1">
-          {running > 0 && (
-            <span className="flex items-center gap-1 text-[10px] text-accent-blue">
-              <span className="w-1.5 h-1.5 bg-accent-blue rounded-full animate-pulse" />
-              执行中 ({running})
+      <div className="px-3 pb-3 border-b border-dark-border">
+        {/* 总体进度条 */}
+        <div className="mb-2">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[10px] text-dark-muted truncate max-w-[160px]" title={currentPlan.goal}>
+              🎯 {currentPlan.goal}
             </span>
-          )}
-          {planPhase === 'result' && (
-            <span className="text-[10px] text-accent-green">✅ 已完成</span>
-          )}
-          {planPhase === 'error' && (
-            <span className="text-[10px] text-accent-red">❌ 规划失败</span>
-          )}
+            <span className="text-[10px] text-dark-muted shrink-0 ml-2">
+              {completed}/{total} · {progress}%
+            </span>
+          </div>
+          <div className="w-full h-1.5 bg-dark-bg rounded-full overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-500 ${
+                failed > 0 && running === 0 ? 'bg-red-500' : running > 0 ? 'bg-blue-500' : 'bg-green-500'
+              }`}
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+          {/* 生命周期状态汇总 */}
+          <div className="flex items-center gap-2 mt-1 flex-wrap">
+            {running > 0 && (
+              <span className="flex items-center gap-1 text-[9px] text-blue-400">
+                <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-pulse" />
+                {running} 执行中
+              </span>
+            )}
+            {failed > 0 && (
+              <span className="flex items-center gap-1 text-[9px] text-red-400">
+                <span className="w-1.5 h-1.5 bg-red-400 rounded-full" />
+                {failed} 失败
+              </span>
+            )}
+            {planPhase === 'result' && <span className="text-[9px] text-green-400">✅ 全部完成</span>}
+            {planPhase === 'error' && <span className="text-[9px] text-red-400">❌ 规划失败</span>}
+          </div>
         </div>
+
+        {/* 任务列表（最多展示8个，滚动） */}
+        {flatTasks.length > 0 && (
+          <div className="max-h-[260px] overflow-y-auto custom-scrollbar space-y-1">
+            {flatTasks.slice(0, 12).map((task) => {
+              const lc = lifecycleConfig[task.status] || lifecycleConfig.pending;
+              const contextKeys = task.context ? Object.keys(task.context).filter(k => k === 'relatedFiles' || k === 'targetModule') : [];
+              return (
+                <div
+                  key={task.id}
+                  className={`flex items-start gap-1.5 p-1.5 rounded text-[10px] transition-colors ${
+                    task.status === 'running'
+                      ? 'bg-blue-500/10 border border-blue-500/20'
+                      : 'hover:bg-dark-hover/50 border border-transparent'
+                  }`}
+                >
+                  {/* 生命周期状态图标 */}
+                  <span className={`shrink-0 mt-0.5 ${lc?.color || 'text-gray-400'}`} title={lc?.label || '未知'}>
+                    {lc?.icon || '❓'}
+                  </span>
+                  {/* 任务信息 */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className={`truncate font-medium ${
+                        task.status === 'completed' ? 'text-dark-muted line-through' : 'text-dark-text'
+                      }`}>
+                        {task.stepNumber && <span className="text-dark-muted mr-0.5">#{task.stepNumber}</span>}
+                        {task.title}
+                      </span>
+                    </div>
+                    {/* 描述预览 */}
+                    {task.description && task.description !== task.title && (
+                      <p className="text-[9px] text-dark-muted truncate mt-0.5">
+                        {task.description.length > 60 ? task.description.slice(0, 60) + '...' : task.description}
+                      </p>
+                    )}
+                    {/* 上下文标签 */}
+                    {contextKeys.length > 0 && (
+                      <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+                        {task.context?.relatedFiles && (
+                          <span className="text-[8px] px-1 py-0.5 bg-purple-500/10 text-purple-400 rounded truncate max-w-[120px]" title={task.context.relatedFiles}>
+                            📄 {task.context.relatedFiles.split(',')[0]}
+                            {task.context.relatedFiles.includes(',') && ' ...'}
+                          </span>
+                        )}
+                        {task.context?.targetModule && (
+                          <span className="text-[8px] px-1 py-0.5 bg-yellow-500/10 text-yellow-400 rounded truncate max-w-[100px]">
+                            📦 {task.context.targetModule}
+                          </span>
+                        )}
+                        {task.context?.constraints && (
+                          <span className="text-[8px] px-1 py-0.5 bg-red-500/10 text-red-400 rounded truncate max-w-[100px]" title={task.context.constraints}>
+                            ⚠️ 约束
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {/* 进度条（执行中时显示） */}
+                    {task.status === 'running' && task.progress != null && (
+                      <div className="w-full h-0.5 bg-dark-bg rounded-full overflow-hidden mt-1">
+                        <div
+                          className="h-full bg-blue-500 rounded-full transition-all duration-300"
+                          style={{ width: `${task.progress}%` }}
+                        />
+                      </div>
+                    )}
+                    {/* 错误信息 */}
+                    {task.error && (
+                      <p className="text-[9px] text-red-400 truncate mt-0.5">
+                        {task.error}
+                      </p>
+                    )}
+                  </div>
+                  {/* Agent 类型标签 */}
+                  <span className="text-[8px] px-1 py-0.5 bg-dark-bg rounded text-dark-muted shrink-0">
+                    {task.agentType}
+                  </span>
+                </div>
+              );
+            })}
+            {flatTasks.length > 12 && (
+              <div className="text-center text-[9px] text-dark-muted py-1">
+                ... 还有 {flatTasks.length - 12} 个任务
+              </div>
+            )}
+          </div>
+        )}
       </div>
     );
   }
@@ -541,7 +659,7 @@ function App() {
             {/* Log Section Header (collapsible) */}
             <div
               className="flex items-center justify-between px-4 py-2 border-b border-dark-border shrink-0 cursor-pointer hover:bg-dark-hover transition-colors"
-              onClick={() => setIsLogDrawerOpen(!isLogDrawerOpen)}
+              onClick={() => startTransition(() => setIsLogDrawerOpen(!isLogDrawerOpen))}
             >
               <h2 className="text-xs font-semibold flex items-center gap-1.5 text-dark-text">
                 <ScrollText size={14} className="text-accent-blue" />
@@ -562,7 +680,9 @@ function App() {
             {/* Log Content (collapsible) - 展开时占满剩余空间，折叠时完全隐藏 */}
             {isLogDrawerOpen && (
               <div className="flex-1 flex flex-col overflow-hidden min-h-0">
-                <LogsPanel logs={logs} onClear={handleClearLogs} compact />
+                <Suspense fallback={<PanelFallback />}>
+                  <LogsPanel logs={logs} onClear={handleClearLogs} compact />
+                </Suspense>
               </div>
             )}
 

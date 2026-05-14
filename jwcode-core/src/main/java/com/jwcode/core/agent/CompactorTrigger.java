@@ -35,6 +35,10 @@ public class CompactorTrigger {
 
     /** 压缩策略 */
     public enum Strategy {
+        /** 结构化压缩（推荐）：强制XML输出，按优先级保留信息 */
+        STRUCTURED,
+        /** AICL 优先级淘汰（v1.1）：基于 6 级优先级+生命周期的渐进式淘汰 */
+        AICL_PRIORITY,
         /** 智能压缩（默认）：保留尾部8条 + 关键任务目标 */
         SMART,
         /** 激进压缩：仅保留尾部4条 + 摘要 */
@@ -81,11 +85,11 @@ public class CompactorTrigger {
      */
     public Strategy selectStrategy(TriggerReason reason) {
         return switch (reason) {
-            case TOKEN_HIGH_WATERMARK -> Strategy.SMART;
+            case TOKEN_HIGH_WATERMARK -> Strategy.AICL_PRIORITY;
             case MANUAL_REQUEST -> Strategy.AGGRESSIVE;
-            case AGENT_REQUEST -> Strategy.SMART;
+            case AGENT_REQUEST -> Strategy.AICL_PRIORITY;
             case CHECKPOINT_BEFORE -> Strategy.MINIMAL;
-            case TASK_COMPLETION -> Strategy.SMART;
+            case TASK_COMPLETION -> Strategy.AICL_PRIORITY;
             case SESSION_LIMIT -> Strategy.AGGRESSIVE;
         };
     }
@@ -95,6 +99,8 @@ public class CompactorTrigger {
      */
     public int getTailSize(Strategy strategy) {
         return switch (strategy) {
+            case STRUCTURED -> 8;
+            case AICL_PRIORITY -> 0; // AICL 不按 tail 截断，由优先级引擎决策
             case SMART -> 8;
             case AGGRESSIVE -> 4;
             case MINIMAL -> Integer.MAX_VALUE; // 不截断，仅清理噪声
@@ -106,11 +112,11 @@ public class CompactorTrigger {
      */
     public String getReasonDescription(TriggerReason reason) {
         return switch (reason) {
-            case TOKEN_HIGH_WATERMARK -> "Token 使用率超过阈值，自动触发上下文压缩";
+            case TOKEN_HIGH_WATERMARK -> "Token 使用率超过阈值，自动触发 AICL 优先级淘汰";
             case MANUAL_REQUEST -> "用户手动触发上下文压缩";
-            case AGENT_REQUEST -> "Agent 主动请求上下文压缩";
+            case AGENT_REQUEST -> "Agent 主动请求 AICL 优先级淘汰";
             case CHECKPOINT_BEFORE -> "保存检查点前执行最小压缩";
-            case TASK_COMPLETION -> "子任务完成，清理上下文";
+            case TASK_COMPLETION -> "子任务完成，AICL 清理上下文";
             case SESSION_LIMIT -> "会话消息数超限，执行激进压缩";
         };
     }

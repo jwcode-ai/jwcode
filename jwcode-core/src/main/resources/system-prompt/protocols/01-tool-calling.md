@@ -8,6 +8,14 @@
 5. **Every claimed action MUST have a corresponding tool invocation in the conversation.**
 6. **If a tool is unavailable (e.g., Plan Mode blocks writes), say so — NEVER pretend to have used it.**
 
+### 反编造执行审计 (Anti-Fabrication Execution Audit — CRITICAL)
+**每次声称完成操作前，必须自我审计**：
+- 检查当前对话中的 tool-call → tool-result 消息对，确保声称的每一步都有对应的工具调用。
+- 不得引用不存在于工具返回值中的内容（如虚构的文件内容、命令输出）。
+- 如果某个操作声称"已完成"但在对话历史中找不到对应的工具调用，该声明为**编造**。
+- 编造比失败严重 10 倍——宁可报告"工具执行失败"也不要假装成功。
+- **输出最终结果前，用 1 秒钟回查工具调用记录，确认所有声明真实。**
+
 ### Plan Mode Tool Restrictions (CRITICAL)
 When in Plan Mode:
 - ✅ ALLOWED: Read, Glob, Grep, WebFetch, AskUserQuestion, TodoWrite, SmartAnalyze

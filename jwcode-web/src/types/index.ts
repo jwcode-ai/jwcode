@@ -202,6 +202,7 @@ export type WSMessageType =
   | 'plan_task_result'
   | 'plan_complete'
   | 'plan_error'
+  | 'plan_confirm'
   // 步骤提示消息
   | 'step_prompt'
   // TodoWrite 消息
@@ -282,6 +283,17 @@ export interface FileNode {
 
 export type PlanPhase = 'idle' | 'planning' | 'executing' | 'result' | 'error';
 
+export type ExecutionMode = 'SEQUENTIAL' | 'CONCURRENT';
+
+export type TaskPhase = 
+  | 'EXPLORATION' 
+  | 'DESIGN' 
+  | 'IMPLEMENTATION' 
+  | 'TESTING' 
+  | 'REVIEW' 
+  | 'DOCUMENTATION' 
+  | 'GENERAL';
+
 export interface PlanTask {
   id: string;
   title: string;
@@ -303,6 +315,27 @@ export interface PlanTask {
   action?: string;
   /** AI提示词 - 进入此步骤时向AI注入的上下文提示 */
   stepPrompt?: string;
+  /** 任务上下文（文件路径、模块、约束等，注入到子Agent执行） */
+  context?: Record<string, string>;
+}
+
+/**
+ * StructuredTask — 结构化任务（增强版 PlanTask）
+ * 
+ * 相比 PlanTask 增加了：
+ * - executionMode: 执行模式（SEQUENTIAL/CONCURRENT）
+ * - phase: 所属阶段（EXPLORATION/DESIGN/IMPLEMENTATION/TESTING/REVIEW/DOCUMENTATION）
+ * - parallelGroup: 并发组ID（同组任务可并行执行）
+ */
+export interface StructuredTask extends PlanTask {
+  /** 执行模式：串行或并发 */
+  executionMode: ExecutionMode;
+  /** 所属阶段 */
+  phase: TaskPhase;
+  /** 并发组ID（同一组的任务可并行执行） */
+  parallelGroup?: string;
+  /** 子任务（StructuredTask 类型） */
+  children?: StructuredTask[];
 }
 
 export interface Plan {
@@ -311,6 +344,8 @@ export interface Plan {
   phase: PlanPhase;
   goal: string;
   tasks: PlanTask[];
+  /** 结构化任务列表（增强版） */
+  structuredTasks?: StructuredTask[];
   createdAt: number;
   updatedAt: number;
 }

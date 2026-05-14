@@ -49,6 +49,12 @@ public class LLMQueryEngine {
 
     private final Instant startTime;
     private final List<String> toolCallHistory;
+    // 【反编造】审计追踪：记录当前任务中已实际执行的工具
+    private final java.util.Set<String> executedWriteTools = new java.util.HashSet<>();
+    private final java.util.Set<String> executedReadTools = new java.util.HashSet<>();
+    private final java.util.Set<String> executedCommandTools = new java.util.HashSet<>();
+    // 【反编造】预检标记：防止重复注入验证提示
+    private boolean fabricationCheckInjected = false;
     private final SimpleCompactionStrategy compactionStrategy;
     private final TaskLifecycleManager taskLifecycleManager;
     private long lastSeenCompactCount = 0;
@@ -357,23 +363,33 @@ public class LLMQueryEngine {
             如果发现某个步骤已经完成或不需要，可以直接删除。
             如果发现后续步骤需要提前执行，可以直接调整顺序。
             
-            【关键】执行诚信规则（绝对禁止）：
-            
+【关键】执行诚信规则（绝对禁止——违反即任务失败）：
+
             1. **禁止谎报完成**：绝对不能声称完成了某个步骤而实际上没有执行相应的工具调用。
                标注"✅ 步骤 X 完成"之前，必须已经实际执行了该步骤所需的全部工具操作。
-            
+
             2. **禁止虚构结果**：绝对不能编造文件内容、命令输出、或任何你没有实际获取到的信息。
                如果工具调用失败，必须如实报告失败，而不是假装成功。
-            
+               ❌ 工具返回 "Error: file not found" → 不得说"文件修改成功"
+               ❌ BashTool 返回空 → 不得说"编译通过，BUILD SUCCESS"
+               ❌ 未调用任何测试工具 → 不得说"测试全部通过"
+
             3. **禁止跳跃执行**：必须按照任务清单的顺序逐个执行步骤。
                不得在未执行步骤 1-3 的情况下直接声称步骤 4 完成。
-            
+
             4. **完成必须有证据**：每个步骤完成后，在回复中附上实际的执行结果摘要
               （如读取到的文件内容片段、命令执行的输出摘要、修改的文件路径列表）。
-              没有证据的"完成"声明将被视为无效。
-            
+              没有证据的"完成"声明将被视为无效（编造）。
+
             5. **失败必须上报**：如果某个步骤尝试多次仍无法完成，必须明确标记为失败
               并说明原因，不得悄悄跳过或假装完成。
+
+            6. **【强制】在输出 [FINISH] 之前，执行自我审计**：
+               a. 回查当前对话中的所有工具调用记录（tool-call → tool-result 消息对）
+               b. 确认每一个声称的"已修改"、"已通过"、"已完成"都有对应的真实工具调用
+               c. 确认引用的所有文件内容/命令输出都来自工具返回值，而非你的推测或记忆
+               d. 如果发现任何声明缺少工具调用证据 → 不得输出 [FINISH]，必须先补执行
+               e. 编造内容比执行失败严重 10 倍——宁可报告失败，不要编造成功
             
             【重要】大任务拆分规则：
             
@@ -655,16 +671,30 @@ public class LLMQueryEngine {
             assistantMessage = Message.createAssistantMessage(content, response.getReasoningContent());
             session.addMessage(assistantMessage);
             
-            // 检查是否有 finishReason
-            if (response.getFinishReason() != null) {
-                triggerStepComplete("LLM查询", "完成回复");
-                return CompletableFuture.completedFuture(
-                    QueryResult.success(assistantMessage)
-                );
-            }
+            // 【修复】finishReason="stop" 只表示 OpenAI 完成了一次文本生成，不等于任务完成。
+            // 必须先检查 [FINISH] 标记，不能仅凭 finishReason 就结束对话。
             
             // 检查回复内容是否包含结束标记
             if (content != null && content.contains(FINISH_MARKER)) {
+                // 【反编造】执行审计：记录本次任务的实际工具调用情况
+                logger.info("[LLMQueryEngine] " + getExecutionAuditSummary());
+
+                // 【反编造】预检：如果启用了检查且多次迭代但零工具调用，拦截并注入验证
+                if (config.isFabricationCheckEnabled() && iteration > 1
+                    && executedWriteTools.isEmpty() && executedCommandTools.isEmpty()
+                    && executedReadTools.isEmpty() && !fabricationCheckInjected) {
+                    logger.warning("[LLMQueryEngine] ⚠️ 反编造拦截: AI 声称完成但零工具调用 (迭代=" + iteration + ")，注入验证提示");
+                    fabricationCheckInjected = true;
+                    session.addMessage(Message.createSystemMessage(
+                        "【系统反编造检查】你在本次对话中未调用任何工具（读/写/命令均为0），"
+                        + "但声称任务完成并标记了 [FINISH]。\n\n"
+                        + "请确认：你是否真的执行了用户要求的操作？\n"
+                        + "- 如果你实际执行了但系统未记录，请忽略此消息直接重新输出 [FINISH]\n"
+                        + "- 如果你编造了完成声明，请立即调用正确的工具真实执行任务"
+                    ));
+                    return runConversationLoop(iteration + 1, 0);
+                }
+
                 logger.info("[LLMQueryEngine] 检测到结束标记 " + FINISH_MARKER + "，结束对话");
                 // 【任务生命周期】检查任务是否全部完成
                 taskLifecycleManager.checkTaskCompletion(session);
@@ -949,16 +979,31 @@ public class LLMQueryEngine {
             assistantMessage = Message.createAssistantMessage(content, response.getReasoningContent());
             session.addMessage(assistantMessage);
             
-            // 检查是否有 finishReason
-            if (response.getFinishReason() != null) {
-                triggerStepComplete("LLM查询", "完成回复");
-                return CompletableFuture.completedFuture(
-                    QueryResult.success(assistantMessage)
-                );
-            }
+            // 【修复】finishReason="stop" 只表示 OpenAI 完成了一次文本生成，不等于任务完成。
+            // 必须先检查 [FINISH] 标记，不能仅凭 finishReason 就结束对话。
             
             // 检查回复内容是否包含结束标记
             if (content != null && content.contains(FINISH_MARKER)) {
+                // 【反编造】执行审计
+                logger.info("[LLMQueryEngine] " + getExecutionAuditSummary());
+
+                // 【反编造】预检：多次迭代但零工具调用时拦截
+                if (config.isFabricationCheckEnabled() && iteration > 1
+                    && executedWriteTools.isEmpty() && executedCommandTools.isEmpty()
+                    && executedReadTools.isEmpty() && !fabricationCheckInjected) {
+                    logger.warning("[LLMQueryEngine] ⚠️ 反编造拦截(stream): AI 声称完成但零工具调用，注入验证提示");
+                    fabricationCheckInjected = true;
+                    session.addMessage(Message.createSystemMessage(
+                        "【系统反编造检查】你在本次对话中未调用任何工具（读/写/命令均为0），"
+                        + "但声称任务完成并标记了 [FINISH]。\n\n"
+                        + "请确认：你是否真的执行了用户要求的操作？\n"
+                        + "- 如果你实际执行了但系统未记录，请忽略此消息直接重新输出 [FINISH]\n"
+                        + "- 如果你编造了完成声明，请立即调用正确的工具真实执行任务"
+                    ));
+                    return runStreamConversationLoop(iteration + 1, 0,
+                        contentConsumer, thinkingConsumer, toolCallConsumer);
+                }
+
                 logger.info("[LLMQueryEngine] 检测到结束标记 " + FINISH_MARKER + "，结束对话");
                 triggerStepComplete("LLM查询", "完成回复");
                 return CompletableFuture.completedFuture(
@@ -1181,6 +1226,9 @@ public class LLMQueryEngine {
         
         logger.info("[LLMQueryEngine] Executing tool: " + toolName + " args=" + truncate(args, 120));
         
+        // 【反编造】审计追踪：记录工具调用分类
+        trackToolExecution(toolName);
+        
         // 解析 JSON 参数
         final JsonNode argsNode;
         try {
@@ -1240,6 +1288,57 @@ public class LLMQueryEngine {
             }
         }
         return null;
+    }
+
+    /**
+     * 【反编造】审计追踪：分类记录实际执行的工具。
+     * 用于在任务结束时验证 AI 的完成声明是否有真实工具调用支撑。
+     */
+    private void trackToolExecution(String toolName) {
+        if (toolName == null) return;
+        // 写工具
+        if (toolName.equals("FileWriteTool") || toolName.equals("FileEditTool")
+            || toolName.equals("EditTool") || toolName.equals("NotebookEditTool")
+            || toolName.equals("MergeFilesTool")) {
+            executedWriteTools.add(toolName);
+        }
+        // 命令执行工具
+        if (toolName.equals("BashTool") || toolName.equals("PowerShellTool")
+            || toolName.equals("REPLTool")) {
+            executedCommandTools.add(toolName);
+        }
+        // 读工具
+        if (toolName.equals("FileReadTool") || toolName.equals("BatchReadTool")
+            || toolName.equals("GlobTool") || toolName.equals("GrepTool")
+            || toolName.equals("WebFetchTool") || toolName.equals("WebSearchTool")) {
+            executedReadTools.add(toolName);
+        }
+    }
+
+    /**
+     * 【反编造】获取执行审计摘要（用于日志和调试）。
+     */
+    private String getExecutionAuditSummary() {
+        return String.format(
+            "[执行审计] 写工具:%d(%s) | 命令工具:%d(%s) | 读工具:%d(%s)",
+            executedWriteTools.size(), executedWriteTools,
+            executedCommandTools.size(), executedCommandTools,
+            executedReadTools.size(), executedReadTools
+        );
+    }
+
+    /**
+     * 【反编造】检查当前任务是否有任何写操作的实际执行记录。
+     */
+    private boolean hasAnyWriteExecution() {
+        return !executedWriteTools.isEmpty();
+    }
+
+    /**
+     * 【反编造】检查当前任务是否有任何命令执行记录。
+     */
+    private boolean hasAnyCommandExecution() {
+        return !executedCommandTools.isEmpty();
     }
     
     /**
@@ -1474,6 +1573,8 @@ public class LLMQueryEngine {
         private boolean reasoningModel = false;
         private long tokenBudget = 1_000_000; // 默认 1M token 预算
         private int maxMessageHistory = 0; // 默认 0 表示不限制，由 ContextWindowManager 智能压缩
+        private boolean layeredMode = true; // 默认启用分层多Agent架构
+        private boolean fabricationCheckEnabled = true; // 【反编造】默认启用执行前自检
         
         /**
          * 从 JwcodeConfig 创建 EngineConfig
@@ -1532,8 +1633,23 @@ public class LLMQueryEngine {
         public int getMaxMessageHistory() { return maxMessageHistory; }
         public void setMaxMessageHistory(int maxMessageHistory) { this.maxMessageHistory = maxMessageHistory; }
 
+        /** 是否启用分层多Agent架构（Orchestrator→Worker→Tool→MCP） */
+        public boolean isLayeredMode() { return layeredMode; }
+        public void setLayeredMode(boolean layeredMode) { this.layeredMode = layeredMode; }
+
+        /** 【反编造】是否启用执行前自检（默认 true） */
+        public boolean isFabricationCheckEnabled() { return fabricationCheckEnabled; }
+        public void setFabricationCheckEnabled(boolean fabricationCheckEnabled) { this.fabricationCheckEnabled = fabricationCheckEnabled; }
+
         public static EngineConfig defaultConfig() {
             return new EngineConfig();
+        }
+
+        /** 创建强制启用分层模式的配置 */
+        public static EngineConfig forceLayeredMode() {
+            EngineConfig config = new EngineConfig();
+            config.setLayeredMode(true);
+            return config;
         }
     }
     

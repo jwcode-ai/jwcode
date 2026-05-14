@@ -93,21 +93,23 @@ public class LLMResponse {
     /**
      * 判断响应是否应该结束对话
      * 
-     * 检查以下条件之一满足即认为应该结束：
-     * 1. finishReason 不为空（API 明确返回结束原因）
-     * 2. 没有工具调用
+     * 仅当以下条件全部满足时才认为应该结束：
+     * 1. 没有待执行的工具调用
+     * 2. 内容中包含 [FINISH] 标记（显式完成信号）
+     * 
+     * 注意：finishReason="stop" 仅表示 API 完成了一次文本生成，不代表任务完成。
      */
     public boolean shouldEndConversation() {
         // 有工具调用时不结束，需要执行工具
         if (hasToolCalls()) {
             return false;
         }
-        // 有 finishReason 时结束
-        if (finishReason != null && !finishReason.isEmpty()) {
+        // 必须显式包含 [FINISH] 标记才认为任务完成
+        if (content != null && content.contains("[FINISH]")) {
             return true;
         }
-        // 没有工具调用时假设可以结束（让调用方检查内容）
-        return true;
+        // 无工具调用且无 [FINISH] 标记 → 不应结束，应继续对话
+        return false;
     }
     
     public LLMMessage toAssistantMessage() {

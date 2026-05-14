@@ -196,3 +196,8 @@ class WebSocketService {
 
 export const wsService = new WebSocketService();
 export default wsService;
+
+// 暴露到 window 上，供 planStore.confirmPlan() 等非 React 组件使用
+if (typeof window !== 'undefined') {
+  (window as any).__wsService = wsService;
+}

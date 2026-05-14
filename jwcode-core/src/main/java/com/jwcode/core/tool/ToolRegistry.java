@@ -280,9 +280,26 @@ public class ToolRegistry {
         registry.register(new SyntheticOutputTool());
         registry.register(new McpAuthTool());
         
+        // 注意：SemanticSearchTool 需要 CodebaseIndexer 实例，
+        // 无法在此处注册。请使用 registerSemanticSearch() 方法。
+        
         logger.info("[ToolRegistry] 已注册 " + registry.size() + " 个内置工具");
         
         return registry;
+    }
+    
+    /**
+     * 注册语义搜索工具（需要 CodebaseIndexer 实例）
+     *
+     * @param indexer 代码库索引器
+     * @return 注册后的工具实例
+     */
+    public SemanticSearchTool registerSemanticSearch(
+            com.jwcode.core.index.CodebaseIndexer indexer) {
+        SemanticSearchTool tool = new SemanticSearchTool(indexer);
+        register(tool);
+        logger.info("[ToolRegistry] SemanticSearchTool 已注册");
+        return tool;
     }
     
     /**

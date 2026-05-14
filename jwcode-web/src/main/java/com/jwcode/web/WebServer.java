@@ -1,5 +1,8 @@
 package com.jwcode.web;
 
+import com.jwcode.core.index.CodebaseIndexer;
+import com.jwcode.core.index.EmbeddingService;
+import com.jwcode.core.index.IndexConfig;
 import com.jwcode.core.task.TaskStore;
 import com.jwcode.core.tool.ToolRegistry;
 import com.jwcode.web.stream.StreamingWebSocketHandler;
@@ -33,6 +36,7 @@ public class WebServer {
     private final int wsPort;
     private final WebSessionManager sessionManager;
     private final ToolRegistry toolRegistry;
+    private CodebaseIndexer codebaseIndexer;
     
     public WebServer(int port, int wsPort, ToolRegistry toolRegistry) {
         this.port = port;
@@ -93,8 +97,12 @@ public class WebServer {
         ));
         server.start();
         
+        // 初始化代码库语义搜索索引（CodebaseIndexer + SemanticSearchTool）
+        initializeCodebaseIndexer();
+        
         // 启动 WebSocket 服务器（流式响应）
         webSocketHandler = new StreamingWebSocketHandler(wsPort, toolRegistry);
+        webSocketHandler.setCodebaseIndexer(codebaseIndexer);
         webSocketHandler.start();
         
         logger.info("Web UI 服务器启动: http://localhost:" + port);
@@ -107,12 +115,58 @@ public class WebServer {
      * 停止服务器
      */
     public void stop() {
+        if (codebaseIndexer != null) {
+            codebaseIndexer.shutdown();
+        }
         if (webSocketHandler != null) {
             webSocketHandler.shutdown();
         }
         if (server != null) {
             server.stop(0);
             logger.info("Web UI 服务器已停止");
+        }
+    }
+
+    /**
+     * 初始化代码库语义搜索索引 — CodebaseIndexer + SemanticSearchTool。
+     *
+     * <p>使用本地 TF-IDF 风格 fallback embedding（无需外部 API），
+     * 后续可升级为调用远程 embedding API。</p>
+     */
+    private void initializeCodebaseIndexer() {
+        try {
+            String workingDir = System.getProperty("user.dir");
+            java.nio.file.Path workspaceRoot = java.nio.file.Path.of(workingDir).toAbsolutePath().normalize();
+            IndexConfig indexConfig = IndexConfig.forWorkspace(workspaceRoot);
+            EmbeddingService embeddingService = EmbeddingService.createLocalFallback(256);
+            this.codebaseIndexer = new CodebaseIndexer(workspaceRoot, indexConfig, embeddingService);
+
+            // 注册 SemanticSearchTool，使子 Agent 可用自然语言搜索代码库
+            toolRegistry.registerSemanticSearch(codebaseIndexer);
+            logger.info("SemanticSearchTool registered — 子 Agent 可自然语言搜索代码库");
+
+            // 异步启动初始全量索引（后台执行，不阻塞启动）
+            codebaseIndexer.reindexAsync()
+                .thenAccept(fileCount -> {
+                    if (fileCount > 0) {
+                        logger.info("代码库索引完成: " + fileCount + " 个文件, "
+                            + codebaseIndexer.getVectorCount() + " 个向量块");
+                    } else {
+                        logger.info("代码库索引完成（无新增文件）");
+                    }
+                })
+                .exceptionally(e -> {
+                    logger.warning("代码库索引失败: " + e.getMessage());
+                    return null;
+                });
+
+            // 启动文件监控（增量索引）
+            codebaseIndexer.startWatching();
+
+            System.out.println("🔍 语义搜索: 已启用（后台索引中...）");
+        } catch (Exception e) {
+            logger.warning("代码库索引初始化失败（语义搜索不可用）: " + e.getMessage());
+            this.codebaseIndexer = null;
         }
     }
     

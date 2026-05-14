@@ -1,6 +1,10 @@
 package com.jwcode.core.tool;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.jwcode.core.hook.HookChain;
+import com.jwcode.core.hook.HookContext;
+import com.jwcode.core.hook.HookDecision;
+import com.jwcode.core.hook.HookResult;
 import com.jwcode.core.plan.PlanModeManager;
 import com.jwcode.core.tool.context.ToolExecutionContext;
 import com.jwcode.core.tool.permission.PermissionChecker;
@@ -23,21 +27,38 @@ public class ToolExecutor {
     private final ToolRegistry toolRegistry;
     private final PermissionChecker permissionChecker;
     private final ToolExecutionListener executionListener;
+    private final HookChain hookChain;
     
     public ToolExecutor() {
-        this(ToolRegistry.createDefault(), null, null);
+        this(ToolRegistry.createDefault(), null, null, null);
     }
     
     public ToolExecutor(ToolRegistry toolRegistry) {
-        this(toolRegistry, null, null);
+        this(toolRegistry, null, null, null);
     }
     
     public ToolExecutor(ToolRegistry toolRegistry, 
                        PermissionChecker permissionChecker,
                        ToolExecutionListener executionListener) {
+        this(toolRegistry, permissionChecker, executionListener, null);
+    }
+    
+    /**
+     * 完整构造器（含 Hook 链）。
+     *
+     * @param toolRegistry      工具注册表
+     * @param permissionChecker 权限检查器
+     * @param executionListener 执行监听器（兼容层）
+     * @param hookChain         Hook 拦截链（可为 null，表示不启用 Hook）
+     */
+    public ToolExecutor(ToolRegistry toolRegistry, 
+                       PermissionChecker permissionChecker,
+                       ToolExecutionListener executionListener,
+                       HookChain hookChain) {
         this.toolRegistry = toolRegistry != null ? toolRegistry : ToolRegistry.createDefault();
         this.permissionChecker = permissionChecker;
         this.executionListener = executionListener;
+        this.hookChain = hookChain;
     }
     
     /**
@@ -112,7 +133,10 @@ public class ToolExecutor {
     }
     
     /**
-     * 执行工具调用（类型安全版本，带进度回调）
+     * 执行工具调用（类型安全版本，带进度回调）。
+     *
+     * <p><b>Hook 拦截点</b>：权限检查通过后触发 {@code PRE_TOOL_USE}，
+     * 完成后触发 {@code POST_TOOL_USE} 或 {@code POST_TOOL_USE_FAILURE}。</p>
      */
     public <I, O, P> CompletableFuture<ToolResult<O>> execute(
             Tool<I, O, P> tool,
@@ -144,6 +168,43 @@ public class ToolExecutor {
             return CompletableFuture.completedFuture(ToolResult.error(error));
         }
         
+        // ──────── Hook: PRE_TOOL_USE ────────
+        if (hookChain != null) {
+            try {
+                JsonNode inputJson = new com.fasterxml.jackson.databind.ObjectMapper()
+                    .valueToTree(input);
+                HookContext hookCtx = HookContext.forPreToolUse(
+                    null, null, toolName, inputJson, context);
+                HookResult hookResult = hookChain.execute(hookCtx);
+
+                if (hookResult.getDecision() == HookDecision.DENY) {
+                    logger.warning("[ToolExecutor] PRE_TOOL_USE DENY: " + toolName
+                        + " | reason=" + hookResult.getReason());
+                    return CompletableFuture.completedFuture(
+                        ToolResult.error("Hook拒绝: " + hookResult.getReason()));
+                }
+                if (hookResult.getDecision() == HookDecision.MODIFY
+                    && hookResult.getModifiedInput() != null) {
+                    I modifiedInput = tool.parseInput(hookResult.getModifiedInput());
+                    logger.fine("[ToolExecutor] PRE_TOOL_USE MODIFY: " + toolName);
+                    // 使用修改后的输入重新执行（hookChain置null防止递归）
+                    ToolExecutor inner = new ToolExecutor(
+                        toolRegistry, permissionChecker, executionListener, null);
+                    return inner.execute(tool, modifiedInput, context, onProgress);
+                }
+                if (hookResult.getDecision() == HookDecision.ASK) {
+                    logger.info("[ToolExecutor] PRE_TOOL_USE ASK: " + toolName
+                        + " | " + hookResult.getAskPayload());
+                    return CompletableFuture.completedFuture(
+                        ToolResult.error("HOOK_ASK:" + hookResult.getAskPayload()));
+                }
+                // ALLOW / DEFER / VOID → continue
+            } catch (Exception e) {
+                logger.warning("[ToolExecutor] PRE_TOOL_USE hook error: " + e.getMessage()
+                    + " (fail-open, continuing)");
+            }
+        }
+        
         // 执行工具
         CompletableFuture<ToolResult<O>> future = tool.call(input, context, onProgress);
         
@@ -156,13 +217,41 @@ public class ToolExecutor {
                 if (executionListener != null) {
                     executionListener.onToolError(toolName, throwable, duration);
                 }
+                triggerPostHook(toolName, context, null, throwable);
             } else {
                 logger.fine("工具执行完成: " + toolName + " (" + duration + "ms)");
                 if (executionListener != null) {
                     executionListener.onToolComplete(toolName, result, duration);
                 }
+                triggerPostHook(toolName, context, result, null);
             }
         });
+    }
+
+    /** 触发 POST_TOOL_USE 或 POST_TOOL_USE_FAILURE Hook */
+    private void triggerPostHook(String toolName, ToolExecutionContext context,
+                                  ToolResult<?> result, Throwable error) {
+        if (hookChain == null) return;
+        try {
+            HookContext hookCtx;
+            if (error != null) {
+                hookCtx = HookContext.forPostToolUseFailure(
+                    null, null, toolName, error.getMessage());
+            } else {
+                JsonNode resultJson = null;
+                if (result != null && result.getData() != null) {
+                    try {
+                        resultJson = new com.fasterxml.jackson.databind.ObjectMapper()
+                            .valueToTree(result.getData());
+                    } catch (Exception ignored) {}
+                }
+                hookCtx = HookContext.forPostToolUse(
+                    null, null, toolName, resultJson);
+            }
+            hookChain.execute(hookCtx);
+        } catch (Exception e) {
+            logger.fine("[ToolExecutor] Post-hook error (ignored): " + e.getMessage());
+        }
     }
     
     /**

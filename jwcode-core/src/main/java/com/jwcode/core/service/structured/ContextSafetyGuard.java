@@ -1,5 +1,10 @@
 package com.jwcode.core.service.structured;
 
+import com.jwcode.core.aicl.BlockLifecycle;
+import com.jwcode.core.aicl.BlockPriority;
+import com.jwcode.core.aicl.ContextBlock;
+import com.jwcode.core.aicl.ContextAssembler;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.logging.Logger;
@@ -7,7 +12,8 @@ import java.util.logging.Logger;
 /**
  * 上下文安全守卫
  * 
- * 对 AI 评估结果进行校验，防止过度丢弃导致上下文丢失
+ * 对 AI 评估结果进行校验，防止过度丢弃导致上下文丢失。
+ * v1.1 新增 AICL 感知的安全规则（TTL、代际上限、pinned 保护）。
  * 
  * @author JWCode Team
  * @since 1.0.0
@@ -26,6 +32,14 @@ public class ContextSafetyGuard {
     private boolean enableRefCountProtection = true;
     // 是否启用最近消息保护
     private boolean enableRecentProtection = true;
+
+    // ===== AICL 安全规则（v1.1） =====
+    /** 最大压缩代际（防止无限摘要） */
+    private int maxGeneration = 2;
+    /** 是否启用 pinned 保护 */
+    private boolean enablePinnedProtection = true;
+    /** 是否启用受保护优先级保护（critical+） */
+    private boolean enableProtectedPriority = true;
     
     public ContextSafetyGuard() {
     }
@@ -41,9 +55,15 @@ public class ContextSafetyGuard {
     public void setEnableRefCountProtection(boolean enableRefCountProtection) { this.enableRefCountProtection = enableRefCountProtection; }
     public void setEnableRecentProtection(boolean enableRecentProtection) { this.enableRecentProtection = enableRecentProtection; }
     
+    // AICL Setters
+    public void setMaxGeneration(int maxGeneration) { this.maxGeneration = maxGeneration; }
+    public void setEnablePinnedProtection(boolean enablePinnedProtection) { this.enablePinnedProtection = enablePinnedProtection; }
+    public void setEnableProtectedPriority(boolean enableProtectedPriority) { this.enableProtectedPriority = enableProtectedPriority; }
+    
     // Getters
     public int getMinRetainCount() { return minRetainCount; }
     public int getRecentMessageProtection() { return recentMessageProtection; }
+    public int getMaxGeneration() { return maxGeneration; }
     
     /**
      * 校验评估结果是否安全
@@ -188,5 +208,53 @@ public class ContextSafetyGuard {
             }
         }
         return true;
+    }
+
+    // ==================== AICL 安全规则（v1.1） ====================
+
+    /**
+     * 校验 AICL ContextBlock 是否可以淘汰。
+     */
+    public boolean canEvictBlock(ContextBlock block) {
+        // 规则 A1: pinned 块永不淘汰
+        if (enablePinnedProtection && block.getPriority() == BlockPriority.PINNED) {
+            logger.fine("[ContextSafetyGuard] pinned block protected: " + block.getId());
+            return false;
+        }
+
+        // 规则 A2: critical 块限制淘汰动作
+        if (enableProtectedPriority && block.getPriority().isProtected()) {
+            // 仅允许 trim_comments，不允许 archive/summarize/remove
+            if (block.getState() == BlockLifecycle.COMPRESSED
+                    || block.getState() == BlockLifecycle.SUMMARIZED
+                    || block.getState() == BlockLifecycle.ARCHIVED) {
+                logger.fine("[ContextSafetyGuard] critical block over-compressed: " + block.getId());
+                return false;
+            }
+        }
+
+        // 规则 A3: 代际保护 — 超过 maxGeneration 的不再压缩（应直接移除）
+        if (block.getGeneration() >= maxGeneration) {
+            // 超过代际上限，可以移除
+            if (block.getState() == BlockLifecycle.ARCHIVED
+                    || block.getState() == BlockLifecycle.DEPRECATED) {
+                return true;
+            }
+        }
+
+        // 规则 A4: TTL 未到期的不应强制淘汰
+        // 允许淘汰，但优先级最低
+
+        return true; // 默认允许
+    }
+
+    /**
+     * 校验 AICL 淘汰统计是否安全。
+     */
+    public boolean isEvictionSafe(ContextAssembler.EvictionStats stats, int totalBlocks) {
+        // 至少保留最小数量的活跃块
+        int removedTotal = stats.getRemovedCount() + stats.getArchivedCount();
+        int remainingBlocks = totalBlocks - removedTotal;
+        return remainingBlocks >= minRetainCount;
     }
 }

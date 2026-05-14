@@ -82,13 +82,33 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
             break;
 
           case 'plan_thinking':
-            // 更新规划状态描述
+            // 更新规划状态描述 - 将思考内容同步到 plan store 供前端展示
             console.log('[WS] plan_thinking:', rawData);
+            planStore.setThinkingStatus(sessionId, rawData || '正在分析需求...');
             break;
 
           case 'plan_tasks': {
             console.log('[WS] plan_tasks:', rawData);
             const data = JSON.parse(rawData || '{}');
+
+            // 检查是否包含结构化任务元数据
+            // 支持两种路径：
+            //   1. 顶层 data.structuredTasks（由 broadcastPlanData 发送）
+            //   2. 嵌套 data.tasks.structuredTasks（由 broadcastPlanTasks 发送，兼容旧格式）
+            const structuredTasksData =
+              (data.structuredTasks && Array.isArray(data.structuredTasks))
+                ? data.structuredTasks
+                : (data.tasks?.structuredTasks && Array.isArray(data.tasks.structuredTasks))
+                  ? data.tasks.structuredTasks
+                  : null;
+
+            if (structuredTasksData) {
+              // 结构化任务消息 — 存储到 structuredTasksBySession
+              const { setStructuredTasks } = usePlanStore.getState();
+              setStructuredTasks(sessionId, structuredTasksData);
+              console.log('[WS] Structured tasks received:', structuredTasksData.length);
+            }
+
             const tasks: PlanTask[] = data.tasks || [];
             const analysis = data.analysis || '';
             const currentPlan = planStore.getPlan(sessionId);
@@ -96,6 +116,8 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
               planStore.setPlan(sessionId, {
                 ...currentPlan,
                 tasks,
+                // 如果有结构化任务，也保存到 plan 中
+                structuredTasks: structuredTasksData || currentPlan.structuredTasks,
                 phase: 'executing',
               });
             } else {
@@ -108,6 +130,7 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
                   planStore.setPlan(sessionId, {
                     ...newPlan,
                     tasks,
+                    structuredTasks: structuredTasksData,
                     phase: 'executing',
                   });
                 }
@@ -124,6 +147,11 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
               startedAt: Date.now(),
               logs: data.logs || [],
             });
+            // 同时更新结构化任务
+            planStore.updateStructuredTask(sessionId, data.id, {
+              status: 'running',
+              startedAt: Date.now(),
+            });
             break;
           }
 
@@ -132,6 +160,10 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
             planStore.updateTask(sessionId, data.id, {
               progress: data.progress,
               logs: data.logs,
+            });
+            // 同时更新结构化任务
+            planStore.updateStructuredTask(sessionId, data.id, {
+              progress: data.progress,
             });
             break;
           }
@@ -146,27 +178,45 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
               completedAt: Date.now(),
               logs: data.logs,
             });
+            // 同时更新结构化任务
+            planStore.updateStructuredTask(sessionId, data.id, {
+              status: data.status || 'completed',
+              result: data.result,
+              error: data.error,
+              completedAt: Date.now(),
+            });
             break;
           }
 
-          case 'plan_complete':
-            console.log('[WS] plan_complete');
-            planStore.setPhase(sessionId, 'result');
-            // 检查消息队列
-            const nextMsg = planStore.dequeueMessage();
-            if (nextMsg) {
-              // 有排队消息，自动发送
-              const sid = useSessionStore.getState().activeSessionId;
-              if (sid) {
-                wsService.setSessionId(sid);
-                wsService.send({
-                  type: 'chat',
-                  sessionId: sid,
-                  message: nextMsg.content,
-                });
+          case 'plan_complete': {
+            console.log('[WS] plan_complete:', rawData);
+            const planData = JSON.parse(rawData || '{}');
+            
+            if (planData.status === 'waiting_confirm') {
+              // AI 分析完成，等待用户确认
+              planStore.setPhase(sessionId, 'planning');
+              planStore.setShowConfirmButton(true);
+              console.log('[WS] Plan 分析完成，等待用户确认');
+            } else if (planData.status === 'completed') {
+              // 执行完成
+              planStore.setPhase(sessionId, 'result');
+              planStore.setShowConfirmButton(false);
+              // 检查消息队列
+              const nextMsg = planStore.dequeueMessage();
+              if (nextMsg) {
+                const sid = useSessionStore.getState().activeSessionId;
+                if (sid) {
+                  wsService.setSessionId(sid);
+                  wsService.send({
+                    type: 'chat',
+                    sessionId: sid,
+                    message: nextMsg.content,
+                  });
+                }
               }
             }
             break;
+          }
 
           case 'plan_error':
             console.error('[Plan] Error:', rawData);

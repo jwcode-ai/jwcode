@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { Plan, PlanTask, PlanPhase, MessageQueueItem } from '../types';
+import { Plan, PlanTask, StructuredTask, PlanPhase, MessageQueueItem } from '../types';
 
 export type PlanMode = 'plan' | 'act' | 'normal';
 
@@ -16,6 +16,9 @@ interface PlanState {
   plansBySession: Record<string, Plan>;
   planPhasesBySession: Record<string, PlanPhase>;
   activePlanSessionId: string | null;
+
+  // 结构化任务（增强版，按 sessionId 隔离）
+  structuredTasksBySession: Record<string, StructuredTask[]>;
 
   // Plan/Act 模式（全局）
   mode: PlanMode;
@@ -41,6 +44,13 @@ interface PlanState {
     agentType: string;
   } | null;
 
+  // 规划思考状态文本（plan_thinking 实时更新）
+  thinkingStatusBySession: Record<string, string>;
+
+  // Plan 确认状态（用户确认后才执行）
+  showConfirmButton: boolean;         // 是否显示确认按钮
+  planConfirmed: boolean;             // 是否已确认
+
   // Actions
   startPlanning: (sessionId: string, goal: string) => void;
   setPlan: (sessionId: string, plan: Plan) => void;
@@ -50,10 +60,22 @@ interface PlanState {
   setPhase: (sessionId: string, phase: PlanPhase) => void;
   getPlan: (sessionId: string) => Plan | null;
   getPhase: (sessionId: string) => PlanPhase;
+  setThinkingStatus: (sessionId: string, status: string) => void;
+  getThinkingStatus: (sessionId: string) => string;
 
   // Step prompt
   setCurrentStepPrompt: (prompt: PlanState['currentStepPrompt']) => void;
   clearCurrentStepPrompt: () => void;
+
+  // Plan 确认相关
+  setShowConfirmButton: (show: boolean) => void;
+  confirmPlan: (sessionId: string) => void;
+  clearPendingPlan: (sessionId: string) => void;
+
+  // 结构化任务管理
+  setStructuredTasks: (sessionId: string, tasks: StructuredTask[]) => void;
+  updateStructuredTask: (sessionId: string, taskId: string, updates: Partial<StructuredTask>) => void;
+  getStructuredTasks: (sessionId: string) => StructuredTask[];
 
   // Plan Mode 管理
   setMode: (mode: PlanMode) => void;
@@ -75,6 +97,7 @@ export const usePlanStore = create<PlanState>()(
       plansBySession: {},
       planPhasesBySession: {},
       activePlanSessionId: null,
+      structuredTasksBySession: {},
       mode: 'act',
       currentPlanContent: null,
       modeHistory: [],
@@ -82,6 +105,13 @@ export const usePlanStore = create<PlanState>()(
 
       // 当前步骤提示
       currentStepPrompt: null,
+
+      // 规划思考状态
+      thinkingStatusBySession: {},
+
+      // Plan 确认状态
+      showConfirmButton: false,
+      planConfirmed: false,
 
       startPlanning: (sessionId, goal) =>
         set((state) => ({
@@ -188,6 +218,19 @@ export const usePlanStore = create<PlanState>()(
         return get().planPhasesBySession[sessionId] || 'idle';
       },
 
+      // 规划思考状态
+      setThinkingStatus: (sessionId, status) =>
+        set((state) => ({
+          thinkingStatusBySession: {
+            ...state.thinkingStatusBySession,
+            [sessionId]: status,
+          },
+        })),
+
+      getThinkingStatus: (sessionId) => {
+        return get().thinkingStatusBySession[sessionId] || '';
+      },
+
       // === Plan Mode 管理 ===
 
       setMode: (mode) => {
@@ -269,19 +312,99 @@ export const usePlanStore = create<PlanState>()(
         return first || null;
       },
 
+      // === Plan 确认 ===
+
+      setShowConfirmButton: (show) => set({ showConfirmButton: show }),
+
+      confirmPlan: (sessionId) => {
+        const state = get();
+        // 通过 WebSocket 发送 plan_confirm 消息到后端
+        try {
+          // 使用动态导入的 wsService 避免循环依赖
+          const wsService = (window as any).__wsService;
+          if (wsService && wsService.send) {
+            wsService.send({
+              type: 'plan_confirm',
+              sessionId,
+              message: state.plansBySession[sessionId]?.goal || '',
+            });
+          } else {
+            console.warn('[PlanStore] wsService not available');
+          }
+        } catch (e) {
+          console.error('[PlanStore] Failed to send plan_confirm:', e);
+        }
+        set({ planConfirmed: true, showConfirmButton: false });
+      },
+
+      clearPendingPlan: (_sessionId) =>
+        set({
+          planConfirmed: false,
+          showConfirmButton: false,
+        }),
+
       // === 步骤提示 ===
 
       setCurrentStepPrompt: (prompt) => set({ currentStepPrompt: prompt }),
 
       clearCurrentStepPrompt: () => set({ currentStepPrompt: null }),
 
+      // === 结构化任务管理 ===
+
+      /**
+       * 设置结构化任务列表（从后端 WebSocket plan_tasks 消息接收）
+       */
+      setStructuredTasks: (sessionId, tasks) =>
+        set((state) => ({
+          structuredTasksBySession: {
+            ...state.structuredTasksBySession,
+            [sessionId]: tasks,
+          },
+        })),
+
+      /**
+       * 递归更新树形结构化任务中的指定任务
+       */
+      updateStructuredTask: (sessionId, taskId, updates) =>
+        set((state) => {
+          const tasks = state.structuredTasksBySession[sessionId];
+          if (!tasks) return state;
+
+          const updateInTree = (taskList: StructuredTask[]): StructuredTask[] =>
+            taskList.map((t) => {
+              if (t.id === taskId) {
+                return { ...t, ...updates };
+              }
+              if (t.children && t.children.length > 0) {
+                return { ...t, children: updateInTree(t.children) };
+              }
+              return t;
+            });
+
+          return {
+            structuredTasksBySession: {
+              ...state.structuredTasksBySession,
+              [sessionId]: updateInTree(tasks),
+            },
+          };
+        }),
+
+      /**
+       * 获取结构化任务列表
+       */
+      getStructuredTasks: (sessionId) => {
+        return get().structuredTasksBySession[sessionId] || [];
+      },
+
       clearPlan: (sessionId) =>
         set((state) => {
           const { [sessionId]: _, ...restPlans } = state.plansBySession;
           const { [sessionId]: __, ...restPhases } = state.planPhasesBySession;
+          const { [sessionId]: ___, ...restStructured } = state.structuredTasksBySession;
           return {
             plansBySession: restPlans,
             planPhasesBySession: restPhases,
+            structuredTasksBySession: restStructured,
           };
         }),
 
@@ -290,10 +413,13 @@ export const usePlanStore = create<PlanState>()(
           plansBySession: {},
           planPhasesBySession: {},
           activePlanSessionId: null,
+          structuredTasksBySession: {},
           mode: 'act',
           currentPlanContent: null,
           modeHistory: [],
           messageQueue: [],
+          currentStepPrompt: null,
+          thinkingStatusBySession: {},
         }),
     }),
     {

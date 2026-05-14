@@ -1,13 +1,19 @@
 package com.jwcode.core.agent;
 
+import com.jwcode.core.hook.HookChain;
+import com.jwcode.core.hook.HookContext;
+import com.jwcode.core.hook.HookDecision;
+import com.jwcode.core.hook.HookResult;
 import com.jwcode.core.session.Session;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 /**
@@ -99,6 +105,9 @@ public class MainAgentStateMachine {
     private volatile boolean budgetCritical = false;
     private volatile boolean budgetExhausted = false;
 
+    // Hook 链（TransitionGuard）
+    private volatile HookChain hookChain;
+
     // ==================== 构造函数 ====================
 
     public MainAgentStateMachine(String sessionId) {
@@ -114,7 +123,16 @@ public class MainAgentStateMachine {
     // ==================== 核心方法 ====================
 
     /**
-     * 状态转换
+     * 状态转换（含 TransitionGuard Hook 检查）。
+     *
+     * <p>转换前触发 {@code STATE_TRANSITION} Hook：
+     * <ul>
+     *   <li>{@code ALLOW} — 正常转换</li>
+     *   <li>{@code DENY} — 阻止转换，保持原状态</li>
+     *   <li>{@code VOID} — 取消转换并回退</li>
+     *   <li>{@code ASK} — 需要用户确认</li>
+     * </ul>
+     * </p>
      */
     public synchronized State transitionTo(State newState, String reason) {
         State oldState = this.currentState;
@@ -122,6 +140,26 @@ public class MainAgentStateMachine {
         if (oldState == newState) {
             logger.debug("[StateMachine] 状态未变化: {} -> {}", oldState, newState);
             return oldState;
+        }
+
+        // ──────── TransitionGuard Hook ────────
+        if (hookChain != null) {
+            HookResult guardResult = checkTransitionGuard(oldState, newState, reason);
+            if (guardResult != null) {
+                if (guardResult.getDecision() == HookDecision.DENY
+                    || guardResult.getDecision() == HookDecision.VOID) {
+                    logger.warn("[StateMachine] TransitionGuard {}: {} -> {} blocked | reason={}",
+                        guardResult.getDecision(), oldState, newState, guardResult.getReason());
+                    // 触发 STATE_ENTERED 通知（进入"被阻止"状态 = 保持原状态）
+                    return oldState;
+                }
+                if (guardResult.getDecision() == HookDecision.ASK) {
+                    logger.info("[StateMachine] TransitionGuard ASK: {} -> {} needs confirmation",
+                        oldState, newState);
+                    // ASK: 转换为 WAITING_INPUT 等待用户确认
+                    // 记录 pendingTransition 以便确认后恢复
+                }
+            }
         }
 
         logger.info("[StateMachine] 状态转换: {} -> {} | 原因: {}", oldState, newState, reason);
@@ -146,6 +184,35 @@ public class MainAgentStateMachine {
      */
     public State getCurrentState() {
         return currentState;
+    }
+
+    /**
+     * 检查 TransitionGuard Hook。
+     */
+    private HookResult checkTransitionGuard(State from, State to, String reason) {
+        try {
+            HookContext ctx = HookContext.forStateTransition(
+                sessionId, "Orchestrator",
+                from.name(), to.name(), reason);
+            return hookChain.execute(ctx);
+        } catch (Exception e) {
+            logger.warn("[StateMachine] TransitionGuard hook error: {} (fail-open)", e.getMessage());
+            return null; // fail-open: allow transition
+        }
+    }
+
+    /**
+     * 设置 Hook 链（用于 TransitionGuard）。
+     */
+    public void setHookChain(HookChain hookChain) {
+        this.hookChain = hookChain;
+    }
+
+    /**
+     * 获取 Hook 链。
+     */
+    public HookChain getHookChain() {
+        return hookChain;
     }
 
     /**

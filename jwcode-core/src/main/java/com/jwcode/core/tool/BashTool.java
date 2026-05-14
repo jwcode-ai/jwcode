@@ -32,6 +32,21 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
     
     private static final Logger logger = Logger.getLogger(BashTool.class.getName());
     
+    /** 后台命令执行器（由应用层注入，用于 OS 级进程隔离的长时任务） */
+    @FunctionalInterface
+    public interface BackgroundCommandExecutor {
+        /** 以后台方式执行命令，返回任务 ID */
+        String execute(String command, String description, Path workingDir);
+    }
+    
+    /** 应用层设置的后台命令执行器，为 null 时不支持后台模式 */
+    private static volatile BackgroundCommandExecutor backgroundExecutor;
+    
+    /** 设置后台命令执行器（由 JwCodeApplication 在启动时调用） */
+    public static void setBackgroundExecutor(BackgroundCommandExecutor executor) {
+        backgroundExecutor = executor;
+    }
+    
     // 配置常量
     private static final int DEFAULT_TIMEOUT_MS = 600000; // 10 分钟
     private static final int MAX_OUTPUT_LINES = 1000;
@@ -211,6 +226,20 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
                         return ToolResult.error("危险命令需要用户确认: " + input.command());
                     }
                     logger.warning("执行危险命令: " + input.command());
+                }
+                
+                // 【Phase 3 接线】后台任务：使用 BackgroundTaskLauncher OS 级进程隔离
+                if (input.isBackground() && backgroundExecutor != null) {
+                    Path workDir = context.getWorkingDirectory();
+                    String taskId = backgroundExecutor.execute(
+                        input.command(),
+                        input.description() != null ? input.description() : input.command(),
+                        workDir
+                    );
+                    logger.info("[BashTool] 后台任务已启动 | taskId=" + taskId + " | command=" + input.command());
+                    return ToolResult.success(BashOutput.background(
+                        taskId, input.command()
+                    ));
                 }
                 
                 // 执行命令

@@ -9,7 +9,13 @@ import com.jwcode.core.config.JwcodeConfig;
 import com.jwcode.core.tool.ToolRegistry;
 import com.jwcode.core.tool.ToolExecutor;
 import com.jwcode.core.config.SystemPromptLoader;
+import com.jwcode.core.index.CodebaseIndexer;
+import com.jwcode.core.index.EmbeddingService;
+import com.jwcode.core.index.IndexConfig;
 import com.jwcode.core.llm.*;
+import com.jwcode.core.mcp.*;
+import com.jwcode.core.service.ToolExecutionService;
+import com.jwcode.core.service.UsageService;
 import com.jwcode.core.model.Message;
 import com.jwcode.core.session.Session;
 import com.jwcode.core.session.SessionManager;
@@ -18,7 +24,9 @@ import com.jwcode.core.skill.SkillRegistry;
 import com.jwcode.core.task.BackgroundTaskLauncher;
 import com.jwcode.core.task.IdleDetector;
 import com.jwcode.core.task.TaskStore;
+import com.jwcode.core.task.WireEventBus;
 import com.jwcode.core.terminal.JLine3Terminal;
+import com.jwcode.core.tool.BashTool;
 
 import java.nio.file.Paths;
 import java.util.*;
@@ -37,6 +45,12 @@ public class JwCodeApplication implements AutoCloseable {
     private JLine3Terminal terminal;
     private BackgroundTaskLauncher backgroundTaskLauncher;
     private IdleDetector idleDetector;
+    private CodebaseIndexer codebaseIndexer;
+    private McpConnectionManager mcpConnectionManager;
+    private McpServerRegistry mcpServerRegistry;
+    private McpOfficialRegistry mcpOfficialRegistry;
+    private ToolExecutionService toolExecutionService;
+    private UsageService usageService;
     
     public JwCodeApplication(String[] args) {
         this.context = new CommandContext();
@@ -140,6 +154,12 @@ public class JwCodeApplication implements AutoCloseable {
     
     @Override
     public void close() {
+        if (codebaseIndexer != null) {
+            codebaseIndexer.shutdown();
+        }
+        if (mcpConnectionManager != null) {
+            mcpConnectionManager.disconnectAll();
+        }
         if (idleDetector != null) {
             idleDetector.stop();
         }
@@ -161,13 +181,27 @@ public class JwCodeApplication implements AutoCloseable {
             this.backgroundTaskLauncher = new BackgroundTaskLauncher(
                 Paths.get(System.getProperty("user.dir")), taskStore);
             
+            // 【Phase 3 接线】WireEventBus 订阅：后台任务完成 → 通知 IdleDetector
+            WireEventBus.getInstance().subscribe(event -> {
+                if (event instanceof WireEventBus.TaskCompletedEvent tce) {
+                    CliLogger.getInstance().info("[WireEventBus] 后台任务完成 | taskId=" +
+                        tce.getSourceId() + " | success=" + tce.isSuccess() +
+                        " | exitCode=" + tce.getExitCode());
+                }
+            });
+            
             this.idleDetector = new IdleDetector(taskStore);
             idleDetector.setOnIdleTaskComplete(task -> {
                 CliLogger.getInstance().info("[IdleDetector] 后台任务完成 | taskId=" + task.getId() + " | status=" + task.getStatus());
             });
             idleDetector.start();
             
-            CliLogger.getInstance().info("后台基础设施初始化完成: BackgroundTaskLauncher + IdleDetector");
+            // 【Phase 3 接线】设置 BashTool 后台执行器，支持 background=true 参数
+            BashTool.setBackgroundExecutor((command, description, workingDir) -> {
+                return backgroundTaskLauncher.launch(command, description).getId();
+            });
+            
+            CliLogger.getInstance().info("后台基础设施初始化完成: BackgroundTaskLauncher + IdleDetector + WireEventBus + BashTool后台");
         } catch (Exception e) {
             CliLogger.getInstance().warn("后台基础设施初始化失败: " + e.getMessage());
         }
@@ -238,6 +272,10 @@ public class JwCodeApplication implements AutoCloseable {
             // 创建 ToolRegistry 和 ToolExecutor，确保工具系统正常工作
             ToolRegistry toolRegistry = ToolRegistry.createDefault();
             ToolExecutor toolExecutor = new ToolExecutor(toolRegistry);
+
+            // 【接线】初始化语义搜索索引 — CodebaseIndexer + SemanticSearchTool
+            initializeCodebaseIndexer(toolRegistry, session.getWorkingDirectory());
+
             this.llmQueryEngine = llmFactory.createQueryEngine(
                 session,
                 toolRegistry,
@@ -245,6 +283,12 @@ public class JwCodeApplication implements AutoCloseable {
                 agentRegistry
             );
             
+            // 【接线】初始化 MCP 生态（连接管理 + 注册表 + 安全认证）
+            initializeMcpEcosystem();
+
+            // 【接线】初始化工具执行服务 + 用量统计服务
+            initializeApplicationServices();
+
             // 获取工具信息
             int toolCount = llmQueryEngine.getToolExecutor().getEnabledTools().size();
             
@@ -305,7 +349,94 @@ public class JwCodeApplication implements AutoCloseable {
             System.exit(1);
         }
     }
-    
+
+    /**
+     * 初始化代码库语义搜索索引 — CodebaseIndexer + SemanticSearchTool。
+     *
+     * <p>使用本地 TF-IDF 风格 fallback embedding（无需外部 API），
+     * 后续可升级为调用远程 embedding API。</p>
+     */
+    private void initializeCodebaseIndexer(ToolRegistry toolRegistry, String workingDirectory) {
+        CliLogger logger = CliLogger.getInstance();
+        try {
+            java.nio.file.Path workspaceRoot = java.nio.file.Path.of(workingDirectory).toAbsolutePath().normalize();
+            IndexConfig indexConfig = IndexConfig.forWorkspace(workspaceRoot);
+            // 使用本地 fallback（TF-IDF 关键词向量），无需外部 embedding API
+            // 后续可替换为 EmbeddingService(apiEndpoint, apiKey, modelName, dim) 调用远程 API
+            EmbeddingService embeddingService = EmbeddingService.createLocalFallback(256);
+            this.codebaseIndexer = new CodebaseIndexer(workspaceRoot, indexConfig, embeddingService);
+
+            // 注册 SemanticSearchTool，使子 Agent 可用自然语言搜索代码库
+            toolRegistry.registerSemanticSearch(codebaseIndexer);
+            logger.info("SemanticSearchTool registered — 子 Agent 可自然语言搜索代码库");
+
+            // 异步启动初始全量索引（后台执行，不阻塞启动）
+            codebaseIndexer.reindexAsync()
+                .thenAccept(fileCount -> {
+                    if (fileCount > 0) {
+                        logger.info("代码库索引完成: " + fileCount + " 个文件, "
+                            + codebaseIndexer.getVectorCount() + " 个向量块");
+                    } else {
+                        logger.info("代码库索引完成（无新增文件）");
+                    }
+                })
+                .exceptionally(e -> {
+                    logger.warn("代码库索引失败: " + e.getMessage());
+                    return null;
+                });
+
+            // 启动文件监控（增量索引）
+            codebaseIndexer.startWatching();
+
+            System.out.println("🔍 语义搜索: 已启用（后台索引中...）");
+        } catch (Exception e) {
+            logger.warn("代码库索引初始化失败（语义搜索不可用）: " + e.getMessage());
+            this.codebaseIndexer = null;
+        }
+    }
+
+    /**
+     * 初始化 MCP 生态链 — McpConfig → McpConnectionManager → McpServerRegistry → McpOfficialRegistry。
+     */
+    private void initializeMcpEcosystem() {
+        CliLogger logger = CliLogger.getInstance();
+        try {
+            McpConfig mcpConfig = new McpConfig();
+            this.mcpConnectionManager = new McpConnectionManager();
+            this.mcpServerRegistry = new McpServerRegistry();
+            this.mcpOfficialRegistry = new McpOfficialRegistry();
+
+            // 将已配置的 MCP 服务器注册到连接管理器和注册表
+            for (String serverName : mcpConfig.getEnabledServers()) {
+                McpConfig.McpServerConfig serverConfig = mcpConfig.getServer(serverName);
+                if (serverConfig != null) {
+                    mcpConnectionManager.registerServer(serverName, serverConfig);
+                    mcpServerRegistry.registerServer(serverName,
+                        new McpServerRegistry.ServerInfo(serverName, "1.0.0",
+                            "MCP Server: " + serverName));
+                }
+            }
+
+            logger.info("MCP 生态初始化完成: connectionManager + serverRegistry + officialRegistry");
+        } catch (Exception e) {
+            logger.warn("MCP 生态初始化失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 初始化应用级服务 — ToolExecutionService + UsageService。
+     */
+    private void initializeApplicationServices() {
+        CliLogger logger = CliLogger.getInstance();
+        try {
+            this.toolExecutionService = new ToolExecutionService();
+            this.usageService = new UsageService();
+            logger.info("应用服务初始化完成: ToolExecutionService + UsageService");
+        } catch (Exception e) {
+            logger.warn("应用服务初始化失败: " + e.getMessage());
+        }
+    }
+
     private void printConfigError() {
         System.err.println("╔═══════════════════════════════════════════════════════════╗");
         System.err.println("║  ⚠️  未检测到配置文件                                      ║");
@@ -411,6 +542,7 @@ public class JwCodeApplication implements AutoCloseable {
             "com.jwcode.cli.commands.TasksCommand",
             "com.jwcode.cli.commands.TeleportCommand",
             "com.jwcode.cli.commands.UpgradeCommand",
+            "com.jwcode.cli.commands.TaskCommand",
             "com.jwcode.cli.commands.VimCommand",
             "com.jwcode.cli.commands.VoiceCommand"
         };

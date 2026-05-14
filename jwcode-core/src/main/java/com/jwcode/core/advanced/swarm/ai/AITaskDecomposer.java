@@ -1,9 +1,13 @@
 package com.jwcode.core.advanced.swarm.ai;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jwcode.core.llm.LLMMessage;
+import com.jwcode.core.llm.LLMResponse;
+import com.jwcode.core.llm.LLMService;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.logging.Logger;
 
 /**
  * AI Task Decomposer - AI 驱动的任务分解器
@@ -12,11 +16,22 @@ import java.util.concurrent.CompletableFuture;
  * 替代基于规则的简单匹配
  */
 public class AITaskDecomposer {
-    
+
+    private static final Logger logger = Logger.getLogger(AITaskDecomposer.class.getName());
+
     private final ObjectMapper objectMapper;
-    
+    private final LLMService llmService;
+
+    /** 无 LLM 构造器（向后兼容，分解时会失败） */
     public AITaskDecomposer() {
         this.objectMapper = new ObjectMapper();
+        this.llmService = null;
+    }
+
+    /** 注入 LLM 服务的构造器 */
+    public AITaskDecomposer(LLMService llmService) {
+        this.objectMapper = new ObjectMapper();
+        this.llmService = llmService;
     }
     
     /**
@@ -51,17 +66,95 @@ public class AITaskDecomposer {
         });
     }
     
+    /** 任务分解系统提示词 */
+    private static final String DECOMPOSE_SYSTEM_PROMPT = """
+        你是一个任务分解专家。将用户的开发任务拆分为可并行或串行执行的子任务。
+
+        输出格式（严格 JSON）：
+        {
+          "complexity": 1-10 的整数,
+          "reasoning": "简短的分解理由",
+          "estimatedSubTasks": 子任务数量,
+          "subTasks": [
+            {
+              "id": "subtask-1",
+              "description": "子任务描述",
+              "type": "explore|code|test|review|doc|debug",
+              "priority": 1-10,
+              "dependencies": []
+            }
+          ]
+        }
+
+        规则：
+        - 每个子任务必须有明确的验收标准
+        - type 必须从给定的枚举值中选择
+        - dependencies 列出必须在前面的子任务 id
+        - 简单任务（如修改一个变量名）不要拆分，返回1个子任务
+        """;
+
     /**
-     * 执行真实的 AI 调用
-     * 修复：移除 simulateAIResponse，改为抛异常或调用真实 LLM
+     * 执行真实的 AI 调用 — 通过 LLMService 分解任务。
      */
     private String executeRealAI(String taskDescription) {
-        // TODO: 集成真实的 LLM Service
-        // 当前如果没有配置 LLM，应该直接失败
-        throw new UnsupportedOperationException(
-            "AITaskDecomposer requires LLM Service configuration. " +
-            "Please configure LLM provider before using AI-based task decomposition."
-        );
+        if (llmService == null) {
+            throw new UnsupportedOperationException(
+                "AITaskDecomposer requires LLM Service. " +
+                "Please configure LLM provider before using AI-based task decomposition."
+            );
+        }
+
+        try {
+            List<LLMMessage> messages = List.of(
+                LLMMessage.system(DECOMPOSE_SYSTEM_PROMPT),
+                LLMMessage.user("请分解以下开发任务：\n" + taskDescription)
+            );
+
+            LLMResponse response = llmService.chat(messages)
+                .get(30, java.util.concurrent.TimeUnit.SECONDS);
+
+            String content = response.getContent();
+            logger.fine("AITaskDecomposer AI response (first 200 chars): "
+                + (content.length() > 200 ? content.substring(0, 200) + "..." : content));
+
+            // 提取 JSON（AI 可能用 markdown 包裹）
+            return extractJson(content);
+
+        } catch (java.util.concurrent.TimeoutException e) {
+            throw new RuntimeException("AITaskDecomposer: LLM 响应超时（30s）");
+        } catch (Exception e) {
+            throw new RuntimeException("AITaskDecomposer: LLM 调用失败 — " + e.getMessage(), e);
+        }
+    }
+
+    /** 从 AI 回复中提取 JSON（处理 markdown 代码块包裹） */
+    private String extractJson(String content) {
+        String trimmed = content.trim();
+        // 尝试提取 ```json ... ``` 代码块
+        int start = trimmed.indexOf("```json");
+        if (start >= 0) {
+            int jsonStart = trimmed.indexOf('\n', start) + 1;
+            int end = trimmed.indexOf("```", jsonStart);
+            if (end > jsonStart) {
+                return trimmed.substring(jsonStart, end).trim();
+            }
+        }
+        // 尝试提取 ``` ... ``` 代码块
+        start = trimmed.indexOf("```");
+        if (start >= 0) {
+            int jsonStart = trimmed.indexOf('\n', start) + 1;
+            int end = trimmed.indexOf("```", jsonStart);
+            if (end > jsonStart) {
+                return trimmed.substring(jsonStart, end).trim();
+            }
+        }
+        // 尝试提取 { ... } 第一个 JSON 对象
+        int braceStart = trimmed.indexOf('{');
+        int braceEnd = trimmed.lastIndexOf('}');
+        if (braceStart >= 0 && braceEnd > braceStart) {
+            return trimmed.substring(braceStart, braceEnd + 1);
+        }
+        return trimmed;
     }
     
     private DecompositionResult parseAIResponse(String aiResponse) throws Exception {

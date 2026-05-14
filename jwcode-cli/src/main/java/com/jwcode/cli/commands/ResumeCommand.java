@@ -1,18 +1,24 @@
 package com.jwcode.cli.commands;
 
 import com.jwcode.core.session.Session;
+import com.jwcode.core.session.ResilientSessionLoader;
 import com.jwcode.core.session.SessionManager;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 import picocli.CommandLine.Parameters;
 
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.List;
 
 /**
  * ResumeCommand - /resume 命令
  * 
  * 功能说明：
- * 恢复之前的会话。
+ * 恢复之前的会话。使用 ResilientSessionLoader 进行容错恢复：
+ * - JSON 损坏时跳过无效行，从最后一个有效状态继续
+ * - 校验工具调用与结果配对一致性
+ * - 自动补全缺失的 tool result
  * 
  * @author JWCode Team
  * @since 1.0.0
@@ -21,6 +27,7 @@ import java.util.List;
 public class ResumeCommand implements Runnable {
     
     private final SessionManager sessionManager;
+    private final ResilientSessionLoader resilientLoader;
     
     @Parameters(index = "0", description = "会话 ID 或搜索词", arity = "0..1")
     private String sessionIdOrSearch;
@@ -33,6 +40,7 @@ public class ResumeCommand implements Runnable {
     
     public ResumeCommand() {
         this.sessionManager = new SessionManager();
+        this.resilientLoader = new ResilientSessionLoader();
     }
     
     @Override
@@ -63,7 +71,27 @@ public class ResumeCommand implements Runnable {
     }
     
     private void resumeSession(String sessionId) {
-        Session session = sessionManager.loadSession(sessionId);
+        // 【Phase 4 接线】优先使用 ResilientSessionLoader 进行容错恢复
+        // 尝试从会话文件路径加载
+        Path sessionFilePath = Paths.get(
+            System.getProperty("user.home"), ".jwcode", "sessions", sessionId + ".json");
+        
+        Session session = null;
+        
+        if (java.nio.file.Files.exists(sessionFilePath)) {
+            try {
+                session = resilientLoader.loadFromFile(sessionFilePath);
+                System.out.println("🔧 使用容错恢复加载会话");
+            } catch (Exception e) {
+                System.out.println("⚠️ 容错恢复失败: " + e.getMessage() + "，降级到简单加载");
+            }
+        }
+        
+        // 降级：使用简单加载
+        if (session == null) {
+            session = sessionManager.loadSession(sessionId);
+        }
+        
         if (session != null) {
             sessionManager.setActiveSession(sessionId);
             System.out.println("已恢复会话：" + sessionId);

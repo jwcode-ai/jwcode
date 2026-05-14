@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react';
 import { usePlanStore } from '../../stores/planStore';
 import { useSessionStore } from '../../stores/sessionStore';
 
-import { PlanTask } from '../../types';
+import { PlanTask, StructuredTask } from '../../types';
 import { KanbanBoard } from './KanbanBoard';
 import { CurrentTaskDetail } from './CurrentTaskDetail';
 import { PlanTimeline } from './PlanTimeline';
@@ -10,8 +10,9 @@ import { PlanSummary } from './PlanSummary';
 import { PlanSkeleton } from './PlanSkeleton';
 import { TaskTree } from './TaskTree';
 import { StepProgressBar } from './StepProgressBar';
+import { StructuredTaskView, StructuredTaskSummary } from './StructuredTaskView';
 
-type ViewMode = 'kanban' | 'timeline' | 'tree';
+type ViewMode = 'kanban' | 'timeline' | 'tree' | 'structured';
 
 /**
  * PlanPanel — Plan/Act 模式面板
@@ -26,6 +27,7 @@ type ViewMode = 'kanban' | 'timeline' | 'tree';
 export function PlanPanel() {
   const plansBySession = usePlanStore((s) => s.plansBySession);
   const planPhasesBySession = usePlanStore((s) => s.planPhasesBySession);
+  const structuredTasksBySession = usePlanStore((s) => s.structuredTasksBySession);
   const messageQueue = usePlanStore((s) => s.messageQueue);
   const mode = usePlanStore((s) => s.mode);
   const currentPlanContent = usePlanStore((s) => s.currentPlanContent);
@@ -43,7 +45,15 @@ export function PlanPanel() {
   const currentPlan = activeSessionId ? plansBySession[activeSessionId] : null;
   const planPhase = activeSessionId ? (planPhasesBySession[activeSessionId] || 'idle') : 'idle';
 
-  const handleTaskClick = useCallback((task: PlanTask) => {
+  // 获取当前 session 的结构化任务
+  const currentStructuredTasks = activeSessionId
+    ? (structuredTasksBySession[activeSessionId] || [])
+    : [];
+
+  // 如果有结构化任务数据，自动切换到结构化视图
+  const hasStructuredTasks = currentStructuredTasks.length > 0;
+
+  const handleTaskClick = useCallback((task: PlanTask | StructuredTask) => {
     setActiveTaskId((prev) => (prev === task.id ? null : task.id));
   }, []);
 
@@ -123,8 +133,12 @@ export function PlanPanel() {
   // === 模式历史 ===
   const lastModeChange = modeHistory.length > 0 ? modeHistory[modeHistory.length - 1] : null;
 
-  // Planning phase - show skeleton
+  // Planning phase - show skeleton or confirm button
   if (planPhase === 'planning' || !currentPlan) {
+    const showConfirm = usePlanStore((s) => s.showConfirmButton);
+    const confirmPlan = usePlanStore((s) => s.confirmPlan);
+    const clearPendingPlan = usePlanStore((s) => s.clearPendingPlan);
+
     return (
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Mode toggle bar */}
@@ -139,7 +153,42 @@ export function PlanPanel() {
           </div>
         </div>
         <div className="flex-1 flex flex-col overflow-hidden p-4">
-          <PlanSkeleton />
+          {showConfirm ? (
+            <div className="flex flex-col items-center justify-center h-full">
+              <div className="max-w-lg text-center">
+                <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-purple-500/10 flex items-center justify-center">
+                  <span className="text-2xl">📋</span>
+                </div>
+                <h2 className="text-lg font-semibold text-dark-text mb-2">
+                  AI 分析完成
+                </h2>
+                <p className="text-sm text-dark-muted mb-6">
+                  AI 已完成需求分析并生成了任务计划。请查看上方 AI 的回复内容，
+                  确认无误后点击下方按钮开始执行。
+                </p>
+                <div className="flex items-center justify-center gap-3">
+                  <button
+                    onClick={() => confirmPlan(activeSessionId || '')}
+                    className="px-6 py-2.5 text-sm bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors flex items-center gap-2"
+                  >
+                    <span>⚡</span>
+                    <span>确认执行</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      clearPendingPlan(activeSessionId || '');
+                      handleNewPlan();
+                    }}
+                    className="px-4 py-2.5 text-sm bg-dark-surface border border-dark-border rounded-lg hover:bg-dark-hover transition-colors"
+                  >
+                    重新规划
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <PlanSkeleton />
+          )}
         </div>
       </div>
     );
@@ -295,6 +344,24 @@ export function PlanPanel() {
               >
                 树形
               </button>
+              <button
+                onClick={() => setViewMode('structured')}
+                className={`px-3 py-1.5 text-xs rounded-md transition-all ${
+                  viewMode === 'structured'
+                    ? 'bg-accent-blue text-white'
+                    : hasStructuredTasks
+                      ? 'text-amber-400 hover:text-amber-300'
+                      : 'text-dark-muted hover:text-dark-text'
+                }`}
+              >
+                {hasStructuredTasks && <span className="mr-1">⚡</span>}
+                结构化
+                {hasStructuredTasks && (
+                  <span className="ml-1 text-[10px] opacity-60">
+                    ({currentStructuredTasks.length})
+                  </span>
+                )}
+              </button>
             </div>
 
             {/* Progress summary */}
@@ -337,6 +404,47 @@ export function PlanPanel() {
                 activeTaskId={activeTaskId}
                 onTaskClick={handleTaskClick}
               />
+            </div>
+          )}
+          {viewMode === 'structured' && (
+            <div>
+              {hasStructuredTasks ? (
+                <div className="space-y-4">
+                  {/* 结构化任务统计 */}
+                  <StructuredTaskSummary tasks={currentStructuredTasks} />
+
+                  {/* 结构化任务视图 */}
+                  <div className="bg-dark-surface rounded-lg border border-dark-border p-4">
+                    <div className="mb-3 flex items-center justify-between">
+                      <h3 className="text-sm font-medium text-dark-text">
+                        ⚡ 结构化任务执行视图
+                      </h3>
+                      <span className="text-xs text-dark-muted">
+                        {currentStructuredTasks.length} 个阶段
+                      </span>
+                    </div>
+                    <StructuredTaskView
+                      tasks={currentStructuredTasks}
+                      activeTaskId={activeTaskId}
+                      onTaskClick={handleTaskClick}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-center py-16">
+                  <div className="text-center">
+                    <div className="text-4xl mb-3">📋</div>
+                    <h3 className="text-sm font-medium text-dark-text mb-2">
+                      暂无结构化任务
+                    </h3>
+                    <p className="text-xs text-dark-muted max-w-sm">
+                      在 Plan 模式下与 AI 确认执行计划后，AI 会自动生成结构化任务列表。
+                      <br />
+                      结构化任务会标注执行模式（串行/并发）、阶段分组和依赖关系。
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

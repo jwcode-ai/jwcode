@@ -97,7 +97,51 @@ com.jwcode.core
 ├── tool/            # 工具系统
 ├── session/         # 会话管理
 ├── task/            # 任务管理
+├── agent/           # Agent 系统（多Agent分层架构）
+│   ├── OrchestratorAgent       # 主控指挥家
+│   ├── EnhancedOrchestratorAgent # 增强版（PDCA循环）
+│   ├── TaskAgent               # AI回复→结构化任务解析器 ← v1.1
+│   ├── TaskExecutionAgent      # 结构化任务逐步执行器 ← v1.1
+│   ├── CoderAgent/DebugAgent/  # 专业Worker Agent
+│   │   ReviewerAgent/TestAgent/
+│   │   DocAgent/ExploreAgent/
+│   │   ArchitectAgent
+│   ├── CompactorAgent          # 上下文压缩专家
+│   └── fork/                   # 子Agent Fork机制
+├── aicl/            # AICL 协议引擎（上下文生命周期管理）← v1.1
+│   ├── BlockPriority           # 6级优先级枚举
+│   ├── BlockLifecycle           # 6状态生命周期枚举
+│   ├── ContextBlock            # 上下文块模型
+│   ├── ContextControl          # 控制层（预算+策略）
+│   ├── ContextAssembler        # Priority-LRU 淘汰引擎
+│   ├── AICLSerializer          # XML 序列化器
+│   ├── AICLDeserializer        # XML 反序列化器
+│   ├── AICLContext             # 完整上下文容器
+│   └── AICLPromptBuilder       # AI解析规则生成器
+├── hook/            # Hook 拦截体系（生命周期拦截与运行时治理）← v2.1
+│   ├── HookDecision            # 6种决策语义枚举
+│   ├── HookEventType           # 12种事件类型枚举
+│   ├── HookImplementationType  # 4种实现形态枚举
+│   ├── HookPriority            # 5级优先级 + ConflictResolver
+│   ├── HookContext             # 上下文数据模型
+│   ├── HookResult              # 决策结果模型
+│   ├── HookConfig              # 配置模型
+│   ├── HookChain               # ★ 核心拦截编排引擎
+│   ├── HookRegistry            # 配置加载 + 热重载
+│   ├── HookAuditLogger         # 审计日志
+│   ├── StateTransitionEvent    # TransitionGuard 事件
+│   ├── RollbackAction          # 回退策略
+│   └── executor/
+│       ├── ShellHookExecutor   # Shell 脚本执行器
+│       ├── HttpHookExecutor    # HTTP REST 执行器
+│       ├── PromptHookExecutor  # LLM Prompt 执行器
+│       └── AgentHookExecutor   # 子 Agent 调查执行器
+├── a2a/             # A2A 协议（Agent间通信）
+│   ├── model/       # A2ATask, ErrorSummary, TaskLifecycle...
+│   └── retry/       # RetryOrchestrator, RetryStrategy
 ├── model/           # 数据模型
+│   ├── PlanTask     # 计划任务模型
+│   └── StructuredTask # 结构化任务模型 ← v1.1
 └── exception/       # 异常定义
 ```
 
@@ -109,6 +153,18 @@ com.jwcode.core
 | ToolExecutor | 执行工具调用 | ToolRegistry, PermissionChecker |
 | SessionManager | 管理会话生命周期 | SessionStore, SessionId |
 | ToolRegistry | 工具注册和查找 | Tool |
+| EnhancedOrchestratorAgent | 主Agent：意图识别、PDCA循环、调度子Agent | IntentAnalyzer, TaskAgent, A2AFacade, PlanTaskBroadcaster |
+| TaskAgent | AI回复→结构化任务解析（阶段/模式/依赖） | StructuredTask |
+| TaskExecutionAgent | 结构化任务逐步执行（并发/串行调度） | A2AFacade, PlanTaskBroadcaster |
+| StructuredTask | 结构化任务模型（执行模式+阶段+并发组） | PlanTask |
+| ContextAssembler | AICL Priority-LRU 淘汰引擎 | ContextBlock, BlockPriority |
+| ContextBlock | AICL 上下文块（id/type/priority/state/ttl/generation） | BlockPriority, BlockLifecycle |
+| AICLSerializer | AICL XML 序列化器（ContextBlock → AICL XML v1.0） | ContextBlock, AICLContext |
+| HookChain | ★ Hook 拦截编排引擎（优先级排序→串行执行→短路）← v2.1 | HookRegistry, HookExecutor, HookAuditLogger |
+| HookRegistry | Hook 配置加载 + 热重载 + 事件索引 ← v2.1 | HookConfig, HookExecutor, .jwcode/hooks.json |
+| HookContext | Hook 上下文（公共字段 + 事件专用字段 + 序列化）← v2.1 | HookEventType, ToolExecutionContext |
+| HookResult | Hook 决策结果（decision/reason/modifiedInput/rollbackAction）← v2.1 | HookDecision, RollbackAction |
+| TransitionGuard | 状态转换前置审批（STATE_TRANSITION Hook）← v2.1 | MainAgentStateMachine, HookChain |
 
 ### jwcode-cli 模块
 
@@ -458,6 +514,66 @@ class ToolIntegrationTest {
         assertEquals("hello", result.getData().getOutput().trim());
     }
 }
+```
+
+---
+
+## Plan/Act 模式开发指南
+
+> 新增于 v1.1
+
+### 结构化任务流程
+
+Plan/Act 模式下的任务执行链路：
+
+```
+用户输入 → EnhancedOrchestratorAgent.processConfirmedPlan()
+  ├── TaskAgent.parsePlan()       → List<StructuredTask>
+  ├── broadcastStructuredTasks()  → WebSocket → 前端
+  └── TaskExecutionAgent.execute()
+        ├── SEQUENTIAL: 拓扑排序 → 逐个 A2AFacade.submitTaskSync()
+        └── CONCURRENT: 线程池 CompletableFuture.allOf()
+```
+
+### 添加新的任务解析规则
+
+在 `TaskAgent.java` 中扩展解析能力：
+
+```java
+// 1. 添加新的阶段关键词
+PHASE_KEYWORDS.put("deploy|部署|发布", TaskPhase.GENERAL);
+
+// 2. 添加新的并发检测模式
+// 修改 CONCURRENT_PATTERN
+
+// 3. 添加新的依赖检测模式
+// 修改 DEPENDS_ON_PATTERN
+```
+
+### 添加新的前端视图
+
+1. 在 `StructuredTaskView.tsx` 中添加新的渲染组件
+2. 在 `PlanPanel.tsx` 中添加到 `ViewMode` 枚举
+3. 在 `planStore.ts` 中添加对应的状态管理方法
+
+### Web 前端组件结构
+
+```
+jwcode-web/src/
+├── components/Plan/
+│   ├── PlanPanel.tsx              # 主面板（模式切换+视图选择）
+│   ├── StructuredTaskView.tsx     # 结构化任务视图 ← v1.1
+│   ├── KanbanBoard.tsx            # 看板视图
+│   ├── TaskTree.tsx               # 树形视图
+│   ├── PlanTimeline.tsx           # 时间线视图
+│   └── ...
+├── stores/
+│   ├── planStore.ts               # Plan 状态管理（含结构化任务）← v1.1
+│   └── ...
+├── types/
+│   └── index.ts                   # TypeScript 类型定义 ← v1.1
+└── hooks/
+    └── useWebSocket.ts            # WebSocket 消息处理 ← v1.1
 ```
 
 ---

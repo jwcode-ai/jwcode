@@ -3,6 +3,10 @@ package com.jwcode.core.a2a.dispatcher;
 import com.jwcode.core.a2a.model.*;
 import com.jwcode.core.agent.Agent;
 import com.jwcode.core.agent.AgentRegistry;
+import com.jwcode.core.hook.HookChain;
+import com.jwcode.core.hook.HookContext;
+import com.jwcode.core.hook.HookEventType;
+import com.jwcode.core.hook.HookResult;
 import com.jwcode.core.llm.LLMFactory;
 import com.jwcode.core.llm.LLMQueryEngine;
 import com.jwcode.core.llm.LLMService;
@@ -38,6 +42,9 @@ public class LocalAgentDispatcher implements AgentDispatcher {
     private final LLMService llmService;
     private final ToolRegistry toolRegistry;
     private final ToolExecutor toolExecutor;
+
+    // Hook 拦截链
+    private volatile HookChain hookChain;
 
     public LocalAgentDispatcher(AgentRegistry agentRegistry) {
         this(agentRegistry, null, null, null);
@@ -361,6 +368,9 @@ public class LocalAgentDispatcher implements AgentDispatcher {
         logger.info("LocalDispatcher: executing sub-agent task via LLM | agent=" + agentName
             + " | taskId=" + task.getTaskId() + " | description=" + task.getDescription());
 
+        // ──────── Hook: SUBAGENT_START ────────
+        triggerSubagentHook(HookEventType.SUBAGENT_START, agentName, task);
+
         // 2. 创建子Agent专用的 Session
         Session subSession = new Session(
             "subtask-" + task.getTaskId() + "-" + agentName,
@@ -396,6 +406,7 @@ public class LocalAgentDispatcher implements AgentDispatcher {
         agentRegistry.switchTo(agentId);
 
         // 4. 执行查询（query() 内部会自动 addMessage + injectEnvironmentInfo + injectAgentSystemPrompt）
+        TaskOutput output;
         try {
             LLMQueryEngine.QueryResult result = engine.query(taskPrompt).get(5, TimeUnit.MINUTES);
 
@@ -404,7 +415,7 @@ public class LocalAgentDispatcher implements AgentDispatcher {
                 String content = result.getMessage() != null
                     ? result.getMessage().getTextContent()
                     : "Task completed";
-                return TaskOutput.success(content, Map.of(
+                output = TaskOutput.success(content, Map.of(
                     "agentName", agentName,
                     "taskId", task.getTaskId(),
                     "messageCount", subSession.getMessageCount()
@@ -412,14 +423,53 @@ public class LocalAgentDispatcher implements AgentDispatcher {
             } else {
                 String errorMsg = result != null ? result.getErrorMessage() : "Unknown error";
                 logger.warning("LocalDispatcher: sub-agent task failed: " + errorMsg);
-                return TaskOutput.success("Task failed: " + errorMsg);
+                output = TaskOutput.success("Task failed: " + errorMsg);
             }
         } catch (Exception e) {
             logger.warning("LocalDispatcher: sub-agent task exception: " + e.getMessage());
-            return TaskOutput.success("Task execution error: " + e.getMessage());
+            output = TaskOutput.success("Task execution error: " + e.getMessage());
         } finally {
+            // ──────── Hook: SUBAGENT_STOP ────────
+            triggerSubagentHook(HookEventType.SUBAGENT_STOP, agentName, task);
             // 切回 Orchestrator
             agentRegistry.switchTo("orchestrator");
+        }
+        return output;
+    }
+
+    /**
+     * 设置 Hook 链。
+     */
+    public void setHookChain(HookChain hookChain) {
+        this.hookChain = hookChain;
+    }
+
+    /**
+     * 获取 Hook 链。
+     */
+    public HookChain getHookChain() {
+        return hookChain;
+    }
+
+    /**
+     * 触发子 Agent 生命周期 Hook。
+     */
+    private void triggerSubagentHook(HookEventType eventType, String agentName, A2ATask task) {
+        if (hookChain == null) return;
+        try {
+            HookContext ctx = HookContext.forSubagent(
+                null, "Orchestrator", agentName, eventType);
+            if (task != null) {
+                ctx = new HookContext.Builder(eventType)
+                    .sessionId(null)
+                    .agentName("Orchestrator")
+                    .targetAgentName(agentName)
+                    .taskId(task.getTaskId())
+                    .build();
+            }
+            hookChain.execute(ctx);
+        } catch (Exception e) {
+            logger.fine("[LocalDispatcher] Subagent hook error (ignored): " + e.getMessage());
         }
     }
 

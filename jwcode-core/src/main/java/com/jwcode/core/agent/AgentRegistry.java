@@ -59,6 +59,13 @@ public class AgentRegistry {
         register(new ExploreAgent());
         register(new ArchitectAgent());
 
+        // 注册任务结构化 Agent（将 AI 回复转为结构化任务列表）
+        // TaskAgent 和 TaskExecutionAgent 是内部服务 Agent，由 Orchestrator 直接调用
+        // 不需要作为独立 Agent 注册
+
+        // MemoryAgent 按工作目录实例化，由 Orchestrator.setWorkspaceRoot() 管理
+        // 每个工作目录独立一个 MemoryAgent 实例，存储在 .jwcode/memory/ 下
+
         // 注册通用 Agent（降级兜底）
         register(new DefaultAgent());
 

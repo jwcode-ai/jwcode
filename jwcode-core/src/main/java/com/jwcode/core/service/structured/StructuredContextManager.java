@@ -1,10 +1,13 @@
 package com.jwcode.core.service.structured;
 
+import com.jwcode.core.aicl.*;
+
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
@@ -14,7 +17,7 @@ import java.util.stream.Collectors;
  * 结构化上下文管理器
  * 
  * 核心组件：管理活跃消息、任务上下文、归档记录
- * 支持 AI 评估与主动遗忘机制
+ * 支持 AI 评估与主动遗忘机制。v1.1 新增 AICL 协议集成。
  * 
  * @author JWCode Team
  * @since 1.0.0
@@ -43,6 +46,11 @@ public class StructuredContextManager {
     private Instant lastEvaluationTime;
     private int evaluationCount;
     private int messageCounter;
+
+    // ===== AICL 集成（v1.1） =====
+    private ContextAssembler aiclAssembler;
+    private AICLSerializer aiclSerializer;
+    private boolean aiclEnabled;
     
     // ==================== AI 评估器（可选）====================
     private AiEvaluator aiEvaluator;
@@ -435,4 +443,134 @@ public class StructuredContextManager {
     public Map<String, ArchiveRecord> getArchiveStore() { return archiveStore; }
     public Map<String, TaskContext> getTaskContexts() { return taskContexts; }
     public Instant getLastEvaluationTime() { return lastEvaluationTime; }
+
+    // ==================== AICL 协议集成（v1.1） ====================
+
+    /**
+     * 启用 AICL 协议支持。
+     */
+    public void enableAicl(ContextControl.EvictionConfig evictionConfig) {
+        this.aiclAssembler = new ContextAssembler(new ContextControl(
+                new ContextControl.ContextBudget(8000, 0),
+                evictionConfig != null ? evictionConfig : ContextControl.EvictionConfig.DEFAULT,
+                Set.of("sys", "usr"),
+                ContextControl.LifecycleDefaults.DEFAULT
+        ));
+        this.aiclSerializer = new AICLSerializer();
+        this.aiclEnabled = true;
+        logger.info("[StructuredContextManager] AICL protocol enabled");
+    }
+
+    /**
+     * 将活跃消息转换为 AICL ContextBlock 并注册到 Assembler。
+     */
+    public ContextBlock registerMessageAsBlock(StructuredMessage msg) {
+        if (!aiclEnabled || aiclAssembler == null) return null;
+
+        ContextBlock block = ContextBlock.builder(msg.getId())
+                .type(detectBlockType(msg))
+                .role(msg.getRole())
+                .priority(msg.getPriority())
+                .format("markdown")
+                .state(msg.getState())
+                .ttl(msg.getTtl())
+                .lastAccess(msg.getLastAccess())
+                .accessCount(msg.getAccessCount())
+                .generation(msg.getGeneration())
+                .label(getMessageLabel(msg))
+                .blockAbstract(getMessageAbstract(msg))
+                .content(msg.getContent())
+                .build();
+
+        aiclAssembler.registerBlock(block);
+        return block;
+    }
+
+    /**
+     * 批量将活跃消息注册为 AICL 块。
+     */
+    public void syncToAicl() {
+        if (!aiclEnabled || aiclAssembler == null) return;
+        for (StructuredMessage msg : activeMessages) {
+            registerMessageAsBlock(msg);
+        }
+        logger.fine("[StructuredContextManager] synced " + activeMessages.size() + " messages to AICL");
+    }
+
+    /**
+     * 将当前上下文导出为 AICL XML 字符串。
+     */
+    public String toAiclXml(int currentTurn) {
+        if (!aiclEnabled || aiclAssembler == null) {
+            logger.warning("[StructuredContextManager] AICL not enabled, cannot export XML");
+            return "";
+        }
+        syncToAicl();
+
+        // 刷新预算
+        aiclAssembler.getControl().getBudget().recalculate(aiclAssembler.getAllBlocks());
+
+        AICLContext context = new AICLContext(
+                sessionId,
+                currentTurn,
+                aiclAssembler.getControl(),
+                aiclAssembler.getAllBlocks()
+        );
+        return aiclSerializer.serialize(context);
+    }
+
+    /**
+     * 执行 AICL 淘汰。
+     */
+    public ContextAssembler.EvictionStats evictAicl() {
+        if (!aiclEnabled || aiclAssembler == null) return null;
+        syncToAicl();
+        return aiclAssembler.evict();
+    }
+
+    /**
+     * AICL 轮次推进（每轮对话结束调用）。
+     */
+    public void tickAicl() {
+        if (!aiclEnabled || aiclAssembler == null) return;
+        syncToAicl();
+        aiclAssembler.tick();
+    }
+
+    /** 是否启用了 AICL */
+    public boolean isAiclEnabled() { return aiclEnabled; }
+
+    /** 获取 AICL Assembler */
+    public ContextAssembler getAiclAssembler() { return aiclAssembler; }
+
+    // ==================== AICL 辅助方法 ====================
+
+    private String detectBlockType(StructuredMessage msg) {
+        if (msg.isSystemMessage()) return "system";
+        if (msg.isUserMessage()) return "user";
+        if (msg.isAssistantMessage()) return "assistant";
+        if (msg.isToolResultMessage()) return "tool";
+        return "general";
+    }
+
+    private String getMessageLabel(StructuredMessage msg) {
+        String roleLabel = switch (msg.getRole().toLowerCase()) {
+            case "user" -> "用户消息";
+            case "assistant" -> "助手回复";
+            case "system" -> "系统指令";
+            case "tool" -> "工具结果";
+            default -> "消息";
+        };
+        MessageType type = msg.getType();
+        if (type != null) {
+            return roleLabel + " [" + type.name() + "]";
+        }
+        return roleLabel;
+    }
+
+    private String getMessageAbstract(StructuredMessage msg) {
+        String content = msg.getContent();
+        if (content == null || content.isEmpty()) return "";
+        return content.length() > 100 ? content.substring(0, 100) + "..." : content;
+    }
 }

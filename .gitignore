@@ -28,6 +28,7 @@ jwcode-core/target/classes/com/jwcode/core/tool/FileWriteTool$2.class
 jwcode-core/target/classes/com/jwcode/core/tool/FileWriteTool$Input.class
 *jar
 jwcode-web/node_modules/*
+jwcode-web/dist/*
 jwcode-repl/target/classes/*
 jwcode-cli/target/jwcode-cli-1.0.0-SNAPSHOT.jar
 jwcode-cli/target/original-jwcode-cli-1.0.0-SNAPSHOT.jar

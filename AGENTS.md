@@ -40,7 +40,25 @@
 ┌─────────────────────────────────────────────────────────────┐
 │  CompactorAgent (上下文压缩专家)                              │
 │  职责：为所有Agent提供上下文压缩服务，节省Token预算             │
-│  策略：SMART / AGGRESSIVE / MINIMAL                          │
+│  策略：AICL_PRIORITY / STRUCTURED / SMART / AGGRESSIVE /     │
+│        MINIMAL                                               │
+│  协议：AICL (Agent Interaction Context Language) v1.0         │
+│  核心：6级优先级 + 6状态生命周期 + Priority-LRU 淘汰引擎       │
+└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│  AICL 协议引擎（v1.1 新增，结构化上下文生命周期管理）           │
+│  ContextAssembler / ContextBlock / BlockPriority /           │
+│  BlockLifecycle / AICLSerializer / AICLDeserializer          │
+└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│  Hook 拦截体系（v2.1 新增，生命周期拦截与运行时治理）          │
+│  职责：在关键节点拦截、决策、修改执行流                          │
+│  事件：12种生命周期事件 (Session/Tool/Context/StateMachine/   │
+│        Task/A2A)                                             │
+│  决策：6种决策语义 (ALLOW/DENY/ASK/MODIFY/DEFER/VOID)        │
+│  形态：4种实现 (Shell/HTTP/Prompt/Agent Hook)                │
+│  核心：HookChain拦截链 + TransitionGuard状态守护 +             │
+│        A2A远程拦截 + Priority-LRU冲突裁决                     │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -70,6 +88,9 @@
 | **Documenter** | worker | 文档编写、README、API文档 | 读写文件，不执行命令 |
 | **Explorer** | worker | 代码库调研、结构分析、技术债务 | **只读模式**，纯调研 |
 | **Architect** | worker | 架构设计、接口定义、技术选型 | 输出设计文档和代码骨架 |
+| **TaskAgent** | internal | AI回复→结构化任务解析（阶段/模式/依赖） | 无外部工具，纯解析 |
+| **TaskExecutionAgent** | internal | 结构化任务逐步执行（并发/串行调度） | 通过 A2AFacade 调度子Agent |
+| **MemoryAgent** | internal | 工作目录级主动记忆（项目模式/洞察/偏好） | 文件读写（仅 .jwcode/memory/） |
 | **Default** | worker | 通用任务、降级兜底 | 全工具权限 |
 
 ### 2.3 Tool Agent（执行器 / 第3层）
@@ -88,8 +109,92 @@
 |------|------|
 | **定位** | 上下文压缩专家，为所有Agent提供服务 |
 | **职责** | 压缩对话历史，节省Token预算 |
-| **策略** | SMART(智能压缩, 保留尾部8条+摘要) / AGGRESSIVE(激进压缩, 保留尾部4条+摘要) / MINIMAL(最小压缩, 仅移除噪声) |
+| **策略** | AICL_PRIORITY(基于6级优先级+生命周期渐进淘汰, v1.1默认) / STRUCTURED(强制XML输出, 按优先级保留) / SMART(智能压缩, 保留尾部8条+摘要) / AGGRESSIVE(激进压缩, 保留尾部4条+摘要) / MINIMAL(最小压缩, 仅移除噪声) |
+| **结构化输出** | `<current_focus>` / `<environment>` / `<completed_tasks>` / `<active_issues>` / `<code_state>` / `<design_decisions>` / `<todo_items>` |
+| **AICL输出** | `<ctx:context>` 根 → `<ctx:control>`(预算/策略) + `<ctx:blocks>`(优先级块集合) + `<ctx:trace>`(校验) |
+| **优先级体系** | 当前任务状态 > 错误与解决方案 > 代码最终版本 > 系统上下文 > 设计决策 > TODO项 |
+| **AICL优先级** | pinned(永固) > critical(关键) > high(高) > medium(中) > low(低) > optional(可选) |
 | **触发方式** | Token水位线自动触发 / 用户手动触发(/compact) / Agent主动请求 / 检查点前 / 子任务完成时 / 会话超限 |
+
+### 2.5 AICL 协议引擎（v1.1 新增 / 横向基础设施）
+
+AICL (Agent Interaction Context Language) 是上下文块的结构化生命周期管理协议。核心组件：
+
+| 组件 | 文件 | 职责 |
+|------|------|------|
+| `BlockPriority` | `aicl/BlockPriority.java` | 6级优先级枚举（OPTIONAL→PINNED）+ 淘汰动作映射 |
+| `BlockLifecycle` | `aicl/BlockLifecycle.java` | 6状态生命周期（active→compressed→summarized→archived→deprecated）+ pinned |
+| `ContextBlock` | `aicl/ContextBlock.java` | AICL块模型（id/type/priority/state/ttl/lastAccess/generation） |
+| `ContextControl` | `aicl/ContextControl.java` | 控制层（TokenBudget + EvictionConfig + LifecycleDefaults） |
+| `ContextAssembler` | `aicl/ContextAssembler.java` | **核心淘汰引擎**：Priority-LRU逐级淘汰 |
+| `AICLSerializer` | `aicl/AICLSerializer.java` | XML序列化（ContextBlock → AICL XML） |
+| `AICLDeserializer` | `aicl/AICLDeserializer.java` | XML反序列化（AICL XML → AICLContext） |
+| `AICLContext` | `aicl/AICLContext.java` | 完整上下文容器（sessionId/turn/control/blocks/checksum） |
+| `AICLPromptBuilder` | `aicl/AICLPromptBuilder.java` | AI解析规则Prompt生成器 |
+
+**淘汰算法（Priority-LRU）**：
+```
+当 used > total * threshold 时：
+  1. 按 priority 分组，从 optional 开始处理
+  2. 同优先级内按 last-access 排序（LRU）
+  3. 依次执行：
+     optional → 直接删除     low → 归档(保留元数据)
+     medium → 摘要替换        high → 同义压缩(去冗余)
+     critical → 仅删注释      pinned → 跳过
+  4. 每处理一个块，重新计算 used
+  5. 当 used <= total * stopThreshold 时停止
+```
+
+### 2.6 Hook 拦截体系（v2.1 新增 / 横向基础设施）
+
+Hook 是生命周期的"切面"，StateMachine 是生命周期的"骨架"。
+Hook 位于 Governance Layer，与 Permission Modes、Sandboxing 并列。
+
+| 维度 | 说明 |
+|------|------|
+| **定位** | 生命周期拦截与运行时治理 |
+| **职责** | 在关键节点拦截、决策、修改执行流（工具调用/状态转换/A2A任务分发） |
+| **事件模型** | 12种生命周期事件：SESSION_START/END, PRE_TOOL_USE, POST_TOOL_USE, POST_TOOL_USE_FAILURE, PRE_COMPACT, STATE_TRANSITION, STATE_ENTERED, USER_PROMPT_SUBMIT, SUBAGENT_START, SUBAGENT_STOP, TASK_DISPATCH, A2A_REMOTE_INTERCEPT |
+| **决策语义** | ALLOW(放行) / DENY(拒绝) / ASK(确认) / MODIFY(修改) / DEFER(延迟) / VOID(回退) |
+| **实现形态** | SHELL(脚本) / HTTP(REST端点) / PROMPT(AI动态评估) / AGENT(子代理调查) |
+| **优先级** | SYSTEM(100) > SECURITY(80) > PROJECT(60) > USER(40) > PLUGIN(20) |
+| **核心机制** | HookChain拦截链(优先级排序→串行执行→短路→MODIFY链式传递) + TransitionGuard(状态转换前置审批) + ConflictResolver(冲突裁决) |
+| **配置方式** | `.jwcode/hooks.json` 声明式配置，支持热加载 |
+
+**核心组件**：
+
+| 组件 | 文件 | 职责 |
+|------|------|------|
+| `HookDecision` | `hook/HookDecision.java` | 6种决策语义枚举 |
+| `HookEventType` | `hook/HookEventType.java` | 12种事件类型枚举 |
+| `HookChain` | `hook/HookChain.java` | **核心拦截编排引擎**：按优先级排序、串行执行、短路裁决 |
+| `HookRegistry` | `hook/HookRegistry.java` | 配置加载（.jwcode/hooks.json）+ 热重载 + 事件索引 |
+| `HookExecutor` | `hook/HookExecutor.java` | 执行器接口（Shell/HTTP/Prompt/Agent） |
+| `HookContext` | `hook/HookContext.java` | 上下文数据模型（公共字段 + 事件专用字段） |
+| `HookResult` | `hook/HookResult.java` | 决策结果模型（decision/reason/modifiedInput/askPayload） |
+| `HookAuditLogger` | `hook/HookAuditLogger.java` | 审计日志（ConcurrentLinkedQueue + 统计摘要） |
+| `ShellHookExecutor` | `hook/executor/ShellHookExecutor.java` | stdin JSON → 外部脚本 → stdout 决策 |
+| `HttpHookExecutor` | `hook/executor/HttpHookExecutor.java` | POST JSON → REST API → JSON 决策 |
+| `PromptHookExecutor` | `hook/executor/PromptHookExecutor.java` | 模板 → LLM Prompt → AI 动态风险评估 |
+| `AgentHookExecutor` | `hook/executor/AgentHookExecutor.java` | 子Agent(只读)→深度调查→结构化决策 |
+| `RollbackAction` | `hook/RollbackAction.java` | 回退策略（RETRY/SKIP/ROLLBACK_TO_CHECKPOINT/ABORT） |
+
+**三大拦截点**：
+
+```
+ToolExecutor.execute()      → PRE_TOOL_USE / POST_TOOL_USE / POST_TOOL_USE_FAILURE
+MainAgentStateMachine       → STATE_TRANSITION (TransitionGuard)
+LocalAgentDispatcher        → SUBAGENT_START / SUBAGENT_STOP
+```
+
+**冲突裁决规则**：
+```
+当多个 Hook 返回不同决策时：
+  1. DENY/VOID 最高优先 — 任一拒绝即拒绝
+  2. MODIFY 链式传递 — 高优先级先修改，低优先级基于新输入
+  3. ASK 覆盖 ALLOW — 只要有确认需求，最终就需要确认
+  4. DEFER 聚合 — 等待所有审批完成
+```
 
 ---
 
@@ -264,14 +369,42 @@ Tool Agent层 (自修复):
 用户: "给parser模块加JSON导出功能"
 
 Orchestrator:
-  1. 派 ExploreAgent 分析 parser 现有架构
-  2. 派 ArchitectAgent 设计 JSON 导出接口
-  3. 等 1、2 完成后，派 CoderAgent 实现核心逻辑
-  4. 等 3 完成后，并行：
-     - 派 Tester 编写并执行单元测试
-     - 派 Reviewer 审查代码质量
-  5. 等 4 完成后，派 Documenter 更新README和API文档
-  6. 整合所有结果，汇报给用户
+  # Plan 模式: AI 生成计划 → TaskAgent 解析为结构化任务
+  0. AI 生成执行计划 (Plan Mode)
+  0a. 用户确认 → processConfirmedPlan()
+  0b. TaskAgent 解析AI回复 → StructuredTask列表
+      - Phase 1: 调研 (Explorer, 串行)
+      - Phase 2: 设计 (Architect, 串行)
+      - Phase 3: 实现 (Coder+Tester, 并发)
+      - Phase 4: 审查 (Reviewer, 串行)
+  0c. WebSocket 广播 → 前端"结构化"视图展示
+  # Act 模式: 使用 TaskExecutionAgent 逐步执行
+  1. TaskExecutionAgent 按阶段顺序执行
+  2. Phase 3 并发: Coder + Tester 线程池并行
+  3. 等 3 完成后 → Reviewer 审查
+  4. 每个任务完成后 → MemoryAgent 自动记忆
+  5. 整合所有结果，汇报给用户
+```
+
+#### 场景F：跨任务记忆
+```yaml
+用户: "分析所有Java文件的依赖关系"
+
+Orchestrator:
+  # 首次执行
+  1. 派 Explorer 分析整个项目结构
+  2. 任务完成后 → MemoryAgent 记录:
+     - 项目类型: maven
+     - 语言: Java, TypeScript
+     - 关键模块: jwcode-core, jwcode-web
+     - 洞察: "所有模块通过 pom.xml 父子关系管理"
+  3. regeneratePlanContext() → .jwcode/memory/plan_context.md
+
+  # 下一次任务
+  用户: "重构 jwcode-core 的 agent 包"
+  4. Plan 模式 → MemoryAgent 自动注入:
+     "已知模块结构、依赖关系、编码规范..."
+  5. AI 基于记忆做出更精准的任务规划
 ```
 
 #### 场景B：修复Bug
@@ -344,9 +477,16 @@ Orchestrator 只向子Agent传递完成任务所需的最小上下文：
 - 使用 SharedContextBus 共享中间成果
 
 ### 8.4 上下文压缩
-- Token使用率超过70%时自动触发压缩
+- Token使用率超过80%时自动触发 AICL Priority-LRU 淘汰
 - 子任务完成时自动清理上下文
 - 支持手动 `/compact` 命令触发激进压缩
+- 每轮对话结束自动触发 TTL 衰减和代际检查
+
+### 8.5 AICL 上下文协议（v1.1）
+- 所有上下文块统一包装为 `<ctx:block>` 元素，携带 `priority`、`state`、`ttl` 等生命周期属性
+- Assembler 组装时自动执行分级淘汰，确保 Token 预算内信息密度最大化
+- AI 通过注入的 AICL 解析规则识别优先级与状态，调整阅读策略
+- 完整规范见 `docs/AICL_SPEC.md`
 
 ---
 
@@ -407,6 +547,10 @@ Orchestrator判断失败类型
 ### 11.2 Agent注册
 Agent注册位于 `AgentRegistry.java`，所有Agent在系统启动时自动注册。
 
+**内部服务Agent**（TaskAgent / TaskExecutionAgent / MemoryAgent）由 `EnhancedOrchestratorAgent` 
+直接实例化和调用，不需要通过 AgentRegistry 注册，也不暴露给外部 A2A 协议。
+MemoryAgent 按工作目录实例化（每个项目一个实例），数据存储在 `.jwcode/memory/` 下。
+
 ---
 
 ## 12. 扩展指南
@@ -431,7 +575,7 @@ Orchestrator 的拆解和调度逻辑可通过以下方式扩展：
 | 文件 | 说明 |
 |------|------|
 | `jwcode-core/src/main/java/com/jwcode/core/agent/OrchestratorAgent.java` | 主Agent实现 |
-| `jwcode-core/src/main/java/com/jwcode/core/agent/EnhancedOrchestratorAgent.java` | 增强型主Agent（PDCA循环） |
+| `jwcode-core/src/main/java/com/jwcode/core/agent/EnhancedOrchestratorAgent.java` | 增强型主Agent（PDCA循环，集成TaskAgent+TaskExecutionAgent） |
 | `jwcode-core/src/main/java/com/jwcode/core/agent/CoderAgent.java` | 代码专家 |
 | `jwcode-core/src/main/java/com/jwcode/core/agent/DebugAgent.java` | 调试专家 |
 | `jwcode-core/src/main/java/com/jwcode/core/agent/ReviewerAgent.java` | 审查专家 |
@@ -439,9 +583,24 @@ Orchestrator 的拆解和调度逻辑可通过以下方式扩展：
 | `jwcode-core/src/main/java/com/jwcode/core/agent/DocAgent.java` | 文档专家 |
 | `jwcode-core/src/main/java/com/jwcode/core/agent/ExploreAgent.java` | 探索专家 |
 | `jwcode-core/src/main/java/com/jwcode/core/agent/ArchitectAgent.java` | 架构专家 |
+| `jwcode-core/src/main/java/com/jwcode/core/agent/TaskAgent.java` | 任务结构化Agent（AI回复→结构化任务列表） |
+| `jwcode-core/src/main/java/com/jwcode/core/agent/TaskExecutionAgent.java` | 任务执行Agent（并发/串行逐步调度子Agent） |
+| `jwcode-core/src/main/java/com/jwcode/core/agent/MemoryAgent.java` | 工作目录记忆Agent（项目模式/洞察/偏好主动记忆） |
+| `jwcode-core/src/main/java/com/jwcode/core/agent/WorkspaceMemoryStore.java` | 工作目录记忆持久化存储（.jwcode/memory/） |
 | `jwcode-core/src/main/java/com/jwcode/core/agent/CompactorAgent.java` | 上下文压缩专家 |
 | `jwcode-core/src/main/java/com/jwcode/core/agent/CompactorTrigger.java` | 压缩触发策略 |
+| `jwcode-core/src/main/java/com/jwcode/core/service/StructuredCompactionStrategy.java` | 强制XML结构化压缩策略（优先级截断） |
+| `jwcode-core/src/main/java/com/jwcode/core/aicl/BlockPriority.java` | AICL 6级优先级枚举 |
+| `jwcode-core/src/main/java/com/jwcode/core/aicl/BlockLifecycle.java` | AICL 6状态生命周期枚举 |
+| `jwcode-core/src/main/java/com/jwcode/core/aicl/ContextBlock.java` | AICL 上下文块模型 |
+| `jwcode-core/src/main/java/com/jwcode/core/aicl/ContextControl.java` | AICL 控制层（预算+策略） |
+| `jwcode-core/src/main/java/com/jwcode/core/aicl/ContextAssembler.java` | AICL Priority-LRU 淘汰引擎 |
+| `jwcode-core/src/main/java/com/jwcode/core/aicl/AICLSerializer.java` | AICL XML 序列化器 |
+| `jwcode-core/src/main/java/com/jwcode/core/aicl/AICLDeserializer.java` | AICL XML 反序列化器 |
+| `jwcode-core/src/main/java/com/jwcode/core/aicl/AICLContext.java` | AICL 完整上下文容器 |
+| `jwcode-core/src/main/java/com/jwcode/core/aicl/AICLPromptBuilder.java` | AICL AI解析规则Prompt生成器 |
 | `jwcode-core/src/main/java/com/jwcode/core/agent/AgentRegistry.java` | Agent注册表 |
+| `jwcode-core/src/main/java/com/jwcode/core/model/StructuredTask.java` | 结构化任务模型（执行模式+阶段+并发组） |
 | `jwcode-core/src/main/java/com/jwcode/core/tool/ToolAgent.java` | 工具执行Agent（第3层） |
 | `jwcode-core/src/main/java/com/jwcode/core/tool/ToolAgentResult.java` | 工具执行结果 |
 | `jwcode-core/src/main/java/com/jwcode/core/a2a/model/ErrorSummary.java` | 错误摘要模型 |
@@ -450,10 +609,23 @@ Orchestrator 的拆解和调度逻辑可通过以下方式扩展：
 | `jwcode-core/src/main/java/com/jwcode/core/a2a/model/RetryPolicy.java` | 重试策略配置 |
 | `jwcode-core/src/main/java/com/jwcode/core/a2a/retry/RetryStrategy.java` | 重试策略算法 |
 | `jwcode-core/src/main/java/com/jwcode/core/a2a/retry/RetryOrchestrator.java` | 分层重试编排器 |
+| `jwcode-core/src/main/java/com/jwcode/core/hook/HookDecision.java` | Hook决策语义枚举（v2.1） |
+| `jwcode-core/src/main/java/com/jwcode/core/hook/HookEventType.java` | Hook事件类型枚举（v2.1） |
+| `jwcode-core/src/main/java/com/jwcode/core/hook/HookChain.java` | Hook拦截链编排引擎（v2.1） |
+| `jwcode-core/src/main/java/com/jwcode/core/hook/HookRegistry.java` | Hook配置加载与热重载（v2.1） |
+| `jwcode-core/src/main/java/com/jwcode/core/hook/HookExecutor.java` | Hook执行器接口（v2.1） |
+| `jwcode-core/src/main/java/com/jwcode/core/hook/executor/ShellHookExecutor.java` | Shell脚本Hook（v2.1） |
+| `jwcode-core/src/main/java/com/jwcode/core/hook/executor/HttpHookExecutor.java` | HTTP端点Hook（v2.1） |
+| `jwcode-core/src/main/java/com/jwcode/core/hook/executor/PromptHookExecutor.java` | LLM Prompt Hook（v2.1） |
+| `jwcode-core/src/main/java/com/jwcode/core/hook/executor/AgentHookExecutor.java` | Agent调查Hook（v2.1） |
+| `jwcode-core/src/main/java/com/jwcode/core/hook/HookAuditLogger.java` | Hook审计日志（v2.1） |
+| `jwcode-core/src/main/java/com/jwcode/core/hook/RollbackAction.java` | 回退策略枚举（v2.1） |
 | `jwcode-core/src/main/java/com/jwcode/core/planner/TaskPlanner.java` | 任务规划器 |
 | `jwcode-core/src/main/java/com/jwcode/core/agent/SubTaskSplitter.java` | 子任务拆分器 |
 | `jwcode-core/src/main/java/com/jwcode/core/agent/parallel/ParallelAgentExecutor.java` | 并行执行器 |
 | `jwcode-core/src/main/java/com/jwcode/core/planner/checkpoint/CheckpointManager.java` | 检查点管理器 |
 | `jwcode-core/src/main/java/com/jwcode/core/planner/checkpoint/SharedContextBus.java` | 共享上下文总线 |
+| `jwcode-web/src/components/Plan/StructuredTaskView.tsx` | 前端结构化任务视图组件 |
+| `jwcode-web/src/stores/planStore.ts` | 前端 Plan 状态管理（含结构化任务） |
 | `jwcode-core/src/test/java/com/jwcode/core/a2a/FourLayerIntegrationTest.java` | 四层架构集成测试（25个测试用例） |
 | `.jwcode/team_members.json` | 团队配置 |

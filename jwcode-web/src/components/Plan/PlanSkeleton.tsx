@@ -1,6 +1,13 @@
 import { memo } from 'react';
+import { usePlanStore } from '../../stores/planStore';
+import { useSessionStore } from '../../stores/sessionStore';
 
 export const PlanSkeleton = memo(function PlanSkeleton() {
+  const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  const thinkingStatus = activeSessionId
+    ? usePlanStore((s) => s.thinkingStatusBySession[activeSessionId] || '')
+    : '';
+
   return (
     <div className="bg-dark-surface rounded-lg border border-dark-border p-6">
       {/* Header skeleton */}
@@ -40,14 +47,14 @@ export const PlanSkeleton = memo(function PlanSkeleton() {
         ))}
       </div>
 
-      {/* Loading indicator */}
+      {/* Loading indicator - 显示实时思考状态 */}
       <div className="flex items-center justify-center gap-2 mt-6 text-dark-muted">
         <div className="flex gap-1">
           <span className="w-2 h-2 bg-accent-blue rounded-full animate-bounce" />
           <span className="w-2 h-2 bg-accent-blue rounded-full animate-bounce" style={{ animationDelay: '0.1s' }} />
           <span className="w-2 h-2 bg-accent-blue rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
         </div>
-        <span className="text-sm">AI 正在分析需求，生成任务列表...</span>
+        <span className="text-sm">{thinkingStatus || 'AI 正在分析需求，生成任务列表...'}</span>
       </div>
     </div>
   );

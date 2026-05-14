@@ -37,7 +37,11 @@ public record BashOutput(
     Boolean truncated,
     
     @JsonProperty("truncation_reason")
-    String truncationReason
+    String truncationReason,
+    
+    /** 后台任务 ID，当命令以 background=true 执行时返回 */
+    @JsonProperty("background_task_id")
+    String backgroundTaskId
 ) {
     
     public BashOutput {
@@ -56,21 +60,21 @@ public record BashOutput(
      * 创建成功输出
      */
     public static BashOutput success(String stdout, String command, String workingDirectory) {
-        return new BashOutput(stdout, "", 0, false, null, command, workingDirectory, false, null);
+        return new BashOutput(stdout, "", 0, false, null, command, workingDirectory, false, null, null);
     }
     
     /**
      * 创建错误输出
      */
     public static BashOutput error(String stderr, int exitCode, String command) {
-        return new BashOutput("", stderr, exitCode, false, null, command, null, false, null);
+        return new BashOutput("", stderr, exitCode, false, null, command, null, false, null, null);
     }
     
     /**
      * 创建超时输出
      */
     public static BashOutput timeout(String partialOutput, String command, long executionTimeMs) {
-        return new BashOutput(partialOutput, "", -1, true, executionTimeMs, command, null, true, "timeout");
+        return new BashOutput(partialOutput, "", -1, true, executionTimeMs, command, null, true, "timeout", null);
     }
     
     /**
@@ -78,7 +82,15 @@ public record BashOutput(
      */
     public static BashOutput truncated(String stdout, String stderr, int exitCode, 
                                         String command, String reason) {
-        return new BashOutput(stdout, stderr, exitCode, false, null, command, null, true, reason);
+        return new BashOutput(stdout, stderr, exitCode, false, null, command, null, true, reason, null);
+    }
+    
+    /**
+     * 创建后台任务输出（命令已提交到 BackgroundTaskLauncher）
+     */
+    public static BashOutput background(String taskId, String command) {
+        return new BashOutput("后台任务已启动 | taskId=" + taskId, "", 0, false,
+            null, command, null, false, null, taskId);
     }
     
     /**

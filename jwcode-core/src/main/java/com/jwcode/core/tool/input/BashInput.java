@@ -31,7 +31,11 @@ public record BashInput(
     Map<String, String> env,
     
     @JsonProperty("require_approval")
-    Boolean requireApproval
+    Boolean requireApproval,
+    
+    /** 是否作为后台任务执行（OS级进程隔离），用于长时任务如 mvn clean install */
+    @JsonProperty("background")
+    Boolean background
 ) {
     
     public BashInput {
@@ -41,14 +45,17 @@ public record BashInput(
         if (requireApproval == null) {
             requireApproval = true;
         }
+        if (background == null) {
+            background = false;
+        }
     }
     
     public BashInput(String command) {
-        this(command, null, null, null, null, null);
+        this(command, null, null, null, null, null, null);
     }
     
     public BashInput(String command, String description) {
-        this(command, description, null, null, null, null);
+        this(command, description, null, null, null, null, null);
     }
     
     /**
@@ -63,6 +70,13 @@ public record BashInput(
      */
     public boolean requiresApproval() {
         return requireApproval != null && requireApproval;
+    }
+    
+    /**
+     * 是否应作为后台任务执行（OS 级进程隔离）
+     */
+    public boolean isBackground() {
+        return background != null && background;
     }
     
     /**

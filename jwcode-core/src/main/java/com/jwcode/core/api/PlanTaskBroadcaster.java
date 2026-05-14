@@ -121,6 +121,8 @@ public class PlanTaskBroadcaster {
 
     /**
      * 广播 plan_tasks — 发送完整的任务树列表
+     * <p>注意：此方法会自动将 data 用 {"tasks": ...} 包装。
+     * 如果需要发送原始结构化数据（如 {"structuredTasks": [...]}），请使用 broadcastPlanData()。</p>
      */
     public void broadcastPlanTasks(String sessionId, Object tasksJson) {
         if (!enabled || wsServer == null || sessionId == null) return;
@@ -136,6 +138,32 @@ public class PlanTaskBroadcaster {
             logger.info("[PlanBroadcaster] plan_tasks sent: session=" + sessionId);
         } catch (Exception e) {
             logger.log(Level.WARNING, "Failed to broadcast plan_tasks", e);
+        }
+    }
+
+    /**
+     * 广播 plan_tasks — 发送原始结构化数据（不额外包装 {"tasks": ...}）。
+     *
+     * <p>与 broadcastPlanTasks 不同，此方法直接将 payload 序列化为 data 字段，
+     * 不会额外嵌套 tasks 层。适用于 {@code {"structuredTasks": [...]}} 等自定义格式。</p>
+     *
+     * @param sessionId 会话 ID
+     * @param payload   原始数据对象（将被序列化为 JSON 作为 data 字段）
+     */
+    public void broadcastPlanData(String sessionId, Object payload) {
+        if (!enabled || wsServer == null || sessionId == null) return;
+        try {
+            String dataStr = payload instanceof String
+                    ? (String) payload
+                    : MAPPER.writeValueAsString(payload);
+            wsServer.broadcast(Map.of(
+                    "type", "plan_tasks",
+                    "sessionId", sessionId,
+                    "data", dataStr
+            ));
+            logger.info("[PlanBroadcaster] plan_tasks raw data sent: session=" + sessionId);
+        } catch (Exception e) {
+            logger.log(Level.WARNING, "Failed to broadcast plan_tasks raw data", e);
         }
     }
 
