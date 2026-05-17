@@ -6,6 +6,7 @@ import com.jwcode.core.a2a.model.TaskOutput;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * AgentDispatcher — Agent 调度抽象接口。
@@ -50,13 +51,24 @@ public interface AgentDispatcher {
     CompletableFuture<TaskOutput> submitTask(String agentName, A2ATask task);
 
     /**
-     * 提交任务并等待结果（同步阻塞）
+     * 提交任务并等待结果（同步阻塞，使用默认超时）
      *
      * @param agentName 目标 Agent 名称
      * @param task      待执行的任务
      * @return 任务执行结果
      */
     TaskOutput submitTaskSync(String agentName, A2ATask task);
+
+    /**
+     * 提交任务并等待结果（同步阻塞，可指定超时）
+     *
+     * @param agentName 目标 Agent 名称
+     * @param task      待执行的任务
+     * @param timeout   超时时间
+     * @param unit      超时时间单位
+     * @return 任务执行结果
+     */
+    TaskOutput submitTaskSync(String agentName, A2ATask task, long timeout, TimeUnit unit);
 
     /**
      * 查询任务执行状态

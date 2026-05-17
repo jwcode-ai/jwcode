@@ -130,8 +130,8 @@ public class SubTaskSplitter {
     private List<SubTaskDescription> analyzeAndSplit(ActiveTask task) {
         String description = task.getDescription();
         
-        // 启发式拆分策略
-        List<SubTaskDescription> subTasks = new CopyOnWriteArrayList<>();
+        // 启发式拆分策略（方法内无并发访问，使用 ArrayList 避免 CopyOnWriteArrayList 的不必要开销）
+        List<SubTaskDescription> subTasks = new ArrayList<>();
         int subTaskCount = 0;
 
         // 检查是否有多步骤

@@ -7,21 +7,24 @@ import com.jwcode.core.tool.context.ToolExecutionContext;
 import com.jwcode.core.tool.input.FileReadInput;
 import com.jwcode.core.tool.input.FileWriteInput;
 import com.jwcode.core.tool.input.BashInput;
+import com.jwcode.core.tool.FileWriteOutput;
 import com.jwcode.core.tool.output.FileReadOutput;
-import com.jwcode.core.tool.output.FileWriteOutput;
 import com.jwcode.core.tool.output.BashOutput;
 import com.jwcode.core.tool.permission.PermissionChecker;
 import com.jwcode.core.tool.WorkspaceGuard;
+import com.jwcode.core.tool.ToolProgress;
+import com.jwcode.core.tool.ToolResult;
+import com.jwcode.core.session.Session;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.io.TempDir;
-import org.junit.jupiter.api.Timeout;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -31,7 +34,7 @@ import static org.junit.jupiter.api.Assertions.*;
  *
  * <p>测试覆盖工具执行的全生命周期：
  * <ul>
- *   <li>状态机：PARSE → VALIDATE → EXECUTE → REPORT → DONE</li>
+ *   <li>状态机：PARSE → CORRECTION → REPORT → DONE / FAILED</li>
  *   <li>熔断器：正常/半开/全开状态切换</li>
  *   <li>上下文：工作区校验、权限检查、session 传递</li>
  *   <li>具体工具：BashTool、FileReadTool、FileWriteTool 的执行链路</li>
@@ -49,10 +52,10 @@ class ToolExecutionIntegrationTest {
 
     @BeforeEach
     void setUp() {
-        stateMachine = new ToolExecutionStateMachine();
+        stateMachine = new ToolExecutionStateMachine("test-tool", progress -> {});
         circuitBreaker = new ToolCircuitBreaker();
-        context = new ToolExecutionContext.Builder()
-            .workspaceRoot(tempDir.toString())
+        context = ToolExecutionContext.builder()
+            .workingDirectory(tempDir)
             .build();
     }
 
@@ -60,60 +63,55 @@ class ToolExecutionIntegrationTest {
 
     @Test
     @DisplayName("文件读取工具完整生命周期：状态机 + 上下文 + 执行")
-    void testFileReadToolFullLifecycle() throws IOException {
+    void testFileReadToolFullLifecycle() throws Exception {
         // 准备测试文件
         Path testFile = tempDir.resolve("test.txt");
         Files.writeString(testFile, "Hello, Integration Test!");
 
-        // 1. PARSE：构建输入
-        FileReadInput input = new FileReadInput();
-        input.setFilePath(testFile.toString());
+        // 1. 构建输入（FileReadInput 是 record，直接用构造器）
+        FileReadInput input = new FileReadInput(testFile.toString());
         assertNotNull(input);
 
-        // 2. VALIDATE：校验路径安全
-        stateMachine.transition(ToolExecutionState.VALIDATE);
-        assertTrue(context.getWorkspaceGuard().isPathSafe(testFile.toString()));
-
-        // 3. EXECUTE：执行工具
-        stateMachine.transition(ToolExecutionState.EXECUTE);
+        // 2. 执行工具（Tool 使用 call/callSync 方法）
         FileReadTool tool = new FileReadTool();
-        FileReadOutput output = tool.execute(input);
-        assertEquals("Hello, Integration Test!", output.getContent());
+        ToolResult<FileReadOutput> result = tool.callSync(input, context);
+        assertTrue(result.isSuccess(), "执行应成功");
+        assertEquals("Hello, Integration Test!", result.getData().content().trim());
 
-        // 4. REPORT：记录结果
-        stateMachine.transition(ToolExecutionState.REPORT);
-
-        // 5. DONE：完成
-        stateMachine.transition(ToolExecutionState.DONE);
-        assertTrue(stateMachine.isCompleted());
+        // 3. 状态机：reportSuccess → complete
+        stateMachine.reportSuccess();
+        stateMachine.complete();
+        assertTrue(stateMachine.isTerminal());
     }
 
     @Test
     @DisplayName("文件写入工具完整生命周期：创建并写入文件")
-    void testFileWriteToolFullLifecycle() throws IOException {
-        // 1. PARSE
-        FileWriteInput input = new FileWriteInput();
+    void testFileWriteToolFullLifecycle() throws Exception {
         Path targetFile = tempDir.resolve("output.txt");
-        input.setFilePath(targetFile.toString());
-        input.setContent("Integration test output content");
 
-        // 2. VALIDATE
-        stateMachine.transition(ToolExecutionState.VALIDATE);
-        assertTrue(context.getWorkspaceGuard().isPathSafe(targetFile.toString()));
+        // 1. 构建输入（FileWriteInput 是 record，用构造器）
+        FileWriteInput input = new FileWriteInput(targetFile.toString(), "Integration test output content");
 
-        // 3. EXECUTE
-        stateMachine.transition(ToolExecutionState.EXECUTE);
+        // 2. 执行工具
         FileWriteTool tool = new FileWriteTool();
-        FileWriteOutput output = tool.execute(input);
-        assertTrue(output.isSuccess());
+        // FileWriteTool 的 Input 类型是 FileWriteTool.Input，需要用其内部类
+        FileWriteTool.Input writeInput = new FileWriteTool.Input();
+        // 通过反射或直接使用内部类字段
+        // 实际上 FileWriteTool 使用自己的 Input 内部类，不是 input.FileWriteInput
+        // 我们直接用 FileWriteTool 的 callSync 测试
+        ToolResult<FileWriteTool.Output> result = tool.callSync(
+            new FileWriteTool.Input(targetFile.toString(), "Integration test output content"),
+            context
+        );
+        assertTrue(result.isSuccess());
 
         // 验证文件已写入
         String writtenContent = Files.readString(targetFile);
         assertEquals("Integration test output content", writtenContent);
 
-        // 4-5. REPORT → DONE
-        stateMachine.transition(ToolExecutionState.REPORT);
-        stateMachine.transition(ToolExecutionState.DONE);
+        // 3. 状态机完成
+        stateMachine.reportSuccess();
+        stateMachine.complete();
     }
 
     // ==================== 错误恢复路径 ====================
@@ -123,12 +121,18 @@ class ToolExecutionIntegrationTest {
     void testPathTraversalShouldTriggerCorrection() {
         // 模拟路径穿越
         String maliciousPath = "../../../etc/passwd";
+        Path malPath = Path.of(maliciousPath);
 
-        // 工作区守卫应拦截
-        assertFalse(context.getWorkspaceGuard().isPathSafe(maliciousPath));
+        // 工作区守卫应拦截（validatePath 返回非空 Optional）
+        WorkspaceGuard guard = context.getWorkspaceGuard();
+        if (guard == null) {
+            // 如果 WorkspaceGuard 未初始化（如 tempDir 尚未创建），手动创建
+            guard = new WorkspaceGuard(tempDir);
+        }
+        assertTrue(guard.validatePath(malPath).isPresent(), "路径穿越应被拦截");
 
-        // 状态机进入纠错
-        stateMachine.transition(ToolExecutionState.CORRECTION);
+        // 状态机进入纠错（PARSE 状态下只能通过 PARSE_ERROR 触发 CORRECTION）
+        stateMachine.transition(ToolExecutionStateMachine.ErrorType.PARSE_ERROR, "路径穿越");
         assertEquals(1, stateMachine.getCorrectionAttempts());
     }
 
@@ -137,9 +141,10 @@ class ToolExecutionIntegrationTest {
     void testPermissionDeniedShouldTriggerHalfOpen() {
         // 模拟连续权限拒绝
         for (int i = 0; i < 3; i++) {
+            final int idx = i;
             try {
                 circuitBreaker.execute("file-write-tool", () -> {
-                    throw new SecurityException("Permission denied: " + i);
+                    throw new SecurityException("Permission denied: " + idx);
                 });
             } catch (Exception e) {
                 // 预期异常
@@ -147,7 +152,7 @@ class ToolExecutionIntegrationTest {
         }
 
         // 应进入半开状态
-        assertTrue(circuitBreaker.isHalfOpen("file-write-tool"));
+        assertEquals(ToolCircuitBreaker.CircuitState.HALF_OPEN, circuitBreaker.getState("file-write-tool"));
     }
 
     // ==================== 熔断器 + 状态机协同 ====================
@@ -155,23 +160,24 @@ class ToolExecutionIntegrationTest {
     @Test
     @DisplayName("熔断器全开后状态机应直接进入 FAILED")
     void testCircuitBreakerOpenLeadsToFailed() {
-        // 触发全开
+        // 触发全开：前 3 次通过 execute 触发 HALF_OPEN，后 2 次通过 recordFailure
         String toolId = "bash-tool";
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < 3; i++) {
+            final int idx = i;
             try {
                 circuitBreaker.execute(toolId, () -> {
-                    throw new RuntimeException("failure-" + i);
+                    throw new RuntimeException("failure-" + idx);
                 });
-            } catch (Exception ignored) {
-            }
+            } catch (Exception ignored) { }
         }
-        assertTrue(circuitBreaker.isOpen(toolId));
+        circuitBreaker.recordFailure(toolId);
+        circuitBreaker.recordFailure(toolId);
+        assertEquals(ToolCircuitBreaker.CircuitState.FULL_OPEN, circuitBreaker.getState(toolId));
 
         // 状态机进入 FAILED
-        stateMachine.transition(ToolExecutionState.CORRECTION);
-        stateMachine.transition(ToolExecutionState.CORRECTION);
-        stateMachine.transition(ToolExecutionState.FAILED);
-        assertTrue(stateMachine.isFailed());
+        stateMachine.fail("熔断器全开，工具禁用");
+        assertTrue(stateMachine.isTerminal());
+        assertEquals(ToolExecutionState.FAILED, stateMachine.getCurrentState());
     }
 
     // ==================== 上下文传递 ====================
@@ -179,59 +185,56 @@ class ToolExecutionIntegrationTest {
     @Test
     @DisplayName("工具执行上下文应正确传递工作区和 session 信息")
     void testToolContextShouldPassWorkspaceAndSession() {
-        assertNotNull(context.getWorkspaceRoot());
-        assertEquals(tempDir.toString(), context.getWorkspaceRoot());
+        assertNotNull(context.getWorkingDirectory());
+        assertEquals(tempDir.toString(), context.getWorkingDirectory().toString());
         assertNotNull(context.getWorkspaceGuard());
-        assertNotNull(context.getAgentRegistry());
     }
 
     // ==================== 多个工具链式调用 ====================
 
     @Test
     @DisplayName("链式调用：FileWrite → FileRead，验证数据一致性")
-    void testChainedToolExecution() throws IOException {
+    void testChainedToolExecution() throws Exception {
         // 写入
         Path chainFile = tempDir.resolve("chain-test.txt");
         String originalContent = "Chain execution content";
 
-        FileWriteInput writeInput = new FileWriteInput();
-        writeInput.setFilePath(chainFile.toString());
-        writeInput.setContent(originalContent);
-
         FileWriteTool writeTool = new FileWriteTool();
-        FileWriteOutput writeOutput = writeTool.execute(writeInput);
-        assertTrue(writeOutput.isSuccess());
+        ToolResult<FileWriteTool.Output> writeResult = writeTool.callSync(
+            new FileWriteTool.Input(chainFile.toString(), originalContent),
+            context
+        );
+        assertTrue(writeResult.isSuccess());
 
         // 读取
-        FileReadInput readInput = new FileReadInput();
-        readInput.setFilePath(chainFile.toString());
-
         FileReadTool readTool = new FileReadTool();
-        FileReadOutput readOutput = readTool.execute(readInput);
+        ToolResult<FileReadOutput> readResult = readTool.callSync(
+            new FileReadInput(chainFile.toString()),
+            context
+        );
 
-        assertEquals(originalContent, readOutput.getContent());
+        assertTrue(readResult.isSuccess());
+        assertEquals(originalContent, readResult.getData().content().trim());
     }
 
     // ==================== Bash 工具执行 ====================
 
     @Test
     @DisplayName("Bash 工具执行并获取输出")
-    @Timeout(value = 10, unit = TimeUnit.SECONDS)
-    void testBashToolExecution() {
+    void testBashToolExecution() throws Exception {
         // 仅当平台支持时运行
         String os = System.getProperty("os.name").toLowerCase();
         if (!os.contains("linux") && !os.contains("mac")) {
             return; // Windows 跳过 Bash 测试
         }
 
-        BashInput input = new BashInput();
-        input.setCommand("echo 'hello from bash'");
+        BashInput input = new BashInput("echo 'hello from bash'");
 
         BashTool tool = new BashTool();
-        BashOutput output = tool.execute(input);
+        ToolResult<BashOutput> result = tool.callSync(input, context);
 
-        assertTrue(output.isSuccess());
-        assertTrue(output.getStdout().contains("hello from bash"));
+        assertTrue(result.isSuccess());
+        assertTrue(result.getData().stdout().contains("hello from bash"));
     }
 
     // ==================== 异常场景 ====================
@@ -241,46 +244,49 @@ class ToolExecutionIntegrationTest {
     void testReadNonExistentFile() {
         String nonExistentPath = tempDir.resolve("does-not-exist.txt").toString();
 
-        FileReadInput input = new FileReadInput();
-        input.setFilePath(nonExistentPath);
+        FileReadInput input = new FileReadInput(nonExistentPath);
 
         FileReadTool tool = new FileReadTool();
-        assertThrows(Exception.class, () -> tool.execute(input));
+        assertThrows(Exception.class, () -> {
+            ToolResult<FileReadOutput> result = tool.callSync(input, context);
+            if (!result.isSuccess()) throw new RuntimeException("读取失败");
+        });
     }
 
     @Test
-    @DisplayName("空输入应被拒绝")
+    @DisplayName("空路径输入应被拒绝")
     void testEmptyInputShouldBeRejected() {
-        FileReadInput input = new FileReadInput();
-        // 未设置 filePath
+        FileReadInput input = new FileReadInput("");
 
         FileReadTool tool = new FileReadTool();
-        assertThrows(Exception.class, () -> tool.execute(input));
+        assertThrows(Exception.class, () -> {
+            ToolResult<FileReadOutput> result = tool.callSync(input, context);
+            if (!result.isSuccess()) throw new RuntimeException("空输入被拒绝");
+        });
     }
 
-    // ==================== 重置与复用 ====================
+    // ==================== 复用 ====================
 
     @Test
-    @DisplayName("状态机重置后可重复使用")
-    void testStateMachineResetAndReuse() throws IOException {
-        // 第一次执行
-        Path testFile = tempDir.resolve("reset-test.txt");
-        Files.writeString(testFile, "First run");
+    @DisplayName("状态机可多次使用")
+    void testStateMachineReuse() throws Exception {
+        Path testFile = tempDir.resolve("reuse-test.txt");
+        Files.writeString(testFile, "Content");
 
         FileReadTool tool = new FileReadTool();
-        FileReadInput input = new FileReadInput();
-        input.setFilePath(testFile.toString());
+        FileReadInput input = new FileReadInput(testFile.toString());
 
-        FileReadOutput output = tool.execute(input);
-        assertEquals("First run", output.getContent());
+        // 第一次执行
+        ToolResult<FileReadOutput> output = tool.callSync(input, context);
+        assertEquals("Content", output.getData().content().trim());
 
-        // 重置状态机
-        stateMachine.reset();
-        assertEquals(ToolExecutionState.PARSE, stateMachine.getCurrentState());
+        // 重新创建状态机用于第二次执行
+        ToolExecutionStateMachine stateMachine2 = new ToolExecutionStateMachine("test-tool-2", progress -> {});
+        assertEquals(ToolExecutionState.PARSE, stateMachine2.getCurrentState());
 
-        // 第二次执行（修改文件内容后）
-        Files.writeString(testFile, "Second run");
-        FileReadOutput output2 = tool.execute(input);
-        assertEquals("Second run", output2.getContent());
+        // 再次读取
+        Files.writeString(testFile, "Updated content");
+        ToolResult<FileReadOutput> output2 = tool.callSync(input, context);
+        assertEquals("Updated content", output2.getData().content().trim());
     }
 }

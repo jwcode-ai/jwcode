@@ -77,12 +77,11 @@ public class TerminalInput {
      * 读取单个字符
      */
     public char readCharacter() throws IOException {
-        terminal.enterRawMode();
         try {
             int ch = terminal.reader().read();
             return (char) ch;
         } finally {
-            terminal.leaveRawMode();
+            // raw mode managed externally
         }
     }
     
@@ -90,11 +89,10 @@ public class TerminalInput {
      * 读取按键（不等待回车）
      */
     public int readKey() throws IOException {
-        terminal.enterRawMode();
         try {
             return terminal.reader().read();
         } finally {
-            terminal.leaveRawMode();
+            // raw mode managed externally
         }
     }
     
@@ -102,7 +100,7 @@ public class TerminalInput {
      * 检查是否有输入可用
      */
     public boolean hasInput() throws IOException {
-        return terminal.reader().peek() != -1;
+        return terminal.reader().peek(10L) != -1;
     }
     
     /**

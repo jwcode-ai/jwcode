@@ -275,14 +275,24 @@ public class LocalAgentDispatcher implements AgentDispatcher {
         }, executor);
     }
 
+    /** 默认同步超时时间（毫秒）：简单任务 30 秒，复杂任务 5 分钟 */
+    private static final long DEFAULT_SYNC_TIMEOUT_MS = 300_000; // 5 分钟
+
     @Override
     public TaskOutput submitTaskSync(String agentName, A2ATask task) {
+        return submitTaskSync(agentName, task, DEFAULT_SYNC_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+    }
+
+    @Override
+    public TaskOutput submitTaskSync(String agentName, A2ATask task, long timeout, TimeUnit unit) {
         try {
-            return submitTask(agentName, task).get(5, TimeUnit.MINUTES);
+            return submitTask(agentName, task).get(timeout, unit);
         } catch (TimeoutException e) {
             task.fail("Task timeout: " + task.getTaskId());
-            logger.severe("LocalDispatcher: task " + task.getTaskId() + " timed out after 5 minutes");
-            return TaskOutput.failure("Task timeout after 5 minutes: " + task.getTaskId());
+            logger.severe("LocalDispatcher: task " + task.getTaskId()
+                + " timed out after " + unit.toSeconds(timeout) + " seconds");
+            return TaskOutput.failure("Task timeout after "
+                + unit.toSeconds(timeout) + " seconds: " + task.getTaskId());
         } catch (Exception e) {
             Throwable cause = e.getCause() != null ? e.getCause() : e;
             task.fail(cause.getMessage());

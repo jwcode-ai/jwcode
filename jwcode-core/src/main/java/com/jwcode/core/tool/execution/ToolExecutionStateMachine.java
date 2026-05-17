@@ -78,6 +78,13 @@ public class ToolExecutionStateMachine {
     }
     
     /**
+     * 获取最后错误消息
+     */
+    public String getLastErrorMessage() {
+        return lastErrorMessage;
+    }
+    
+    /**
      * 状态转移触发
      */
     public void transition(ErrorType errorType, String errorMessage) {
@@ -108,8 +115,12 @@ public class ToolExecutionStateMachine {
                 break;
                 
             case CORRECTION:
-                if (!canCorrect()) {
+                // 在 CORRECTION 状态下再次触发错误，增加纠错计数
+                int attempt = correctionAttempts.incrementAndGet();
+                if (attempt >= MAX_CORRECTION) {
                     transitionToFailed("已达到最大纠错次数：" + MAX_CORRECTION);
+                } else {
+                    logger.info("[ToolStateMachine] " + toolName + " -> CORRECTION (attempt " + attempt + "/" + MAX_CORRECTION + ")");
                 }
                 break;
                 

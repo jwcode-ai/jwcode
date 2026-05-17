@@ -10,6 +10,11 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import com.jwcode.core.mcp.model.McpResource;
+import com.jwcode.core.mcp.model.McpResourceContent;
+import com.jwcode.core.mcp.model.McpTool;
+import com.jwcode.core.mcp.model.McpToolResult;
+
 /**
  * McpClient - MCP 客户端
  * 
@@ -306,7 +311,7 @@ public class McpClient {
      * @param uri 资源 URI
      * @return 资源内容
      */
-    public CompletableFuture<McpResourceContents> readResource(String uri) {
+    public CompletableFuture<McpResourceContent> readResource(String uri) {
         Map<String, Object> params = new HashMap<>();
         params.put("uri", uri);
         
@@ -488,8 +493,8 @@ public class McpClient {
     /**
      * 解析资源内容
      */
-    private McpResourceContents parseResourceContents(McpResponse response) {
-        return new McpResourceContents();
+    private McpResourceContent parseResourceContents(McpResponse response) {
+        return new McpResourceContent();
     }
     
     /**
@@ -568,95 +573,6 @@ public class McpClient {
         
         public boolean isPromptsSupported() {
             return promptsSupported;
-        }
-    }
-    
-    /**
-     * MCP 工具
-     */
-    public static class McpTool {
-        private String name;
-        private String description;
-        private Map<String, Object> inputSchema;
-        
-        public String getName() {
-            return name;
-        }
-        
-        public String getDescription() {
-            return description;
-        }
-        
-        public Map<String, Object> getInputSchema() {
-            return inputSchema;
-        }
-    }
-    
-    /**
-     * MCP 工具结果
-     */
-    public static class McpToolResult {
-        private List<Object> content;
-        private boolean isError;
-        
-        public List<Object> getContent() {
-            return content;
-        }
-        
-        public boolean isError() {
-            return isError;
-        }
-    }
-    
-    /**
-     * MCP 资源
-     */
-    public static class McpResource {
-        private String uri;
-        private String name;
-        private String description;
-        private String mimeType;
-        
-        public String getUri() {
-            return uri;
-        }
-        
-        public String getName() {
-            return name;
-        }
-        
-        public String getDescription() {
-            return description;
-        }
-        
-        public String getMimeType() {
-            return mimeType;
-        }
-    }
-    
-    /**
-     * MCP 资源内容
-     */
-    public static class McpResourceContents {
-        private String uri;
-        private String mimeType;
-        private String text;
-        private byte[] blob;
-        
-        public String getUri() {
-            return uri;
-        }
-        
-        public String getMimeType() {
-            return mimeType;
-        }
-        
-        public String getText() {
-            return text;
-        }
-        
-        public byte[] getBlob() {
-            return blob;
         }
     }
     

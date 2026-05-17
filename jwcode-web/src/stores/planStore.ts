@@ -77,6 +77,13 @@ interface PlanState {
   updateStructuredTask: (sessionId: string, taskId: string, updates: Partial<StructuredTask>) => void;
   getStructuredTasks: (sessionId: string) => StructuredTask[];
 
+  // Sprint Contract 状态跟踪
+  activeContractId: string | null;
+  contractIterationByTask: Record<string, number>;
+  contractVerdictByTask: Record<string, string>;
+  setContractIteration: (taskId: string, iteration: number) => void;
+  setContractVerdict: (taskId: string, verdict: string) => void;
+
   // Plan Mode 管理
   setMode: (mode: PlanMode) => void;
   toggleMode: () => void;
@@ -112,6 +119,11 @@ export const usePlanStore = create<PlanState>()(
       // Plan 确认状态
       showConfirmButton: false,
       planConfirmed: false,
+
+      // Sprint Contract 状态
+      activeContractId: null,
+      contractIterationByTask: {},
+      contractVerdictByTask: {},
 
       startPlanning: (sessionId, goal) =>
         set((state) => ({
@@ -408,6 +420,22 @@ export const usePlanStore = create<PlanState>()(
           };
         }),
 
+      setContractIteration: (taskId, iteration) =>
+        set((state) => ({
+          contractIterationByTask: {
+            ...state.contractIterationByTask,
+            [taskId]: iteration,
+          },
+        })),
+
+      setContractVerdict: (taskId, verdict) =>
+        set((state) => ({
+          contractVerdictByTask: {
+            ...state.contractVerdictByTask,
+            [taskId]: verdict,
+          },
+        })),
+
       reset: () =>
         set({
           plansBySession: {},
@@ -416,6 +444,9 @@ export const usePlanStore = create<PlanState>()(
           structuredTasksBySession: {},
           mode: 'act',
           currentPlanContent: null,
+          activeContractId: null,
+          contractIterationByTask: {},
+          contractVerdictByTask: {},
           modeHistory: [],
           messageQueue: [],
           currentStepPrompt: null,

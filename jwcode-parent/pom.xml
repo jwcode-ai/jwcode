@@ -82,6 +82,11 @@
             </dependency>
             <dependency>
                 <groupId>com.jwcode</groupId>
+                <artifactId>jwcode-ui</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.jwcode</groupId>
                 <artifactId>jwcode-web</artifactId>
                 <version>${project.version}</version>
             </dependency>
@@ -421,8 +426,10 @@
         <module>../jwcode-common</module>
         <module>../jwcode-core</module>
         <module>../jwcode-cli</module>
+        <module>../jwcode-ui</module>
         <module>../jwcode-repl</module>
         <module>../jwcode-web</module>
+        <module>../jwcode-mcp</module>
         <module>../jwcode-distribution</module>
         <module>../jwcode-parser</module>
     </modules>

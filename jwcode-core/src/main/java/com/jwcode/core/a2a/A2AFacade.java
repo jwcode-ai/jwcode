@@ -12,6 +12,7 @@ import com.jwcode.core.tool.ToolExecutor;
 import com.jwcode.core.tool.ToolRegistry;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.logging.Logger;
 
@@ -47,7 +48,7 @@ public class A2AFacade {
     }
 
     /**
-     * 【新增】完整构造器，支持传入 LLMService 和 ToolRegistry
+     * 完整构造器，支持传入 LLMService 和 ToolRegistry
      */
     public A2AFacade(AgentRegistry agentRegistry,
                      LLMService llmService,
@@ -57,7 +58,7 @@ public class A2AFacade {
     }
 
     /**
-     * 【新增】最完整构造器
+     * 最完整构造器
      */
     public A2AFacade(AgentRegistry agentRegistry,
                      A2AConfig config,
@@ -83,6 +84,51 @@ public class A2AFacade {
             this.primaryDispatcher = fallbackDispatcher;
             logger.info("A2AFacade: using local dispatcher (mode=" + config.getMode() + ")");
         }
+    }
+
+    /**
+     * A2AFacade Builder — 替代多构造器 overload，提供更清晰的参数传递。
+     */
+    public static class Builder {
+        private AgentRegistry agentRegistry;
+        private A2AConfig config = new A2AConfig();
+        private LLMService llmService;
+        private ToolRegistry toolRegistry;
+        private ToolExecutor toolExecutor;
+
+        public Builder agentRegistry(AgentRegistry agentRegistry) {
+            this.agentRegistry = agentRegistry;
+            return this;
+        }
+
+        public Builder config(A2AConfig config) {
+            this.config = config;
+            return this;
+        }
+
+        public Builder llmService(LLMService llmService) {
+            this.llmService = llmService;
+            return this;
+        }
+
+        public Builder toolRegistry(ToolRegistry toolRegistry) {
+            this.toolRegistry = toolRegistry;
+            return this;
+        }
+
+        public Builder toolExecutor(ToolExecutor toolExecutor) {
+            this.toolExecutor = toolExecutor;
+            return this;
+        }
+
+        public A2AFacade build() {
+            Objects.requireNonNull(agentRegistry, "agentRegistry must not be null");
+            return new A2AFacade(agentRegistry, config, llmService, toolRegistry, toolExecutor);
+        }
+    }
+
+    public static Builder builder() {
+        return new Builder();
     }
 
     /**
@@ -164,9 +210,14 @@ public class A2AFacade {
 
     /**
      * 关闭
+     *
+     * <p>当 primaryDispatcher 和 fallbackDispatcher 指向同一个对象时（本地模式），
+     * 避免重复关闭。</p>
      */
     public void shutdown() {
         primaryDispatcher.shutdown();
+        // 只有当 primary 和 fallback 是不同对象时才关闭 fallback
+        // （远程模式下 primary=remote, fallback=local；本地模式下两者指向同一个 local 实例）
         if (fallbackDispatcher != primaryDispatcher) {
             fallbackDispatcher.shutdown();
         }

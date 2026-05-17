@@ -352,11 +352,11 @@ public class ToolExecutor {
      * </ul>
      */
     private <I, O, P> boolean hasPermission(Tool<I, O, P> tool, I input) {
-        // 1. Plan Mode 权限检查
+        // 1. Plan Mode 权限检查（带 null-safety 保护）
         PlanModeManager modeManager = PlanModeManager.getInstance();
-        if (modeManager.isPlanMode()) {
+        if (modeManager != null && modeManager.isPlanMode()) {
             PlanModeManager.PermissionResult planResult = modeManager.checkToolPermission(tool, input);
-            if (planResult.isDenied()) {
+            if (planResult != null && planResult.isDenied()) {
                 logger.warning("Plan Mode 权限拒绝: " + tool.getName() + " - " + planResult.getReason());
                 return false;
             }
@@ -365,14 +365,16 @@ public class ToolExecutor {
         
         // 2. 非 Plan Mode 下的常规权限检查
         // 只读工具通常不需要额外权限检查
-        if (tool.isReadOnly(input)) {
-            return true;
-        }
-        
-        // 破坏性操作需要确认
-        if (tool.isDestructive(input) && tool.requiresApproval(input)) {
-            // 这里可以实现更复杂的权限逻辑
-            return true; // 暂时允许
+        if (tool != null) {
+            if (tool.isReadOnly(input)) {
+                return true;
+            }
+            
+            // 破坏性操作需要确认
+            if (tool.isDestructive(input) && tool.requiresApproval(input)) {
+                // 这里可以实现更复杂的权限逻辑
+                return true; // 暂时允许
+            }
         }
         
         return true;

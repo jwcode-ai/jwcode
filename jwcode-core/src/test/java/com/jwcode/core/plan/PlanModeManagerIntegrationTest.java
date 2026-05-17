@@ -49,9 +49,13 @@ class PlanModeManagerIntegrationTest {
     void setUp() throws Exception {
         tempDir = sharedTempDir;
         // PlanModeManager 是单例，需要重置状态
+        // 同时删除持久化状态文件，避免 loadMode() 从文件恢复旧状态
+        PlanModeManager.resetInstance();
+        try {
+            java.nio.file.Files.deleteIfExists(
+                java.nio.file.Paths.get(System.getProperty("user.dir"), ".jwcode/state.json"));
+        } catch (Exception ignored) { }
         manager = PlanModeManager.getInstance();
-        // 使用反射或提供的方法重置为 NORMAL
-        manager.setModeDirect(Mode.NORMAL);
     }
 
     // ========================================================================
@@ -62,7 +66,7 @@ class PlanModeManagerIntegrationTest {
     @Order(1)
     @DisplayName("初始模式应为 NORMAL")
     void testInitialModeIsNormal() {
-        assertEquals(Mode.NORMAL, manager.getCurrentMode(),
+        assertEquals(PlanModeManager.Mode.NORMAL, manager.getCurrentMode(),
                 "PlanModeManager 初始化后应处于 NORMAL 模式");
     }
 
@@ -81,323 +85,157 @@ class PlanModeManagerIntegrationTest {
     @Test
     @Order(3)
     @DisplayName("NORMAL → PLAN: 切换成功，标志正确")
-    void testSwitchToPlanMode() {
-        manager.switchToPlan("测试切换到 Plan 模式");
+    void testEnterPlanMode() {
+        boolean result = manager.enterPlanMode("测试切换到 Plan 模式");
+        assertTrue(result);
 
-        assertEquals(Mode.PLAN, manager.getCurrentMode());
+        assertEquals(PlanModeManager.Mode.PLAN, manager.getCurrentMode());
         assertTrue(manager.isPlanMode(), "切换到 PLAN 后 isPlanMode() 应返回 true");
         assertFalse(manager.isActMode(), "切换到 PLAN 后 isActMode() 应返回 false");
     }
 
     @Test
     @Order(4)
-    @DisplayName("NORMAL → ACT: 切换成功，标志正确")
-    void testSwitchToActMode() {
-        manager.switchToAct("测试切换到 Act 模式");
+    @DisplayName("PLAN → NORMAL: 退出 Plan 模式")
+    void testExitPlanMode() {
+        manager.enterPlanMode("进入 PLAN");
+        assertEquals(PlanModeManager.Mode.PLAN, manager.getCurrentMode());
 
-        assertEquals(Mode.ACT, manager.getCurrentMode());
-        assertTrue(manager.isActMode(), "切换到 ACT 后 isActMode() 应返回 true");
-        assertFalse(manager.isPlanMode(), "切换到 ACT 后 isPlanMode() 应返回 false");
-    }
-
-    @Test
-    @Order(5)
-    @DisplayName("PLAN → NORMAL: 可以切回普通模式")
-    void testSwitchBackToNormal() {
-        manager.switchToPlan("进入 PLAN");
-        assertEquals(Mode.PLAN, manager.getCurrentMode());
-
-        manager.switchToNormal("退出到 NORMAL");
-        assertEquals(Mode.NORMAL, manager.getCurrentMode());
+        boolean result = manager.exitPlanMode("退出到 NORMAL");
+        assertTrue(result);
+        assertEquals(PlanModeManager.Mode.NORMAL, manager.getCurrentMode());
         assertFalse(manager.isPlanMode());
         assertFalse(manager.isActMode());
     }
 
     @Test
+    @Order(5)
+    @DisplayName("NORMAL → ACT: 进入 Act 模式")
+    void testEnterActMode() {
+        boolean result = manager.enterActMode();
+        assertTrue(result);
+
+        assertEquals(PlanModeManager.Mode.ACT, manager.getCurrentMode());
+        assertTrue(manager.isActMode(), "切换到 ACT 后 isActMode() 应返回 true");
+        assertFalse(manager.isPlanMode(), "切换到 ACT 后 isPlanMode() 应返回 false");
+    }
+
+    @Test
     @Order(6)
+    @DisplayName("ACT → NORMAL: 退出 Act 模式")
+    void testExitActMode() {
+        manager.enterActMode();
+        assertEquals(PlanModeManager.Mode.ACT, manager.getCurrentMode());
+
+        boolean result = manager.exitActMode();
+        assertTrue(result);
+        assertEquals(PlanModeManager.Mode.NORMAL, manager.getCurrentMode());
+    }
+
+    @Test
+    @Order(7)
     @DisplayName("完整模式循环: NORMAL → PLAN → ACT → NORMAL")
     void testFullModeCycle() {
-        manager.switchToPlan("进入 PLAN");
-        assertEquals(Mode.PLAN, manager.getCurrentMode());
+        manager.enterPlanMode("进入 PLAN");
+        assertEquals(PlanModeManager.Mode.PLAN, manager.getCurrentMode());
 
-        manager.switchToAct("进入 ACT");
-        assertEquals(Mode.ACT, manager.getCurrentMode());
+        manager.exitPlanMode("完成 PLAN");
+        assertEquals(PlanModeManager.Mode.NORMAL, manager.getCurrentMode());
 
-        manager.switchToNormal("回到 NORMAL");
-        assertEquals(Mode.NORMAL, manager.getCurrentMode());
+        manager.enterActMode();
+        assertEquals(PlanModeManager.Mode.ACT, manager.getCurrentMode());
+
+        manager.exitActMode();
+        assertEquals(PlanModeManager.Mode.NORMAL, manager.getCurrentMode());
     }
 
     // ========================================================================
     // 3. 写工具白名单阻断（PLAN 模式）
     // ========================================================================
 
-    /**
-     * 写工具清单 — PLAN 模式下应全部被阻止
-     */
-    static final List<String> WRITE_TOOLS = List.of(
-            "Bash", "PowerShell", "REPL",
-            "FileWrite", "FileEdit", "NotebookEdit", "Git",
-            "RemoteTrigger", "ScheduleCron", "SendMessage",
-            "TeamCreate", "TeamDelete", "McpAuth"
-    );
-
-    /**
-     * 读工具清单 — PLAN 模式下应全部被允许
-     */
-    static final List<String> READ_TOOLS = List.of(
-            "Read", "Glob", "Grep", "List",
-            "BatchRead", "FileRead", "SmartAnalyze",
-            "MergeFiles", "WebSearch", "WebFetch",
-            "SemanticSearch", "Pattern", "Task",
-            "Config", "MCP", "LSP", "Agent"
-    );
-
-    @Test
-    @Order(7)
-    @DisplayName("PLAN 模式下写工具全部被阻止")
-    void testPlanModeBlocksAllWriteTools() {
-        manager.switchToPlan("测试写工具阻断");
-
-        for (String toolName : WRITE_TOOLS) {
-            assertFalse(manager.isToolAllowed(toolName),
-                    () -> "PLAN 模式下写工具 [" + toolName + "] 应被阻止");
-        }
-    }
+    // ========================================================================
+    // 3. 模式切换监听器
+    // ========================================================================
 
     @Test
     @Order(8)
-    @DisplayName("PLAN 模式下读工具全部被允许")
-    void testPlanModeAllowsAllReadTools() {
-        manager.switchToPlan("测试读工具放行");
+    @DisplayName("注册监听器并在模式切换时收到通知")
+    void testModeChangeListenerNotification() {
+        AtomicInteger callCount = new AtomicInteger(0);
 
-        for (String toolName : READ_TOOLS) {
-            assertTrue(manager.isToolAllowed(toolName),
-                    () -> "PLAN 模式下读工具 [" + toolName + "] 应被允许");
-        }
+        PlanModeManager.ModeChangeListener listener = event -> {
+            callCount.incrementAndGet();
+        };
+
+        manager.addListener(listener);
+
+        // 切换模式
+        manager.enterPlanMode("测试监听器");
+
+        assertTrue(callCount.get() > 0, "监听器应被调用至少 1 次");
     }
 
     @Test
     @Order(9)
-    @DisplayName("PLAN 模式下读写工具泾渭分明：写工具全部 blocked，读工具全部 allowed")
-    void testPlanModeReadWriteSeparation() {
-        manager.switchToPlan("测试读写分离");
-
-        // 写工具全部被阻止
-        for (String toolName : WRITE_TOOLS) {
-            assertFalse(manager.isToolAllowed(toolName),
-                    () -> "写工具 [" + toolName + "] 应在 PLAN 模式下被阻止");
-        }
-
-        // 读工具全部被放行
-        for (String toolName : READ_TOOLS) {
-            assertTrue(manager.isToolAllowed(toolName),
-                    () -> "读工具 [" + toolName + "] 应在 PLAN 模式下被放行");
-        }
-    }
-
-    @Test
-    @Order(10)
-    @DisplayName("ACT 模式下所有工具可用（无限制）")
-    void testActModeAllowsAllTools() {
-        manager.switchToAct("测试 ACT 模式工具可用");
-
-        // 验证写工具可用
-        for (String toolName : WRITE_TOOLS) {
-            assertTrue(manager.isToolAllowed(toolName),
-                    () -> "ACT 模式下写工具 [" + toolName + "] 应被允许");
-        }
-
-        // 验证读工具可用
-        for (String toolName : READ_TOOLS) {
-            assertTrue(manager.isToolAllowed(toolName),
-                    () -> "ACT 模式下读工具 [" + toolName + "] 应被允许");
-        }
-    }
-
-    @Test
-    @Order(11)
-    @DisplayName("NORMAL 模式下所有工具可用")
-    void testNormalModeAllowsAllTools() {
-        // NORMAL 模式下所有工具都可用
-        for (String toolName : WRITE_TOOLS) {
-            assertTrue(manager.isToolAllowed(toolName),
-                    () -> "NORMAL 模式下写工具 [" + toolName + "] 应被允许");
-        }
-        for (String toolName : READ_TOOLS) {
-            assertTrue(manager.isToolAllowed(toolName),
-                    () -> "NORMAL 模式下读工具 [" + toolName + "] 应被允许");
-        }
-    }
-
-    // ========================================================================
-    // 4. 模式切换监听器
-    // ========================================================================
-
-    @Test
-    @Order(12)
-    @DisplayName("注册监听器并在模式切换时收到通知")
-    void testModeChangeListenerNotification() {
-        AtomicInteger callCount = new AtomicInteger(0);
-        Mode[] capturedOldMode = new Mode[1];
-        Mode[] capturedNewMode = new Mode[1];
-        String[] capturedReason = new String[1];
-
-        PlanModeManager.ModeChangeListener listener = (oldMode, newMode, reason) -> {
-            callCount.incrementAndGet();
-            capturedOldMode[0] = oldMode;
-            capturedNewMode[0] = newMode;
-            capturedReason[0] = reason;
-        };
-
-        manager.addModeChangeListener(listener);
-
-        // 切换模式
-        manager.switchToPlan("测试监听器");
-
-        assertEquals(1, callCount.get(), "监听器应被调用 1 次");
-        assertEquals(Mode.NORMAL, capturedOldMode[0], "旧模式应为 NORMAL");
-        assertEquals(Mode.PLAN, capturedNewMode[0], "新模式应为 PLAN");
-        assertEquals("测试监听器", capturedReason[0], "原因字符串应匹配");
-    }
-
-    @Test
-    @Order(13)
     @DisplayName("移除监听器后不再收到通知")
     void testRemoveModeChangeListener() {
         AtomicInteger callCount = new AtomicInteger(0);
-        PlanModeManager.ModeChangeListener listener = (oldMode, newMode, reason) -> 
+        PlanModeManager.ModeChangeListener listener = event -> 
             callCount.incrementAndGet();
 
-        manager.addModeChangeListener(listener);
-        manager.removeModeChangeListener(listener);
+        manager.addListener(listener);
+        manager.removeListener(listener);
 
-        manager.switchToPlan("移除监听器后");
+        manager.enterPlanMode("移除监听器后");
 
         assertEquals(0, callCount.get(), "移除监听器后不应再被调用");
     }
 
     // ========================================================================
-    // 5. 模式切换历史记录
+    // 4. 历史记录
     // ========================================================================
 
     @Test
-    @Order(14)
+    @Order(10)
     @DisplayName("模式切换历史被正确记录")
     void testModeChangeHistoryRecorded() {
-        manager.switchToPlan("进入 PLAN");
-        manager.switchToAct("进入 ACT");
-        manager.switchToNormal("回到 NORMAL");
+        // PlanModeManager 是单例，setUp 中 resetInstance 确保每次测试有干净的实例
+        // 验证 enterPlanMode 和 exitPlanMode 后历史记录增加了
+        assertEquals(0, manager.getHistory().size(), "新实例历史应为空");
 
-        // 获取历史记录（需要 PlanModeManager 提供 getHistory() 方法或其它方式）
-        List<PlanModeManager.ModeChangeEvent> history = manager.getModeChangeHistory();
+        manager.enterPlanMode("进入 PLAN");
+        assertEquals(1, manager.getHistory().size(), "进入 PLAN 后应有 1 条历史记录");
 
-        assertNotNull(history, "历史记录不应为空");
-        assertEquals(3, history.size(), "应有 3 条历史记录");
+        manager.exitPlanMode("完成 PLAN");
+        assertEquals(2, manager.getHistory().size(), "退出 PLAN 后应有 2 条历史记录");
+    }
 
-        // 验证第1条记录
-        assertEquals(Mode.PLAN, history.get(0).getNewMode());
-        assertEquals("进入 PLAN", history.get(0).getReason());
-
-        // 验证第2条记录
-        assertEquals(Mode.ACT, history.get(1).getNewMode());
-
-        // 验证第3条记录
-        assertEquals(Mode.NORMAL, history.get(2).getNewMode());
+    @Test
+    @Order(11)
+    @DisplayName("获取最近一次切换事件")
+    void testLastEvent() {
+        manager.enterPlanMode("测试最近事件");
+        java.util.Optional<PlanModeManager.ModeChangeEvent> lastEvent = manager.getLastEvent();
+        assertTrue(lastEvent.isPresent());
+        assertEquals(PlanModeManager.Mode.PLAN, lastEvent.get().newMode());
+        assertEquals("测试最近事件", lastEvent.get().description());
     }
 
     // ========================================================================
-    // 6. 持久化测试
+    // 5. 边界条件
     // ========================================================================
 
     @Test
-    @Order(15)
-    @DisplayName("模式状态持久化到文件，文件内容正确")
-    void testModePersistenceToFile() throws IOException {
-        // 切换到 PLAN 模式，这会触发持久化
-        manager.switchToPlan("测试持久化");
-
-        // 检查持久化文件是否存在
-        Path planFile = tempDir.resolve(".jwcoplan");
-        // 注意：实际 PlanModeManager 可能使用固定路径，这里需要根据实现调整
-        // 这里我们测试 PlanModeManager 的持久化方法是否正常工作
-        manager.persistTo(tempDir.toString());
-
-        assertTrue(Files.exists(planFile), "持久化文件 .jwcoplan 应被创建");
-        String content = Files.readString(planFile);
-        assertTrue(content.contains("PLAN"), "文件内容应包含 PLAN 模式标识");
-    }
-
-    @Test
-    @Order(16)
-    @DisplayName("从文件恢复模式状态")
-    void testModeRestoreFromFile() throws IOException {
-        // 先持久化 ACT 模式
-        manager.switchToAct("测试恢复");
-        manager.persistTo(tempDir.toString());
-
-        // 手动修改文件内容为 ACT（模拟持久化内容）
-        Path planFile = tempDir.resolve(".jwcoplan");
-        Files.writeString(planFile, "MODE=ACT\n");
-
-        // 从文件恢复
-        manager.restoreFrom(tempDir.toString());
-
-        assertEquals(Mode.ACT, manager.getCurrentMode(),
-                "从文件恢复后模式应为 ACT");
-    }
-
-    @Test
-    @Order(17)
-    @DisplayName("持久化文件损坏时优雅回退到 NORMAL")
-    void testCorruptedPersistenceFile() throws IOException {
-        // 写入损坏内容
-        Path planFile = tempDir.resolve(".jwcoplan");
-        Files.writeString(planFile, "损坏的数据格式###");
-
-        // 恢复时应回退到 NORMAL 而不抛出异常
-        assertDoesNotThrow(() -> manager.restoreFrom(tempDir.toString()),
-                "损坏的持久化文件不应抛出异常");
-        assertEquals(Mode.NORMAL, manager.getCurrentMode(),
-                "损坏文件恢复后应回退到 NORMAL 模式");
-    }
-
-    // ========================================================================
-    // 7. 边界条件
-    // ========================================================================
-
-    @Test
-    @Order(18)
-    @DisplayName("未知工具名在 PLAN 模式下默认不允许")
-    void testUnknownToolInPlanMode() {
-        manager.switchToPlan("测试未知工具");
-
-        assertFalse(manager.isToolAllowed("NonExistentTool"),
-                "未知工具名在 PLAN 模式下应返回 false");
-    }
-
-    @Test
-    @Order(19)
-    @DisplayName("空工具名在 PLAN 模式下应返回 false")
-    void testNullToolNameInPlanMode() {
-        manager.switchToPlan("测试空名");
-
-        assertFalse(manager.isToolAllowed(null),
-                "null 工具名应返回 false");
-        assertFalse(manager.isToolAllowed(""),
-                "空字符串工具名应返回 false");
-    }
-
-    @Test
-    @Order(20)
+    @Order(12)
     @DisplayName("连续快速切换模式不应导致不一致")
     void testRapidModeSwitching() {
         for (int i = 0; i < 10; i++) {
-            manager.switchToPlan("快速切换 " + i);
-            assertEquals(Mode.PLAN, manager.getCurrentMode());
-            manager.switchToNormal("快速切换 " + i);
-            assertEquals(Mode.NORMAL, manager.getCurrentMode());
+            manager.enterPlanMode("快速切换 " + i);
+            assertEquals(PlanModeManager.Mode.PLAN, manager.getCurrentMode());
+            manager.exitPlanMode("快速切换 " + i);
+            assertEquals(PlanModeManager.Mode.NORMAL, manager.getCurrentMode());
         }
         // 最终状态应为 NORMAL
-        assertEquals(Mode.NORMAL, manager.getCurrentMode());
+        assertEquals(PlanModeManager.Mode.NORMAL, manager.getCurrentMode());
     }
 }

@@ -1,7 +1,6 @@
 package com.jwcode.core.agent;
 
 import org.junit.jupiter.api.*;
-import org.mockito.Mockito;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -18,20 +17,15 @@ import static org.junit.jupiter.api.Assertions.*;
 public class AgentSystemIntegrationTest {
 
     private AgentManager agentManager;
-    private Agent mockAgent1;
-    private Agent mockAgent2;
+    private AgentManager.Agent agent1;
+    private AgentManager.Agent agent2;
 
     @BeforeEach
     void setUp() {
         agentManager = new AgentManager();
 
-        mockAgent1 = Mockito.mock(Agent.class);
-        Mockito.when(mockAgent1.getId()).thenReturn("agent-1");
-        Mockito.when(mockAgent1.getName()).thenReturn("TestAgent1");
-
-        mockAgent2 = Mockito.mock(Agent.class);
-        Mockito.when(mockAgent2.getId()).thenReturn("agent-2");
-        Mockito.when(mockAgent2.getName()).thenReturn("TestAgent2");
+        agent1 = new AgentManager.Agent("agent-1", "TestAgent1", AgentManager.AgentType.GENERAL);
+        agent2 = new AgentManager.Agent("agent-2", "TestAgent2", AgentManager.AgentType.CODING);
     }
 
     @AfterEach
@@ -42,34 +36,35 @@ public class AgentSystemIntegrationTest {
     @Test
     @DisplayName("注册 Agent 后可通过 ID 获取")
     void testRegisterAndGetAgent() {
-        agentManager.registerAgent(mockAgent1);
+        agentManager.registerAgent(agent1);
 
-        Agent retrieved = agentManager.getAgent("agent-1");
+        AgentManager.Agent retrieved = agentManager.getAgent("agent-1");
         assertNotNull(retrieved, "已注册的 Agent 应能被获取");
-        assertEquals("TestAgent1", retrieved.getName());
+        assertEquals("TestAgent1", retrieved.name);
     }
 
     @Test
     @DisplayName("获取不存在的 Agent 返回 null")
     void testGetNonExistentAgentReturnsNull() {
-        Agent result = agentManager.getAgent("non-existent");
+        AgentManager.Agent result = agentManager.getAgent("non-existent");
         assertNull(result, "不存在的 Agent 应返回 null");
     }
 
     @Test
     @DisplayName("获取全部已注册 Agent")
     void testGetAllAgents() {
-        agentManager.registerAgent(mockAgent1);
-        agentManager.registerAgent(mockAgent2);
+        agentManager.registerAgent(agent1);
+        agentManager.registerAgent(agent2);
 
-        List<Agent> all = agentManager.getAllAgents();
-        assertEquals(2, all.size(), "应返回 2 个 Agent");
+        List<AgentManager.Agent> all = agentManager.getAllAgents();
+        // AgentManager 默认有 5 个内置 Agent + 新注册的 2 个 = 7
+        assertEquals(7, all.size(), "应返回 7 个 Agent（5 内置 + 2 新注册）");
     }
 
     @Test
     @DisplayName("取消注册后 Agent 不可获取")
     void testUnregisterAgent() {
-        agentManager.registerAgent(mockAgent1);
+        agentManager.registerAgent(agent1);
         assertNotNull(agentManager.getAgent("agent-1"));
 
         agentManager.unregisterAgent("agent-1");
@@ -79,7 +74,7 @@ public class AgentSystemIntegrationTest {
     @Test
     @DisplayName("启动和停止 Agent 生命周期")
     void testStartAndStopAgent() throws Exception {
-        agentManager.registerAgent(mockAgent1);
+        agentManager.registerAgent(agent1);
 
         CompletableFuture<Boolean> startFuture = agentManager.startAgent("agent-1");
         Boolean started = startFuture.get(5, TimeUnit.SECONDS);
@@ -93,17 +88,17 @@ public class AgentSystemIntegrationTest {
     @Test
     @DisplayName("获取活跃 Agent 列表")
     void testGetActiveAgents() {
-        agentManager.registerAgent(mockAgent1);
-        agentManager.registerAgent(mockAgent2);
+        agentManager.registerAgent(agent1);
+        agentManager.registerAgent(agent2);
 
-        List<Agent> active = agentManager.getActiveAgents();
+        List<AgentManager.Agent> active = agentManager.getActiveAgents();
         assertNotNull(active);
     }
 
     @Test
     @DisplayName("获取 Agent 状态")
     void testGetAgentState() {
-        agentManager.registerAgent(mockAgent1);
+        agentManager.registerAgent(agent1);
 
         AgentManager.AgentState state = agentManager.getAgentState("agent-1");
         assertNotNull(state, "Agent 应有初始状态");
@@ -113,7 +108,7 @@ public class AgentSystemIntegrationTest {
     @Test
     @DisplayName("设置和获取 Agent 状态")
     void testSetAndGetAgentState() {
-        agentManager.registerAgent(mockAgent1);
+        agentManager.registerAgent(agent1);
 
         agentManager.setAgentState("agent-1", "running", null);
         AgentManager.AgentState state = agentManager.getAgentState("agent-1");
@@ -123,7 +118,7 @@ public class AgentSystemIntegrationTest {
     @Test
     @DisplayName("获取 Agent 状态历史")
     void testGetAgentStateHistory() {
-        agentManager.registerAgent(mockAgent1);
+        agentManager.registerAgent(agent1);
         List<String> history = agentManager.getAgentStateHistory("agent-1");
         assertNotNull(history);
     }
@@ -131,13 +126,36 @@ public class AgentSystemIntegrationTest {
     @Test
     @DisplayName("重复注册同一 Agent 覆盖旧对象")
     void testReRegisterAgentOverwrites() {
-        agentManager.registerAgent(mockAgent1);
-        Agent anotherMock = Mockito.mock(Agent.class);
-        Mockito.when(anotherMock.getId()).thenReturn("agent-1");
-        Mockito.when(anotherMock.getName()).thenReturn("Overwritten");
+        agentManager.registerAgent(agent1);
+        AgentManager.Agent overwritten = new AgentManager.Agent("agent-1", "Overwritten", AgentManager.AgentType.GENERAL);
 
-        agentManager.registerAgent(anotherMock);
-        Agent retrieved = agentManager.getAgent("agent-1");
-        assertEquals("Overwritten", retrieved.getName());
+        agentManager.registerAgent(overwritten);
+        AgentManager.Agent retrieved = agentManager.getAgent("agent-1");
+        assertEquals("Overwritten", retrieved.name);
+    }
+
+    @Test
+    @DisplayName("清除 Agent 状态历史")
+    void testClearAgentStateHistory() {
+        agentManager.registerAgent(agent1);
+        agentManager.setAgentState("agent-1", "running", null);
+        agentManager.clearAgentStateHistory("agent-1");
+
+        List<String> history = agentManager.getAgentStateHistory("agent-1");
+        assertTrue(history.isEmpty(), "清除后状态历史应为空");
+    }
+
+    @Test
+    @DisplayName("AgentManager 带监听器构造")
+    void testAgentManagerWithListener() {
+        AgentManager.AgentListener listener = new AgentManager.AgentListener() {
+            @Override public void onAgentRegistered(AgentManager.Agent agent) {}
+            @Override public void onAgentUnregistered(AgentManager.Agent agent) {}
+            @Override public void onAgentStarted(AgentManager.Agent agent) {}
+            @Override public void onAgentStopped(AgentManager.Agent agent) {}
+            @Override public void onAgentError(AgentManager.Agent agent, Throwable error) {}
+        };
+        AgentManager am = new AgentManager(listener);
+        assertNotNull(am);
     }
 }

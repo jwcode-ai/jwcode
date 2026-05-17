@@ -25,6 +25,9 @@ import com.jwcode.core.report.ExecutionReport.*;
 import com.jwcode.core.tool.ToolExecutor;
 import com.jwcode.core.tool.ToolRegistry;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.*;
@@ -51,6 +54,9 @@ public class EnhancedOrchestratorAgent {
 
     private static final Logger logger = Logger.getLogger(EnhancedOrchestratorAgent.class.getName());
 
+    /** Jackson ObjectMapper — 用于安全 JSON 序列化 */
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
     /** 语义意图分析器（LLM驱动 + 正则fallback） */
     private final SemanticIntentAnalyzer intentAnalyzer;
     private final CheckpointManager checkpointManager;
@@ -59,10 +65,8 @@ public class EnhancedOrchestratorAgent {
     // A2A 协议调度门面
     private A2AFacade a2aFacade;
 
-    // 【新增】LLM 执行引擎依赖（传递给子Agent）
+    // LLM 执行引擎依赖（仅通过构造器传递给 A2AFacade，不直接持有工具引用）
     private LLMService llmService;
-    private ToolRegistry toolRegistry;
-    private ToolExecutor toolExecutor;
 
     // Plan 模式广播器（用于向前端推送任务状态）
     private PlanTaskBroadcaster planTaskBroadcaster;
@@ -104,12 +108,19 @@ public class EnhancedOrchestratorAgent {
     }
 
     /**
-     * 【新增】完整构造器，支持传入 LLMService 和 ToolRegistry
-     * 这些依赖将传递给 A2AFacade → LocalAgentDispatcher，使子Agent真正通过LLM执行任务
+     * 完整构造器，支持传入 LLMService、ToolRegistry 和 AgentRegistry
+     * 这些依赖仅传递给 A2AFacade → LocalAgentDispatcher，Orchestrator 自身不持有工具引用
+     * （符合 AGENTS.md 架构规范：第1层不直接调用工具）
+     *
+     * @param llmService    LLM 服务
+     * @param toolRegistry  工具注册表
+     * @param toolExecutor  工具执行器
+     * @param agentRegistry Agent 注册表（复用已有实例，避免重复创建）
      */
     public EnhancedOrchestratorAgent(LLMService llmService,
                                      ToolRegistry toolRegistry,
-                                     ToolExecutor toolExecutor) {
+                                     ToolExecutor toolExecutor,
+                                     AgentRegistry agentRegistry) {
         this.intentAnalyzer = new SemanticIntentAnalyzer(llmService);
         this.checkpointManager = new CheckpointManager();
         this.contextBus = new SharedContextBus();
@@ -120,20 +131,28 @@ public class EnhancedOrchestratorAgent {
         this.timeline = new ArrayList<>();
         this.recommendations = new ArrayList<>();
         this.llmService = llmService;
-        this.toolRegistry = toolRegistry;
-        this.toolExecutor = toolExecutor;
         this.taskAgent = new TaskAgent();
         this.currentStructuredTasks = new ArrayList<>();
-        initA2A();
+        initA2A(toolRegistry, toolExecutor, agentRegistry);
+    }
+
+    /**
+     * 完整构造器（向后兼容，无 AgentRegistry）
+     */
+    public EnhancedOrchestratorAgent(LLMService llmService,
+                                     ToolRegistry toolRegistry,
+                                     ToolExecutor toolExecutor) {
+        this(llmService, toolRegistry, toolExecutor, null);
     }
 
     /**
      * 初始化 A2A 协议支持
-     * 【修复】将 LLMService、ToolRegistry、ToolExecutor 传递给 A2AFacade
+     * 将 ToolRegistry、ToolExecutor、AgentRegistry 传递给 A2AFacade，Orchestrator 自身不持有
      */
-    private void initA2A() {
+    private void initA2A(ToolRegistry toolRegistry, ToolExecutor toolExecutor, AgentRegistry agentRegistry) {
         try {
-            AgentRegistry registry = AgentRegistry.createDefault();
+            // 优先复用传入的 AgentRegistry，避免重复创建（减少日志刷屏和性能浪费）
+            AgentRegistry registry = agentRegistry != null ? agentRegistry : AgentRegistry.createDefault();
             this.a2aFacade = new A2AFacade(registry, new A2AConfig(), llmService, toolRegistry, toolExecutor);
             logger.info("A2A Facade initialized: " + a2aFacade.getDispatcherName()
                 + " | llmService=" + (llmService != null ? "available" : "null (mock fallback)"));
@@ -430,6 +449,11 @@ public class EnhancedOrchestratorAgent {
                     sb.append("**Phase 5**: Review and report\n");
                     TaskOutput reviewerOutput = executeSingleTask("Reviewer", analysis);
                     sb.append(formatTaskOutput(reviewerOutput));
+
+                    // Phase 6: GAN 迭代循环（Generator ⇄ Evaluator）
+                    sb.append("**Phase 6**: GAN iterative refinement (Generator ⇄ Evaluator)\n");
+                    String ganResult = executeGanIteration(analysis, coderOutput);
+                    sb.append(ganResult);
                     break;
             }
         } catch (Exception e) {
@@ -486,6 +510,92 @@ public class EnhancedOrchestratorAgent {
             this.agentName = agentName;
             this.description = description;
         }
+    }
+
+    /**
+     * 执行 GAN 迭代循环（Generator ⇄ Evaluator）。
+     *
+     * <p>在标准执行流程后添加的迭代式生成-评估对抗循环。
+     * 使用 SprintContract 定义验收标准和评分权重，
+     * 通过 IterativeSprintOrchestrator 驱动最多 N 轮迭代。</p>
+     */
+    private String executeGanIteration(AnalysisResult analysis, TaskOutput coderOutput) {
+        StringBuilder sb = new StringBuilder();
+
+        try {
+            // 创建 SprintContract
+            com.jwcode.core.model.SprintContract contract;
+            boolean isFrontend = analysis.getTechStack() != null
+                && (analysis.getTechStack().toLowerCase().contains("react")
+                    || analysis.getTechStack().toLowerCase().contains("vue")
+                    || analysis.getTechStack().toLowerCase().contains("ui")
+                    || analysis.getTechStack().toLowerCase().contains("frontend"));
+            boolean isBackend = analysis.getTechStack() != null
+                && (analysis.getTechStack().toLowerCase().contains("api")
+                    || analysis.getTechStack().toLowerCase().contains("backend")
+                    || analysis.getTechStack().toLowerCase().contains("database"));
+
+            if (isFrontend) {
+                contract = com.jwcode.core.model.SprintContract.createFrontendContract(
+                    analysis.getSummary(), currentTaskId);
+                sb.append("  > 使用前端权重配置（视觉设计权重最高: 0.35）\n");
+            } else if (isBackend) {
+                contract = com.jwcode.core.model.SprintContract.createBackendContract(
+                    analysis.getSummary(), currentTaskId);
+                sb.append("  > 使用后端权重配置（功能性权重最高: 0.35）\n");
+            } else {
+                contract = com.jwcode.core.model.SprintContract.createFullstackContract(
+                    analysis.getSummary(), currentTaskId);
+                sb.append("  > 使用全栈权重配置\n");
+            }
+
+            // 添加验收标准
+            contract.addAcceptanceCriterion("功能完整性：所有功能按规格实现");
+            contract.addAcceptanceCriterion("正确性：核心逻辑无错误");
+            contract.addAcceptanceCriterion("代码质量：符合项目编码规范");
+            contract.addAcceptanceCriterion("边界处理：空状态、错误状态、异常输入");
+
+            // 进入谈判状态
+            contract.startNegotiation();
+
+            // 模拟双方签署（在实际系统中，应由 Generator 和 Evaluator 各自确认）
+            contract.signByGenerator();
+            contract.signByEvaluator();
+
+            sb.append("  > Sprint Contract 已签署: ").append(contract.getContractId()).append("\n");
+            sb.append("  > 最大迭代轮数: ").append(contract.getMaxIterations()).append("\n\n");
+
+            // 执行迭代循环
+            AgentRegistry registry = AgentRegistry.createDefault();
+            com.jwcode.core.service.IterativeSprintOrchestrator orchestrator =
+                new com.jwcode.core.service.IterativeSprintOrchestrator(registry);
+
+            com.jwcode.core.service.IterativeSprintOrchestrator.IterationResult result =
+                orchestrator.executeSprint(contract, coderOutput.getSummary());
+
+            if (result.isSuccess()) {
+                sb.append("  ✅ GAN 迭代循环完成: ").append(result.toSummary()).append("\n");
+            } else {
+                sb.append("  ⚠️ GAN 迭代循环未完全通过: ").append(result.toSummary()).append("\n");
+                sb.append("  > 最后一次评估报告:\n");
+                if (result.getLastReport() != null) {
+                    sb.append("  > Verdict: ").append(result.getLastReport().getVerdict().getLabel()).append("\n");
+                    sb.append("  > 加权总分: ").append(String.format("%.2f",
+                        result.getLastReport().getWeightedTotalScore())).append("/10.0\n");
+                }
+            }
+
+            // 记录到时间线
+            timeline.add(new TimelineEntry(
+                "GAN Iteration: " + contract.getContractId() + " (" + result.getTotalIterations() + " rounds)",
+                java.time.Duration.ZERO, "Evaluator"));
+
+        } catch (Exception e) {
+            logger.warning("GAN iteration failed: " + e.getMessage());
+            sb.append("  ⚠️ GAN 迭代循环异常: ").append(e.getMessage()).append("\n");
+        }
+
+        return sb.toString();
     }
 
     /**
@@ -758,19 +868,35 @@ public class EnhancedOrchestratorAgent {
 
     /**
      * 保存检查点
+     *
+     * <p>使用 Jackson ObjectMapper 安全构建 JSON，消除手动字符串拼接的注入风险。</p>
      */
     private void saveCheckpoint() {
         if (currentTaskId == null) return;
 
-        Checkpoint checkpoint = Checkpoint.builder()
-            .taskId(currentTaskId)
-            .contextJson("{\"goal\":\"" + currentTaskGoal + "\",\"startTime\":\"" + taskStartTime + "\"}")
-            .resultsJson("{\"completedSubTasks\":" + completedSubTasks.size() + "}")
-            .busJson(contextBus.exportToJson())
-            .timelineJson("[]")
-            .build();
+        try {
+            // 使用 ObjectMapper 安全构建 contextJson
+            ObjectNode contextNode = OBJECT_MAPPER.createObjectNode();
+            contextNode.put("goal", currentTaskGoal != null ? currentTaskGoal : "");
+            contextNode.put("startTime", taskStartTime != null ? taskStartTime.toString() : "");
 
-        checkpointManager.saveCheckpoint(checkpoint);
+            // 使用 ObjectMapper 安全构建 resultsJson
+            ObjectNode resultsNode = OBJECT_MAPPER.createObjectNode();
+            resultsNode.put("completedSubTasks", completedSubTasks.size());
+            resultsNode.put("totalChanges", changes.size());
+
+            Checkpoint checkpoint = Checkpoint.builder()
+                .taskId(currentTaskId)
+                .contextJson(OBJECT_MAPPER.writeValueAsString(contextNode))
+                .resultsJson(OBJECT_MAPPER.writeValueAsString(resultsNode))
+                .busJson(contextBus.exportToJson())
+                .timelineJson("[]")
+                .build();
+
+            checkpointManager.saveCheckpoint(checkpoint);
+        } catch (Exception e) {
+            logger.warning("Failed to save checkpoint: " + e.getMessage());
+        }
     }
 
     /**
@@ -835,60 +961,43 @@ public class EnhancedOrchestratorAgent {
 
     /**
      * 生成报告
+     *
+     * <p>修复 Builder 模式误用问题：先一次性收集所有子任务/变更/测试结果，
+     * 再构建最终的 ExecutionReport，避免每次循环新建 builder 导致数据丢失。</p>
      */
     private String generateReport() {
         if (currentTaskId == null) {
             return "❌ 没有任务可以生成报告。";
         }
 
-        ExecutionReport report = ExecutionReport.builder()
+        // 先收集所有子任务/变更/测试结果
+        ExecutionReport.Builder builder = ExecutionReport.builder()
             .taskId(currentTaskId)
             .taskGoal(currentTaskGoal)
             .status(completedSubTasks.isEmpty() ? Status.FAILED : Status.SUCCESS)
             .startTime(taskStartTime)
             .endTime(LocalDateTime.now())
-            .duration(Duration.between(taskStartTime, LocalDateTime.now()))
-            .build();
+            .duration(Duration.between(taskStartTime, LocalDateTime.now()));
 
-        // 添加子任务结果
-        for (SubTaskResult st : completedSubTasks) {
-            report = ExecutionReport.builder()
-                .taskId(report.getTaskId())
-                .taskGoal(report.getTaskGoal())
-                .status(report.getStatus())
-                .startTime(report.getStartTime())
-                .endTime(report.getEndTime())
-                .duration(report.getDuration())
-                .addSubTask(st)
-                .build();
+        // 添加子任务结果（一次性收集，避免 builder 循环覆盖）
+        List<SubTaskResult> allSubTasks = new ArrayList<>(completedSubTasks);
+        for (SubTaskResult st : allSubTasks) {
+            builder.addSubTask(st);
         }
 
         // 添加变更
-        for (FileChange fc : changes) {
-            report = ExecutionReport.builder()
-                .taskId(report.getTaskId())
-                .taskGoal(report.getTaskGoal())
-                .status(report.getStatus())
-                .startTime(report.getStartTime())
-                .endTime(report.getEndTime())
-                .duration(report.getDuration())
-                .addChange(fc)
-                .build();
+        List<FileChange> allChanges = new ArrayList<>(changes);
+        for (FileChange fc : allChanges) {
+            builder.addChange(fc);
         }
 
         // 添加测试结果
-        for (TestResult tr : testResults) {
-            report = ExecutionReport.builder()
-                .taskId(report.getTaskId())
-                .taskGoal(report.getTaskGoal())
-                .status(report.getStatus())
-                .startTime(report.getStartTime())
-                .endTime(report.getEndTime())
-                .duration(report.getDuration())
-                .addTestResult(tr)
-                .build();
+        List<TestResult> allTestResults = new ArrayList<>(testResults);
+        for (TestResult tr : allTestResults) {
+            builder.addTestResult(tr);
         }
 
+        ExecutionReport report = builder.build();
         return report.toMarkdown();
     }
 

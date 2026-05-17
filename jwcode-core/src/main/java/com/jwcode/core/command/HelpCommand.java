@@ -66,8 +66,8 @@ public class HelpCommand implements Command {
             .orElse(0);
         
         for (Command command : commands) {
-            sb.append(String.format("  %%-%ds  %%s\n", maxNameLength + 2, 
-                command.getName(), 
+            sb.append(String.format("  %-" + (maxNameLength + 2) + "s%s\n",
+                command.getName(),
                 command.getDescription()));
         }
         

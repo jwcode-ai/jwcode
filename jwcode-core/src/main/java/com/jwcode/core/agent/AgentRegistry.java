@@ -54,6 +54,7 @@ public class AgentRegistry {
         register(new CoderAgent());
         register(new DebugAgent());
         register(new ReviewerAgent());
+        register(new EvaluatorAgent());
         register(new TestAgent());
         register(new DocAgent());
         register(new ExploreAgent());

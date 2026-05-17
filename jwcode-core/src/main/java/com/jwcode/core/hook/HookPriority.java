@@ -69,6 +69,14 @@ public enum HookPriority {
 
     /**
      * 冲突裁决器 —— 聚合多个 HookResult 为最终决策。
+     *
+     * <p>冲突裁决规则（v2.1）：</p>
+     * <ol>
+     *   <li><b>DENY/VOID 最高优先</b> — 任一拒绝即拒绝</li>
+     *   <li><b>MODIFY 链式传递</b> — 高优先级先修改，低优先级基于新输入</li>
+     *   <li><b>ASK 覆盖 ALLOW</b> — 只要有确认需求，最终就需要确认</li>
+     *   <li><b>DEFER 聚合</b> — 等待所有审批完成</li>
+     * </ol>
      */
     public static final class ConflictResolver {
 

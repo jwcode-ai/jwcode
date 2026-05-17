@@ -79,6 +79,14 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
           case 'plan_start':
             console.log('[WS] plan_start:', rawData);
             planStore.startPlanning(sessionId, rawData || '');
+            // 创建 assistant message，使后续 content 消息能正确追加
+            chatStore.getState().startGeneration(sessionId);
+            chatStore.getState().addMessage(sessionId, {
+              id: `msg-${Date.now()}`,
+              type: 'assistant',
+              content: '',
+              timestamp: Date.now(),
+            });
             break;
 
           case 'plan_thinking':

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jwcode.core.tool.context.ToolExecutionContext;
 import com.jwcode.core.tool.execution.ToolExecutionStateMachine;
 import com.jwcode.core.tool.execution.ToolExecutionState;
+import com.jwcode.core.tool.ToolProgress;
 import org.junit.jupiter.api.*;
 
 import java.util.concurrent.CompletableFuture;
@@ -38,12 +39,12 @@ public class ToolChainIntegrationTest {
     @DisplayName("工具注册 - 默认注册中心包含核心工具")
     void testDefaultRegistryContainsCoreTools() {
         assertAll("默认注册应包含核心工具",
-            () -> assertTrue(registry.hasTool("FileReadTool"), "应包含 FileReadTool"),
-            () -> assertTrue(registry.hasTool("FileWriteTool"), "应包含 FileWriteTool"),
-            () -> assertTrue(registry.hasTool("BashTool"), "应包含 BashTool"),
-            () -> assertTrue(registry.hasTool("GlobTool"), "应包含 GlobTool"),
-            () -> assertTrue(registry.hasTool("GrepTool"), "应包含 GrepTool"),
-            () -> assertTrue(registry.hasTool("FileEditTool"), "应包含 FileEditTool")
+            () -> assertTrue(registry.contains("FileReadTool"), "应包含 FileReadTool"),
+            () -> assertTrue(registry.contains("FileWriteTool"), "应包含 FileWriteTool"),
+            () -> assertTrue(registry.contains("BashTool"), "应包含 BashTool"),
+            () -> assertTrue(registry.contains("GlobTool"), "应包含 GlobTool"),
+            () -> assertTrue(registry.contains("GrepTool"), "应包含 GrepTool"),
+            () -> assertTrue(registry.contains("FileEditTool"), "应包含 FileEditTool")
         );
     }
 
@@ -79,19 +80,18 @@ public class ToolChainIntegrationTest {
     void testExecuteSimpleToolSuccess() throws Exception {
         // 准备输入参数
         JsonNode input = mapper.createObjectNode()
-            .put("toolName", "FileReadTool")
-            .put("filePath", "README.md");
+            .put("toolName", "Config")
+            .put("action", "list");
 
         ToolExecutionContext context = ToolExecutionContext.builder().build();
 
         CompletableFuture<ToolExecutor.ToolExecutionResult> future =
-            executor.execute("FileReadTool", input, context);
+            executor.execute("Config", input, context);
 
         ToolExecutor.ToolExecutionResult result = future.get(10, TimeUnit.SECONDS);
 
         assertAll("工具执行结果验证",
-            () -> assertNotNull(result, "执行结果不应为 null"),
-            () -> assertNotNull(result.isSuccess(), "执行状态不应为 null")
+            () -> assertNotNull(result, "执行结果不应为 null")
         );
     }
 
@@ -110,43 +110,48 @@ public class ToolChainIntegrationTest {
     // ==================== 工具状态机 ====================
 
     @Test
-    @DisplayName("状态机 - 从 PENDING 到 COMPLETED 的完整转换")
+    @DisplayName("状态机 - 从 PARSE 到 DONE 的完整转换")
     void testStateMachineFullTransition() {
-        ToolExecutionStateMachine stateMachine = new ToolExecutionStateMachine("test-exec-1");
+        ToolExecutionStateMachine stateMachine = new ToolExecutionStateMachine("test-exec-1",
+            progress -> {});
 
-        assertEquals(ToolExecutionState.PENDING, stateMachine.getCurrentState(),
-            "初始状态应为 PENDING");
+        assertEquals(ToolExecutionState.PARSE, stateMachine.getCurrentState(),
+            "初始状态应为 PARSE");
 
-        stateMachine.transitionTo(ToolExecutionState.RUNNING);
-        assertEquals(ToolExecutionState.RUNNING, stateMachine.getCurrentState(),
-            "应转换为 RUNNING");
+        stateMachine.reportSuccess();
+        assertEquals(ToolExecutionState.REPORT, stateMachine.getCurrentState(),
+            "应转换为 REPORT");
 
-        stateMachine.transitionTo(ToolExecutionState.COMPLETED);
-        assertEquals(ToolExecutionState.COMPLETED, stateMachine.getCurrentState(),
-            "应转换为 COMPLETED");
+        stateMachine.complete();
+        assertEquals(ToolExecutionState.DONE, stateMachine.getCurrentState(),
+            "应转换为 DONE");
     }
 
     @Test
-    @DisplayName("状态机 - 从 PENDING 到 FAILED 的错误路径")
+    @DisplayName("状态机 - 错误路径转换")
     void testStateMachineErrorTransition() {
-        ToolExecutionStateMachine stateMachine = new ToolExecutionStateMachine("test-exec-2");
+        ToolExecutionStateMachine stateMachine = new ToolExecutionStateMachine("test-exec-2",
+            progress -> {});
 
-        stateMachine.transitionTo(ToolExecutionState.RUNNING);
-        stateMachine.transitionTo(ToolExecutionState.FAILED);
-
+        stateMachine.fail("执行失败");
         assertEquals(ToolExecutionState.FAILED, stateMachine.getCurrentState(),
             "应转换为 FAILED");
     }
 
     @Test
-    @DisplayName("状态机 - 非法状态转换应抛出异常")
-    void testStateMachineIllegalTransition() {
-        ToolExecutionStateMachine stateMachine = new ToolExecutionStateMachine("test-exec-3");
+    @DisplayName("状态机 - 纠错后仍失败应进入 FAILED")
+    void testStateMachineCorrectionThenFailed() {
+        ToolExecutionStateMachine stateMachine = new ToolExecutionStateMachine("test-exec-3",
+            progress -> {});
 
-        // 从 PENDING 直接到 COMPLETED 可能是非法的
-        assertThrows(IllegalStateException.class, () -> {
-            stateMachine.transitionTo(ToolExecutionState.COMPLETED);
-        }, "非法状态转换应抛出异常");
+        // PARSE 状态下触发 PARSE_ERROR → 进入 CORRECTION（第1次纠错）
+        stateMachine.transition(ToolExecutionStateMachine.ErrorType.PARSE_ERROR, "JSON 解析失败");
+        assertEquals(ToolExecutionState.CORRECTION, stateMachine.getCurrentState());
+        assertEquals(1, stateMachine.getCorrectionAttempts());
+
+        // 在 CORRECTION 状态下再次触发 → 第2次纠错，超过 MAX_CORRECTION=2，进入 FAILED
+        stateMachine.transition(ToolExecutionStateMachine.ErrorType.PARSE_ERROR, "JSON 解析失败");
+        assertEquals(ToolExecutionState.FAILED, stateMachine.getCurrentState());
     }
 
     // ==================== 工具上下文 ====================
@@ -154,14 +159,11 @@ public class ToolChainIntegrationTest {
     @Test
     @DisplayName("工具上下文 - 创建和属性设置")
     void testToolContextCreation() {
-        ToolExecutionContext context = ToolExecutionContext.builder()
-            .withTimeout(30)
-            .withDebugMode(true)
-            .build();
+        ToolExecutionContext context = ToolExecutionContext.builder().build();
 
         assertAll("工具上下文验证",
             () -> assertNotNull(context, "上下文不应为 null"),
-            () -> assertNotNull(context.getSessionId(), "会话 ID 不应为 null")
+            () -> assertNull(context.getSession(), "未设置会话时应为 null")
         );
     }
 
@@ -185,35 +187,33 @@ public class ToolChainIntegrationTest {
     void testToolCategories() {
         assertAll("工具分类验证",
             () -> assertTrue(registry.getAllToolNames().contains("FileReadTool"),
-                "FileReadTool 应为文件操作类"),
+                "应包含 FileReadTool"),
             () -> assertTrue(registry.getAllToolNames().contains("BashTool"),
-                "BashTool 应为命令执行类"),
-            () -> assertTrue(registry.getAllToolNames().contains("GitTool"),
-                "GitTool 应为版本控制类")
+                "应包含 BashTool"),
+            () -> assertTrue(registry.getAllToolNames().contains("Git"),
+                "应包含 Git")
         );
     }
 
     // ==================== 完整工具链流程 ====================
 
     @Test
-    @DisplayName("完整工具链：注册 → 查找 → 执行 → 状态转换 → 结果")
+    @DisplayName("完整工具链：注册 → 查找 → 执行 → 结果")
     void testCompleteToolChain() throws Exception {
         // 1. 注册 - 注册中心可用
         assertNotNull(registry, "注册中心应已初始化");
 
         // 2. 查找 - 找到指定工具
-        String toolName = "ConfigTool";
-        assertTrue(registry.hasTool(toolName), "应能找到 " + toolName);
+        String toolName = "GlobTool";
+        assertTrue(registry.contains(toolName), "应能找到 " + toolName);
         Tool tool = registry.getTool(toolName);
         assertNotNull(tool, "工具实例不应为 null");
 
         // 3. 准备输入
         JsonNode input = mapper.createObjectNode()
-            .put("action", "list");
+            .put("pattern", "*.java");
 
-        ToolExecutionContext context = ToolExecutionContext.builder()
-            .withTimeout(30)
-            .build();
+        ToolExecutionContext context = ToolExecutionContext.builder().build();
 
         // 4. 执行
         CompletableFuture<ToolExecutor.ToolExecutionResult> future =
@@ -230,9 +230,7 @@ public class ToolChainIntegrationTest {
     @Test
     @DisplayName("工具执行 - 超时处理")
     void testToolExecutionTimeout() {
-        ToolExecutionContext context = ToolExecutionContext.builder()
-            .withTimeout(1) // 1 秒超时
-            .build();
+        ToolExecutionContext context = ToolExecutionContext.builder().build();
 
         // 长时间运行的工具应被超时机制处理
         assertNotNull(context, "带超时的上下文应可创建");

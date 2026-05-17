@@ -4,6 +4,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
+import com.jwcode.core.mcp.model.McpResource;
+import com.jwcode.core.mcp.model.McpResourceContent;
+import com.jwcode.core.mcp.model.McpServerInfo;
+import com.jwcode.core.mcp.model.McpTool;
+import com.jwcode.core.mcp.model.McpToolResult;
+
 /**
  * McpClientInterface - MCP 客户端接口。
  * 

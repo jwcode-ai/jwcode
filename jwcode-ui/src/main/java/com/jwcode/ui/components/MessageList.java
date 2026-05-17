@@ -19,6 +19,11 @@ public class MessageList implements Component {
     private boolean showTimestamps;
     private boolean compact;
     private String sourceLabel; // 用于显示子代理来源
+
+    /** 虚拟滚动：可见区域高度（行数），0 = 禁用虚拟滚动 */
+    private int viewportHeight = 0;
+    /** 虚拟滚动：是否自动滚动到底部 */
+    private boolean autoScroll = true;
     
     // ANSI 颜色
     private static final String RESET = "\u001B[0m";
@@ -104,7 +109,67 @@ public class MessageList implements Component {
         this.showTimestamps = show;
         return this;
     }
-    
+
+    // ========== 虚拟滚动支持 ==========
+
+    /**
+     * 设置视口高度（行数）。启用后，render() 只渲染可见区域的消息。
+     *
+     * @param height 视口高度（行数），≤ 0 表示禁用虚拟滚动
+     */
+    public MessageList viewportHeight(int height) {
+        this.viewportHeight = height;
+        return this;
+    }
+
+    /**
+     * 设置是否自动滚动到底部。
+     */
+    public MessageList autoScroll(boolean autoScroll) {
+        this.autoScroll = autoScroll;
+        return this;
+    }
+
+    /**
+     * 向上滚动一行。
+     */
+    public void scrollUp() {
+        if (visibleStart > 0) {
+            visibleStart--;
+        }
+    }
+
+    /**
+     * 向下滚动一行。
+     */
+    public void scrollDown() {
+        if (visibleStart < getMaxScrollStart()) {
+            visibleStart++;
+        }
+    }
+
+    /**
+     * 滚动到顶部。
+     */
+    public void scrollToTop() {
+        visibleStart = 0;
+    }
+
+    /**
+     * 滚动到底部。
+     */
+    public void scrollToBottom() {
+        visibleStart = getMaxScrollStart();
+        autoScroll = true;
+    }
+
+    /**
+     * 获取最大滚动起始位置。
+     */
+    private int getMaxScrollStart() {
+        return Math.max(0, messages.size() - visibleCount);
+    }
+
     /**
      * 更新最后一条消息的内容（用于流式输出）
      */
@@ -145,19 +210,82 @@ public class MessageList implements Component {
         if (messages.isEmpty()) {
             return "";
         }
-        
+
+        // 虚拟滚动模式：根据视口高度计算可见消息范围
+        if (viewportHeight > 0) {
+            return renderVirtualScroll();
+        }
+
         StringBuilder sb = new StringBuilder();
         int endIndex = Math.min(visibleStart + visibleCount, messages.size());
-        
+
         for (int i = visibleStart; i < endIndex; i++) {
             MessageItem item = messages.get(i);
             sb.append(renderMessage(item, i));
-            
+
             if (!compact && i < endIndex - 1) {
                 sb.append("\n");
             }
         }
-        
+
+        return sb.toString();
+    }
+
+    /**
+     * 虚拟滚动渲染：只渲染视口高度内可见的消息行。
+     *
+     * <p>算法：从最后一条消息开始反向累加行数，直到填满视口或到达顶部。</p>
+     */
+    private String renderVirtualScroll() {
+        StringBuilder sb = new StringBuilder();
+        int availableLines = viewportHeight;
+        int startIdx;
+
+        if (autoScroll) {
+            // 自动滚动：从底部开始
+            startIdx = messages.size() - 1;
+            int lines = 0;
+
+            // 反向遍历消息，累加行数
+            for (int i = messages.size() - 1; i >= 0; i--) {
+                String rendered = renderMessage(messages.get(i), i);
+                int msgLines = rendered.split("\n", -1).length;
+                if (lines + msgLines > availableLines) {
+                    // 如果当前消息超出可用行数，只取部分
+                    startIdx = i;
+                    break;
+                }
+                lines += msgLines;
+                startIdx = i;
+                if (lines >= availableLines) break;
+            }
+
+            visibleStart = startIdx;
+        }
+
+        // 从 startIdx 开始渲染消息
+        int renderedLines = 0;
+        for (int i = visibleStart; i < messages.size(); i++) {
+            String rendered = renderMessage(messages.get(i), i);
+            String[] lines = rendered.split("\n", -1);
+
+            if (renderedLines + lines.length > availableLines) {
+                // 只渲染部分行
+                int remainingLines = availableLines - renderedLines;
+                for (int j = 0; j < remainingLines && j < lines.length; j++) {
+                    sb.append(lines[j]);
+                    if (j < remainingLines - 1) sb.append("\n");
+                }
+                break;
+            }
+
+            if (renderedLines > 0) sb.append("\n");
+            sb.append(rendered);
+            renderedLines += lines.length;
+
+            if (renderedLines >= availableLines) break;
+        }
+
         return sb.toString();
     }
     

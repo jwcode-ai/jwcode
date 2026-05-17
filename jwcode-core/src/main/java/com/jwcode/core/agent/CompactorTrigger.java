@@ -44,7 +44,9 @@ public class CompactorTrigger {
         /** 激进压缩：仅保留尾部4条 + 摘要 */
         AGGRESSIVE,
         /** 最小压缩：仅移除工具结果噪声，不调用LLM */
-        MINIMAL
+        MINIMAL,
+        /** 上下文重置：当压缩不足以解决问题时，建议升级为进程级 Context Reset */
+        RESET
     }
 
     /** 各触发原因的默认阈值 */
@@ -104,6 +106,7 @@ public class CompactorTrigger {
             case SMART -> 8;
             case AGGRESSIVE -> 4;
             case MINIMAL -> Integer.MAX_VALUE; // 不截断，仅清理噪声
+            case RESET -> 0; // RESET 不截断，建议升级为 Context Reset
         };
     }
 

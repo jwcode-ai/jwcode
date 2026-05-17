@@ -61,10 +61,10 @@ public class AgentBridge {
         this.queryEngine = queryEngine;
         this.agentRegistry = agentRegistry;
 
-        // 尝试创建 EnhancedOrchestratorAgent
+        // 尝试创建 EnhancedOrchestratorAgent（复用已有 AgentRegistry）
         EnhancedOrchestratorAgent orch = null;
         try {
-            orch = new EnhancedOrchestratorAgent(llmService, toolRegistry, toolExecutor);
+            orch = new EnhancedOrchestratorAgent(llmService, toolRegistry, toolExecutor, agentRegistry);
             logger.info("AgentBridge: EnhancedOrchestratorAgent initialized successfully");
         } catch (Exception e) {
             logger.warning("AgentBridge: Failed to initialize EnhancedOrchestratorAgent: " + e.getMessage()

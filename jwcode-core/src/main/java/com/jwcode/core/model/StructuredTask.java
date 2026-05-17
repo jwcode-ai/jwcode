@@ -81,6 +81,12 @@ public class StructuredTask {
      */
     private Map<String, String> context;
 
+    /** 关联的 SprintContract ID（GAN 迭代循环用） */
+    private String contractId;
+
+    /** 当前迭代轮数（GAN 迭代循环用） */
+    private int iterationRound;
+
     // ==================== 枚举 ====================
 
     public enum ExecutionMode {
@@ -146,6 +152,8 @@ public class StructuredTask {
         private Integer progress = 0;
         private List<String> logs = new ArrayList<>();
         private Map<String, String> context = new HashMap<>();
+        private String contractId;
+        private int iterationRound;
 
         public Builder id(String id) { this.id = id; return this; }
         public Builder title(String title) { this.title = title; return this; }
@@ -169,6 +177,8 @@ public class StructuredTask {
         public Builder logs(List<String> logs) { this.logs = logs; return this; }
         public Builder context(Map<String, String> context) { this.context = context; return this; }
         public Builder addContext(String key, String value) { this.context.put(key, value); return this; }
+        public Builder contractId(String contractId) { this.contractId = contractId; return this; }
+        public Builder iterationRound(int iterationRound) { this.iterationRound = iterationRound; return this; }
 
         public StructuredTask build() {
             StructuredTask task = new StructuredTask();
@@ -191,6 +201,8 @@ public class StructuredTask {
             task.progress = this.progress;
             task.logs = this.logs;
             task.context = this.context != null ? new HashMap<>(this.context) : new HashMap<>();
+            task.contractId = this.contractId;
+            task.iterationRound = this.iterationRound;
             return task;
         }
     }
@@ -227,6 +239,12 @@ public class StructuredTask {
     }
 
     // ==================== Getters & Setters ====================
+
+    public String getContractId() { return contractId; }
+    public void setContractId(String contractId) { this.contractId = contractId; }
+
+    public int getIterationRound() { return iterationRound; }
+    public void setIterationRound(int iterationRound) { this.iterationRound = iterationRound; }
 
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
@@ -284,4 +302,15 @@ public class StructuredTask {
 
     public Map<String, String> getContext() { return context; }
     public void setContext(Map<String, String> context) { this.context = context; }
+
+    /**
+     * 追加执行结果到 result 字段。
+     */
+    public void appendResult(String resultLine) {
+        if (this.result == null || this.result.isEmpty()) {
+            this.result = resultLine;
+        } else {
+            this.result = this.result + "\n" + resultLine;
+        }
+    }
 }

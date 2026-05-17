@@ -60,15 +60,6 @@ public class ToolRegistry {
         toolsByName.put(name, tool);
         tools.add(tool);
         
-        // 注册别名
-        if (tool instanceof ToolWrapper) {
-            ToolWrapper<?, ?, ?> wrapper = (ToolWrapper<?, ?, ?>) tool;
-            for (String alias : wrapper.getAliases()) {
-                toolsByName.put(alias, tool);
-            }
-        }
-        
-        
         return this;
     }
     
@@ -227,9 +218,26 @@ public class ToolRegistry {
     /**
      * 创建默认的工具注册表（包含所有内置工具）
      * 
-     * @return 包含所有内置工具的注册表
+     * <p>使用静态缓存，确保全局只有一个默认 ToolRegistry 实例。
+     * 避免各 Agent 构造函数重复创建导致的性能浪费和日志刷屏。</p>
+     * 
+     * @return 包含所有内置工具的注册表（单例）
      */
     public static ToolRegistry createDefault() {
+        return DefaultInstanceHolder.INSTANCE;
+    }
+    
+    /**
+     * 静态内部类持有单例，利用 JVM 类加载机制保证线程安全
+     */
+    private static final class DefaultInstanceHolder {
+        static final ToolRegistry INSTANCE = createNewDefault();
+    }
+    
+    /**
+     * 实际创建默认 ToolRegistry 的方法（仅调用一次）
+     */
+    private static ToolRegistry createNewDefault() {
         ToolRegistry registry = new ToolRegistry();
         
         // 注册内置工具 - 与 JavaScript 项目对齐
@@ -302,16 +310,4 @@ public class ToolRegistry {
         return tool;
     }
     
-    /**
-     * 工具包装器（支持别名）
-     */
-    public interface ToolWrapper<Input, Output, Progress> extends Tool<Input, Output, Progress> {
-        
-        /**
-         * 获取工具别名列表
-         * 
-         * @return 别名列表
-         */
-        List<String> getAliases();
-    }
 }

@@ -1,8 +1,15 @@
 package com.jwcode.core.config;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.core.JacksonException;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
+import com.fasterxml.jackson.databind.DeserializationContext;
+import com.fasterxml.jackson.databind.JsonDeserializer;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -10,6 +17,10 @@ import lombok.NoArgsConstructor;
 import java.io.File;
 import java.io.IOException;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
+import java.util.Arrays;
 
 /**
  * JWCode 主配置类
@@ -35,6 +46,7 @@ import java.util.*;
 @Data
 @NoArgsConstructor
 @JsonInclude(JsonInclude.Include.NON_NULL)
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class JwcodeConfig {
     
     /**
@@ -128,16 +140,105 @@ public class JwcodeConfig {
         @JsonProperty("models")
         private List<ModelDefinition> models = new ArrayList<>();
         
+        /** 轮询计数器（线程安全） */
+        private final AtomicInteger roundRobinCounter = new AtomicInteger(0);
+
+        /** API Key 健康状态（key -> 不可用到 nextRetryTime） */
+        private final Map<String, Long> keyHealthMap = new ConcurrentHashMap<>();
+
         /**
-         * 获取当前应该使用的 API Key（支持轮询）
+         * 获取当前应该使用的 API Key（支持轮询 + 故障转移）
          */
         public String getCurrentApiKey() {
             if (apiKeys.isEmpty()) {
                 return null;
             }
-            // 简单的轮询策略
-            int index = (int) (System.currentTimeMillis() / 1000) % apiKeys.size();
-            return apiKeys.get(index);
+            if (apiKeys.size() == 1) {
+                String onlyKey = apiKeys.get(0);
+                return isKeyHealthy(onlyKey) ? onlyKey : null;
+            }
+
+            String strategy = keyRotation != null ? keyRotation.getStrategy() : "round_robin";
+            long now = System.nanoTime(); // 纳秒级精度，避免同一纳秒冲突
+
+            switch (strategy) {
+                case "random":
+                    return getRandomKey();
+                case "priority":
+                    return getPriorityKey();
+                case "round_robin":
+                default:
+                    return getRoundRobinKey(now);
+            }
+        }
+
+        /**
+         * 轮询策略：使用 AtomicInteger 保证线程安全，纳秒级精度
+         */
+        private String getRoundRobinKey(long now) {
+            int size = apiKeys.size();
+            for (int attempt = 0; attempt < size; attempt++) {
+                int index = roundRobinCounter.getAndIncrement() % size;
+                if (index < 0) index = -index;
+                String key = apiKeys.get(index);
+                if (isKeyHealthy(key)) {
+                    return key;
+                }
+            }
+            // 所有 key 都不可用，重置健康状态并重试
+            keyHealthMap.clear();
+            int fallbackIndex = roundRobinCounter.getAndIncrement() % size;
+            if (fallbackIndex < 0) fallbackIndex = -fallbackIndex;
+            return apiKeys.get(fallbackIndex);
+        }
+
+        /**
+         * 随机策略
+         */
+        private String getRandomKey() {
+            List<String> healthy = apiKeys.stream()
+                .filter(this::isKeyHealthy).collect(Collectors.toList());
+            if (healthy.isEmpty()) {
+                keyHealthMap.clear();
+                healthy = new ArrayList<>(apiKeys);
+            }
+            return healthy.get(new Random().nextInt(healthy.size()));
+        }
+
+        /**
+         * 优先级策略：按配置顺序优先使用前面的 key
+         */
+        private String getPriorityKey() {
+            for (String key : apiKeys) {
+                if (isKeyHealthy(key)) {
+                    return key;
+                }
+            }
+            keyHealthMap.clear();
+            return apiKeys.get(0);
+        }
+
+        /**
+         * 检查 key 是否健康（未进入冷却期）
+         */
+        private boolean isKeyHealthy(String key) {
+            Long nextRetry = keyHealthMap.get(key);
+            return nextRetry == null || System.currentTimeMillis() >= nextRetry;
+        }
+
+        /**
+         * 标记 key 为不可用，进入冷却期
+         */
+        public void markKeyFailed(String key) {
+            long cooldown = keyRotation != null ? keyRotation.getCooldownMs() : 60000;
+            keyHealthMap.put(key, System.currentTimeMillis() + cooldown);
+        }
+
+        /**
+         * 重置所有 key 的健康状态
+         */
+        public void resetKeyHealth() {
+            keyHealthMap.clear();
         }
         
         /**
@@ -418,6 +519,7 @@ public class JwcodeConfig {
         private int maxActionsPerMinute = 30;
         
         @JsonProperty("dangerous-commands")
+        @JsonDeserialize(using = StringToListDeserializer.class)
         private List<String> dangerousCommands = Arrays.asList("rm -rf", "format", "del /s /q");
     }
     
@@ -579,5 +681,56 @@ public class JwcodeConfig {
      * ModelConfig 是 ModelDefinition 的别名（兼容性）
      */
     public static class ModelConfig extends ModelDefinition {
+    }
+
+    // ==================== 自定义 Jackson 反序列化器 ====================
+
+    /**
+     * 兼容字符串格式的 List<String> 反序列化器。
+     * <p>
+     * 当配置文件中 dangerous-commands 被错误写为字符串（如 "[rm -rf, format, del /s /q]"）
+     * 而非 YAML 列表时，此反序列化器会尝试解析字符串并转换为 List。
+     * 同时也兼容标准的 YAML 列表格式。
+     */
+    public static class StringToListDeserializer extends JsonDeserializer<List<String>> {
+        
+        @Override
+        public List<String> deserialize(JsonParser p, DeserializationContext ctxt) 
+                throws IOException {
+            
+            // 情况 1：标准 YAML 列表格式
+            if (p.currentToken() == JsonToken.START_ARRAY) {
+                List<String> result = new ArrayList<>();
+                while (p.nextToken() != JsonToken.END_ARRAY) {
+                    result.add(p.getValueAsString());
+                }
+                return result;
+            }
+            
+            // 情况 2：字符串格式（容错处理）
+            String raw = p.getValueAsString();
+            if (raw == null || raw.isBlank()) {
+                return new ArrayList<>();
+            }
+            
+            // 去除首尾方括号和引号
+            String cleaned = raw.trim();
+            if (cleaned.startsWith("[") && cleaned.endsWith("]")) {
+                cleaned = cleaned.substring(1, cleaned.length() - 1);
+            }
+            
+            // 按逗号分割，并清理每个元素的空白和引号
+            return Arrays.stream(cleaned.split(","))
+                .map(String::trim)
+                .map(s -> {
+                    if ((s.startsWith("\"") && s.endsWith("\"")) || 
+                        (s.startsWith("'") && s.endsWith("'"))) {
+                        return s.substring(1, s.length() - 1).trim();
+                    }
+                    return s;
+                })
+                .filter(s -> !s.isEmpty())
+                .collect(Collectors.toList());
+        }
     }
 }

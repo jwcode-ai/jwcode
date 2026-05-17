@@ -8,6 +8,7 @@ import com.jwcode.core.session.Session;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -108,6 +109,24 @@ public class MainAgentStateMachine {
     // Hook 链（TransitionGuard）
     private volatile HookChain hookChain;
 
+    // ASK 待确认状态转换（pendingTransition）
+    private volatile PendingTransition pendingTransition;
+
+    /**
+     * 待确认的转换记录。
+     */
+    public record PendingTransition(
+        State from,
+        State to,
+        String reason,
+        HookResult hookResult,
+        Instant createdAt
+    ) {
+        public boolean isExpired(long timeoutMs) {
+            return Duration.between(createdAt, Instant.now()).toMillis() > timeoutMs;
+        }
+    }
+
     // ==================== 构造函数 ====================
 
     public MainAgentStateMachine(String sessionId) {
@@ -156,8 +175,20 @@ public class MainAgentStateMachine {
                 if (guardResult.getDecision() == HookDecision.ASK) {
                     logger.info("[StateMachine] TransitionGuard ASK: {} -> {} needs confirmation",
                         oldState, newState);
-                    // ASK: 转换为 WAITING_INPUT 等待用户确认
-                    // 记录 pendingTransition 以便确认后恢复
+                    // ASK: 记录 pendingTransition，转换为 WAITING_INPUT 等待用户确认
+                    this.pendingTransition = new PendingTransition(
+                        oldState, newState, reason, guardResult, Instant.now());
+                    this.currentState = State.WAITING_INPUT;
+                    this.lastStateChangeAt = Instant.now();
+                    stateHistory.add(new StateTransition(
+                        sessionId, oldState, State.WAITING_INPUT,
+                        "ASK: pending " + oldState + " -> " + newState + " (" + reason + ")",
+                        Instant.now()));
+                    notifyStateChange(new StateTransition(
+                        sessionId, oldState, State.WAITING_INPUT,
+                        "ASK: waiting confirmation for " + oldState + " -> " + newState,
+                        Instant.now()));
+                    return oldState;
                 }
             }
         }
@@ -184,6 +215,58 @@ public class MainAgentStateMachine {
      */
     public State getCurrentState() {
         return currentState;
+    }
+
+    /**
+     * 获取待确认的转换（ASK 决策后记录）。
+     *
+     * @return pendingTransition，如果没有则为 null
+     */
+    public PendingTransition getPendingTransition() {
+        return pendingTransition;
+    }
+
+    /**
+     * 确认或拒绝待确认的转换。
+     *
+     * @param approved true 确认转换，false 拒绝转换
+     * @return 如果 approved=true，执行目标状态转换并返回 true；
+     *         如果 approved=false，清除 pendingTransition 并返回 false
+     */
+    public synchronized boolean confirmPendingTransition(boolean approved) {
+        PendingTransition pt = this.pendingTransition;
+        if (pt == null) {
+            logger.warn("[StateMachine] 没有待确认的转换");
+            return false;
+        }
+
+        this.pendingTransition = null;
+
+        if (approved) {
+            logger.info("[StateMachine] ASK 已确认: {} -> {}", pt.from(), pt.to());
+            // 直接执行状态转换（跳过 TransitionGuard 检查，避免循环 ASK）
+            this.currentState = pt.to();
+            this.lastStateChangeAt = Instant.now();
+            stateHistory.add(new StateTransition(
+                sessionId, pt.from(), pt.to(),
+                "ASK confirmed: " + pt.reason(), Instant.now()));
+            notifyStateChange(new StateTransition(
+                sessionId, pt.from(), pt.to(),
+                "ASK confirmed: " + pt.reason(), Instant.now()));
+            return true;
+        } else {
+            logger.info("[StateMachine] ASK 已拒绝: 保持在 {}", pt.from());
+            // 回到原始状态
+            this.currentState = pt.from();
+            this.lastStateChangeAt = Instant.now();
+            stateHistory.add(new StateTransition(
+                sessionId, State.WAITING_INPUT, pt.from(),
+                "ASK denied: " + pt.reason(), Instant.now()));
+            notifyStateChange(new StateTransition(
+                sessionId, State.WAITING_INPUT, pt.from(),
+                "ASK denied: " + pt.reason(), Instant.now()));
+            return false;
+        }
     }
 
     /**

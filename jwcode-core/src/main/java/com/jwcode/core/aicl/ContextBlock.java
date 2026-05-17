@@ -1,198 +1,180 @@
 package com.jwcode.core.aicl;
 
 import java.time.Instant;
-import java.util.*;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
- * AICL 上下文块 — 对应 {@code <ctx:block>} 元素。
+ * ContextBlock — AICL 上下文块模型。
  *
- * <p>将现有 {@code StructuredMessage} 的概念提升为带有优先级、生命周期、
- * TTL 的独立块。每个块包含 label、abstract、content、summary 等子元素。</p>
- *
- * <pre>
- * &lt;ctx:block id="hist" type="history" role="dialogue"
- *            priority="high" format="markdown" state="active"
- *            ttl="5" last-access="1715515800" access-count="3" generation="0"&gt;
- *   &lt;ctx:label&gt;对话历史&lt;/ctx:label&gt;
- *   &lt;ctx:abstract&gt;摘要描述&lt;/ctx:abstract&gt;
- *   &lt;ctx:content&gt;...&lt;/ctx:content&gt;
- * &lt;/ctx:block&gt;
- * </pre>
- *
- * @author JWCode Team
- * @since 1.0.0
+ * <p>每个上下文块统一包装为 {@code <ctx:block>} 元素，
+ * 携带优先级、状态、TTL、最后访问时间、代际等生命周期属性。</p>
  */
 public class ContextBlock {
-    // ===== 核心标识 =====
+
     private final String id;
-    private String type;
+    private final String type;
     private String role;
     private BlockPriority priority;
-    private String format;
-
-    // ===== 生命周期字段 =====
     private BlockLifecycle state;
-    private int ttl;
-    private long lastAccess;
-    private int accessCount;
-    private int generation;
-
-    // ===== 内容 =====
-    private String label;
-    private String blockAbstract;
+    private int ttl;                // TTL 轮数（-1 永久）
+    private Instant lastAccess;     // 最后访问时间
+    private int accessCount;        // 访问次数
+    private int generation;         // 代际
     private String content;
-    private String summary;
-    private long estimatedTokens;
+    private String summary;         // 摘要
+    private String label;           // 标签
+    private String blockAbstract;   // 摘要句（归档用）
+    private String format;          // 格式（markdown/text）
+    private long estimatedTokens;   // 预估 token 数
+    private Map<String, String> attributes; // 扩展属性
 
-    // ===== 元数据 =====
-    private final Instant createdAt;
-    private Instant updatedAt;
-    private final Map<String, String> attributes;
-
-    // ===== 构造函数 =====
-
-    private ContextBlock(Builder builder) {
-        this.id = Objects.requireNonNull(builder.id, "id must not be null");
-        this.type = builder.type;
-        this.role = builder.role;
-        this.priority = builder.priority;
-        this.format = builder.format;
-        this.state = builder.state;
-        this.ttl = builder.ttl;
-        this.lastAccess = builder.lastAccess;
-        this.accessCount = builder.accessCount;
-        this.generation = builder.generation;
-        this.label = builder.label;
-        this.blockAbstract = builder.blockAbstract;
-        this.content = builder.content;
-        this.summary = builder.summary;
-        this.estimatedTokens = builder.estimatedTokens;
-        this.createdAt = Instant.now();
-        this.updatedAt = this.createdAt;
-        this.attributes = new LinkedHashMap<>(builder.attributes);
+    public ContextBlock(String id, String type, BlockPriority priority) {
+        this.id = id;
+        this.type = type;
+        this.priority = priority;
+        this.state = BlockLifecycle.ACTIVE;
+        this.ttl = 3;
+        this.lastAccess = Instant.now();
+        this.accessCount = 0;
+        this.generation = 0;
+        this.estimatedTokens = 0;
+        this.role = "default";
+        this.format = "markdown";
+        this.attributes = new HashMap<>();
     }
 
-    /** 复制构造（用于状态变更后创建新实例） */
-    public ContextBlock(ContextBlock source) {
-        this.id = source.id;
-        this.type = source.type;
-        this.role = source.role;
-        this.priority = source.priority;
-        this.format = source.format;
-        this.state = source.state;
-        this.ttl = source.ttl;
-        this.lastAccess = source.lastAccess;
-        this.accessCount = source.accessCount;
-        this.generation = source.generation;
-        this.label = source.label;
-        this.blockAbstract = source.blockAbstract;
-        this.content = source.content;
-        this.summary = source.summary;
-        this.estimatedTokens = source.estimatedTokens;
-        this.createdAt = source.createdAt;
-        this.updatedAt = Instant.now();
-        this.attributes = new LinkedHashMap<>(source.attributes);
+    /**
+     * 拷贝构造（用于淘汰时创建更新副本）。
+     */
+    public ContextBlock(ContextBlock other) {
+        this.id = other.id;
+        this.type = other.type;
+        this.role = other.role;
+        this.priority = other.priority;
+        this.state = other.state;
+        this.ttl = other.ttl;
+        this.lastAccess = other.lastAccess;
+        this.accessCount = other.accessCount;
+        this.generation = other.generation;
+        this.content = other.content;
+        this.summary = other.summary;
+        this.label = other.label;
+        this.blockAbstract = other.blockAbstract;
+        this.format = other.format;
+        this.estimatedTokens = other.estimatedTokens;
+        this.attributes = new HashMap<>(other.attributes);
     }
 
-    // ===== 生命周期操作 =====
+    // ==================== Getters ====================
 
-    /** 记录访问（更新时间戳和计数） */
-    public ContextBlock touch() {
-        this.lastAccess = System.currentTimeMillis();
-        this.accessCount++;
-        this.updatedAt = Instant.now();
-        return this;
-    }
-
-    /** 衰减到下一生命周期状态 */
-    public ContextBlock decay() {
-        if (this.state == BlockLifecycle.PINNED) return this;
-        BlockLifecycle next = this.state.decay();
-        if (next != this.state) {
-            this.state = next;
-            this.generation++;
-            this.updatedAt = Instant.now();
-        }
-        return this;
-    }
-
-    /** 减少 TTL（每轮对话调用），返回 true 表示 TTL 到期 */
-    public boolean tick() {
-        if (ttl > 0) {
-            ttl--;
-            return ttl <= 0;
-        }
-        return false;
-    }
-
-    /** 计算当前有效 token 数 */
-    public long effectiveTokens() {
-        return (long) (estimatedTokens * state.getContentIntegrity());
-    }
-
-    // ===== 类型判断 =====
-
-    public boolean isSystem() { return "system".equals(type); }
-    public boolean isUser() { return "user".equals(type); }
-    public boolean isHistory() { return "history".equals(type); }
-    public boolean isTool() { return "tool".equals(type); }
-    public boolean isMemory() { return "memory".equals(type); }
-    public boolean isReasoning() { return "reasoning".equals(type); }
-    public boolean isPinned() { return priority == BlockPriority.PINNED; }
-
-    // ===== Getters =====
     public String getId() { return id; }
     public String getType() { return type; }
     public String getRole() { return role; }
     public BlockPriority getPriority() { return priority; }
-    public String getFormat() { return format; }
     public BlockLifecycle getState() { return state; }
     public int getTtl() { return ttl; }
-    public long getLastAccess() { return lastAccess; }
+    public Instant getLastAccess() { return lastAccess; }
     public int getAccessCount() { return accessCount; }
     public int getGeneration() { return generation; }
-    public String getLabel() { return label; }
-    public String getBlockAbstract() { return blockAbstract; }
     public String getContent() { return content; }
     public String getSummary() { return summary; }
+    public String getLabel() { return label; }
+    public String getBlockAbstract() { return blockAbstract; }
+    public String getFormat() { return format; }
     public long getEstimatedTokens() { return estimatedTokens; }
-    public Instant getCreatedAt() { return createdAt; }
-    public Instant getUpdatedAt() { return updatedAt; }
-    public Map<String, String> getAttributes() { return Collections.unmodifiableMap(attributes); }
+    public Map<String, String> getAttributes() { return attributes; }
 
-    // ===== Setters（可变字段） =====
-    public void setType(String type) { this.type = type; }
+    // ==================== Setters ====================
+
     public void setRole(String role) { this.role = role; }
     public void setPriority(BlockPriority priority) { this.priority = priority; }
-    public void setFormat(String format) { this.format = format; }
     public void setState(BlockLifecycle state) { this.state = state; }
     public void setTtl(int ttl) { this.ttl = ttl; }
-    public void setLabel(String label) { this.label = label; }
-    public void setBlockAbstract(String blockAbstract) { this.blockAbstract = blockAbstract; }
+    public void setLastAccess(Instant lastAccess) { this.lastAccess = lastAccess; }
+    public void setAccessCount(int accessCount) { this.accessCount = accessCount; }
+    public void setGeneration(int generation) { this.generation = generation; }
     public void setContent(String content) { this.content = content; }
     public void setSummary(String summary) { this.summary = summary; }
+    public void setLabel(String label) { this.label = label; }
+    public void setBlockAbstract(String blockAbstract) { this.blockAbstract = blockAbstract; }
+    public void setFormat(String format) { this.format = format; }
     public void setEstimatedTokens(long estimatedTokens) { this.estimatedTokens = estimatedTokens; }
-    public void setAttribute(String key, String value) { this.attributes.put(key, value); }
+    public void setAttributes(Map<String, String> attributes) { this.attributes = attributes; }
 
-    @Override
-    public String toString() {
-        return String.format("ContextBlock{id=%s, type=%s, priority=%s, state=%s, ttl=%d, gen=%d, tokens=%d}",
-                id, type, priority.getName(), state.getState(), ttl, generation, estimatedTokens);
+    // ==================== 生命周期方法 ====================
+
+    /**
+     * 访问块，更新最后访问时间和访问计数。
+     */
+    public void access() {
+        this.lastAccess = Instant.now();
+        this.accessCount++;
     }
 
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof ContextBlock that)) return false;
-        return id.equals(that.id);
+    /**
+     * touch() — access() 的别名，用于 ContextAssembler。
+     */
+    public void touch() {
+        access();
     }
 
-    @Override
-    public int hashCode() {
-        return id.hashCode();
+    /**
+     * TTL 倒计时：递减 ttl，返回是否过期（ttl <= 0）。
+     * 与 ContextAssembler.tick() 配合使用。
+     */
+    public boolean tick() {
+        if (ttl > 0) {
+            ttl--;
+        }
+        return ttl == 0;
     }
 
-    // ===== Builder =====
+    /**
+     * 生命周期衰减：state 降级到下一级，generation +1。
+     */
+    public void decay() {
+        this.state = this.state.decay();
+        this.generation++;
+    }
+
+    /**
+     * 判断是否已过期（基于 lastAccess + ttl*轮次估算）。
+     */
+    public boolean isExpired() {
+        return ttl == 0 && state != BlockLifecycle.PINNED;
+    }
+
+    /**
+     * 计算有效 token 数。
+     * 根据 state 的 contentIntegrity 比例估算。
+     */
+    public long effectiveTokens() {
+        if (state == BlockLifecycle.DEPRECATED) return 0;
+        if (state == BlockLifecycle.ARCHIVED) {
+            // 归档态：仅 label + abstract 的 token 数
+            long base = (label != null ? label.length() / 3 : 0)
+                      + (blockAbstract != null ? blockAbstract.length() / 3 : 0);
+            return Math.max(20, base);
+        }
+        if (state == BlockLifecycle.SUMMARIZED) {
+            // 摘要态：使用 summary 长度估算
+            long sumLen = summary != null ? summary.length() / 3 : 0;
+            return Math.max(50, sumLen);
+        }
+        // 其他状态：使用 content 长度 * contentIntegrity
+        long raw = (content != null ? content.length() / 3 : 0) + estimatedTokens;
+        return Math.max(10, (long) (raw * state.getContentIntegrity()));
+    }
+
+    /**
+     * 计算未使用时长（毫秒）。
+     */
+    public long getIdleMillis() {
+        return java.time.Duration.between(lastAccess, Instant.now()).toMillis();
+    }
+
+    // ==================== Builder ====================
 
     public static Builder builder(String id) {
         return new Builder(id);
@@ -203,62 +185,66 @@ public class ContextBlock {
         private String type = "general";
         private String role = "default";
         private BlockPriority priority = BlockPriority.MEDIUM;
-        private String format = "markdown";
         private BlockLifecycle state = BlockLifecycle.ACTIVE;
         private int ttl = 3;
-        private long lastAccess = System.currentTimeMillis();
+        private Instant lastAccess = Instant.now();
         private int accessCount = 0;
         private int generation = 0;
-        private String label = "";
-        private String blockAbstract = "";
-        private String content = "";
-        private String summary = "";
+        private String content;
+        private String summary;
+        private String label;
+        private String blockAbstract;
+        private String format = "markdown";
         private long estimatedTokens = 0;
-        private final Map<String, String> attributes = new LinkedHashMap<>();
+        private Map<String, String> attributes = new HashMap<>();
 
-        public Builder(String id) {
-            this.id = Objects.requireNonNull(id, "id must not be null");
+        private Builder(String id) {
+            this.id = id;
         }
 
         public Builder type(String type) { this.type = type; return this; }
         public Builder role(String role) { this.role = role; return this; }
-        public Builder priority(BlockPriority p) { this.priority = p; return this; }
-        public Builder format(String f) { this.format = f; return this; }
-        public Builder state(BlockLifecycle s) { this.state = s; return this; }
-        public Builder ttl(int t) { this.ttl = t; return this; }
-        public Builder lastAccess(long la) { this.lastAccess = la; return this; }
-        public Builder accessCount(int ac) { this.accessCount = ac; return this; }
-        public Builder generation(int g) { this.generation = g; return this; }
-        public Builder label(String l) { this.label = l; return this; }
-        public Builder blockAbstract(String a) { this.blockAbstract = a; return this; }
-        public Builder content(String c) { this.content = c; this.estimatedTokens = estimateTokens(c); return this; }
-        public Builder summary(String s) { this.summary = s; return this; }
-        public Builder estimatedTokens(long t) { this.estimatedTokens = t; return this; }
-        public Builder attribute(String k, String v) { this.attributes.put(k, v); return this; }
-        public Builder attributes(Map<String, String> a) { this.attributes.putAll(a); return this; }
-
-        public ContextBlock build() {
-            if (estimatedTokens == 0 && content != null && !content.isEmpty()) {
-                estimatedTokens = estimateTokens(content);
-            }
-            return new ContextBlock(this);
+        public Builder priority(BlockPriority priority) { this.priority = priority; return this; }
+        public Builder state(BlockLifecycle state) { this.state = state; return this; }
+        public Builder ttl(int ttl) { this.ttl = ttl; return this; }
+        public Builder lastAccess(Instant lastAccess) { this.lastAccess = lastAccess; return this; }
+        public Builder lastAccess(long epochMillis) {
+            this.lastAccess = Instant.ofEpochMilli(epochMillis);
+            return this;
+        }
+        public Builder accessCount(int accessCount) { this.accessCount = accessCount; return this; }
+        public Builder generation(int generation) { this.generation = generation; return this; }
+        public Builder content(String content) { this.content = content; return this; }
+        public Builder summary(String summary) { this.summary = summary; return this; }
+        public Builder label(String label) { this.label = label; return this; }
+        public Builder blockAbstract(String blockAbstract) { this.blockAbstract = blockAbstract; return this; }
+        public Builder format(String format) { this.format = format; return this; }
+        public Builder estimatedTokens(long estimatedTokens) { this.estimatedTokens = estimatedTokens; return this; }
+        public Builder attribute(String key, String value) {
+            this.attributes.put(key, value);
+            return this;
+        }
+        public Builder attributes(Map<String, String> attributes) {
+            this.attributes.putAll(attributes);
+            return this;
         }
 
-        /** 简单 token 估算：中文字符约 1 token，英文约 4 字符/token */
-        private static long estimateTokens(String text) {
-            if (text == null || text.isEmpty()) return 0;
-            int chineseChars = 0;
-            int otherChars = 0;
-            for (char c : text.toCharArray()) {
-                if (Character.UnicodeBlock.of(c) == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS
-                        || Character.UnicodeBlock.of(c) == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_A
-                        || Character.UnicodeBlock.of(c) == Character.UnicodeBlock.CJK_SYMBOLS_AND_PUNCTUATION) {
-                    chineseChars++;
-                } else {
-                    otherChars++;
-                }
-            }
-            return chineseChars + (otherChars / 4);
+        public ContextBlock build() {
+            ContextBlock block = new ContextBlock(id, type, priority);
+            block.role = this.role;
+            block.state = this.state;
+            block.ttl = this.ttl;
+            block.lastAccess = this.lastAccess;
+            block.accessCount = this.accessCount;
+            block.generation = this.generation;
+            block.content = this.content;
+            block.summary = this.summary;
+            block.label = this.label;
+            block.blockAbstract = this.blockAbstract;
+            block.format = this.format;
+            block.estimatedTokens = this.estimatedTokens;
+            block.attributes = new HashMap<>(this.attributes);
+            return block;
         }
     }
 }

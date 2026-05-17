@@ -180,10 +180,15 @@ public class A2AAgentDispatcher implements AgentDispatcher {
 
     @Override
     public TaskOutput submitTaskSync(String agentName, A2ATask task) {
+        return submitTaskSync(agentName, task, timeout.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    @Override
+    public TaskOutput submitTaskSync(String agentName, A2ATask task, long timeout, TimeUnit unit) {
         try {
-            return submitTask(agentName, task).get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+            return submitTask(agentName, task).get(timeout, unit);
         } catch (TimeoutException e) {
-            task.fail("Task timeout after " + timeout.toSeconds() + "s");
+            task.fail("Task timeout after " + unit.toSeconds(timeout) + "s");
             return TaskOutput.success("Task timeout: " + task.getTaskId());
         } catch (Exception e) {
             task.fail(e.getMessage());

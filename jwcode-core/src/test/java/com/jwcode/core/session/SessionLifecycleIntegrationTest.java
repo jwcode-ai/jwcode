@@ -71,8 +71,11 @@ public class SessionLifecycleIntegrationTest {
     @Test
     @DisplayName("获取所有 Session")
     void testGetAllSessions() {
+        sessionManager.clearActiveSession();
         sessionManager.createSession("/workdir1");
+        sessionManager.clearActiveSession();
         sessionManager.createSession("/workdir2");
+        sessionManager.clearActiveSession();
         sessionManager.createSession("/workdir3");
 
         List<Session> all = sessionManager.getAllSessions();
@@ -82,8 +85,11 @@ public class SessionLifecycleIntegrationTest {
     @Test
     @DisplayName("获取最近 Session")
     void testGetRecentSessions() {
+        sessionManager.clearActiveSession();
         sessionManager.createSession("/workdir1");
+        sessionManager.clearActiveSession();
         sessionManager.createSession("/workdir2");
+        sessionManager.clearActiveSession();
         sessionManager.createSession("/workdir3");
 
         List<Session> recent = sessionManager.getRecentSessions(2);
@@ -117,7 +123,9 @@ public class SessionLifecycleIntegrationTest {
     void testSessionCount() {
         assertEquals(0, sessionManager.getSessionCount());
 
+        sessionManager.clearActiveSession();
         sessionManager.createSession("/workdir1");
+        sessionManager.clearActiveSession();
         sessionManager.createSession("/workdir2");
 
         assertEquals(2, sessionManager.getSessionCount());

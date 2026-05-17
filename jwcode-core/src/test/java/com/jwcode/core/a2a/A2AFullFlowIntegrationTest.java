@@ -6,9 +6,13 @@ import com.jwcode.core.a2a.dispatcher.LocalAgentDispatcher;
 import com.jwcode.core.a2a.model.A2AMessage;
 import com.jwcode.core.a2a.model.A2ATask;
 import com.jwcode.core.a2a.model.AgentCard;
+import com.jwcode.core.a2a.model.Capabilities;
+import com.jwcode.core.a2a.model.Skill;
 import com.jwcode.core.a2a.model.TaskOutput;
 import com.jwcode.core.a2a.registry.A2ARegistry;
 import com.jwcode.core.a2a.registry.AgentSession;
+import com.jwcode.core.a2a.model.ErrorSummary;
+import com.jwcode.core.a2a.model.RetryPolicy;
 import com.jwcode.core.a2a.retry.RetryOrchestrator;
 import com.jwcode.core.a2a.retry.RetryStrategy;
 import com.jwcode.core.a2a.router.AgentRouter;
@@ -23,6 +27,8 @@ import org.junit.jupiter.api.*;
 import org.mockito.Mockito;
 
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -53,9 +59,9 @@ public class A2AFullFlowIntegrationTest {
         mockToolExecutor = Mockito.mock(ToolExecutor.class);
         mockToolRegistry = Mockito.mock(ToolRegistry.class);
 
-        agentRegistry = new AgentRegistry();
+        agentRegistry = new AgentRegistry(mockToolRegistry);
 
-        facade = new A2AFacade(config, agentRegistry, mockLLM, mockToolExecutor, mockToolRegistry);
+        facade = new A2AFacade(agentRegistry, config, mockLLM, mockToolRegistry, mockToolExecutor);
     }
 
     // ==================== A2AConfig 配置测试 ====================
@@ -91,71 +97,176 @@ public class A2AFullFlowIntegrationTest {
         );
     }
 
+    @Test
+    @DisplayName("A2A 配置 - Builder 模式")
+    void testConfigBuilder() {
+        A2AConfig built = A2AConfig.builder()
+            .mode(A2AConfig.DispatchMode.AUTO)
+            .registryEndpoint("http://example:9200")
+            .basePort(9200)
+            .connectTimeoutSeconds(30)
+            .requestTimeoutSeconds(60)
+            .build();
+
+        assertEquals(A2AConfig.DispatchMode.AUTO, built.getMode());
+        assertEquals("http://example:9200", built.getRegistryEndpoint());
+    }
+
     // ==================== A2ARegistry 测试 ====================
 
     @Test
-    @DisplayName("A2A 注册中心 - Agent 注册与发现")
+    @DisplayName("A2A 注册中心 - Agent 会话注册与发现")
     void testRegistryAgentRegistration() {
-        A2ARegistry registry = new A2ARegistry();
+        A2ARegistry registry = A2ARegistry.getInstance();
 
-        AgentCard agentCard = new AgentCard("agent-1", "测试Agent", List.of("skill1"), "http://localhost:9101");
-        registry.register(agentCard);
+        AgentCard card = AgentCard.builder()
+            .name("agent-1")
+            .description("测试Agent")
+            .agentType("worker")
+            .skills(List.of(new Skill("skill1", "测试技能", "测试技能", Map.of(), Map.of())))
+            .capabilities(Capabilities.defaultCapabilities())
+            .endpointUrl("http://localhost:9101")
+            .version("1.0.0")
+            .build();
+
+        AgentSession session = AgentSession.builder()
+            .agentName(card.getName())
+            .agentType(card.getAgentType())
+            .agentCard(card)
+            .connectionId("conn-agent-1")
+            .build();
+        registry.register(session);
 
         assertAll("Agent 注册验证",
-            () -> assertTrue(registry.isRegistered("agent-1"), "Agent 应已注册"),
-            () -> assertNotNull(registry.lookup("agent-1"), "应能查找到 Agent"),
-            () -> assertEquals("测试Agent", registry.lookup("agent-1").getName(), "Agent 名称匹配")
+            () -> assertTrue(registry.findByName("agent-1").isPresent(), "Agent 应已注册"),
+            () -> assertEquals("测试Agent", registry.findByName("agent-1").get().getAgentCard().getDescription(), "Agent 描述匹配")
         );
+
+        registry.unregister(session.getConnectionId());
     }
 
     @Test
-    @DisplayName("A2A 注册中心 - Agent 注销")
-    void testRegistryAgentUnregister() {
-        A2ARegistry registry = new A2ARegistry();
-        registry.register(new AgentCard("agent-2", "待注销Agent", List.of(), "http://localhost:9102"));
+    @DisplayName("A2A 注册中心 - Agent 按技能查找")
+    void testRegistryFindBySkill() {
+        A2ARegistry registry = A2ARegistry.getInstance();
 
-        assertTrue(registry.isRegistered("agent-2"), "注册后应可用");
+        AgentCard card = AgentCard.builder()
+            .name("skill-agent")
+            .description("技能Agent")
+            .agentType("worker")
+            .skills(List.of(
+                new Skill("code-review", "代码审查", "代码审查技能", Map.of(), Map.of()),
+                new Skill("analysis", "分析", "分析技能", Map.of(), Map.of())))
+            .capabilities(Capabilities.defaultCapabilities())
+            .endpointUrl("http://localhost:9102")
+            .version("1.0.0")
+            .build();
 
-        registry.unregister("agent-2");
-        assertFalse(registry.isRegistered("agent-2"), "注销后应不可用");
+        AgentSession session = AgentSession.builder()
+            .agentName(card.getName())
+            .agentType(card.getAgentType())
+            .agentCard(card)
+            .connectionId("conn-skill-agent")
+            .build();
+        registry.register(session);
+
+        List<AgentSession> bySkill = registry.findBySkillId("code-review");
+        assertFalse(bySkill.isEmpty(), "应按技能找到 Agent");
+
+        registry.unregister(session.getConnectionId());
+    }
+
+    @Test
+    @DisplayName("A2A 注册中心 - 统计信息")
+    void testRegistryStats() {
+        A2ARegistry registry = A2ARegistry.getInstance();
+        A2ARegistry.RegistryStats stats = registry.getStats();
+        assertNotNull(stats);
     }
 
     // ==================== AgentRouter 测试 ====================
 
     @Test
-    @DisplayName("Agent 路由 - 根据技能路由到正确 Agent")
-    void testRouterBySkill() {
-        AgentRouter router = new AgentRouter();
-        router.registerAgent("agent-a", List.of("code-review", "analysis"));
-        router.registerAgent("agent-b", List.of("deploy", "test"));
+    @DisplayName("Agent 路由 - 根据能力选择 Agent")
+    void testRouterSelectAgent() {
+        A2ARegistry registry = A2ARegistry.getInstance();
 
-        assertAll("路由验证",
-            () -> assertEquals("agent-a", router.routeBySkill("code-review"), "code-review 应路由到 agent-a"),
-            () -> assertEquals("agent-b", router.routeBySkill("deploy"), "deploy 应路由到 agent-b"),
-            () -> assertEquals("agent-b", router.routeBySkill("test"), "test 应路由到 agent-b")
-        );
+        AgentCard card = AgentCard.builder()
+            .name("router-agent")
+            .description("路由测试Agent")
+            .agentType("worker")
+            .skills(List.of(new Skill("code", "编码", "编码技能", Map.of(), Map.of())))
+            .capabilities(Capabilities.defaultCapabilities())
+            .endpointUrl("http://localhost:9103")
+            .version("1.0.0")
+            .build();
+
+        AgentSession session = AgentSession.builder()
+            .agentName(card.getName())
+            .agentType(card.getAgentType())
+            .agentCard(card)
+            .connectionId("conn-router-agent")
+            .build();
+        registry.register(session);
+
+        AgentRouter router = new AgentRouter();
+        Optional<AgentSession> selected = router.selectAgent(registry, "code", RoutingStrategy.ROUND_ROBIN);
+
+        assertTrue(selected.isPresent(), "应能根据能力选择 Agent");
+
+        registry.unregister(session.getConnectionId());
     }
 
     @Test
-    @DisplayName("Agent 路由 - 未知技能应返回 null 或抛出异常")
+    @DisplayName("Agent 路由 - 未知能力应返回空")
     void testRouterUnknownSkill() {
+        A2ARegistry registry = A2ARegistry.getInstance();
         AgentRouter router = new AgentRouter();
-        router.registerAgent("agent-a", List.of("code-review"));
 
-        String result = router.routeBySkill("unknown-skill");
-        assertNull(result, "未知技能应返回 null");
+        Optional<AgentSession> selected = router.selectAgent(registry, "unknown-skill", RoutingStrategy.ROUND_ROBIN);
+        assertTrue(selected.isEmpty(), "未知能力应返回空");
     }
 
     // ==================== LocalAgentDispatcher 测试 ====================
 
     @Test
+    @DisplayName("本地调度器 - 注册 Agent 卡片")
+    void testLocalDispatcherRegisterAgent() {
+        LocalAgentDispatcher dispatcher = new LocalAgentDispatcher(agentRegistry, mockLLM, mockToolRegistry, mockToolExecutor);
+
+        AgentCard card = AgentCard.builder()
+            .name("dispatcher-agent")
+            .description("调度测试Agent")
+            .agentType("worker")
+            .skills(List.of(new Skill("test", "测试", "测试技能", Map.of(), Map.of())))
+            .capabilities(Capabilities.defaultCapabilities())
+            .endpointUrl("local")
+            .version("1.0.0")
+            .build();
+
+        dispatcher.registerAgent(card);
+        List<AgentCard> agents = dispatcher.getAvailableAgents();
+        assertFalse(agents.isEmpty(), "应包含已注册的 Agent");
+    }
+
+    @Test
     @DisplayName("本地调度器 - 提交任务并获取结果")
     void testLocalDispatcherSubmitTask() throws Exception {
-        LocalAgentDispatcher dispatcher = new LocalAgentDispatcher(
-            agentRegistry, mockLLM, mockToolExecutor, mockToolRegistry);
+        LocalAgentDispatcher dispatcher = new LocalAgentDispatcher(agentRegistry, mockLLM, mockToolRegistry, mockToolExecutor);
 
-        A2ATask task = new A2ATask("test-task-1", "测试任务描述");
-        CompletableFuture<TaskOutput> future = dispatcher.dispatchTask("agent-1", task);
+        AgentCard card = AgentCard.builder()
+            .name("task-agent")
+            .description("任务测试Agent")
+            .agentType("worker")
+            .skills(List.of(new Skill("test", "测试", "测试技能", Map.of(), Map.of())))
+            .capabilities(Capabilities.defaultCapabilities())
+            .endpointUrl("local")
+            .version("1.0.0")
+            .build();
+        dispatcher.registerAgent(card);
+
+        A2ATask task = A2ATask.create("test", "测试任务描述", Map.of("key", "value"));
+        CompletableFuture<TaskOutput> future = dispatcher.submitTask("task-agent", task);
 
         assertNotNull(future, "调度器应返回异步结果");
     }
@@ -163,99 +274,170 @@ public class A2AFullFlowIntegrationTest {
     // ==================== A2AFacade 完整流程测试 ====================
 
     @Test
-    @DisplayName("A2A 门面 - 不同调度模式的策略选择")
-    void testFacadeDispatchModeSelection() {
-        assertAll("调度模式验证",
-            () -> assertDoesNotThrow(() -> {
-                facade.setMode(A2AConfig.DispatchMode.LOCAL);
-            }, "切换到 LOCAL 模式不应抛出异常"),
-            () -> assertDoesNotThrow(() -> {
-                facade.setMode(A2AConfig.DispatchMode.AUTO);
-            }, "切换到 AUTO 模式不应抛出异常")
-        );
+    @DisplayName("A2A 门面 - 获取可用 Agent 列表")
+    void testFacadeGetAvailableAgents() {
+        List<AgentCard> agents = facade.getAvailableAgents();
+        assertNotNull(agents, "可用 Agent 列表不应为 null");
     }
 
     @Test
-    @DisplayName("A2A 门面 - Agent 卡片信息查询")
-    void testFacadeAgentCard() {
-        AgentCard card = facade.getAgentCard();
-        assertAll("Agent 卡片信息验证",
-            () -> assertNotNull(card, "Agent 卡片不应为 null"),
-            () -> assertNotNull(card.getAgentName(), "Agent 名称不应为 null"),
-            () -> assertNotNull(card.getSkills(), "技能列表不应为 null")
-        );
+    @DisplayName("A2A 门面 - 按技能查找 Agent")
+    void testFacadeFindBySkill() {
+        AgentCard card = facade.findAgentBySkill("code");
+        // 无匹配时返回 null
+        assertNull(card);
+    }
+
+    @Test
+    @DisplayName("A2A 门面 - 调度器名称")
+    void testFacadeDispatcherName() {
+        String name = facade.getDispatcherName();
+        assertNotNull(name);
+    }
+
+    @Test
+    @DisplayName("A2A 门面 - 配置访问")
+    void testFacadeConfig() {
+        A2AConfig cfg = facade.getConfig();
+        assertNotNull(cfg);
+        assertEquals(A2AConfig.DispatchMode.LOCAL, cfg.getMode());
     }
 
     // ==================== A2AMessage 模型测试 ====================
 
     @Test
-    @DisplayName("A2A 消息模型 - 创建和属性验证")
-    void testA2AMessage() {
-        A2AMessage message = new A2AMessage("msg-1", "agent-a", "agent-b", "hello");
+    @DisplayName("A2A 消息模型 - 使用工厂方法创建")
+    void testA2AMessageFactory() {
+        A2AMessage message = A2AMessage.taskSubmit("task-1", "hello", "agent-a", "agent-b");
 
         assertAll("消息模型验证",
-            () -> assertEquals("msg-1", message.getMessageId(), "消息 ID 匹配"),
+            () -> assertNotNull(message.getMessageId(), "消息 ID 不应为 null"),
             () -> assertEquals("agent-a", message.getSource(), "发送方匹配"),
             () -> assertEquals("agent-b", message.getTarget(), "接收方匹配"),
-            () -> assertEquals("hello", message.getContent(), "消息内容匹配")
+            () -> assertEquals("hello", message.getContent(), "消息内容匹配"),
+            () -> assertEquals(A2AMessage.MessageType.TASK_SUBMIT, message.getType(), "消息类型匹配")
         );
+    }
+
+    @Test
+    @DisplayName("A2A 消息模型 - 使用 Builder 创建")
+    void testA2AMessageBuilder() {
+        A2AMessage message = A2AMessage.builder()
+            .messageId("msg-1")
+            .type(A2AMessage.MessageType.TASK_COMPLETED)
+            .taskId("task-1")
+            .content("完成")
+            .source("agent-a")
+            .target("agent-b")
+            .build();
+
+        assertEquals("msg-1", message.getMessageId());
+        assertEquals("完成", message.getContent());
+    }
+
+    // ==================== A2ATask 模型测试 ====================
+
+    @Test
+    @DisplayName("A2A 任务模型 - 使用静态工厂方法创建")
+    void testA2ATaskCreate() {
+        A2ATask task = A2ATask.create("skill-1", "测试任务", Map.of("input", "data"));
+
+        assertAll("任务模型验证",
+            () -> assertNotNull(task.getTaskId(), "任务 ID 不应为 null"),
+            () -> assertEquals("skill-1", task.getSkillId()),
+            () -> assertEquals("测试任务", task.getDescription()),
+            () -> assertEquals(A2ATask.TaskStatus.PENDING, task.getStatus())
+        );
+    }
+
+    @Test
+    @DisplayName("A2A 任务模型 - 生命周期状态转换")
+    void testA2ATaskLifecycle() {
+        A2ATask task = A2ATask.create("skill-1", "生命周期测试", Map.of());
+
+        task.start();
+        assertEquals(A2ATask.TaskStatus.RUNNING, task.getStatus());
+
+        task.complete(TaskOutput.success("成功", Map.of("result", "ok")));
+        assertEquals(A2ATask.TaskStatus.COMPLETED, task.getStatus());
+        assertTrue(task.isTerminal());
+    }
+
+    @Test
+    @DisplayName("A2A 任务模型 - 失败状态")
+    void testA2ATaskFailure() {
+        A2ATask task = A2ATask.create("skill-1", "失败测试", Map.of());
+        task.fail("发生错误");
+        assertEquals(A2ATask.TaskStatus.FAILED, task.getStatus());
+        assertEquals("发生错误", task.getErrorMessage());
     }
 
     // ==================== RetryOrchestrator 测试 ====================
 
     @Test
-    @DisplayName("重试编排器 - 重试策略应用")
+    @DisplayName("重试编排器 - 使用 RetryStrategy 接口")
     void testRetryOrchestrator() {
         RetryOrchestrator orchestrator = new RetryOrchestrator();
-        RetryStrategy strategy = new RetryStrategy(3, 100, 2.0);
+        RetryPolicy policy = RetryPolicy.builder().maxRetries(3).build();
+        RetryStrategy strategy = RetryStrategy.exponentialBackoff();
 
         assertAll("重试编排器验证",
-            () -> assertDoesNotThrow(() -> orchestrator.registerStrategy("default", strategy),
-                "注册策略不应抛出异常"),
-            () -> assertDoesNotThrow(() -> orchestrator.getStrategy("default"),
-                "获取策略不应抛出异常")
+            () -> assertNotNull(strategy, "策略不应为 null"),
+            () -> assertDoesNotThrow(() -> {
+                orchestrator.executeWithRetry(() -> "ok", policy, strategy);
+            }, "执行重试不应抛出异常")
         );
     }
 
-    // ==================== 完整流程：注册 → 路由 → 调度 ====================
-
     @Test
-    @DisplayName("完整流程：Agent 注册 → 路由查找 → 调度分发")
-    void testFullFlowRegistryRouteDispatch() throws Exception {
-        // 1. A2A 注册中心注册 Agent
-        A2ARegistry registry = new A2ARegistry();
-        AgentCard card = new AgentCard("full-flow-agent", "全流程Agent",
-            List.of("code", "test"), "http://localhost:9999");
-        registry.register(card);
-        assertTrue(registry.isRegistered("full-flow-agent"), "Agent 应注册成功");
+    @DisplayName("重试编排器 - 执行失败时抛出异常")
+    void testRetryOrchestratorFailure() {
+        RetryOrchestrator orchestrator = new RetryOrchestrator();
+        RetryPolicy policy = RetryPolicy.builder().maxRetries(2).build();
+        RetryStrategy strategy = RetryStrategy.noRetry();
 
-        // 2. 路由查找
-        AgentRouter router = new AgentRouter();
-        router.registerAgent("full-flow-agent", List.of("code", "test"));
-        String routedAgent = router.routeBySkill("code");
-        assertEquals("full-flow-agent", routedAgent, "路由应找到正确的 Agent");
-
-        // 3. 调度器分发
-        LocalAgentDispatcher dispatcher = new LocalAgentDispatcher(
-            agentRegistry, mockLLM, mockToolExecutor, mockToolRegistry);
-        A2ATask task = new A2ATask("flow-task-1", "全流程测试任务");
-        CompletableFuture<TaskOutput> result = dispatcher.dispatchTask(routedAgent, task);
-
-        assertNotNull(result, "调度分发应返回结果");
+        assertThrows(RetryOrchestrator.RetryExhaustedException.class, () -> {
+            orchestrator.executeWithRetry(() -> {
+                throw new RuntimeException("预期失败");
+            }, policy, strategy);
+        });
     }
 
-    // ==================== 配置加载测试 ====================
+    // ==================== A2AFacade 提交任务测试 ====================
 
     @Test
-    @DisplayName("A2A 配置加载 - 从 Properties 加载")
-    void testConfigLoading() {
-        // 验证配置继承和覆盖
-        config.setMode(A2AConfig.DispatchMode.LOCAL);
-        config.setConnectTimeoutSeconds(30);
+    @DisplayName("A2A 门面 - 提交任务")
+    void testFacadeSubmitTask() {
+        A2ATask task = A2ATask.create("test", "门面测试任务", Map.of());
+        CompletableFuture<TaskOutput> future = facade.submitTask("test-agent", task);
+        assertNotNull(future);
+    }
 
-        assertAll("配置加载验证",
-            () -> assertNotNull(config.getMode()),
-            () -> assertEquals(30, config.getConnectTimeoutSeconds())
+    @Test
+    @DisplayName("A2A 门面 - 关闭")
+    void testFacadeShutdown() {
+        assertDoesNotThrow(() -> facade.shutdown());
+    }
+
+    // ==================== AgentCard Builder 测试 ====================
+
+    @Test
+    @DisplayName("AgentCard - Builder 构建远程 Agent")
+    void testAgentCardBuilderRemote() {
+        AgentCard card = AgentCard.builder()
+            .name("remote-agent")
+            .description("远程Agent")
+            .agentType("worker")
+            .skills(List.of(new Skill("deploy", "部署", "部署技能", Map.of(), Map.of())))
+            .capabilities(Capabilities.defaultCapabilities())
+            .endpointUrl("http://remote:9000")
+            .version("2.0.0")
+            .build();
+
+        assertAll("远程 AgentCard 验证",
+            () -> assertEquals("remote-agent", card.getName()),
+            () -> assertTrue(card.isRemote()),
+            () -> assertTrue(card.hasSkill("deploy"))
         );
     }
 }

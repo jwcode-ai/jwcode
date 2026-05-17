@@ -69,16 +69,14 @@ public class Spinner implements Component {
      * 获取颜色代码
      */
     private String getColorCode() {
-        switch (color) {
-            case ANSI.RED: return "\u001B[31m";
-            case ANSI.GREEN: return "\u001B[32m";
-            case ANSI.YELLOW: return "\u001B[33m";
-            case ANSI.BLUE: return "\u001B[34m";
-            case ANSI.MAGENTA: return "\u001B[35m";
-            case ANSI.CYAN: return "\u001B[36m";
-            case ANSI.WHITE: return "\u001B[37m";
-            default: return "\u001B[0m";
-        }
+        if (color == TextColor.ANSI.RED) return "\u001B[31m";
+        if (color == TextColor.ANSI.GREEN) return "\u001B[32m";
+        if (color == TextColor.ANSI.YELLOW) return "\u001B[33m";
+        if (color == TextColor.ANSI.BLUE) return "\u001B[34m";
+        if (color == TextColor.ANSI.MAGENTA) return "\u001B[35m";
+        if (color == TextColor.ANSI.CYAN) return "\u001B[36m";
+        if (color == TextColor.ANSI.WHITE) return "\u001B[37m";
+        return "\u001B[0m";
     }
     
     private static final String ANSI_RESET = "\u001B[0m";

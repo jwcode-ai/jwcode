@@ -33,7 +33,7 @@ public class TaskLifecycleIntegrationTest {
     @Test
     @DisplayName("检测用户意图")
     void testDetectIntent() {
-        TaskIntent intent = manager.detectIntent(session, "test prompt");
+        TaskLifecycleManager.TaskIntent intent = manager.detectIntent(session, "test prompt");
         assertNotNull(intent);
     }
 
@@ -96,7 +96,7 @@ public class TaskLifecycleIntegrationTest {
     @Test
     @DisplayName("操作任务列表")
     void testOperateTaskList() {
-        String result = manager.operateTaskList(session, "list", null);
+        String result = manager.operateTaskList(session, "list", null, null, null);
         assertNotNull(result);
     }
 
@@ -110,7 +110,7 @@ public class TaskLifecycleIntegrationTest {
         manager.advanceStep(session, "step 2 done");
         manager.checkTaskCompletion(session);
 
-        String taskList = manager.operateTaskList(session, "list", null);
+        String taskList = manager.operateTaskList(session, "list", null, null, null);
         assertNotNull(taskList);
     }
 }

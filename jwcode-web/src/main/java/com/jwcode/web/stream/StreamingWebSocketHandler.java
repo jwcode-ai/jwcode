@@ -85,6 +85,9 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     private final Map<WebSocket, Long> lastPongTime;    // 最后收到 pong 的时间
     private final Map<WebSocket, Long> lastActivityTime; // 最后活跃时间
     
+    // 跟踪每个 sessionId 正在执行的 Future，连接断开时取消
+    private final Map<String, java.util.concurrent.Future<?>> runningQueryFutures;
+    
     // 待发送消息队列（按 sessionId 分组，连接断开时暂存，重连后重放）
     private final Map<String, java.util.Queue<PendingMessage>> pendingMessages;
     private static final int MAX_PENDING_MESSAGES = 200; // 每个会话最多暂存 200 条消息
@@ -128,6 +131,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         this.lastActivityTime = new ConcurrentHashMap<>();
         this.authenticatedConnections = new ConcurrentHashMap<>();
         this.pendingMessages = new ConcurrentHashMap<>();
+        this.runningQueryFutures = new ConcurrentHashMap<>();
         
         // 初始化查询线程池：核心 4，最大 16，60 秒回收，有界队列 100
         this.queryExecutor = new ThreadPoolExecutor(
@@ -457,6 +461,8 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         String sessionId = connectionSessions.remove(conn);
         if (sessionId != null) {
             activeSessionConnections.remove(sessionId);
+            // 连接断开时取消正在运行的查询任务
+            cancelRunningQuery(sessionId);
         }
         
         // 清理心跳跟踪数据
@@ -676,9 +682,14 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         final String clientMessage = msg.message;
         final String finalSessionId = sessionId;
         logger.info("提交查询任务到线程池, message=" + truncate(clientMessage, 30));
-        queryExecutor.submit(() -> {
+        
+        // 取消该 sessionId 上之前仍在运行的查询（如果有）
+        cancelRunningQuery(finalSessionId);
+        
+        java.util.concurrent.Future<?> future = queryExecutor.submit(() -> {
             executeQuery(clientConn, clientSession, clientMessage);
         });
+        runningQueryFutures.put(finalSessionId, future);
         
         logger.info("查询任务已提交到线程池");
     }
@@ -727,9 +738,14 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         final Session clientSession = session;
         final String clientMessage = msg.message;
         final String finalSessionId = sessionId;
-        queryExecutor.submit(() -> {
+        
+        // 取消该 sessionId 上之前仍在运行的 Plan 查询
+        cancelRunningQuery(finalSessionId);
+        
+        java.util.concurrent.Future<?> future = queryExecutor.submit(() -> {
             executePlanQuery(clientConn, clientSession, clientMessage);
         });
+        runningQueryFutures.put(finalSessionId, future);
     }
     
     /**
@@ -837,6 +853,12 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         }
         activeSessionConnections.put(sessionId, conn);
         final String querySessionId = sessionId;
+        
+        // 快速检查：如果连接已断开，直接返回
+        if (Thread.currentThread().isInterrupted() || !conn.isOpen()) {
+            logger.info("Plan 查询已取消（连接已断开）: sessionId=" + querySessionId);
+            return;
+        }
         
         try {
             // 从 YAML 配置读取模型信息
@@ -1178,6 +1200,12 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         final String querySessionId = sessionId;
         
         try {
+            // 检查连接是否仍然活跃
+            if (!isSessionActive(sessionId)) {
+                logger.info("Plan 确认已取消（连接已断开）: sessionId=" + sessionId);
+                return;
+            }
+            
             Session session = sessions.get(sessionId);
             if (session == null) {
                 sendMessage(querySessionId, MessageType.PLAN_ERROR, escapeJson("会话不存在"));
@@ -1315,6 +1343,19 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     private boolean isSessionActive(String sessionId) {
         WebSocket conn = activeSessionConnections.get(sessionId);
         return conn != null && conn.isOpen();
+    }
+    
+    /**
+     * 取消指定 sessionId 上正在运行的查询任务
+     * 在连接断开或新查询提交时调用，避免后台任务继续向已断开的连接发送消息
+     */
+    private void cancelRunningQuery(String sessionId) {
+        if (sessionId == null) return;
+        java.util.concurrent.Future<?> future = runningQueryFutures.remove(sessionId);
+        if (future != null && !future.isDone()) {
+            boolean cancelled = future.cancel(true);
+            logger.info("已取消 sessionId=" + sessionId + " 的查询任务, cancelled=" + cancelled);
+        }
     }
 
     /**
@@ -1538,7 +1579,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
      */
     private void sendMessage(String sessionId, MessageType type, String data) {
         if (sessionId == null) {
-            logger.warning("sendMessage 被调用但 sessionId 为 null, type=" + type);
+            logger.fine("sendMessage 被调用但 sessionId 为 null, type=" + type);
             return;
         }
         WebSocket conn = activeSessionConnections.get(sessionId);
@@ -1557,7 +1598,8 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                 logger.fine("消息已暂存: sessionId=" + sessionId + ", type=" + type 
                     + ", queueSize=" + queue.size());
             } else {
-                logger.warning("sendMessage 找不到活跃连接: sessionId=" + sessionId 
+                // 连接已断开但消息仍在发送 — 首次降为 INFO，后续降为 FINE 避免刷屏
+                logger.fine("sendMessage 连接不可用: sessionId=" + sessionId 
                     + ", type=" + type + ", conn=" + (conn == null ? "null" : "closed"));
             }
         }
@@ -1746,6 +1788,12 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         activeSessionConnections.put(sessionId, conn);
         final String querySessionId = sessionId;
         
+        // 快速检查：如果连接已断开，直接返回，避免无谓的 LLM 调用
+        if (Thread.currentThread().isInterrupted() || !conn.isOpen()) {
+            logger.info("查询已取消（连接已断开）: sessionId=" + querySessionId);
+            return;
+        }
+        
         try {
             // 从 YAML 配置读取模型信息
             JwcodeConfig config = YamlConfigLoader.getInstance().getConfig();
@@ -1852,15 +1900,25 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             engine.setStepCallback(stepCallback);
             
             // 定义流式消费者（不再预先 escapeJson，由 sendMessage 统一处理）
+            // 加入连接活跃性检查，连接断开时停止消费
             java.util.function.Consumer<String> contentConsumer = chunk -> {
+                if (!isSessionActive(querySessionId) || Thread.currentThread().isInterrupted()) {
+                    throw new java.util.concurrent.CancellationException("连接已断开，取消流式消费");
+                }
                 sendMessage(querySessionId, MessageType.CONTENT, chunk);
             };
             
             java.util.function.Consumer<String> thinkingConsumer = chunk -> {
+                if (!isSessionActive(querySessionId) || Thread.currentThread().isInterrupted()) {
+                    throw new java.util.concurrent.CancellationException("连接已断开，取消流式消费");
+                }
                 sendMessage(querySessionId, MessageType.THINKING, chunk);
             };
             
             java.util.function.Consumer<LLMService.StreamToolCallEvent> toolCallConsumer = event -> {
+                if (!isSessionActive(querySessionId) || Thread.currentThread().isInterrupted()) {
+                    throw new java.util.concurrent.CancellationException("连接已断开，取消流式消费");
+                }
                 String json = String.format(
                     "{\"id\":\"%s\",\"name\":\"%s\",\"args\":\"%s\",\"complete\":%b,\"index\":%d}",
                     escapeJson(event.getId()),

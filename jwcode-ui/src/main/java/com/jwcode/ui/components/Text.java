@@ -1,12 +1,12 @@
 package com.jwcode.ui.components;
 
 import com.googlecode.lanterna.TextColor;
+import com.jwcode.ui.layout.FlexItem;
 
 /**
  * Text - 文本组件
  * 
- * 功能说明：
- * 显示带格式的文本内容。
+ * <p>v2.0 新增 Flexbox 布局支持，Text 可以作为 FlexItem 参与 Flexbox 布局。</p>
  * 
  * @author JWCode Team
  * @since 1.0.0
@@ -20,6 +20,21 @@ public class Text implements Component {
     private boolean underline;
     private int maxWidth;
     private boolean wordWrap;
+    
+    // ========== Flexbox 布局属性 ==========
+    
+    private float flexGrow = 0f;
+    private float flexShrink = 1f;
+    private int minWidth = 0;
+    private int maxWidthLimit = Integer.MAX_VALUE;
+    private int minHeight = 0;
+    private int maxHeight = Integer.MAX_VALUE;
+    
+    /** 布局计算后的坐标 */
+    private int layoutX = 0;
+    private int layoutY = 0;
+    private int layoutWidth = 0;
+    private int layoutHeight = 0;
     
     public Text() {
         this("");
@@ -41,6 +56,12 @@ public class Text implements Component {
             return "";
         }
         
+        // 如果设置了布局宽度且大于 0，使用布局宽度作为 maxWidth
+        int effectiveMaxWidth = maxWidth;
+        if (layoutWidth > 0 && (effectiveMaxWidth == 0 || layoutWidth < effectiveMaxWidth)) {
+            effectiveMaxWidth = layoutWidth;
+        }
+        
         StringBuilder sb = new StringBuilder();
         String[] lines = content.split("\n", -1);
         
@@ -48,13 +69,13 @@ public class Text implements Component {
             String line = lines[i];
             
             // 处理自动换行
-            if (wordWrap && maxWidth > 0 && line.length() > maxWidth) {
-                String[] wrappedLines = wrapLine(line, maxWidth);
+            if (wordWrap && effectiveMaxWidth > 0 && line.length() > effectiveMaxWidth) {
+                String[] wrappedLines = wrapLine(line, effectiveMaxWidth);
                 for (String wrappedLine : wrappedLines) {
-                    sb.append(applyAlignment(wrappedLine)).append("\n");
+                    sb.append(applyAlignment(wrappedLine, effectiveMaxWidth)).append("\n");
                 }
             } else {
-                sb.append(applyAlignment(line));
+                sb.append(applyAlignment(line, effectiveMaxWidth));
                 if (i < lines.length - 1) {
                     sb.append("\n");
                 }
@@ -67,13 +88,13 @@ public class Text implements Component {
     /**
      * 应用对齐方式
      */
-    private String applyAlignment(String line) {
-        if (maxWidth <= 0 || line.length() >= maxWidth) {
+    private String applyAlignment(String line, int effectiveMaxWidth) {
+        if (effectiveMaxWidth <= 0 || line.length() >= effectiveMaxWidth) {
             return line;
         }
         
         StringBuilder sb = new StringBuilder();
-        int padding = maxWidth - line.length();
+        int padding = effectiveMaxWidth - line.length();
         
         switch (alignment) {
             case LEFT:
@@ -93,7 +114,7 @@ public class Text implements Component {
                 if (line.trim().length() <= 1) {
                     sb.append(line);
                 } else {
-                    sb.append(justifyLine(line, maxWidth));
+                    sb.append(justifyLine(line, effectiveMaxWidth));
                 }
                 break;
         }
@@ -223,6 +244,104 @@ public class Text implements Component {
      */
     public void setWordWrap(boolean wrap) {
         this.wordWrap = wrap;
+    }
+    
+    // ========== Flexbox 布局方法 ==========
+    
+    /**
+     * 设置 flexGrow
+     */
+    public void setFlexGrow(float flexGrow) {
+        this.flexGrow = flexGrow;
+    }
+    
+    /**
+     * 获取 flexGrow
+     */
+    public float getFlexGrow() {
+        return flexGrow;
+    }
+    
+    /**
+     * 设置 flexShrink
+     */
+    public void setFlexShrink(float flexShrink) {
+        this.flexShrink = flexShrink;
+    }
+    
+    /**
+     * 获取 flexShrink
+     */
+    public float getFlexShrink() {
+        return flexShrink;
+    }
+    
+    /**
+     * 设置最小宽度
+     */
+    public void setMinWidth(int minWidth) {
+        this.minWidth = minWidth;
+    }
+    
+    /**
+     * 设置最大宽度
+     */
+    public void setMaxWidthLimit(int maxWidthLimit) {
+        this.maxWidthLimit = maxWidthLimit;
+    }
+    
+    /**
+     * 设置最小高度
+     */
+    public void setMinHeight(int minHeight) {
+        this.minHeight = minHeight;
+    }
+    
+    /**
+     * 设置最大高度
+     */
+    public void setMaxHeight(int maxHeight) {
+        this.maxHeight = maxHeight;
+    }
+    
+    @Override
+    public FlexItem getFlexItem() {
+        // 根据内容计算自然宽度
+        String[] lines = content != null ? content.split("\n", -1) : new String[]{""};
+        int naturalWidth = 0;
+        for (String line : lines) {
+            naturalWidth = Math.max(naturalWidth, line.length());
+        }
+        int naturalHeight = Math.max(1, lines.length);
+        
+        FlexItem fi = new FlexItem(naturalWidth, naturalHeight);
+        fi.flexGrow(flexGrow)
+          .flexShrink(flexShrink)
+          .minWidth(minWidth).maxWidth(maxWidthLimit)
+          .minHeight(minHeight).maxHeight(maxHeight);
+        return fi;
+    }
+    
+    @Override
+    public void setLayoutBounds(int x, int y, int width, int height) {
+        this.layoutX = x;
+        this.layoutY = y;
+        this.layoutWidth = width;
+        this.layoutHeight = height;
+        // 布局宽度影响渲染时的 maxWidth
+        if (width > 0 && (this.maxWidth == 0 || width < this.maxWidth)) {
+            // 不直接修改 maxWidth，render() 时会优先使用 layoutWidth
+        }
+    }
+    
+    @Override
+    public int getLayoutX() {
+        return layoutX;
+    }
+    
+    @Override
+    public int getLayoutY() {
+        return layoutY;
     }
     
     /**

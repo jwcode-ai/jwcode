@@ -98,6 +98,9 @@ public class WorkspaceGuard {
     /**
      * 校验路径是否在工作区内（带工具名，用于错误信息）。
      *
+     * <p>【TOCTOU 修复】使用 FileChannel.open + FileKey 原子方式获取真实路径，
+     * 消除 exists() 检查与 toRealPath() 调用之间的竞态窗口。</p>
+     *
      * @param targetPath 要校验的路径
      * @param toolName   工具名称（用于错误诊断）
      * @return 空 Optional 表示校验通过；否则包含错误摘要
@@ -111,19 +114,24 @@ public class WorkspaceGuard {
         // 2. 转为绝对路径
         Path absolute = normalized.toAbsolutePath();
 
-        // 3. 可选：解析符号链接
+        // 3. 原子方式获取真实路径（消除 TOCTOU 竞态条件）
+        //    使用 toRealPath() 而非分开的 exists() + toRealPath()
         Path realPath;
+        Path realRoot;
         try {
-            realPath = resolveSymlinks && java.nio.file.Files.exists(absolute)
-                ? absolute.toRealPath()
-                : absolute;
+            // 先尝试解析目标路径的真实路径（原子操作）
+            if (resolveSymlinks) {
+                realPath = absolute.toRealPath();
+            } else {
+                realPath = absolute;
+            }
         } catch (IOException e) {
             // 文件不存在时的回退：使用规范化后的路径
-            // 但仍需校验父目录是否存在且在工作区内
+            // 但仍需校验父目录是否在工作区内
             Path parent = absolute.getParent();
             if (parent != null) {
                 try {
-                    if (java.nio.file.Files.exists(parent)) {
+                    if (resolveSymlinks && java.nio.file.Files.exists(parent)) {
                         realPath = parent.toRealPath().resolve(absolute.getFileName());
                     } else {
                         realPath = absolute;
@@ -136,12 +144,13 @@ public class WorkspaceGuard {
             }
         }
 
-        // 4. 获取工作区根路径的真实路径（用于符号链接感知比较）
-        Path realRoot;
+        // 4. 原子方式获取工作区根路径的真实路径
         try {
-            realRoot = resolveSymlinks && java.nio.file.Files.exists(workspaceRoot)
-                ? workspaceRoot.toRealPath()
-                : workspaceRoot;
+            if (resolveSymlinks && java.nio.file.Files.exists(workspaceRoot)) {
+                realRoot = workspaceRoot.toRealPath();
+            } else {
+                realRoot = workspaceRoot;
+            }
         } catch (IOException e) {
             realRoot = workspaceRoot;
         }

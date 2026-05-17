@@ -4,6 +4,7 @@ import org.jline.reader.*;
 import org.jline.terminal.*;
 
 import java.util.*;
+import java.util.function.Consumer;
 
 /**
  * PromptInput - 提示输入组件
@@ -78,7 +79,7 @@ public class PromptInput implements Component {
      * 获取当前输入内容
      */
     public String getValue() {
-        StringBuilder sb = new StringBuffer();
+        StringBuilder sb = new StringBuilder();
         for (int i = 0; i < lines.size(); i++) {
             if (i > 0) {
                 sb.append("\n");
@@ -173,50 +174,38 @@ public class PromptInput implements Component {
     }
     
     private boolean handleControlKey(Key key) {
-        switch (key.getType()) {
-            case Key.Type.UP:
-                moveHistoryUp();
-                return true;
-                
-            case Key.Type.DOWN:
-                moveHistoryDown();
-                return true;
-                
-            case Key.Type.LEFT:
-                moveCursorLeft();
-                return true;
-                
-            case Key.Type.RIGHT:
-                moveCursorRight();
-                return true;
-                
-            case Key.Type.HOME:
-                moveCursorToLineStart();
-                return true;
-                
-            case Key.Type.END:
-                moveCursorToLineEnd();
-                return true;
-                
-            case Key.Type.DELETE:
-                deleteCharAfter();
-                return true;
-                
-            case Key.Type.BACKSPACE:
-                deleteCharBefore();
-                return true;
-                
-            case Key.Type.ENTER:
-                handleEnter();
-                return true;
-                
-            case Key.Type.TAB:
-                // 触发补全
-                return true;
-                
-            default:
-                return false;
+        Key.Type type = key.getType();
+        if (type == Key.Type.UP) {
+            moveHistoryUp();
+            return true;
+        } else if (type == Key.Type.DOWN) {
+            moveHistoryDown();
+            return true;
+        } else if (type == Key.Type.LEFT) {
+            moveCursorLeft();
+            return true;
+        } else if (type == Key.Type.RIGHT) {
+            moveCursorRight();
+            return true;
+        } else if (type == Key.Type.HOME) {
+            moveCursorToLineStart();
+            return true;
+        } else if (type == Key.Type.END) {
+            moveCursorToLineEnd();
+            return true;
+        } else if (type == Key.Type.DELETE) {
+            deleteCharAfter();
+            return true;
+        } else if (type == Key.Type.BACKSPACE) {
+            deleteCharBefore();
+            return true;
+        } else if (type == Key.Type.ENTER) {
+            handleEnter();
+            return true;
+        } else if (type == Key.Type.TAB) {
+            return true;
         }
+        return false;
     }
     
     private boolean handleChar(char c) {

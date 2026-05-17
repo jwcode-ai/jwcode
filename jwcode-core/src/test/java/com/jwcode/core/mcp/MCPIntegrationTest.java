@@ -155,16 +155,16 @@ public class MCPIntegrationTest {
     @DisplayName("McpServerConfig 构造")
     void testMcpServerConfig() {
         var serverCfg = new McpConfig.McpServerConfig("my-server", "stdio", "node");
-        assertEquals("my-server", serverCfg.name());
-        assertEquals("stdio", serverCfg.type());
-        assertEquals("node", serverCfg.command());
-        assertTrue(serverCfg.enabled());
+        assertEquals("my-server", serverCfg.getName());
+        assertEquals("stdio", serverCfg.getType());
+        assertEquals("node", serverCfg.getCommand());
+        assertTrue(serverCfg.isEnabled());
     }
 
     @Test
     @DisplayName("McpServerConfig 默认启用")
     void testMcpServerConfigDefaultEnabled() {
         var serverCfg = new McpConfig.McpServerConfig("s1", "sse", "python");
-        assertTrue(serverCfg.enabled());
+        assertTrue(serverCfg.isEnabled());
     }
 }

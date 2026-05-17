@@ -104,7 +104,7 @@ public class ContextAssembler {
     public Optional<ContextBlock> touchBlock(String blockId) {
         ContextBlock block = blocks.get(blockId);
         if (block != null) {
-            block.touch();
+            block.access();
         }
         return Optional.ofNullable(block);
     }
@@ -151,6 +151,13 @@ public class ContextAssembler {
                 .filter(b -> b.getState() != BlockLifecycle.DEPRECATED)
                 .mapToLong(ContextBlock::effectiveTokens)
                 .sum();
+    }
+
+    /**
+     * 获取当前总有效 token 数（int 版本，兼容旧调用）。
+     */
+    public int getTotalUsedTokensInt() {
+        return (int) getTotalUsedTokens();
     }
 
     // ==================== 淘汰引擎 ====================
@@ -237,7 +244,7 @@ public class ContextAssembler {
             }
             case ARCHIVE -> {
                 // 保留元数据+摘要，清空内容
-                if (updated.getGeneration() < control.getLifecycleDefaults().getMaxGeneration()) {
+                if (block.getGeneration() < control.getLifecycleDefaults().getMaxGeneration()) {
                     updated.setState(BlockLifecycle.ARCHIVED);
                     updated.decay(); // 触发 decay 更新 generation
                     String shortAbstract = buildShortAbstract(block);
@@ -255,7 +262,7 @@ public class ContextAssembler {
                 }
             }
             case SUMMARIZE -> {
-                if (updated.getGeneration() < control.getLifecycleDefaults().getMaxGeneration()) {
+                if (block.getGeneration() < control.getLifecycleDefaults().getMaxGeneration()) {
                     // 使用摘要替换 content
                     String summary = (summaryGenerator != null)
                             ? summaryGenerator.apply(block)
@@ -309,7 +316,7 @@ public class ContextAssembler {
             if (block.getPriority() == BlockPriority.PINNED) continue;
             if (block.getState() == BlockLifecycle.DEPRECATED) continue;
 
-            // TTL 倒计时
+            // TTL 倒计时 — 使用 block 的 tick() 方法
             boolean expired = block.tick();
 
             if (expired) {

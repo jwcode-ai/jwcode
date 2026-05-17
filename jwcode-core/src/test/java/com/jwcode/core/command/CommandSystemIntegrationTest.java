@@ -85,8 +85,14 @@ public class CommandSystemIntegrationTest {
         registry.register(new TestCommand("history", "Show history"));
         registry.register(new TestCommand("config", "Manage config"));
 
+        // history 以 "hi" 开头，所以 "he" 应匹配 help 和 "hello"（如果有的话）
         List<Command> matches = registry.getMatchingCommands("he");
-        assertEquals(2, matches.size(), "应匹配 help 和 history");
+        assertEquals(1, matches.size(), "仅 help 以 he 开头");
+        assertEquals("help", matches.get(0).getName());
+
+        // "h" 应匹配 help 和 history
+        matches = registry.getMatchingCommands("h");
+        assertEquals(2, matches.size(), "h 应匹配 help 和 history");
     }
 
     @Test
@@ -191,6 +197,8 @@ public class CommandSystemIntegrationTest {
 
         CommandResult result = exitCmd.execute(new String[]{}, session);
         assertNotNull(result);
+        assertTrue(result.isExit(), "ExitCommand 应返回 EXIT 类型结果");
+        assertEquals("再见！", result.getMessage());
     }
 
     // ========== 辅助测试命令 ==========

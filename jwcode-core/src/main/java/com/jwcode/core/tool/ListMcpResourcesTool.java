@@ -3,6 +3,7 @@ package com.jwcode.core.tool;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jwcode.core.mcp.model.McpServerInfo;
 import com.jwcode.core.tool.context.ToolExecutionContext;
 
 import java.nio.file.Files;
@@ -101,7 +102,7 @@ public class ListMcpResourcesTool implements Tool<ListMcpResourcesTool.Input, Li
                 if (servers.isEmpty()) {
                     summary = "MCP 框架已就绪。当前未配置 MCP 服务器。请在 .jwcode/mcp-servers.json 中添加服务器配置，格式：{\"mcpServers\": {\"serverName\": {\"type\": \"stdio\", \"command\": \"...\"}}}";
                 } else {
-                    long enabledCount = servers.stream().filter(s -> s.enabled).count();
+                    long enabledCount = servers.stream().filter(s -> s.isEnabled()).count();
                     summary = "共 " + servers.size() + " 个 MCP 服务器（" + enabledCount + " 个已启用）";
                 }
                 
@@ -153,30 +154,6 @@ public class ListMcpResourcesTool implements Tool<ListMcpResourcesTool.Input, Li
             this.success = success;
             this.summary = summary;
             this.servers = servers;
-        }
-    }
-    
-    /**
-     * MCP 服务器信息
-     */
-    public static class McpServerInfo {
-        public String name;
-        public String type;
-        public String command;
-        public boolean enabled;
-        public java.util.List<String> resources;
-        public java.util.List<String> tools;
-        
-        public McpServerInfo() {}
-        
-        public McpServerInfo(String name, String type, String command, boolean enabled,
-                             List<String> resources, List<String> tools) {
-            this.name = name;
-            this.type = type;
-            this.command = command;
-            this.enabled = enabled;
-            this.resources = resources;
-            this.tools = tools;
         }
     }
     

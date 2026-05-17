@@ -138,18 +138,26 @@ public class CompactorAgent {
             + ", original=" + originalSize + " messages");
 
         List<Message> compacted;
+        boolean resetRecommended = false;
         switch (request.getStrategy()) {
             case STRUCTURED -> compacted = compactStructured(request.getMessages());
             case AICL_PRIORITY -> compacted = compactAicl(request.getMessages());
             case MINIMAL -> compacted = compactMinimal(request.getMessages());
             case AGGRESSIVE -> compacted = compactAggressive(request.getMessages());
             case SMART -> compacted = compactSmart(request.getMessages());
+            case RESET -> {
+                // RESET 策略：不压缩，而是建议升级为 Context Reset
+                compacted = request.getMessages();
+                resetRecommended = true;
+            }
             default -> compacted = compactAicl(request.getMessages());
         }
 
         int compactedSize = compacted.size();
         long tokensSaved = estimateTokensSaved(originalSize, compactedSize);
-        String summary = generateSummary(originalSize, compactedSize, tokensSaved, request.getStrategy());
+        String summary = resetRecommended
+            ? "压缩不足以解决问题，建议升级为 Context Reset（进程级重启+结构化交接）"
+            : generateSummary(originalSize, compactedSize, tokensSaved, request.getStrategy());
 
         logger.info("[CompactorAgent] 压缩完成: " + originalSize + " -> " + compactedSize
             + " messages, saved ~" + tokensSaved + " tokens");

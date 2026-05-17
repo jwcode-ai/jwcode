@@ -1,6 +1,7 @@
 package com.jwcode.core.aicl;
 
 import java.util.Collection;
+import java.util.Map;
 import java.util.Set;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
@@ -120,17 +121,17 @@ public class AICLSerializer {
         xml.append(indent).append("<ctx:block")
            .append(" id=\"").append(escapeAttr(block.getId())).append("\"")
            .append(" type=\"").append(escapeAttr(block.getType())).append("\"")
-           .append(" role=\"").append(escapeAttr(block.getRole())).append("\"")
+           .append(" role=\"").append(escapeAttr(block.getRole() != null ? block.getRole() : "default")).append("\"")
            .append(" priority=\"").append(block.getPriority().getName()).append("\"")
-           .append(" format=\"").append(escapeAttr(block.getFormat())).append("\"")
+           .append(" format=\"").append(escapeAttr(block.getFormat() != null ? block.getFormat() : "markdown")).append("\"")
            .append(" state=\"").append(block.getState().getState()).append("\"");
 
         // 生命周期字段
         if (block.getTtl() != 0) {
             xml.append(" ttl=\"").append(block.getTtl()).append("\"");
         }
-        if (block.getLastAccess() > 0) {
-            xml.append(" last-access=\"").append(block.getLastAccess()).append("\"");
+        if (block.getLastAccess() != null) {
+            xml.append(" last-access=\"").append(block.getLastAccess().toEpochMilli()).append("\"");
         }
         if (block.getAccessCount() > 0) {
             xml.append(" access-count=\"").append(block.getAccessCount()).append("\"");
@@ -183,10 +184,13 @@ public class AICLSerializer {
         // 归档态：只有 label + abstract，不输出 content
 
         // 扩展属性
-        for (var entry : block.getAttributes().entrySet()) {
-            xml.append(indent).append(INDENT)
-               .append("<ctx:attr name=\"").append(escapeAttr(entry.getKey()))
-               .append("\" value=\"").append(escapeAttr(entry.getValue())).append("\"/>\n");
+        Map<String, String> attrs = block.getAttributes();
+        if (attrs != null) {
+            for (Map.Entry<String, String> entry : attrs.entrySet()) {
+                xml.append(indent).append(INDENT)
+                   .append("<ctx:attr name=\"").append(escapeAttr(entry.getKey()))
+                   .append("\" value=\"").append(escapeAttr(entry.getValue())).append("\"/>\n");
+            }
         }
 
         xml.append(indent).append("</ctx:block>\n");

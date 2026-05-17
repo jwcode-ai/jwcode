@@ -175,33 +175,46 @@ public class TaskExecutionAgent {
      * 并发执行任务列表（同一并发组内并行执行）
      */
     private void executeConcurrently(List<StructuredTask> tasks, String goal, ExecutionResult result) {
-        List<CompletableFuture<Void>> futures = new ArrayList<>();
+        // 复制任务列表，避免修改原始列表
+        List<StructuredTask> remaining = new ArrayList<>(tasks);
 
-        // 找出无依赖的任务先执行，有依赖的等待依赖完成后执行
-        List<StructuredTask> ready = tasks.stream()
-            .filter(t -> t.getDependencies().isEmpty()
-                || t.getDependencies().stream().allMatch(depId ->
-                    tasks.stream().anyMatch(pt ->
-                        pt.getId().equals(depId) && pt.getStatus().equals("completed"))))
-            .collect(Collectors.toList());
+        // 使用拓扑排序思想：每次取无依赖的任务并行执行，完成后重新计算依赖状态
+        while (!remaining.isEmpty()) {
+            // 找出当前批次中依赖已满足的任务
+            List<StructuredTask> ready = remaining.stream()
+                .filter(t -> t.getDependencies().isEmpty()
+                    || t.getDependencies().stream().allMatch(depId ->
+                        tasks.stream().anyMatch(pt ->
+                            pt.getId().equals(depId) && "completed".equals(pt.getStatus()))))
+                .collect(Collectors.toList());
 
-        List<StructuredTask> pending = new ArrayList<>(tasks);
-        pending.removeAll(ready);
+            if (ready.isEmpty()) {
+                // 死锁检测：有剩余任务但无就绪任务，说明存在循环依赖
+                logger.severe("[TaskExecutionAgent] 依赖死锁: 剩余 " + remaining.size()
+                    + " 个任务因循环依赖无法执行: "
+                    + remaining.stream().map(StructuredTask::getId).collect(Collectors.joining(", ")));
+                for (StructuredTask stuck : remaining) {
+                    stuck.setStatus("failed");
+                    stuck.appendResult("依赖死锁: 依赖的任务未完成或存在循环依赖");
+                    result.addFailure(stuck.getId(), "依赖死锁");
+                }
+                break;
+            }
 
-        // 并行执行无依赖任务
-        for (StructuredTask task : ready) {
-            CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
-                executeSingleTask(task, goal, result);
-            }, executorService);
-            futures.add(future);
-        }
+            // 从剩余列表中移除就绪任务
+            remaining.removeAll(ready);
 
-        // 等待所有并行任务完成
-        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+            // 并行执行就绪任务
+            List<CompletableFuture<Void>> futures = new ArrayList<>();
+            for (StructuredTask task : ready) {
+                CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+                    executeSingleTask(task, goal, result);
+                }, executorService);
+                futures.add(future);
+            }
 
-        // 串行执行剩余的有依赖任务
-        if (!pending.isEmpty()) {
-            executeSequentially(pending, goal, result);
+            // 等待当前批次所有并行任务完成
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
         }
     }
 
@@ -501,5 +514,10 @@ public class TaskExecutionAgent {
         public int skippedCount;
         public String summary;
         public final List<String> errors = new ArrayList<>();
+
+        public void addFailure(String taskId, String reason) {
+            this.failedCount++;
+            this.errors.add(taskId + ": " + reason);
+        }
     }
 }

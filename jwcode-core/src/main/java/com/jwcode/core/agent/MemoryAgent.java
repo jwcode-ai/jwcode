@@ -382,6 +382,45 @@ public class MemoryAgent {
     }
 
     /**
+     * Context Reset 后注入项目记忆 — 供新 Agent 快速恢复上下文。
+     *
+     * <p>在 Context Reset 完成后，新 Agent 启动时调用此方法获取记忆上下文，
+     * 避免新 Agent 从零开始探索项目。</p>
+     *
+     * @param handoffSummary 交接文档摘要（由 ContextResetManager 提供）
+     * @return 注入 prompt（包含项目记忆 + 交接摘要）
+     */
+    public String getResetInjectionPrompt(String handoffSummary) {
+        if (!enabled) return handoffSummary != null ? handoffSummary : "";
+
+        try {
+            StringBuilder sb = new StringBuilder();
+
+            // 1. 项目记忆上下文
+            String planCtx = getPlanContextPrompt();
+            if (!planCtx.isEmpty()) {
+                sb.append(planCtx).append("\n\n");
+            }
+
+            // 2. 交接摘要
+            if (handoffSummary != null && !handoffSummary.isEmpty()) {
+                sb.append("## Context Reset 交接摘要\n\n");
+                sb.append(handoffSummary).append("\n\n");
+            }
+
+            // 3. 提示新 Agent
+            sb.append("> ⚠️ 这是一个 Context Reset 后的新 Agent 实例。\n");
+            sb.append("> 以上是项目记忆和交接摘要，请据此恢复工作状态。\n");
+
+            logger.info("[MemoryAgent] 生成 Reset 注入 prompt (" + sb.length() + " chars)");
+            return sb.toString();
+        } catch (Exception e) {
+            logger.warning("[MemoryAgent] 生成 Reset 注入 prompt 失败: " + e.getMessage());
+            return handoffSummary != null ? handoffSummary : "";
+        }
+    }
+
+    /**
      * 获取简洁版记忆摘要（用于在聊天中快速了解项目上下文）
      *
      * @return 简洁的项目记忆摘要

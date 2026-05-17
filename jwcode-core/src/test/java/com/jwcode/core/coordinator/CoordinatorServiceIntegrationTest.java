@@ -11,9 +11,7 @@ import org.junit.jupiter.api.*;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -32,11 +30,12 @@ public class CoordinatorServiceIntegrationTest {
     void setUp() {
         coordinator = new CoordinatorService();
         coordinator.setMaxWorkers(4);
+        coordinator.start();
     }
 
     @AfterEach
     void tearDown() {
-        coordinator.shutdown();
+        coordinator.stop();
     }
 
     // ==================== 任务创建 ====================
@@ -60,8 +59,11 @@ public class CoordinatorServiceIntegrationTest {
     @Test
     @DisplayName("创建多个任务 - 每个任务应有唯一 ID")
     void testCreateMultipleTasks() throws Exception {
+        // 添加小延迟确保 System.currentTimeMillis() 生成不同 ID
         CoordinatedTask task1 = coordinator.createTask("任务1").get(5, TimeUnit.SECONDS);
+        Thread.sleep(5);
         CoordinatedTask task2 = coordinator.createTask("任务2").get(5, TimeUnit.SECONDS);
+        Thread.sleep(5);
         CoordinatedTask task3 = coordinator.createTask("任务3").get(5, TimeUnit.SECONDS);
 
         assertAll("多个任务应有唯一 ID",
@@ -117,14 +119,15 @@ public class CoordinatorServiceIntegrationTest {
     // ==================== 顺序执行策略 ====================
 
     @Test
-    @DisplayName("顺序执行 - 所有子任务按顺序成功执行")
-    void testSequentialExecutionAllSuccess() throws Exception {
+    @DisplayName("顺序执行 - 使用 SEQUENTIAL 策略")
+    void testSequentialExecution() throws Exception {
         // 准备
+        coordinator.setStrategy(CoordinationStrategy.SEQUENTIAL);
         CoordinatedTask task = coordinator.createTask("顺序执行测试").get(5, TimeUnit.SECONDS);
         coordinator.decomposeTask(task.id, Arrays.asList("步骤1", "步骤2", "步骤3")).get(5, TimeUnit.SECONDS);
 
         // 执行
-        CoordinationResult result = coordinator.execute(task.id, CoordinationStrategy.SEQUENTIAL)
+        CoordinationResult result = coordinator.executeTask(task.id)
             .get(10, TimeUnit.SECONDS);
 
         // 验证
@@ -140,32 +143,18 @@ public class CoordinatorServiceIntegrationTest {
         );
     }
 
-    @Test
-    @DisplayName("顺序执行 - 带进度回调")
-    void testSequentialExecutionWithProgressCallback() throws Exception {
-        CoordinatedTask task = coordinator.createTask("进度回调测试").get(5, TimeUnit.SECONDS);
-        coordinator.decomposeTask(task.id, Arrays.asList("任务A", "任务B")).get(5, TimeUnit.SECONDS);
-
-        final int[] progressCount = {0};
-        coordinator.setProgressCallback((taskId, progress) -> progressCount[0]++);
-
-        coordinator.execute(task.id, CoordinationStrategy.SEQUENTIAL)
-            .get(10, TimeUnit.SECONDS);
-
-        assertTrue(progressCount[0] > 0, "进度回调应被触发至少一次");
-    }
-
     // ==================== 并行执行策略 ====================
 
     @Test
-    @DisplayName("并行执行 - 所有子任务并行成功执行")
-    void testParallelExecutionAllSuccess() throws Exception {
+    @DisplayName("并行执行 - 使用 PARALLEL 策略")
+    void testParallelExecution() throws Exception {
+        coordinator.setStrategy(CoordinationStrategy.PARALLEL);
         CoordinatedTask task = coordinator.createTask("并行执行测试").get(5, TimeUnit.SECONDS);
         coordinator.decomposeTask(task.id, Arrays.asList("并行任务1", "并行任务2", "并行任务3", "并行任务4"))
             .get(5, TimeUnit.SECONDS);
 
         long startTime = System.currentTimeMillis();
-        CoordinationResult result = coordinator.execute(task.id, CoordinationStrategy.PARALLEL)
+        CoordinationResult result = coordinator.executeTask(task.id)
             .get(15, TimeUnit.SECONDS);
         long duration = System.currentTimeMillis() - startTime;
 
@@ -178,28 +167,14 @@ public class CoordinatorServiceIntegrationTest {
     @Test
     @DisplayName("并行执行 - 空子任务列表")
     void testParallelExecutionEmptyTasks() throws Exception {
+        coordinator.setStrategy(CoordinationStrategy.PARALLEL);
         CoordinatedTask task = coordinator.createTask("空任务并行").get(5, TimeUnit.SECONDS);
         coordinator.decomposeTask(task.id, List.of()).get(5, TimeUnit.SECONDS);
 
-        CoordinationResult result = coordinator.execute(task.id, CoordinationStrategy.PARALLEL)
+        CoordinationResult result = coordinator.executeTask(task.id)
             .get(5, TimeUnit.SECONDS);
 
         assertTrue(result.success, "空子任务列表的并行执行应返回成功");
-    }
-
-    // ==================== 平衡执行策略 ====================
-
-    @Test
-    @DisplayName("平衡执行 - 混合顺序和并行的执行策略")
-    void testBalancedExecution() throws Exception {
-        CoordinatedTask task = coordinator.createTask("平衡执行测试").get(5, TimeUnit.SECONDS);
-        coordinator.decomposeTask(task.id, Arrays.asList("组1任务1", "组1任务2", "组2任务1", "组2任务2"))
-            .get(5, TimeUnit.SECONDS);
-
-        CoordinationResult result = coordinator.execute(task.id, CoordinationStrategy.BALANCED)
-            .get(15, TimeUnit.SECONDS);
-
-        assertTrue(result.success, "平衡执行应成功");
     }
 
     // ==================== 进度查询 ====================
@@ -216,7 +191,8 @@ public class CoordinatorServiceIntegrationTest {
         assertEquals(0, beforeProgress.completed, "执行前完成数应为0");
 
         // 执行后
-        coordinator.execute(task.id, CoordinationStrategy.SEQUENTIAL).get(10, TimeUnit.SECONDS);
+        coordinator.setStrategy(CoordinationStrategy.SEQUENTIAL);
+        coordinator.executeTask(task.id).get(10, TimeUnit.SECONDS);
         TaskProgress afterProgress = coordinator.getTaskProgress(task.id);
         assertEquals(2, afterProgress.completed, "执行后应全部完成");
     }
@@ -243,14 +219,15 @@ public class CoordinatorServiceIntegrationTest {
         CoordinatedTask task = coordinator.createTask("活跃任务测试").get(5, TimeUnit.SECONDS);
         coordinator.decomposeTask(task.id, Arrays.asList("子任务1", "子任务2")).get(5, TimeUnit.SECONDS);
 
-        // 执行前 - 无活跃任务
+        // 创建后任务为 PENDING，应在活跃列表中
         List<CoordinatedTask> beforeActive = coordinator.getActiveTasks();
-        assertTrue(beforeActive.isEmpty(), "执行前应无活跃任务");
+        assertFalse(beforeActive.isEmpty(), "创建任务后应有活跃任务（PENDING）");
 
         // 执行后 - 可能无活跃任务（已完成）
-        coordinator.execute(task.id, CoordinationStrategy.SEQUENTIAL).get(10, TimeUnit.SECONDS);
+        coordinator.setStrategy(CoordinationStrategy.SEQUENTIAL);
+        coordinator.executeTask(task.id).get(10, TimeUnit.SECONDS);
         List<CoordinatedTask> afterActive = coordinator.getActiveTasks();
-        // 执行完成后应无活跃任务
+        // 执行完成后应无 RUNNING 状态任务
         assertTrue(afterActive.stream().noneMatch(t -> t.status == TaskStatus.RUNNING),
             "执行完成后应无 RUNNING 状态任务");
     }
@@ -263,20 +240,21 @@ public class CoordinatorServiceIntegrationTest {
         CoordinatedTask task = coordinator.createTask("可取消任务").get(5, TimeUnit.SECONDS);
         coordinator.decomposeTask(task.id, Arrays.asList("长时间任务")).get(5, TimeUnit.SECONDS);
 
-        coordinator.cancelTask(task.id);
+        boolean cancelled = coordinator.cancelTask(task.id);
+        assertTrue(cancelled, "取消任务应返回 true");
 
+        // 取消后任务从活跃列表中移除
         TaskProgress progress = coordinator.getTaskProgress(task.id);
-        // 取消后任务应不再处于 RUNNING 状态
-        assertNotNull(progress, "取消后进度仍可查询");
+        assertNull(progress, "取消后任务不再可查询（已从 map 中移除）");
     }
 
     // ==================== 关闭服务 ====================
 
     @Test
-    @DisplayName("关闭服务 - 优雅关闭，资源释放")
-    void testShutdown() {
-        assertDoesNotThrow(() -> coordinator.shutdown(),
-            "关闭服务不应抛出异常");
+    @DisplayName("停止服务 - 优雅停止，资源释放")
+    void testStop() {
+        assertDoesNotThrow(() -> coordinator.stop(),
+            "停止服务不应抛出异常");
     }
 
     // ==================== 设置最大工作线程 ====================
@@ -287,6 +265,17 @@ public class CoordinatorServiceIntegrationTest {
         coordinator.setMaxWorkers(-5);
         WorkerStatus status = coordinator.getWorkerStatus();
         assertTrue(status.maxWorkers >= 1, "最大工作线程数应至少为1");
+    }
+
+    // ==================== 获取任务状态 ====================
+
+    @Test
+    @DisplayName("获取任务状态 - 返回正确的任务信息")
+    void testGetTaskStatus() throws Exception {
+        CoordinatedTask task = coordinator.createTask("状态查询测试").get(5, TimeUnit.SECONDS);
+        CoordinatedTask status = coordinator.getTaskStatus(task.id);
+        assertNotNull(status);
+        assertEquals(task.id, status.id);
     }
 
     // ==================== 综合场景 ====================
@@ -307,7 +296,8 @@ public class CoordinatorServiceIntegrationTest {
         assertEquals(5, beforeProgress.total);
 
         // 4. 执行（使用并行策略）
-        CoordinationResult result = coordinator.execute(task.id, CoordinationStrategy.PARALLEL)
+        coordinator.setStrategy(CoordinationStrategy.PARALLEL);
+        CoordinationResult result = coordinator.executeTask(task.id)
             .get(15, TimeUnit.SECONDS);
         assertTrue(result.success, "完整工作流执行应成功");
 

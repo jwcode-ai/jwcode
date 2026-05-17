@@ -2,10 +2,12 @@ package com.jwcode.ui;
 
 import com.jwcode.cli.log.ActivityEntry;
 import com.jwcode.cli.log.ActivityLogger;
+import com.jwcode.cli.ui.EnhancedTerminal;
 import com.jwcode.core.model.Message;
 import com.jwcode.core.session.Session;
 import com.jwcode.core.session.SessionManager;
 import com.jwcode.ui.components.*;
+import com.jwcode.ui.terminal.TerminalBuffer;
 
 import org.jline.reader.*;
 import org.jline.terminal.*;
@@ -66,6 +68,15 @@ public class REPL implements AutoCloseable {
     
     // 活动日志
     private final ActivityLogger activityLogger;
+    
+    // ========== Ink 风格渲染管线 ==========
+    
+    /** InkPipeline 实例（可选，启用后替代传统 render()） */
+    private InkPipeline inkPipeline;
+    /** EnhancedTerminal 实例（用于 InkPipeline） */
+    private EnhancedTerminal enhancedTerminal;
+    /** 是否使用 InkPipeline 渲染模式 */
+    private boolean useInkPipeline = false;
     
     // ANSI 颜色
     private static final String RESET = "\u001B[0m";
@@ -448,9 +459,32 @@ public class REPL implements AutoCloseable {
     }
     
     /**
-     * 渲染当前屏幕
+     * 启用 InkPipeline 渲染模式。
+     *
+     * <p>启用后，render() 方法将使用 InkPipeline 进行增量渲染，
+     * 而非传统的全屏清空重绘。</p>
+     *
+     * @param enhancedTerminal EnhancedTerminal 实例
+     */
+    public void enableInkPipeline(EnhancedTerminal enhancedTerminal) {
+        this.enhancedTerminal = enhancedTerminal;
+        this.inkPipeline = new InkPipeline(enhancedTerminal);
+        this.useInkPipeline = true;
+        inkPipeline.init();
+    }
+
+    /**
+     * 渲染当前屏幕。
+     *
+     * <p>在 InkPipeline 模式下，使用格子级 Diff 增量渲染；
+     * 否则回退到传统的全屏清空重绘。</p>
      */
     private void render() {
+        if (useInkPipeline && inkPipeline != null) {
+            renderWithPipeline();
+            return;
+        }
+
         int width = terminal.getSize().getColumns();
         int height = terminal.getSize().getRows();
         
@@ -475,6 +509,60 @@ public class REPL implements AutoCloseable {
         }
         terminal.writer().print(sb.toString());
         terminal.flush();
+    }
+
+    /**
+     * 使用 InkPipeline 进行增量渲染。
+     *
+     * <p>构建组件树 → InkPipeline.render() → 格子级 Diff → ANSI 输出。
+     * 只输出变化区域，不进行全屏重绘。</p>
+     */
+    private void renderWithPipeline() {
+        int width = enhancedTerminal.getTerminalWidth();
+
+        // 构建组件树
+        Box rootBox = new Box();
+        rootBox.setShowBorder(false);
+        rootBox.setWidth(width);
+        rootBox.setFlexDirection(com.jwcode.ui.layout.FlexDirection.COLUMN);
+
+        // 状态栏
+        Text statusText = new Text(buildStatusText(width));
+        statusText.setColor(com.googlecode.lanterna.TextColor.ANSI.CYAN);
+        rootBox.addChild(statusText);
+
+        // 消息列表
+        MessageList ml = new MessageList().maxWidth(width);
+        for (Message msg : messages) {
+            ml.addMessage(msg);
+        }
+        if (isStreaming) {
+            ml.updateLastMessage(streamingContent.toString());
+        }
+        Text messagesText = new Text(ml.render());
+        rootBox.addChild(messagesText);
+
+        inkPipeline.setRoot(rootBox);
+        inkPipeline.render();
+    }
+
+    /**
+     * 构建状态栏文本（不含 ANSI 颜色码，纯文本内容）。
+     */
+    private String buildStatusText(int width) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("[Ctrl+O] 历史 [Ctrl+S] 会话 [Ctrl+R] 搜索 [Ctrl+C] 取消 [/help] 帮助");
+
+        String sessionTitle = currentSession != null && currentSession.getTitle() != null
+            ? currentSession.getTitle().substring(0, Math.min(15, currentSession.getTitle().length()))
+            : "新会话";
+        String info = sessionTitle + " | 消息: " + messages.size();
+        int padding = Math.max(0, width - sb.length() - info.length() - 2);
+        if (padding > 0) {
+            sb.append(" ".repeat(padding));
+        }
+        sb.append(info);
+        return sb.toString();
     }
     
     /**

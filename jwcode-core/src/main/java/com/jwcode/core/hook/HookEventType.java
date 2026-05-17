@@ -51,6 +51,12 @@ public enum HookEventType {
     /** 上下文压缩前触发 */
     PRE_COMPACT(EventCategory.CONTEXT, HookDecision.ALLOW),
 
+    /** 上下文重置前触发（Context Reset 协议） */
+    PRE_CONTEXT_RESET(EventCategory.CONTEXT, HookDecision.ALLOW),
+
+    /** 上下文重置后触发（Context Reset 协议） */
+    POST_CONTEXT_RESET(EventCategory.CONTEXT, HookDecision.ALLOW),
+
     // ==================== StateMachine 事件 ====================
 
     /** 状态转换前触发（TransitionGuard） */

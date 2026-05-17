@@ -27,19 +27,19 @@ public class REPLIntegrationTest {
     // ==================== REPLFactory 测试 ====================
 
     @Test
-    @DisplayName("REPL 工厂 - 创建各语言执行器")
-    void testCreateExecutors() {
-        assertAll("REPL 执行器创建验证",
-            () -> assertNotNull(factory.createExecutor("python"), "应能创建 Python 执行器"),
-            () -> assertNotNull(factory.createExecutor("java"), "应能创建 Java 执行器"),
-            () -> assertNotNull(factory.createExecutor("javascript"), "应能创建 JavaScript 执行器")
+    @DisplayName("REPL 工厂 - 获取各语言执行器")
+    void testGetExecutors() {
+        assertAll("REPL 执行器获取验证",
+            () -> assertNotNull(factory.getExecutor("python"), "应能获取 Python 执行器"),
+            () -> assertNotNull(factory.getExecutor("java"), "应能获取 Java 执行器"),
+            () -> assertNotNull(factory.getExecutor("javascript"), "应能获取 JavaScript 执行器")
         );
     }
 
     @Test
     @DisplayName("REPL 工厂 - 不支持的语音返回 null")
     void testUnsupportedLanguage() {
-        assertNull(factory.createExecutor("ruby"), "不支持的语音应返回 null");
+        assertNull(factory.getExecutor("ruby"), "不支持的语音应返回 null");
     }
 
     // ==================== PythonREPLExecutor 测试 ====================
@@ -47,7 +47,7 @@ public class REPLIntegrationTest {
     @Test
     @DisplayName("Python REPL - 执行简单表达式")
     void testPythonSimpleExpression() throws Exception {
-        REPLExecutor pythonExecutor = factory.createExecutor("python");
+        REPLExecutor pythonExecutor = factory.getExecutor("python");
         assertNotNull(pythonExecutor, "Python 执行器应可创建");
 
         // 注意：此测试可能因环境无 Python 而失败，但验证执行器创建成功
@@ -60,7 +60,7 @@ public class REPLIntegrationTest {
     @Test
     @DisplayName("Python REPL - 超时机制")
     void testPythonTimeout() {
-        REPLExecutor pythonExecutor = factory.createExecutor("python");
+        REPLExecutor pythonExecutor = factory.getExecutor("python");
         assertNotNull(pythonExecutor, "Python 执行器应可创建");
 
         // 验证超时配置
@@ -73,7 +73,7 @@ public class REPLIntegrationTest {
     @Test
     @DisplayName("Java REPL - 创建执行器")
     void testJavaExecutorCreation() {
-        REPLExecutor javaExecutor = factory.createExecutor("java");
+        REPLExecutor javaExecutor = factory.getExecutor("java");
         assertAll("Java 执行器验证",
             () -> assertNotNull(javaExecutor, "Java 执行器应可创建"),
             () -> assertEquals("java", javaExecutor.getLanguage(), "语音应为 java")
@@ -85,7 +85,7 @@ public class REPLIntegrationTest {
     @Test
     @DisplayName("JavaScript REPL - 创建执行器")
     void testJavaScriptExecutorCreation() {
-        REPLExecutor jsExecutor = factory.createExecutor("javascript");
+        REPLExecutor jsExecutor = factory.getExecutor("javascript");
         assertAll("JavaScript 执行器验证",
             () -> assertNotNull(jsExecutor, "JavaScript 执行器应可创建"),
             () -> assertEquals("javascript", jsExecutor.getLanguage(), "语音应为 javascript")
@@ -110,7 +110,7 @@ public class REPLIntegrationTest {
     @Test
     @DisplayName("REPL 执行器 - 失败结果记录")
     void testExecutionFailureResult() {
-        REPLExecutor.ExecutionResult result = REPLExecutor.ExecutionResult.failure("error msg", 50L);
+        REPLExecutor.ExecutionResult result = REPLExecutor.ExecutionResult.error("error msg", 50L, "1");
 
         assertAll("失败结果记录验证",
             () -> assertFalse(result.success(), "失败状态应为 false"),
@@ -125,7 +125,7 @@ public class REPLIntegrationTest {
     @DisplayName("完整 REPL 流程：工厂创建 → 执行器选择 → 代码执行 → 结果返回")
     void testCompleteReplFlow() {
         // 1. 工厂创建执行器
-        REPLExecutor executor = factory.createExecutor("python");
+        REPLExecutor executor = factory.getExecutor("python");
 
         if (executor != null) {
             // 2. 验证执行器属性
@@ -147,7 +147,7 @@ public class REPLIntegrationTest {
     @Test
     @DisplayName("REPL 执行器 - 内存限制配置")
     void testMemoryLimit() {
-        REPLExecutor pythonExecutor = factory.createExecutor("python");
+        REPLExecutor pythonExecutor = factory.getExecutor("python");
         if (pythonExecutor != null) {
             // 默认内存限制应合理
             assertTrue(pythonExecutor.getMaxMemoryMB() > 0, "内存限制应大于0");

@@ -295,25 +295,29 @@ public class TaskTui implements AutoCloseable {
     }
 
     private static String statusIcon(TaskStatus status) {
-        return switch (status) {
-            case PENDING -> "○";
-            case RUNNING -> "▶";
-            case COMPLETED -> "✓";
-            case FAILED -> "✗";
-            case STOPPED -> "■";
-            case CANCELLED -> "⊘";
-        };
+        if (status == null) return "?";
+        switch (status) {
+            case PENDING: return "○";
+            case RUNNING: return "▶";
+            case COMPLETED: return "✓";
+            case FAILED: return "✗";
+            case STOPPED: return "■";
+            case CANCELLED: return "⊘";
+            default: return "?";
+        }
     }
 
     private static TextColor statusColor(TaskStatus status) {
-        return switch (status) {
-            case PENDING -> TextColor.ANSI.WHITE;
-            case RUNNING -> TextColor.ANSI.CYAN;
-            case COMPLETED -> TextColor.ANSI.GREEN;
-            case FAILED -> TextColor.ANSI.RED;
-            case STOPPED -> TextColor.ANSI.YELLOW;
-            case CANCELLED -> TextColor.ANSI.MAGENTA;
-        };
+        if (status == null) return TextColor.ANSI.DEFAULT;
+        switch (status) {
+            case PENDING: return TextColor.ANSI.WHITE;
+            case RUNNING: return TextColor.ANSI.CYAN;
+            case COMPLETED: return TextColor.ANSI.GREEN;
+            case FAILED: return TextColor.ANSI.RED;
+            case STOPPED: return TextColor.ANSI.YELLOW;
+            case CANCELLED: return TextColor.ANSI.MAGENTA;
+            default: return TextColor.ANSI.DEFAULT;
+        }
     }
 
     private static String truncate(String s, int maxLen) {

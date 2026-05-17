@@ -90,6 +90,7 @@ public class SessionManager {
         this.sessionsDir = sessionsDir;
         this.sessions = new ConcurrentHashMap<>();
         initializeSessionsDir();
+        purgeOldSessionFiles(7); // 自动清理超过7天的会话文件
         loadAllSessions();
         restoreActiveSession();
     }
@@ -110,11 +111,23 @@ public class SessionManager {
     
     /**
      * 创建新会话
+     * <p>
+     * 如果当前活动会话存在且为空（0 条消息），则复用它而不是创建新的，
+     * 避免每次启动都产生一个无内容的空会话文件。
      * 
      * @param workingDirectory 工作目录
      * @return 新创建的会话
      */
     public Session createSession(String workingDirectory) {
+        // 复用当前空的活跃会话，避免产生垃圾文件
+        if (activeSessionId != null) {
+            Session existing = sessions.get(activeSessionId);
+            if (existing != null && existing.getMessageCount() == 0) {
+                logger.debug("Reusing empty active session: {}", activeSessionId);
+                return existing;
+            }
+        }
+        
         String sessionId = UUID.randomUUID().toString();
         Session session = new Session(sessionId, workingDirectory);
         sessions.put(sessionId, session);
@@ -289,25 +302,85 @@ public class SessionManager {
     }
     
     /**
-     * 加载所有会话
+     * 最大保留的会话文件数（超过此数量的旧会话不会被加载到内存）
+     */
+    private static final int MAX_SESSION_FILES = 30;
+
+    /**
+     * 清理超过指定天数的旧会话文件
+     *
+     * @param maxAgeDays 最大保留天数
+     */
+    private void purgeOldSessionFiles(int maxAgeDays) {
+        if (!Files.exists(sessionsDir)) {
+            return;
+        }
+        
+        long cutoff = System.currentTimeMillis() - maxAgeDays * 24L * 60 * 60 * 1000;
+        int deleted = 0;
+        
+        try (Stream<Path> paths = Files.list(sessionsDir)) {
+            List<Path> oldFiles = paths
+                .filter(p -> p.toString().endsWith(SESSION_EXTENSION))
+                .filter(p -> {
+                    try {
+                        return Files.getLastModifiedTime(p).toMillis() < cutoff;
+                    } catch (IOException e) {
+                        return false;
+                    }
+                })
+                .toList();
+            
+            for (Path path : oldFiles) {
+                try {
+                    Files.delete(path);
+                    deleted++;
+                } catch (IOException e) {
+                    logger.warn("Failed to delete old session file: {}", path, e);
+                }
+            }
+            
+            if (deleted > 0) {
+                logger.info("Purged {} old session files (>{}/days) from {}", 
+                    deleted, maxAgeDays, sessionsDir);
+            }
+        } catch (IOException e) {
+            logger.warn("Failed to purge old session files", e);
+        }
+    }
+
+    /**
+     * 加载最近的会话（按文件修改时间排序，最多 MAX_SESSION_FILES 个）
      */
     private void loadAllSessions() {
         if (!Files.exists(sessionsDir)) {
             return;
         }
         
-        try (Stream<Path> paths = Files.walk(sessionsDir)) {
-            paths.filter(p -> p.toString().endsWith(SESSION_EXTENSION))
-                 .forEach(path -> {
-                     String sessionId = path.getFileName().toString()
-                             .replace(SESSION_EXTENSION, "");
-                     try {
-                         loadSession(sessionId);
-                     } catch (Exception e) {
-                         logger.error("Failed to load session: {}", sessionId, e);
-                     }
-                 });
-            logger.info("Loaded {} sessions from {}", sessions.size(), sessionsDir);
+        try (Stream<Path> paths = Files.list(sessionsDir)) {
+            List<Path> sessionFiles = paths
+                .filter(p -> p.toString().endsWith(SESSION_EXTENSION))
+                .sorted((a, b) -> {
+                    try {
+                        return Files.getLastModifiedTime(b).compareTo(Files.getLastModifiedTime(a));
+                    } catch (IOException e) {
+                        return 0;
+                    }
+                })
+                .limit(MAX_SESSION_FILES)
+                .toList();
+            
+            for (Path path : sessionFiles) {
+                String sessionId = path.getFileName().toString()
+                        .replace(SESSION_EXTENSION, "");
+                try {
+                    loadSession(sessionId);
+                } catch (Exception e) {
+                    logger.error("Failed to load session: {}", sessionId, e);
+                }
+            }
+            logger.info("Loaded {} recent sessions from {} ({} total files)", 
+                sessions.size(), sessionsDir, sessionFiles.size());
         } catch (IOException e) {
             throw new RuntimeException("Failed to load sessions", e);
         }
