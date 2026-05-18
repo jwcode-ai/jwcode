@@ -293,25 +293,30 @@ public class MessageList implements Component {
         StringBuilder sb = new StringBuilder();
         String[] lines = wrapText(item.content, maxWidth - 4).split("\n");
         
-        // 获取角色颜色和标签
+        // 获取角色颜色和标签（简约风格，参照 Claude Code）
         String color;
         String roleLabel;
+        String roleIcon;
         switch (item.role) {
             case USER:
                 color = GREEN;
-                roleLabel = "用户";
+                roleLabel = "你";
+                roleIcon = " ";
                 break;
             case ASSISTANT:
                 color = CYAN;
                 roleLabel = "助手";
+                roleIcon = "◆ ";
                 break;
             case SYSTEM:
                 color = YELLOW;
                 roleLabel = "系统";
+                roleIcon = "ℹ ";
                 break;
             default:
                 color = DIM;
                 roleLabel = "";
+                roleIcon = "";
         }
         
         if (compact) {
@@ -329,45 +334,33 @@ public class MessageList implements Component {
                 sb.append(DIM).append(" ◐").append(RESET);
             }
         } else {
-            // 完整模式
-            sb.append("\n");
-            
+            // 简约风格（参照 Claude Code）
             // 子代理来源标签
             if (sourceLabel != null && !sourceLabel.isEmpty()) {
-                sb.append(DIM).append("│");
-                sb.append(MAGENTA).append(" ← ").append(sourceLabel).append(RESET);
-                sb.append("\n");
+                sb.append("\n").append(DIM);
+                sb.append("  ← ").append(sourceLabel).append(RESET);
             }
             
-            // 消息头
-            sb.append(color);
-            sb.append("┌─ ").append(BOLD).append(roleLabel).append(RESET).append(color);
-            for (int i = 0; i < maxWidth - roleLabel.length() - 4; i++) {
-                sb.append("─");
+            // 简约角色标记行
+            sb.append("\n").append(color).append(BOLD);
+            if (item.role == Message.Role.USER) {
+                sb.append("  ").append(roleLabel);
+            } else if (item.role == Message.Role.ASSISTANT) {
+                sb.append("  ").append(roleLabel);
+            } else {
+                sb.append("  ").append(roleLabel);
             }
-            sb.append("┐").append(RESET).append("\n");
+            sb.append(RESET);
             
-            // 消息内容
-            for (String line : lines) {
-                sb.append(color).append("│").append(RESET).append(" ");
-                sb.append(line);
-                // 填充
-                for (int i = line.length(); i < maxWidth - 2; i++) {
-                    sb.append(' ');
-                }
-                sb.append(color).append(" │").append(RESET).append("\n");
-            }
-            
-            // 消息尾
-            sb.append(color).append("└");
-            for (int i = 0; i < maxWidth; i++) {
-                sb.append("─");
-            }
-            sb.append("┘").append(RESET);
-            
-            // 流式指示器
+            // 流式指示器（在角色名旁）
             if (item.isStreaming) {
-                sb.append(DIM).append(" ◐").append(RESET);
+                sb.append(" ").append(DIM).append("◐").append(RESET);
+            }
+            sb.append("\n");
+            
+            // 消息内容（简约缩进，无边框盒子）
+            for (String line : lines) {
+                sb.append("  ").append(line).append("\n");
             }
         }
         

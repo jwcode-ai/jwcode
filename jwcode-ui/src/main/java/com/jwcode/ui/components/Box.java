@@ -223,7 +223,9 @@ public class Box implements Component {
      */
     private String padOrTruncate(String str, int length) {
         if (str == null) str = "";
+        if (length <= 0) return "";
         if (str.length() >= length) {
+            if (length <= 3) return str.substring(0, length);
             return str.substring(0, length - 3) + "...";
         }
         StringBuilder sb = new StringBuilder(str);

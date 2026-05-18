@@ -57,8 +57,25 @@ public class EnterPlanModeTool implements Tool<EnterPlanModeTool.Input, EnterPla
         return """
             **EnterPlanMode** — 进入计划模式
             
-            进入 Plan Mode 后，你将只能使用只读工具（Read、Glob、Grep、WebFetch 等），
-            所有写操作（FileWrite、FileEdit、Bash、PowerShell 等）将被禁用。
+            进入 Plan Mode 后，你将只能使用只读工具，所有写操作和命令执行将被禁用。
+            
+            **✅ Plan Mode 下推荐的工具（按优先级）**：
+            1. **SmartAnalyzeTool** — 智能项目分析（自动排噪、定位关键文件），**首选**
+            2. **GlobTool** — 文件搜索（替代 Bash 的 ls/find/dir）
+            3. **FileReadTool** — 读取文件内容
+            4. **AskUserQuestion** — 向用户澄清需求
+            5. **WebFetchTool** — 获取网页内容
+            
+            **❌ Plan Mode 下被禁用的工具**：
+            - Bash / PowerShell — 禁止执行任何 shell 命令
+            - FileWrite / FileEdit — 禁止修改文件
+            - Git — 禁止 Git 操作
+            
+            **💡 工具选择决策树**：
+            - 想了解项目结构？→ 用 **SmartAnalyzeTool**（不要用 Bash ls/find）
+            - 想搜索特定文件？→ 用 **GlobTool**（不要用 Bash find/dir）
+            - 想读取文件内容？→ 用 **FileReadTool**（不要用 Bash cat/type）
+            - 需要更多上下文？→ 用 **AskUserQuestion**
             
             **何时使用**：
             - 实现新功能 / 重构代码 / 架构决策
@@ -71,16 +88,18 @@ public class EnterPlanModeTool implements Tool<EnterPlanModeTool.Input, EnterPla
             
             **标准流程**：
             1. 进入 Plan Mode
-            2. 探索代码（Glob/Grep/Read）
-            3. 需要时用 AskUserQuestion 澄清需求
-            4. 生成结构化任务清单（每个任务必须有 id/action/description/agentType/dependencies/expectedOutput）
-            5. 调用 ExitPlanModeV2 请求审批
+            2. 用 SmartAnalyzeTool 或 GlobTool 探索代码
+            3. 用 FileReadTool 读取关键文件
+            4. 需要时用 AskUserQuestion 澄清需求
+            5. 生成结构化任务清单（每个任务必须有 id/action/description/agentType/dependencies/expectedOutput）
+            6. 调用 ExitPlanModeV2 提交审批
             
             **⚠️ Plan Mode 铁律**：
             - 你只能探索和规划，不得声称自己完成了任何写操作
             - 任何声称"已完成"的声明必须附带对应工具调用的证据
             - 如果无法完成某项操作，如实说明 — 撒谎比失败更严重
             - 返回的任务清单必须是结构化 JSON 格式（见 ExitPlanModeV2）
+            - **禁止调用 Bash/PowerShell** — 所有探索需求都可以用 SmartAnalyzeTool / GlobTool / FileReadTool 满足
             """;
     }
     

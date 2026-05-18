@@ -291,10 +291,11 @@ public class PlanModeManager {
             return PermissionResult.allowed();
         }
         
-        // 始终禁止的工具
+        // 始终禁止的工具 — 带替代建议
         if (PLAN_MODE_ALWAYS_BLOCKED_TOOLS.contains(toolName)) {
+            String suggestion = getReplacementSuggestion(toolName);
             return PermissionResult.denied(
-                "工具 '" + toolName + "' 在 Plan Mode 下不可用。Plan Mode 只允许只读操作。"
+                "工具 '" + toolName + "' 在 Plan Mode 下不可用。Plan Mode 只允许只读操作。" + suggestion
             );
         }
         
@@ -449,6 +450,26 @@ public class PlanModeManager {
         public boolean isAllowed() { return allowed; }
         public String getReason() { return reason; }
         public boolean isDenied() { return !allowed; }
+    }
+    
+    // ==================== 替代工具建议 ====================
+    
+    /**
+     * 获取被禁用工具的替代建议
+     */
+    private String getReplacementSuggestion(String blockedToolName) {
+        return switch (blockedToolName) {
+            case "Bash", "PowerShell", "REPL" ->
+                "\n💡 替代方案：用 SmartAnalyzeTool 分析项目结构，用 GlobTool 搜索文件，用 FileReadTool 读取文件内容。";
+            case "FileWrite", "FileEdit" ->
+                "\n💡 替代方案：Plan Mode 下不能写文件。先用 FileReadTool 读取现有内容，规划好后再退出 Plan Mode 执行写操作。";
+            case "Git" ->
+                "\n💡 替代方案：用 GlobTool + FileReadTool 查看文件状态，用 SmartAnalyzeTool 分析项目结构。";
+            case "NotebookEdit" ->
+                "\n💡 替代方案：用 FileReadTool 读取 notebook 内容进行规划。";
+            default ->
+                "\n💡 提示：Plan Mode 只允许只读操作。尝试用 SmartAnalyzeTool、GlobTool、FileReadTool 等只读工具替代。";
+        };
     }
     
     // ==================== 历史查询 ====================

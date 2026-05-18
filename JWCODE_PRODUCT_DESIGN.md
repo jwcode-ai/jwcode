@@ -1,6 +1,6 @@
 # JwCode 产品设计文档
 
-> **版本**: 2.0 | **更新日期**: 2026-04-27 | **用途**: AI 编码助手了解产品设计与现状
+> **版本**: 2.1 | **更新日期**: 2026-05-17 | **用途**: AI 编码助手了解产品设计与现状
 
 ---
 
@@ -40,7 +40,7 @@ JwCode 是一个用 **Java 17+** 重构的终端 AI 编码工具，对标 TypeSc
 |------|----------|
 | Java | 17+ |
 | 构建工具 | Maven 3.8+ |
-| 终端框架 | JLine (交互式 CLI) |
+| 终端框架 | JLine + InkPipeline (类 Ink 渲染管线) |
 | HTTP 客户端 | OkHttp |
 | JSON 处理 | Jackson |
 | Web 服务 | Spring Boot (内置) |
@@ -473,14 +473,93 @@ jwcode> advanced analyze "升级 Spring Boot 版本"
 
 ## 7. UI 系统
 
-### 7.1 CLI 界面
+### 7.1 终端渲染管线（InkPipeline）
 
-基于 JLine 的交互式终端，提供：
-- 命令自动补全（Tab 键）
-- 命令历史记录（上下箭头）
-- 语法高亮
-- 流式响应实时显示
-- 多行输入支持
+JWCode 实现了类 Ink 的终端渲染管线，完全绕过 DOM，让组件直接在终端字符网格上工作。
+
+**三层架构：**
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  组件层 (Box / Text / MessageList / MarkdownRenderer)       │
+│  声明式组件树，支持嵌套和 Flexbox 布局                         │
+├─────────────────────────────────────────────────────────────┤
+│  布局引擎 (FlexLayout)                                      │
+│  纯 Java 实现的轻量级 Flexbox，计算每个组件的 (x,y,w,h)       │
+├─────────────────────────────────────────────────────────────┤
+│  渲染管线 (InkPipeline)                                     │
+│  光栅化 → 格子级 Diff → ANSI 转义码 → stdout                │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**渲染流程（每帧生命周期）：**
+
+```
+组件状态变更 (setState / 流式追加)
+        ↓
+FlexLayout.layout() 计算子组件位置 (flexDirection/justifyContent/alignItems)
+        ↓
+renderComponentToBuffer() 将组件树光栅化到 TerminalBuffer
+        ↓
+buffer.endFrame() 格子级 Diff → 与上一帧逐格比较 → DiffRegion[]
+        ↓
+AnsiRenderer.renderDiffs() → 最小 ANSI 转义码序列
+        ↓
+EnhancedTerminal.renderFrame() → stdout.write() → 终端屏幕更新
+```
+
+**关键特性：**
+
+| 特性 | 说明 |
+|------|------|
+| **Flexbox 布局** | 支持 ROW/COLUMN、flexGrow、justifyContent（6种）、alignItems（4种）、padding/margin |
+| **双缓冲 Diff** | `Cell[][]` 双缓冲，逐格比较字符+颜色+样式，只输出变化格子 |
+| **连续区间合并** | 同一行连续变化格合并为水平区间，减少 ANSI 光标移动指令 |
+| **真彩色渲染** | 24-bit 真彩色优先，自动降级到 256 色 / 16 色 |
+| **增量更新** | 流式输出时只重绘新增字符，实现流畅打字机效果 |
+| **虚拟滚动** | MessageList 支持视口裁剪，只渲染可见区域消息 |
+
+**组件体系：**
+
+| Ink 对应 | JWCode 组件 | 功能 |
+|----------|-------------|------|
+| `<Box>` | `Box.java` | Flex 容器，支持 Flexbox 布局、边框、标题、内边距 |
+| `<Text>` | `Text.java` | 文本组件，支持颜色、加粗、下划线、对齐、自动换行 |
+| `<Spacer>` | `Box.setFlexGrow(1)` | 占位伸缩项 |
+| `<Newline>` | `Text` 内容中的 `\n` | 换行 |
+| `<Static>` | — | 可用 `Box` + 条件渲染替代 |
+| `useInput` | `TerminalInput.java` | 键盘输入捕获与事件路由 |
+
+**核心文件：**
+```
+jwcode-ui/src/main/java/com/jwcode/ui/
+├── InkPipeline.java              # 渲染管线总控制器
+├── layout/
+│   ├── FlexLayout.java           # Flexbox 布局引擎
+│   ├── FlexItem.java             # 布局项模型
+│   ├── FlexDirection.java        # 主轴方向枚举
+│   └── Align.java                # 对齐方式枚举
+├── components/
+│   ├── Component.java            # 组件接口（v2.0 扩展 getFlexItem/setLayoutBounds）
+│   ├── Box.java                  # 容器组件（Flexbox 支持）
+│   ├── Text.java                 # 文本组件（flex 属性支持）
+│   ├── MessageList.java          # 消息列表（虚拟滚动）
+│   ├── MarkdownRenderer.java     # Markdown 渲染
+│   ├── PromptInput.java          # 提示输入
+│   ├── ProgressBar.java          # 进度条
+│   ├── Spinner.java              # 旋转加载器
+│   ├── StatusLine.java           # 状态栏
+│   ├── Dialog.java               # 对话框
+│   ├── Tabs.java                 # 标签页
+│   └── Select.java               # 选择器
+├── terminal/
+│   ├── TerminalBuffer.java       # 双缓冲 + 格子级 Diff 引擎
+│   ├── TerminalRenderer.java     # 终端渲染器（Buffer+Diff 模式）
+│   └── TerminalInput.java        # 终端输入处理
+└── renderer/
+    ├── AnsiRenderer.java         # Diff→ANSI 转义码渲染器
+    └── ColorCapability.java      # 终端色彩能力枚举
+```
 
 ### 7.2 活动日志系统
 
@@ -540,7 +619,7 @@ PUT  /api/config           → 更新运行时配置
 
 | 功能模块 | 状态 | 说明 |
 |---------|------|------|
-| CLI 交互界面 | ✅ 完成 | JLine 驱动的 REPL，50+ 命令 |
+| CLI 交互界面 | ✅ 完成 | JLine + InkPipeline 渲染管线，50+ 命令，Flexbox 布局，格子级 Diff 增量渲染 |
 | 工具系统 | ✅ 完成 | 40+ 工具，覆盖文件、代码、Shell、Web 等 |
 | 模型池 | ✅ 完成 | 多实例管理、负载均衡、健康检查、故障转移 |
 | OpenAI 兼容 | ✅ 完成 | 统一 OpenAI 格式，简化架构 |

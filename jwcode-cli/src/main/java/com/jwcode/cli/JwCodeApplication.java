@@ -28,6 +28,7 @@ import com.jwcode.core.task.WireEventBus;
 import com.jwcode.core.terminal.JLine3Terminal;
 import com.jwcode.core.tool.BashTool;
 
+import java.lang.reflect.InvocationTargetException;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -230,12 +231,16 @@ public class JwCodeApplication implements AutoCloseable {
         // 检查配置文件是否存在
         if (!configManager.isConfigured()) {
             printConfigError();
+            // 退出前清理本次启动创建的空会话
+            cleanupEmptySession();
             System.exit(1);
         }
         
         String model = configManager.getModel();
         if (model == null || model.isEmpty()) {
             printModelError();
+            // 退出前清理本次启动创建的空会话
+            cleanupEmptySession();
             System.exit(1);
         }
         
@@ -473,6 +478,24 @@ public class JwCodeApplication implements AutoCloseable {
         System.err.println("╚═══════════════════════════════════════════════════════════╝");
     }
     
+    /**
+     * 清理本次启动创建的空会话（当配置检查失败退出时调用）
+     */
+    private void cleanupEmptySession() {
+        CliLogger logger = CliLogger.getInstance();
+        try {
+            SessionManager sm = SessionManager.getInstance();
+            Session active = sm.getActiveSession();
+            if (active != null && active.getMessageCount() == 0) {
+                sm.deleteSession(active.getId());
+                logger.info("Cleaned up empty session created during this launch: " + active.getId());
+            }
+        } catch (Exception e) {
+            // 清理失败不影响主流程
+            logger.debug("Failed to cleanup empty session: " + e.getMessage());
+        }
+    }
+    
     private void registerCommands() {
         // 注册基础命令
         registerCommand(new HelpCommand(commands));
@@ -575,17 +598,51 @@ public class JwCodeApplication implements AutoCloseable {
      * 应用程序主入口
      */
     public void run(String[] args) {
+        System.err.println("[InkREPL] run() 被调用，args=" + java.util.Arrays.toString(args));
+        // 检查是否包含 --ink 参数（强制启用 InkPipeline）
+        boolean forceInk = false;
+        if (args.length > 0) {
+            List<String> argList = new java.util.ArrayList<>(java.util.Arrays.asList(args));
+            if (argList.remove("--ink")) {
+                forceInk = true;
+            }
+            if (!argList.isEmpty()) {
+                executeCommand(argList.toArray(new String[0]));
+                return;
+            }
+        }
+        
         // 显示启动信息
         printBanner();
         
-        // 如果有命令行参数，执行单次命令
-        if (args.length > 0) {
-            executeCommand(args);
-            return;
+        // 进入交互模式（尝试 InkPipeline）
+        runInteractiveMode(forceInk);
+    }
+    
+    private void runInteractiveMode() {
+        runInteractiveMode(false);
+    }
+    
+    private void runInteractiveMode(boolean forceInk) {
+        if (forceInk) {
+            // 强制启用 InkPipeline 模式
+            System.err.println("[InkREPL] 强制启用 InkPipeline 模式");
+            if (tryStartInkRepl()) {
+                return;
+            }
+            System.err.println("[InkREPL] 强制模式启动失败，回退到传统模式");
+        } else {
+            // 自动检测模式：尝试加载 jwcode-ui 的 REPL
+            if (tryStartInkRepl()) {
+                return;
+            }
         }
-        
-        // 否则进入交互模式
-        runInteractiveMode();
+        // 回退：使用 JLine3 终端
+        if (terminal != null) {
+            runInteractiveModeWithJLine3();
+        } else {
+            runInteractiveModeFallback();
+        }
     }
     
     private void printBanner() {
@@ -612,12 +669,75 @@ public class JwCodeApplication implements AutoCloseable {
         System.out.println();
     }
     
-    private void runInteractiveMode() {
-        // 优先使用 JLine3 终端
-        if (terminal != null) {
-            runInteractiveModeWithJLine3();
-        } else {
-            runInteractiveModeFallback();
+    /**
+     * 尝试通过反射加载 jwcode-ui 模块的 REPL（含 InkPipeline）。
+     * 避免编译期循环依赖。
+     */
+    private boolean tryStartInkRepl() {
+        System.err.println("[InkREPL] 尝试加载 com.jwcode.ui.REPL...");
+        try {
+            Class<?> replClass = Class.forName("com.jwcode.ui.REPL");
+            System.err.println("[InkREPL] 找到 REPL 类，正在实例化...");
+            Object repl = replClass.getConstructor().newInstance();
+            System.err.println("[InkREPL] REPL 实例化成功，正在注册命令回调...");
+            
+            // 通过反射设置 onCommand 回调，处理所有输入（命令或自然语言）
+            java.lang.reflect.Method onCommandMethod = replClass.getMethod("onCommand", java.util.function.Consumer.class);
+            onCommandMethod.invoke(repl, new java.util.function.Consumer<String>() {
+                @Override
+                public void accept(String input) {
+                    // 提取命令名：去掉 / 前缀（如果有），取第一个词
+                    String raw = input.startsWith("/") ? input.substring(1) : input;
+                    String[] parts = raw.split("\\s+", 2);
+                    String cmdName = parts[0];
+                    String cmdArgs = parts.length > 1 ? parts[1] : "";
+                    
+                    // 查找命令并执行
+                    Command cmd = commands.get(cmdName);
+                    if (cmd != null) {
+                        CommandResult result = cmd.execute(cmdArgs, context);
+                        if (result.getOutput() != null) {
+                            System.out.println(result.getOutput());
+                        }
+                        if (result.getError() != null) {
+                            System.err.println("错误: " + result.getError());
+                        }
+                    } else {
+                        // 不是已知命令，作为自然语言处理
+                        handleNaturalLanguageQuery(input);
+                    }
+                }
+            });
+            
+            // 通过反射设置 onSubmit 回调，将自然语言输入转发到 LLMQueryEngine
+            java.lang.reflect.Method onSubmitMethod = replClass.getMethod("onSubmit", java.util.function.Consumer.class);
+            onSubmitMethod.invoke(repl, new java.util.function.Consumer<String>() {
+                @Override
+                public void accept(String input) {
+                    handleNaturalLanguageQuery(input);
+                }
+            });
+            
+            System.err.println("[InkREPL] 回调注册完成，正在启动 run()...");
+            replClass.getMethod("run").invoke(repl);
+            System.err.println("[InkREPL] REPL.run() 返回，正常退出");
+            return true;
+        } catch (ClassNotFoundException e) {
+            System.err.println("[InkREPL] jwcode-ui 模块不在 classpath 中，使用传统模式");
+            return false;
+        } catch (NoClassDefFoundError e) {
+            System.err.println("[InkREPL] jwcode-ui 类加载失败: " + e.getMessage() + "，使用传统模式");
+            return false;
+        } catch (InvocationTargetException e) {
+            System.err.println("[InkREPL] REPL 方法抛出异常: " + e.getTargetException().getClass().getSimpleName());
+            e.getTargetException().printStackTrace(System.err);
+            System.err.println("[InkREPL] 回退到传统模式");
+            return false;
+        } catch (Exception e) {
+            System.err.println("[InkREPL] 启动失败 (" + e.getClass().getSimpleName() + "): " + e.getMessage());
+            e.printStackTrace(System.err);
+            System.err.println("[InkREPL] 回退到传统模式");
+            return false;
         }
     }
     

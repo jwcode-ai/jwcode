@@ -61,6 +61,9 @@ public class SmartAnalyzeTool implements Tool<SmartAnalyzeInput, SmartAnalyzeOut
     public String getPrompt() {
         return """
                使用 SmartAnalyzeTool 对项目进行智能分析。
+               
+               **🎯 Plan Mode 首选工具**：在 Plan Mode 下，当你需要了解项目结构时，
+               **必须优先使用 SmartAnalyzeTool**，而不是 Bash/PowerShell/GlobTool。
 
                参数:
                - project_root: 项目根目录路径（必需）
@@ -91,10 +94,10 @@ public class SmartAnalyzeTool implements Tool<SmartAnalyzeInput, SmartAnalyzeOut
                 🔴 调用此工具后，你必须立即停止所有工具调用！
                 
                 ❌ 禁止行为：
-                - 禁止调用 BashTool、GlobTool、PowerShell 做目录 listing
-                - 禁止调用 BashTool、GlobTool、PowerShell 做文件存在性验证
+                - 禁止调用 BashTool、PowerShell 做目录 listing
+                - 禁止调用 BashTool、PowerShell 做文件存在性验证
                 - 禁止再次调用 SmartAnalyzeTool 重新分析
-                - 禁止调用 BashTool 执行 ls、dir、find、Get-ChildItem 等命令
+                - 禁止调用 BashTool 执行 ls、dir、find、Get-ChildItem、tree、cat、type 等命令
                 
                 ✅ 正确行为：
                 1. 直接基于返回的关键文件列表开始分析
@@ -107,9 +110,9 @@ public class SmartAnalyzeTool implements Tool<SmartAnalyzeInput, SmartAnalyzeOut
 
                ⚠️ 平台兼容性警告:
                - 【Windows】不要使用 find、grep、tree、head、cat 等 Unix 命令，它们在 Windows cmd.exe 中不存在！
-               - 【Windows】不要使用 ls、tree 等命令，请使用 PowerShell 的 Get-ChildItem 或 GlobTool
+               - 【Windows】不要使用 ls、tree 等命令，请使用 GlobTool 或 SmartAnalyzeTool
                - 【跨平台】统一使用 GlobTool 或 SmartAnalyzeTool 搜索文件，避免平台差异
-               - 如果需要搜索特定目录（如 */test/*），使用 GlobTool 工具，设置 pattern 为 "**/test/**/*.java"
+               - 如果需要搜索特定目录（如 */test/*），使用 GlobTool，设置 pattern 为 "**/test/**/*.java"
                """;
     }
 

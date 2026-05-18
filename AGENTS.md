@@ -84,6 +84,7 @@
 | **Coder** | worker | 代码编写、重构、Bug修复 | 全工具权限（除危险工具） |
 | **Debug** | worker | 错误排查、根因分析、修复验证 | 侧重分析类工具 |
 | **Reviewer** | worker | 代码审查、安全扫描、风格检查 | **只读模式**，不修改文件 |
+| **Evaluator** | worker | GAN式评估专家（判别器），4维加权评分+硬门槛否决，驱动生成-评估对抗循环 | **只读模式**，输出结构化评分JSON |
 | **Tester** | worker | 测试用例设计、测试编写、执行 | 可运行编译和测试命令 |
 | **Documenter** | worker | 文档编写、README、API文档 | 读写文件，不执行命令 |
 | **Explorer** | worker | 代码库调研、结构分析、技术债务 | **只读模式**，纯调研 |
@@ -116,7 +117,33 @@
 | **AICL优先级** | pinned(永固) > critical(关键) > high(高) > medium(中) > low(低) > optional(可选) |
 | **触发方式** | Token水位线自动触发 / 用户手动触发(/compact) / Agent主动请求 / 检查点前 / 子任务完成时 / 会话超限 |
 
-### 2.5 AICL 协议引擎（v1.1 新增 / 横向基础设施）
+### 2.5 ContextResetManager（v3.0 新增 / 横向基础设施）
+
+Context Reset 协议实现"进程级重启+结构化交接"，用于解决 Agent 上下文焦虑问题。
+
+| 维度 | 说明 |
+|------|------|
+| **定位** | 上下文重置专家，为所有Agent提供进程级重启服务 |
+| **职责** | 检测上下文压力、生成交接文档(HandoffArtifact)、触发Agent重启 |
+| **触发条件** | Token使用率>85%(硬阈值) / 迭代循环>3轮(软阈值) / 任务阶段切换 / Agent主动请求 |
+| **核心机制** | 冻结状态 → 提取HandoffArtifact → 保存到`.jwcode/handoff/` → 杀死旧Agent → 启动新Agent → 读取恢复 |
+| **与Compactor关系** | Compactor先尝试压缩，压缩不足以解决问题时建议升级为Reset |
+
+**HandoffArtifact 结构**：
+| 字段 | 说明 |
+|------|------|
+| `sessionId` | 会话ID |
+| `taskId` | 任务ID |
+| `phase` | 当前阶段 |
+| `completedWork` | 已完成工作摘要 |
+| `currentState` | 当前状态（代码状态、配置等） |
+| `pendingItems` | 待办事项列表 |
+| `decisions` | 关键决策记录 |
+| `codeState` | 代码变更摘要 |
+| `activeIssues` | 活跃问题列表 |
+| `nextActions` | 下一步行动 |
+
+### 2.6 AICL 协议引擎（v1.1 新增 / 横向基础设施）
 
 AICL (Agent Interaction Context Language) 是上下文块的结构化生命周期管理协议。核心组件：
 
@@ -377,13 +404,19 @@ Orchestrator:
       - Phase 2: 设计 (Architect, 串行)
       - Phase 3: 实现 (Coder+Tester, 并发)
       - Phase 4: 审查 (Reviewer, 串行)
+      - Phase 5: GAN迭代 (Generator⇄Evaluator, 串行, 最大3轮)
   0c. WebSocket 广播 → 前端"结构化"视图展示
   # Act 模式: 使用 TaskExecutionAgent 逐步执行
   1. TaskExecutionAgent 按阶段顺序执行
   2. Phase 3 并发: Coder + Tester 线程池并行
   3. 等 3 完成后 → Reviewer 审查
-  4. 每个任务完成后 → MemoryAgent 自动记忆
-  5. 整合所有结果，汇报给用户
+  4. Phase 5: GAN迭代循环:
+     - Generator 根据反馈修改
+     - Evaluator 4维加权评分
+     - 未通过则注入反馈继续循环
+     - 通过或达最大轮数后终止
+  5. 每个任务完成后 → MemoryAgent 自动记忆
+  6. 整合所有结果，汇报给用户
 ```
 
 #### 场景F：跨任务记忆
@@ -589,7 +622,10 @@ Orchestrator 的拆解和调度逻辑可通过以下方式扩展：
 | `jwcode-core/src/main/java/com/jwcode/core/agent/WorkspaceMemoryStore.java` | 工作目录记忆持久化存储（.jwcode/memory/） |
 | `jwcode-core/src/main/java/com/jwcode/core/agent/CompactorAgent.java` | 上下文压缩专家 |
 | `jwcode-core/src/main/java/com/jwcode/core/agent/CompactorTrigger.java` | 压缩触发策略 |
+| `jwcode-core/src/main/java/com/jwcode/core/agent/EvaluatorAgent.java` | GAN式评估专家（4维加权评分+硬门槛否决） |
 | `jwcode-core/src/main/java/com/jwcode/core/service/StructuredCompactionStrategy.java` | 强制XML结构化压缩策略（优先级截断） |
+| `jwcode-core/src/main/java/com/jwcode/core/service/IterativeSprintOrchestrator.java` | GAN迭代循环仲裁器（Generator⇄Evaluator反馈闭环） |
+| `jwcode-core/src/main/java/com/jwcode/core/service/ContextResetManager.java` | 上下文重置管理器（进程级重启+结构化交接） |
 | `jwcode-core/src/main/java/com/jwcode/core/aicl/BlockPriority.java` | AICL 6级优先级枚举 |
 | `jwcode-core/src/main/java/com/jwcode/core/aicl/BlockLifecycle.java` | AICL 6状态生命周期枚举 |
 | `jwcode-core/src/main/java/com/jwcode/core/aicl/ContextBlock.java` | AICL 上下文块模型 |
@@ -600,7 +636,11 @@ Orchestrator 的拆解和调度逻辑可通过以下方式扩展：
 | `jwcode-core/src/main/java/com/jwcode/core/aicl/AICLContext.java` | AICL 完整上下文容器 |
 | `jwcode-core/src/main/java/com/jwcode/core/aicl/AICLPromptBuilder.java` | AICL AI解析规则Prompt生成器 |
 | `jwcode-core/src/main/java/com/jwcode/core/agent/AgentRegistry.java` | Agent注册表 |
-| `jwcode-core/src/main/java/com/jwcode/core/model/StructuredTask.java` | 结构化任务模型（执行模式+阶段+并发组） |
+| `jwcode-core/src/main/java/com/jwcode/core/model/StructuredTask.java` | 结构化任务模型（执行模式+阶段+并发组+contractId） |
+| `jwcode-core/src/main/java/com/jwcode/core/model/SprintContract.java` | Sprint合同模型（DRAFT→NEGOTIATING→SIGNED→EXECUTING） |
+| `jwcode-core/src/main/java/com/jwcode/core/model/EvaluationScore.java` | 4维加权评分模型（产品深度/功能/视觉/代码质量） |
+| `jwcode-core/src/main/java/com/jwcode/core/model/EvaluationReport.java` | 评估报告模型（含verdict+门槛检查+反馈摘要） |
+| `jwcode-core/src/main/java/com/jwcode/core/model/HandoffArtifact.java` | 交接文档模型（Context Reset协议核心） |
 | `jwcode-core/src/main/java/com/jwcode/core/tool/ToolAgent.java` | 工具执行Agent（第3层） |
 | `jwcode-core/src/main/java/com/jwcode/core/tool/ToolAgentResult.java` | 工具执行结果 |
 | `jwcode-core/src/main/java/com/jwcode/core/a2a/model/ErrorSummary.java` | 错误摘要模型 |

@@ -113,6 +113,9 @@ public class REPL implements AutoCloseable {
             currentSession.setTitle("新会话");
         }
         
+        // 自动初始化 InkPipeline（EnhancedTerminal + 增量渲染）
+        autoInitInkPipeline();
+        
         // 初始化活动日志
         this.activityLogger = ActivityLogger.getInstance();
         
@@ -221,6 +224,20 @@ public class REPL implements AutoCloseable {
     }
     
     /**
+     * 自动初始化 InkPipeline（如果尚未启用且 EnhancedTerminal 可用）。
+     */
+    private void autoInitInkPipeline() {
+        if (useInkPipeline) return;
+        try {
+            EnhancedTerminal et = new EnhancedTerminal();
+            enableInkPipeline(et);
+            System.err.println("[InkPipeline] ✅ 已启用增量渲染模式");
+        } catch (Exception e) {
+            System.err.println("[InkPipeline] ⚠️ 初始化失败，回退到传统模式: " + e.getMessage());
+        }
+    }
+
+    /**
      * 运行主循环
      */
     public void run() {
@@ -251,15 +268,18 @@ public class REPL implements AutoCloseable {
                     continue;
                 }
                 
+                // 检查退出命令
+                if (input.equals("/exit") || input.equals("/quit") || input.equals("exit") || input.equals("quit")) {
+                    break;
+                }
+                
                 if (currentScreen == Screen.PROMPT) {
-                    if (input.startsWith("/")) {
-                        if (onCommand != null) {
-                            onCommand.accept(input);
-                        }
-                    } else {
-                        if (onSubmit != null) {
-                            onSubmit.accept(input);
-                        }
+                    // 先尝试命令回调（无论是否带 / 前缀）
+                    if (onCommand != null) {
+                        onCommand.accept(input);
+                    } else if (onSubmit != null) {
+                        // 无命令回调时，走自然语言回调
+                        onSubmit.accept(input);
                     }
                 }
                 
@@ -490,8 +510,10 @@ public class REPL implements AutoCloseable {
         
         StringBuilder sb = new StringBuilder();
         
-        sb.append(renderStatusBar(width));
-        sb.append("\n");
+        // 简约分隔线
+        sb.append(CYAN).append(" ").append("─".repeat(Math.max(0, width - 2))).append(RESET).append("\n");
+        sb.append(renderStatusBar(width)).append("\n");
+        sb.append(CYAN).append(" ").append("─".repeat(Math.max(0, width - 2))).append(RESET).append("\n");
         
         MessageList ml = new MessageList().maxWidth(width);
         for (Message msg : messages) {
@@ -502,6 +524,13 @@ public class REPL implements AutoCloseable {
         }
         sb.append(ml.render());
         
+        // 输入提示行
+        sb.append("\n").append(GREEN).append(" jwcode> ").append(RESET).append("\n");
+        
+        // 底部分隔线
+        sb.append(CYAN).append(" ").append("─".repeat(Math.max(0, width - 2))).append(RESET).append("\n");
+        sb.append(renderFooterText(width));
+        
         try {
             terminal.puts(InfoCmp.Capability.clear_screen);
         } catch (Exception e) {
@@ -510,29 +539,58 @@ public class REPL implements AutoCloseable {
         terminal.writer().print(sb.toString());
         terminal.flush();
     }
+    
+    /**
+     * 渲染底部状态行（传统模式）。
+     */
+    private String renderFooterText(int width) {
+        int msgCount = messages.size();
+        String status = isStreaming ? "◐ 流式输出中..." : "● 就绪";
+        return "  " + DIM + "消息: " + msgCount + "  │  状态: " + status + RESET;
+    }
 
     /**
      * 使用 InkPipeline 进行增量渲染。
      *
      * <p>构建组件树 → InkPipeline.render() → 格子级 Diff → ANSI 输出。
      * 只输出变化区域，不进行全屏重绘。</p>
+     *
+     * <p>布局结构（参照 Claude Code 风格）：</p>
+     * <pre>
+     * ─── JWCode ──────────────────────────────────────
+     *  [Ctrl+O] 历史  [Ctrl+S] 会话  ...  会话名 | N条
+     * ────────────────────────────────────────────────
+     *  消息内容...
+     *  更多消息...
+     * ────────────────────────────────────────────────
+     *  jwcode> _                                      ← 集成在管线内的输入行
+     * ────────────────────────────────────────────────
+     *  消息: N  |  就绪  |  Ctrl+C 取消  |  /help
+     * </pre>
      */
     private void renderWithPipeline() {
         int width = enhancedTerminal.getTerminalWidth();
+        int height = enhancedTerminal.getTerminalHeight();
 
-        // 构建组件树
+        // ===== 根容器（无边框，全屏宽） =====
         Box rootBox = new Box();
         rootBox.setShowBorder(false);
         rootBox.setWidth(width);
         rootBox.setFlexDirection(com.jwcode.ui.layout.FlexDirection.COLUMN);
 
-        // 状态栏
+        // ===== 顶部状态栏（简约分隔线风格，无边框盒） =====
+        Text headerSeparator = new Text(buildHeaderSeparator(width));
+        rootBox.addChild(headerSeparator);
+
         Text statusText = new Text(buildStatusText(width));
         statusText.setColor(com.googlecode.lanterna.TextColor.ANSI.CYAN);
         rootBox.addChild(statusText);
 
-        // 消息列表
-        MessageList ml = new MessageList().maxWidth(width);
+        Text headerSeparator2 = new Text(buildHeaderSeparator(width));
+        rootBox.addChild(headerSeparator2);
+
+        // ===== 消息列表区域（无边框，简约风格） =====
+        MessageList ml = new MessageList().maxWidth(width - 2);
         for (Message msg : messages) {
             ml.addMessage(msg);
         }
@@ -542,21 +600,70 @@ public class REPL implements AutoCloseable {
         Text messagesText = new Text(ml.render());
         rootBox.addChild(messagesText);
 
+        // ===== 输入提示行（集成在管线内，模拟 prompt 区域） =====
+        Text promptLine = new Text(buildPromptLine(width));
+        promptLine.setColor(com.googlecode.lanterna.TextColor.ANSI.GREEN);
+        rootBox.addChild(promptLine);
+
+        // ===== 底部状态行（简约风格） =====
+        Text footerSeparator = new Text(buildFooterSeparator(width));
+        rootBox.addChild(footerSeparator);
+
+        Text footerText = new Text(buildFooterText());
+        footerText.setColor(com.googlecode.lanterna.TextColor.ANSI.WHITE);
+        rootBox.addChild(footerText);
+
         inkPipeline.setRoot(rootBox);
         inkPipeline.render();
     }
 
     /**
-     * 构建状态栏文本（不含 ANSI 颜色码，纯文本内容）。
+     * 构建输入提示行内容（在 InkPipeline 组件树中显示）。
+     * 实际输入仍由 JLine 处理，这里只做视觉提示。
+     */
+    private String buildPromptLine(int width) {
+        String prompt = isStreaming ? "◐ " : "jwcode> ";
+        return " " + prompt;
+    }
+
+    /**
+     * 构建简约风格的分隔线。
+     */
+    private String buildHeaderSeparator(int width) {
+        return " " + "─".repeat(Math.max(0, width - 2));
+    }
+
+    /**
+     * 构建底部分隔线。
+     */
+    private String buildFooterSeparator(int width) {
+        return " " + "─".repeat(Math.max(0, width - 2));
+    }
+
+    /**
+     * 构建底部状态文本（简约风格）。
+     */
+    private String buildFooterText() {
+        int msgCount = messages.size();
+        String status = isStreaming ? "◐ 流式输出中..." : "● 就绪";
+        return "  " + DIM + "消息: " + msgCount + "  │  状态: " + status + RESET;
+    }
+
+    /**
+     * 构建状态栏文本（简约风格，参照 Claude Code）。
      */
     private String buildStatusText(int width) {
         StringBuilder sb = new StringBuilder();
-        sb.append("[Ctrl+O] 历史 [Ctrl+S] 会话 [Ctrl+R] 搜索 [Ctrl+C] 取消 [/help] 帮助");
+        sb.append("  ").append(DIM).append("Ctrl+O").append(RESET).append(" 历史 ");
+        sb.append(DIM).append("Ctrl+S").append(RESET).append(" 会话 ");
+        sb.append(DIM).append("Ctrl+R").append(RESET).append(" 搜索 ");
+        sb.append(DIM).append("Ctrl+C").append(RESET).append(" 取消 ");
+        sb.append(DIM).append("/help").append(RESET).append(" 帮助");
 
         String sessionTitle = currentSession != null && currentSession.getTitle() != null
             ? currentSession.getTitle().substring(0, Math.min(15, currentSession.getTitle().length()))
             : "新会话";
-        String info = sessionTitle + " | 消息: " + messages.size();
+        String info = DIM + sessionTitle + RESET + " │ " + messages.size() + "条";
         int padding = Math.max(0, width - sb.length() - info.length() - 2);
         if (padding > 0) {
             sb.append(" ".repeat(padding));
@@ -598,32 +705,24 @@ public class REPL implements AutoCloseable {
     }
     
     /**
-     * 渲染状态栏
+     * 渲染状态栏（简约风格，参照 Claude Code）。
      */
     private String renderStatusBar(int width) {
         StringBuilder sb = new StringBuilder();
         
-        sb.append(CYAN);
-        sb.append("─".repeat(Math.max(0, width)));
-        sb.append(RESET).append("\n");
-        
-        sb.append(DIM).append("[Ctrl+O] 历史").append(RESET).append(" ");
-        sb.append(DIM).append("[Ctrl+S] 会话").append(RESET).append(" ");
-        sb.append(DIM).append("[Ctrl+R] 搜索").append(RESET).append(" ");
-        sb.append(DIM).append("[Ctrl+C] 取消").append(RESET).append(" ");
-        sb.append(DIM).append("[/help] 帮助").append(RESET);
+        sb.append("  ").append(DIM).append("Ctrl+O").append(RESET).append(" 历史 ");
+        sb.append(DIM).append("Ctrl+S").append(RESET).append(" 会话 ");
+        sb.append(DIM).append("Ctrl+R").append(RESET).append(" 搜索 ");
+        sb.append(DIM).append("Ctrl+C").append(RESET).append(" 取消 ");
+        sb.append(DIM).append("/help").append(RESET).append(" 帮助");
         
         String sessionTitle = currentSession != null && currentSession.getTitle() != null 
             ? currentSession.getTitle().substring(0, Math.min(15, currentSession.getTitle().length())) 
             : "新会话";
-        String info = sessionTitle + " | 消息: " + messages.size();
+        String info = DIM + sessionTitle + RESET + " │ " + messages.size() + "条";
         int infoLen = info.length();
         sb.append(" ".repeat(Math.max(0, width - 90 - infoLen)));
-        sb.append(MAGENTA).append(info).append(RESET);
-        
-        sb.append("\n").append(CYAN);
-        sb.append("─".repeat(Math.max(0, width)));
-        sb.append(RESET);
+        sb.append(info);
         
         return sb.toString();
     }

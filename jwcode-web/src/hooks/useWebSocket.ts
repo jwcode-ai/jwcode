@@ -4,6 +4,7 @@ import { useChatStore } from '../stores/chatStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { usePlanStore } from '../stores/planStore';
 import { useCommandStore } from '../stores/commandStore';
+import { useSettingsStore } from '../stores/settingsStore';
 import { LogEntry, PlanTask } from '../types';
 
 interface UseWebSocketOptions {
@@ -414,6 +415,11 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
         // 认证成功后订阅日志和获取命令列表
         wsService.send({ type: 'subscribe_logs' });
         wsService.send({ type: 'get_commands' });
+        // 向后端同步前端当前的工作目录，确保前后端一致
+        const currentDir = useSettingsStore.getState().workspaceDir;
+        if (currentDir) {
+          wsService.send({ type: 'workspace', message: currentDir });
+        }
         break;
 
       case 'auth_failed':
@@ -457,6 +463,10 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
         try {
           const wsData = JSON.parse(msg.data || '{}');
           console.log('[WS] 工作目录已切换:', wsData.oldDir, '->', wsData.newDir);
+          // 同步更新前端 store，确保前后端工作目录一致
+          if (wsData.newDir) {
+            useSettingsStore.getState().setWorkspaceDir(wsData.newDir);
+          }
         } catch (e) {
           console.log('[WS] 工作目录已切换:', msg.data);
         }

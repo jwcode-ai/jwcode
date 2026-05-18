@@ -8,6 +8,7 @@
 3. 流式响应与 Web UI 深度集成
 4. Agent 配置化（多 Agent 支持）
 5. **Plan/Act 模式结构化任务系统** ← 新增 v1.1
+6. **终端渲染管线 (InkPipeline)** ← 新增 v2.0
 
 ---
 
@@ -721,7 +722,115 @@ const tasks = planStore.getStructuredTasks(sessionId);
 
 ---
 
-## 7. 故障排除
+## 7. 终端渲染管线 (InkPipeline)
+
+> 新增于 2026-05-17 (v2.0)
+
+### 功能说明
+
+JWCode 实现了类 Ink 的终端渲染管线，让组件直接在终端字符网格上工作，绕过 DOM，实现声明式 UI + 增量渲染。
+
+**核心架构：**
+
+```
+组件树 (Box / Text / MessageList)
+    ↓
+FlexLayout.layout() ← Flexbox 布局计算
+    ↓
+TerminalBuffer 光栅化 ← 写入字符网格
+    ↓
+格子级 Diff (endFrame) ← 与上一帧逐格比较
+    ↓
+AnsiRenderer ← DiffRegion[] → ANSI 转义码
+    ↓
+EnhancedTerminal.renderFrame() → stdout
+```
+
+### 使用示例
+
+```java
+// 方式 1：在 REPL 中启用 InkPipeline
+EnhancedTerminal terminal = new EnhancedTerminal();
+repl.enableInkPipeline(terminal);
+
+// 方式 2：直接使用 InkPipeline
+InkPipeline pipeline = new InkPipeline(terminal);
+
+Box root = new Box();
+root.setShowBorder(false);
+root.setFlexDirection(FlexDirection.ROW);
+
+Text left = new Text("左侧面板");
+left.setFlexGrow(1);
+
+Text right = new Text("右侧面板");
+right.setWidth(20);
+
+root.addChild(left);
+root.addChild(right);
+
+pipeline.setRoot(root);
+pipeline.render(); // 只输出变化区域
+```
+
+### Flexbox 布局属性
+
+| 属性 | 可选值 | 说明 |
+|------|--------|------|
+| `flexDirection` | `ROW` / `COLUMN` | 主轴方向 |
+| `justifyContent` | `FLEX_START` / `CENTER` / `FLEX_END` / `SPACE_BETWEEN` / `SPACE_AROUND` / `SPACE_EVENLY` | 主轴对齐 |
+| `alignItems` | `FLEX_START` / `CENTER` / `FLEX_END` / `STRETCH` | 交叉轴对齐 |
+| `flexGrow` | 0.0 ~ N | 伸缩增长比例 |
+| `flexShrink` | 0.0 ~ N | 伸缩收缩比例 |
+| `padding` | 四边独立设置 | 内边距 |
+| `margin` | 四边独立设置 | 外边距 |
+| `minWidth` / `maxWidth` | 像素值 | 宽度约束 |
+| `minHeight` / `maxHeight` | 像素值 | 高度约束 |
+| `alignSelf` | `FLEX_START` / `CENTER` / `FLEX_END` / `STRETCH` | 单项交叉轴覆盖 |
+
+### 格子级 Diff 策略
+
+```
+每帧流程：
+  1. clear() 清空当前帧
+  2. 组件渲染写入 currentFrame[][]
+  3. endFrame() 与 previousFrame[][] 逐格比较
+  4. 连续变化格合并为 DiffRegion（水平区间）
+  5. 交换缓冲区：current → previous，新建 current
+  6. 返回 DiffRegion[] 供 ANSI 渲染
+
+优化：
+  - 全量刷新：resize/clear 后单次全屏 DiffRegion
+  - 空帧跳过：无变化时返回空数组，不输出
+  - 行内合并：同一行连续变化格一个光标定位指令
+```
+
+### 组件列表
+
+| 组件 | 文件 | 功能 |
+|------|------|------|
+| `Box` | `jwcode-ui/.../components/Box.java` | Flex 容器，支持边框/标题/内边距 |
+| `Text` | `jwcode-ui/.../components/Text.java` | 文本，支持颜色/加粗/对齐/换行 |
+| `MessageList` | `jwcode-ui/.../components/MessageList.java` | 消息列表，支持虚拟滚动 |
+| `MarkdownRenderer` | `jwcode-ui/.../components/MarkdownRenderer.java` | Markdown 渲染 |
+| `ProgressBar` | `jwcode-ui/.../components/ProgressBar.java` | 进度条 |
+| `Spinner` | `jwcode-ui/.../components/Spinner.java` | 旋转加载器 |
+| `Dialog` | `jwcode-ui/.../components/Dialog.java` | 对话框 |
+| `Tabs` | `jwcode-ui/.../components/Tabs.java` | 标签页 |
+| `Select` | `jwcode-ui/.../components/Select.java` | 选择器 |
+| `PromptInput` | `jwcode-ui/.../components/PromptInput.java` | 提示输入 |
+
+### 色彩支持
+
+| 级别 | 终端环境 | ANSI 码 |
+|------|---------|---------|
+| 真彩色 (24-bit) | `COLORTERM=truecolor` 或 `TERM=xterm-truecolor` | `\033[38;2;R;G;Bm` |
+| 256 色 | `TERM=xterm-256color` 或 `TERM=screen-256color` | `\033[38;5;Nm` |
+| 16 色 | 其他终端 | `\033[31m` ~ `\033[37m` |
+
+---
+
+## 8. 故障排除
 
 ### 常见问题
 
@@ -737,7 +846,13 @@ A: 检查端口是否被占用，防火墙设置是否正确。
 **Q: Agent 配置未生效？**
 A: 检查配置文件路径和格式，查看日志输出。
 
+**Q: 终端渲染出现闪烁或乱码？**
+A: 确保终端支持 ANSI 转义码（推荐 Windows Terminal / iTerm2 / VS Code 终端）。运行 `echo $TERM` 检查终端类型。
+
+**Q: 颜色显示不正确？**
+A: InkPipeline 自动检测终端色彩能力并降级。可通过 `EnhancedTerminal.getColorLevel()` 查看检测结果。
+
 ---
 
-*文档版本: 1.1.0*
-*最后更新: 2026-05-12*
+*文档版本: 2.0.0*
+*最后更新: 2026-05-17*

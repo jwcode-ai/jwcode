@@ -20,6 +20,10 @@
             <groupId>com.jwcode</groupId>
             <artifactId>jwcode-cli</artifactId>
         </dependency>
+        <dependency>
+            <groupId>com.jwcode</groupId>
+            <artifactId>jwcode-ui</artifactId>
+        </dependency>
     </dependencies>
 
     <build>
@@ -39,6 +43,28 @@
                         <goals>
                             <goal>single</goal>
                         </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.5.1</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <finalName>jwcode-${project.version}-all</finalName>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>com.jwcode.cli.JwCodeApplication</mainClass>
+                                </transformer>
+                            </transformers>
+                        </configuration>
                     </execution>
                 </executions>
             </plugin>

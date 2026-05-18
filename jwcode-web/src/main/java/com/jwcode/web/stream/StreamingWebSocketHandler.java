@@ -7,7 +7,10 @@ import com.jwcode.core.config.JwcodeConfig;
 import com.jwcode.core.config.YamlConfigLoader;
 import com.jwcode.core.llm.*;
 import com.jwcode.core.index.CodebaseIndexer;
+import com.jwcode.core.plan.PlanModeManager;
 import com.jwcode.core.session.Session;
+import com.jwcode.core.tool.Tool;
+import com.jwcode.core.tool.ToolExecutor;
 import com.jwcode.core.tool.ToolRegistry;
 
 import org.java_websocket.WebSocket;
@@ -18,6 +21,8 @@ import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
@@ -757,6 +762,9 @@ public class StreamingWebSocketHandler extends WebSocketServer {
      * Plan 模式下 AI 使用自然语言分析需求，不要求 JSON 输出。
      * 用户确认后，AI 的完整回复将被传递给 EnhancedOrchestratorAgent
      * 进行结构化任务解析和执行。
+     * 
+     * Plan 模式下 AI 可以使用只读工具（SmartAnalyzeTool、GlobTool、GrepTool、
+     * FileReadTool 等）来探索项目结构、读取文件内容，以做出更准确的分析。
      */
     private String getPlanSystemPrompt() {
         return """
@@ -773,7 +781,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             4. 给出高层次的实施建议和步骤
 
             ## 分析原则
-            - 基于常识和项目结构常识进行分析（你无法读取实际文件）
+            - 基于实际项目结构进行分析，使用工具探索代码
             - 诚实标注不确定的内容："需要进一步确认"
             - 分析要有层次：先宏观再微观
             - 最后给出清晰的任务分解建议
@@ -791,22 +799,26 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             4. **风险与注意事项**：潜在问题和注意事项
             5. **任务计划**：具体的任务分解（用 ## 任务计划 标题）
 
-            ## ⚠️ 绝对禁止
-            - **禁止生成任何工具调用标记**（如 <tool_calls>、<invoke name=、Bash 命令等）
-            - **禁止尝试执行任何操作**（Plan 模式是纯分析模式，不执行任何代码）
-            - **禁止读取文件、搜索代码、运行命令**
-            - 如果有需要确认的信息，直接在分析中说明即可
+            ## 可用工具
+            你可以使用以下只读工具来分析项目：
+            - **SmartAnalyzeTool**: 智能分析项目整体结构，自动识别关键文件（Plan 模式首选）
+            - **GlobTool**: 按模式搜索文件路径
+            - **GrepTool**: 在文件内容中搜索关键词
+            - **FileReadTool**: 读取文件内容
+            - **BatchReadTool**: 批量读取多个文件
+            - **AskUserQuestion**: 向用户提问以获取更多信息
 
-            ## ⚠️ 重要提醒
-            Plan 模式下你没有任何工具可用。你的输出将完整呈现给用户。
-            用户确认你的分析后，系统会自动将你的分析交给执行引擎来具体实施。
-            因此请提供详细、可操作的 task 分解建议。
+            ## 使用建议
+            - 分析开始时，先用 SmartAnalyzeTool 了解项目整体结构
+            - 然后根据需求用 GlobTool/GrepTool 定位相关文件
+            - 用 FileReadTool 读取关键文件的具体内容
+            - 基于实际代码内容做出准确的分析和判断
             """;
     }
     
     /**
-     * 检测 AI 响应中是否包含工具调用标记
-     * Plan 模式不支持工具，AI 不应生成任何工具调用
+     * 检测 AI 响应中是否包含模拟工具调用标记（非标准 Function Calling 格式）
+     * 用于检测 AI 是否在文本中生成了伪工具调用（如 <tool_calls> 等标记）
      */
     private boolean containsToolCallPattern(String content) {
         if (content == null || content.isEmpty()) return false;
@@ -821,29 +833,115 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     }
     
     /**
-     * 从 Session 构建 LLMMessage 列表（用于多轮对话重试）
+     * 从 Session 构建 LLMMessage 列表（支持工具调用消息）
+     * 
+     * 正确处理以下消息类型：
+     * - SYSTEM / USER / ASSISTANT: 普通文本消息
+     * - ASSISTANT + tool_calls: 带工具调用的助手消息
+     * - TOOL: 工具执行结果消息
      */
     private java.util.List<LLMMessage> buildLLMMessagesFromSession(Session session) {
         java.util.List<LLMMessage> messages = new java.util.ArrayList<>();
         for (com.jwcode.core.model.Message msg : session.getMessages()) {
             String role = msg.getRole().name().toLowerCase();
-            String msgContent = msg.getTextContent();
-            if (msgContent != null && !msgContent.isEmpty()) {
-                LLMMessage.Role llmRole;
-                switch (role) {
-                    case "system": llmRole = LLMMessage.Role.SYSTEM; break;
-                    case "assistant": llmRole = LLMMessage.Role.ASSISTANT; break;
-                    case "tool": llmRole = LLMMessage.Role.TOOL; break;
-                    default: llmRole = LLMMessage.Role.USER; break;
+            
+            switch (role) {
+                case "system": {
+                    String content = msg.getTextContent();
+                    if (content != null && !content.isEmpty()) {
+                        messages.add(LLMMessage.builder().role(LLMMessage.Role.SYSTEM).content(content).build());
+                    }
+                    break;
                 }
-                messages.add(LLMMessage.builder().role(llmRole).content(msgContent).build());
+                case "user": {
+                    String content = msg.getTextContent();
+                    if (content != null && !content.isEmpty()) {
+                        messages.add(LLMMessage.builder().role(LLMMessage.Role.USER).content(content).build());
+                    }
+                    break;
+                }
+                case "assistant": {
+                    String content = msg.getTextContent();
+                    if (content == null) content = "";
+                    
+                    if (msg.hasToolCalls()) {
+                        // 带工具调用的 assistant 消息
+                        List<LLMMessage.ToolCall> toolCalls = new ArrayList<>();
+                        for (com.jwcode.core.model.Message.ToolCallInfo tci : msg.getToolCalls()) {
+                            toolCalls.add(LLMMessage.ToolCall.builder()
+                                .id(tci.getId())
+                                .function(tci.getName(), tci.getArguments())
+                                .build());
+                        }
+                        messages.add(LLMMessage.assistantWithTools(content, toolCalls, msg.getReasoningContent()));
+                    } else {
+                        // 普通 assistant 消息
+                        messages.add(LLMMessage.builder()
+                            .role(LLMMessage.Role.ASSISTANT)
+                            .content(content)
+                            .reasoningContent(msg.getReasoningContent())
+                            .build());
+                    }
+                    break;
+                }
+                case "tool": {
+                    // 工具结果消息 — 提取 toolCallId 和结果内容
+                    String toolCallId = extractToolCallIdFromMsg(msg);
+                    String resultContent = extractToolResultContentFromMsg(msg);
+                    if (toolCallId != null && !toolCallId.isEmpty()) {
+                        messages.add(LLMMessage.tool(toolCallId, resultContent));
+                    }
+                    break;
+                }
             }
         }
         return messages;
     }
     
     /**
+     * 从 TOOL 消息中提取 toolCallId
+     */
+    private String extractToolCallIdFromMsg(com.jwcode.core.model.Message msg) {
+        if (msg.getContent() == null || msg.getContent().isEmpty()) {
+            return null;
+        }
+        for (com.jwcode.core.model.Message.ContentBlock block : msg.getContent()) {
+            if (block instanceof com.jwcode.core.model.Message.ToolResultContent) {
+                return ((com.jwcode.core.model.Message.ToolResultContent) block).getToolUseId();
+            }
+        }
+        return null;
+    }
+    
+    /**
+     * 从 TOOL 消息中提取结果内容
+     */
+    private String extractToolResultContentFromMsg(com.jwcode.core.model.Message msg) {
+        if (msg.getContent() == null || msg.getContent().isEmpty()) {
+            return "";
+        }
+        for (com.jwcode.core.model.Message.ContentBlock block : msg.getContent()) {
+            if (block instanceof com.jwcode.core.model.Message.ToolResultContent) {
+                Object result = ((com.jwcode.core.model.Message.ToolResultContent) block).getResult();
+                if (result != null) {
+                    String resultStr = result.toString();
+                    // 截断过长结果以节省 token
+                    if (resultStr.length() > 1000) {
+                        return resultStr.substring(0, 1000) + "\n...[结果已截断]";
+                    }
+                    return resultStr;
+                }
+                return "";
+            }
+        }
+        return msg.getTextContent();
+    }
+    
+    /**
      * 执行 Plan 查询 - 调用 LLM 分析需求并生成任务计划
+     * 
+     * 支持工具调用循环：AI 可以使用只读工具（SmartAnalyzeTool、GlobTool、
+     * FileReadTool 等）来探索项目结构，做出更准确的分析。
      */
     private void executePlanQuery(WebSocket conn, Session session, String message) {
         String sessionId = connectionSessions.get(conn);
@@ -874,6 +972,9 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             LLMFactory llmFactory = LLMFactory.fromConfig(config);
             LLMService llmService = llmFactory.getLLMService();
             
+            // 创建 ToolExecutor（使用已有的 toolRegistry）
+            ToolExecutor toolExecutor = new ToolExecutor(this.toolRegistry);
+            
             // 注入 Plan 模式的系统提示词
             session.addMessage(com.jwcode.core.model.Message.createSystemMessage(getPlanSystemPrompt()));
             
@@ -885,42 +986,116 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             // 保存用户目标到 session metadata（供 plan_confirm 使用）
             session.setMetadata("plan_goal", message);
             
-            // 转换会话消息
-            java.util.List<LLMMessage> llmMessages = buildLLMMessagesFromSession(session);
-            
             // 发送 plan_thinking 状态
             sendMessage(querySessionId, MessageType.PLAN_THINKING, escapeJson("正在分析需求..."));
             WebSocketLogBroadcaster.getInstance().broadcast(
                 LogEntry.info("Plan", "正在分析需求...")
             );
             
+            // 构建 Plan 模式下允许的工具列表
+            List<LLMTool> planTools = buildPlanModeTools(toolExecutor);
+            
             // 使用 StringBuilder 收集完整响应
             StringBuilder fullContentBuilder = new StringBuilder();
             
-            // 定义流式内容回调 - 实时推送到前端
-            java.util.function.Consumer<String> contentConsumer = chunk -> {
-                fullContentBuilder.append(chunk);
-                // 实时推送内容到前端（使用 CONTENT 消息类型，让 chatStore 实时渲染）
-                sendMessage(querySessionId, MessageType.CONTENT, chunk);
-            };
+            // 最大工具调用迭代次数，防止无限循环
+            int maxToolIterations = 15;
+            int toolIteration = 0;
+            boolean finished = false;
             
-            // 调用流式 API（不使用工具）
-            CompletableFuture<LLMResponse> future = llmService.chatStream(llmMessages, contentConsumer);
-            LLMResponse response = future.get(120, TimeUnit.SECONDS);
-            
-            if (response.hasError()) {
-                String errorMsg = response.getErrorMessage();
-                logger.severe("Plan 查询失败: " + errorMsg);
-                sendMessage(querySessionId, MessageType.PLAN_ERROR, escapeJson("AI 分析失败: " + errorMsg));
-                WebSocketLogBroadcaster.getInstance().broadcast(
-                    LogEntry.error("Plan 失败: " + errorMsg)
-                );
-                return;
+            while (!finished && toolIteration < maxToolIterations) {
+                toolIteration++;
+                
+                // 转换会话消息
+                java.util.List<LLMMessage> llmMessages = buildLLMMessagesFromSession(session);
+                
+                // 定义流式内容回调 - 实时推送到前端
+                java.util.function.Consumer<String> contentConsumer = chunk -> {
+                    fullContentBuilder.append(chunk);
+                    sendMessage(querySessionId, MessageType.CONTENT, chunk);
+                };
+                
+                // 调用流式 API（带工具）
+                CompletableFuture<LLMResponse> future = llmService.chatStreamWithTools(
+                    llmMessages, planTools, contentConsumer, null, null);
+                LLMResponse response = future.get(120, TimeUnit.SECONDS);
+                
+                if (response.hasError()) {
+                    String errorMsg = response.getErrorMessage();
+                    logger.severe("Plan 查询失败: " + errorMsg);
+                    sendMessage(querySessionId, MessageType.PLAN_ERROR, escapeJson("AI 分析失败: " + errorMsg));
+                    WebSocketLogBroadcaster.getInstance().broadcast(
+                        LogEntry.error("Plan 失败: " + errorMsg)
+                    );
+                    return;
+                }
+                
+                // 检查是否有工具调用
+                if (response.hasToolCalls()) {
+                    // 将 AI 的 tool_calls 消息加入 session
+                    List<com.jwcode.core.model.Message.ToolCallInfo> toolCallInfos = new ArrayList<>();
+                    for (LLMMessage.ToolCall tc : response.getToolCalls()) {
+                        toolCallInfos.add(new com.jwcode.core.model.Message.ToolCallInfo(
+                            tc.getId(),
+                            tc.getFunction().getName(),
+                            tc.getFunction().getArguments()
+                        ));
+                    }
+                    session.addMessage(com.jwcode.core.model.Message.createAssistantMessageWithToolCalls(
+                        response.getContent(), toolCallInfos));
+                    
+                    // 广播工具调用日志
+                    for (LLMMessage.ToolCall tc : response.getToolCalls()) {
+                        String toolName = tc.getFunction().getName();
+                        String args = tc.getFunction().getArguments();
+                        logger.info("Plan 工具调用: " + toolName + " args=" + 
+                            (args.length() > 200 ? args.substring(0, 200) + "..." : args));
+                        WebSocketLogBroadcaster.getInstance().broadcast(
+                            LogEntry.info("Plan", "调用工具: " + toolName)
+                        );
+                        // 发送工具调用事件到前端
+                        String toolCallJson = String.format(
+                            "{\"name\":\"%s\",\"arguments\":%s}",
+                            escapeJson(toolName), args
+                        );
+                        sendMessage(querySessionId, MessageType.TOOL_CALL, toolCallJson);
+                    }
+                    
+                    // 执行每个工具调用
+                    for (LLMMessage.ToolCall tc : response.getToolCalls()) {
+                        String toolName = tc.getFunction().getName();
+                        String args = tc.getFunction().getArguments();
+                        String toolCallId = tc.getId();
+                        
+                        // 执行工具
+                        String result = executePlanTool(toolExecutor, toolName, args, toolCallId);
+                        
+                        // 将工具结果加入 session
+                        session.addMessage(com.jwcode.core.model.Message.createToolResultMessage(
+                            toolCallId, toolName, args, result));
+                        
+                        // 广播工具结果
+                        String resultPreview = result.length() > 200 ? result.substring(0, 200) + "..." : result;
+                        logger.info("Plan 工具结果: " + toolName + " -> " + resultPreview);
+                        WebSocketLogBroadcaster.getInstance().broadcast(
+                            LogEntry.info("Plan", "工具 " + toolName + " 执行完成")
+                        );
+                    }
+                    
+                    // 继续循环，让 AI 基于工具结果继续分析
+                    WebSocketLogBroadcaster.getInstance().broadcast(
+                        LogEntry.info("Plan", "继续分析中...（第 " + toolIteration + " 轮）")
+                    );
+                } else {
+                    // 没有工具调用，分析完成
+                    finished = true;
+                }
             }
             
             String fullContent = fullContentBuilder.toString();
             
-            logger.info("Plan AI 分析完成，内容长度: " + fullContent.length());
+            logger.info("Plan AI 分析完成，内容长度: " + fullContent.length() + 
+                "，工具调用轮次: " + toolIteration);
             
             // 将完整响应保存到 Session metadata（供 plan_confirm 使用）
             session.setMetadata("plan_response", fullContent);
@@ -949,6 +1124,91 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             WebSocketLogBroadcaster.getInstance().broadcast(
                 LogEntry.error("Plan 异常: " + e.getMessage())
             );
+        }
+    }
+    
+    /**
+     * 构建 Plan 模式下允许的工具列表（LLMTool 格式）
+     * 利用 PlanModeManager 过滤出只读/分析类工具
+     */
+    private List<LLMTool> buildPlanModeTools(ToolExecutor toolExecutor) {
+        List<Tool<?, ?, ?>> allTools = toolExecutor.getEnabledTools();
+        
+        // 使用 PlanModeManager 过滤出 Plan 模式下允许的工具
+        PlanModeManager modeManager = PlanModeManager.getInstance();
+        List<Tool<?, ?, ?>> allowedTools;
+        if (modeManager != null) {
+            allowedTools = modeManager.filterPlanModeTools(allTools);
+        } else {
+            // 降级：只保留只读工具
+            allowedTools = allTools.stream()
+                .filter(t -> t.isReadOnly(null))
+                .toList();
+        }
+        
+        logger.info("Plan 模式可用工具: " + allowedTools.size() + "/" + allTools.size() +
+            " (" + allowedTools.stream().map(Tool::getName).toList() + ")");
+        
+        // 转换为 LLMTool 格式
+        List<LLMTool> result = new ArrayList<>();
+        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        for (Tool<?, ?, ?> tool : allowedTools) {
+            LLMTool llmTool = new LLMTool();
+            llmTool.setType("function");
+            
+            LLMTool.Function func = new LLMTool.Function();
+            func.setName(tool.getName());
+            func.setDescription(tool.getDescription());
+            
+            com.fasterxml.jackson.databind.JsonNode inputSchema = tool.getInputSchema();
+            if (inputSchema != null) {
+                Map<String, Object> params = mapper.convertValue(inputSchema, Map.class);
+                func.setParameters(params);
+            }
+            
+            llmTool.setFunction(func);
+            result.add(llmTool);
+        }
+        return result;
+    }
+    
+    /**
+     * 执行单个 Plan 工具调用，返回结果字符串
+     */
+    private String executePlanTool(ToolExecutor toolExecutor, String toolName, String args, String toolCallId) {
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            com.fasterxml.jackson.databind.JsonNode argsNode = mapper.readTree(args);
+            
+            // 使用 ToolExecutionContext 执行工具
+            com.jwcode.core.tool.context.ToolExecutionContext context = 
+                com.jwcode.core.tool.context.ToolExecutionContext.builder().build();
+            
+            java.util.concurrent.CompletableFuture<com.jwcode.core.tool.ToolExecutor.ToolExecutionResult> future = 
+                toolExecutor.execute(toolName, argsNode, context);
+            com.jwcode.core.tool.ToolExecutor.ToolExecutionResult execResult = future.get(60, TimeUnit.SECONDS);
+            
+            if (execResult != null && execResult.isSuccess()) {
+                com.jwcode.core.tool.ToolResult<?> toolResult = execResult.getResult();
+                if (toolResult != null && toolResult.isSuccess()) {
+                    Object data = toolResult.getData();
+                    if (data != null) {
+                        return mapper.valueToTree(data).toString();
+                    } else {
+                        return "Success (no data)";
+                    }
+                } else {
+                    String error = toolResult != null ? toolResult.getContent() : "Unknown error";
+                    return "Error: " + error;
+                }
+            } else {
+                String errorMsg = execResult != null ? execResult.getErrorMessage() : "Execution failed";
+                return "Error: " + errorMsg;
+            }
+        } catch (java.util.concurrent.TimeoutException e) {
+            return "Error: Tool execution timed out after 60 seconds";
+        } catch (Exception e) {
+            return "Error: " + e.getMessage();
         }
     }
     

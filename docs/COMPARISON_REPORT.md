@@ -1,7 +1,7 @@
 # JWCode 与原项目 (Claude Code) 对比分析报告
 
 > 本文档详细分析 Java 重构项目 (JWCode) 与原始 TypeScript 项目 (Claude Code) 之间的差异和未完成功能。
-> 最后更新：2026-04-01 (最新进度更新)
+> 最后更新：2026-05-17 (最新进度更新)
 
 ---
 
@@ -15,7 +15,7 @@
 | 运行时 | Node.js/Bun | JVM |
 | 构建工具 | npm/bun | Maven 3.8+ |
 | 命令行 | Commander.js | Picocli |
-| 终端 UI | Ink (React) | JLine |
+| 终端 UI | Ink (React) | JLine + InkPipeline (Flexbox + 格子级Diff) |
 | JSON 处理 | 原生/JSON | Jackson |
 | HTTP 客户端 | 原生 fetch | OkHttp |
 | 测试 | Jest | JUnit 5 |

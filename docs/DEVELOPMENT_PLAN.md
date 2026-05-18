@@ -1,7 +1,7 @@
 # JWCode 开发计划与功能清单
 
 > 本文档记录 JWCode 项目的完整功能规划、完成状态和开发进度。
-> 最后更新：2026-04-01
+> 最后更新：2026-05-17
 
 ---
 
@@ -23,7 +23,7 @@ JWCode 是一个用 Java 重构的终端 AI 编码工具，参照 Claude Code（
 | 命令系统 | 25 | 0 | 100% |
 | REPL 界面 | 1 | 0 | 100% |
 | 服务层 | 7 | 0 | 100% |
-| UI/UX 组件 | 5 | 0 | 100% |
+| UI/UX 组件 | 12 | 0 | 100% |
 | 高级功能 | 3 | 0 | 100% |
 | 单元测试 | 3 | 0 | 100% |
 | **总体** | **~110** | **~0** | **~100%** |
@@ -166,12 +166,23 @@ JWCode 是一个用 Java 重构的终端 AI 编码工具，参照 Claude Code（
 - CommandHistoryService - 命令历史服务
 - AutoUpdateService - 自动更新服务
 
-### 3.8 UI/UX 组件（5 个）✅
-- ProgressComponent - 进度显示组件
+### 3.8 UI/UX 组件（12 个）✅
+
+#### 渲染管线
+- InkPipeline - 渲染管线总控制器（布局→光栅化→Diff→ANSI输出）
+- FlexLayout - 轻量级 Flexbox 布局引擎（ROW/COLUMN/flexGrow/justifyContent/alignItems）
+- TerminalBuffer - 双缓冲 + 格子级 Diff 引擎（Cell[][] + endFrame() → DiffRegion[]）
+- AnsiRenderer - Diff→ANSI 转义码渲染器（真彩色/256色/16色自动降级）
+- EnhancedTerminal - 增强型终端（ANSI 输出 + 色彩检测）
+
+#### 组件体系
+- Box - 容器组件（Flexbox 支持：addChild/setFlexDirection/setJustifyContent）
+- Text - 文本组件（flexGrow/flexShrink/对齐/自动换行）
+- MessageList - 消息列表（虚拟滚动支持）
+- MarkdownRenderer - Markdown 渲染（标题/粗体/代码块/列表）
+- ProgressBar - 进度显示组件
 - DialogSystem - 对话框系统
 - ThemeSystem - 主题系统
-- KeyboardBindings - 键盘绑定系统
-- BuddyAnimation - Buddy 精灵动画
 
 ### 3.9 高级功能（3 个）✅
 - BridgeService - Bridge 远程服务

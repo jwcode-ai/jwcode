@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>欢迎来到 JwCode</title>
+    <style>
+        /* ===== 全局重置和基础样式 ===== */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+            color: #fff;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+            overflow-x: hidden;
+        }
+
+        /* ===== 背景粒子动画 ===== */
+        .bg-particles {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 0;
+            overflow: hidden;
+        }
+
+        .particle {
+            position: absolute;
+            width: 4px;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            animation: float linear infinite;
+        }
+
+        .particle:nth-child(1) { left: 10%; width: 6px; height: 6px; animation-duration: 12s; animation-delay: 0s; }
+        .particle:nth-child(2) { left: 20%; width: 3px; height: 3px; animation-duration: 15s; animation-delay: 1s; }
+        .particle:nth-child(3) { left: 35%; width: 5px; height: 5px; animation-duration: 10s; animation-delay: 2s; }
+        .particle:nth-child(4) { left: 50%; width: 4px; height: 4px; animation-duration: 18s; animation-delay: 0.5s; }
+        .particle:nth-child(5) { left: 65%; width: 7px; height: 7px; animation-duration: 14s; animation-delay: 3s; }
+        .particle:nth-child(6) { left: 75%; width: 3px; height: 3px; animation-duration: 11s; animation-delay: 1.5s; }
+        .particle:nth-child(7) { left: 85%; width: 5px; height: 5px; animation-duration: 16s; animation-delay: 2.5s; }
+        .particle:nth-child(8) { left: 95%; width: 4px; height: 4px; animation-duration: 13s; animation-delay: 0.8s; }
+        .particle:nth-child(9) { left: 45%; width: 6px; height: 6px; animation-duration: 17s; animation-delay: 4s; }
+        .particle:nth-child(10) { left: 5%; width: 3px; height: 3px; animation-duration: 9s; animation-delay: 3.5s; }
+
+        @keyframes float {
+            0% { transform: translateY(100vh) scale(0); opacity: 0; }
+            10% { opacity: 1; }
+            90% { opacity: 1; }
+            100% { transform: translateY(-10vh) scale(1); opacity: 0; }
+        }
+
+        /* ===== 主容器 ===== */
+        .container {
+            position: relative;
+            z-index: 1;
+            max-width: 800px;
+            width: 100%;
+            text-align: center;
+            animation: fadeInUp 1s ease-out;
+        }
+
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(40px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* ===== Logo / 图标 ===== */
+        .logo {
+            width: 100px;
+            height: 100px;
+            margin: 0 auto 2rem;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            border-radius: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 3rem;
+            font-weight: 800;
+            box-shadow: 0 20px 60px rgba(102, 126, 234, 0.4);
+            transition: transform 0.3s ease;
+            animation: pulse 3s ease-in-out infinite;
+        }
+
+        .logo:hover {
+            transform: scale(1.05) rotate(5deg);
+        }
+
+        @keyframes pulse {
+            0%, 100% { box-shadow: 0 20px 60px rgba(102, 126, 234, 0.4); }
+            50% { box-shadow: 0 20px 80px rgba(102, 126, 234, 0.6); }
+        }
+
+        /* ===== 标题与描述 ===== */
+        h1 {
+            font-size: 3.5rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+            background: linear-gradient(135deg, #f093fb, #f5576c, #4facfe);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            line-height: 1.2;
+        }
+
+        .subtitle {
+            font-size: 1.25rem;
+            color: rgba(255, 255, 255, 0.7);
+            margin-bottom: 2.5rem;
+            line-height: 1.6;
+        }
+
+        /* ===== 三栏卡片 ===== */
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1.5rem;
+            margin: 2.5rem 0;
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.08);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 1.75rem 1.5rem;
+            transition: all 0.3s ease;
+            cursor: default;
+        }
+
+        .card:hover {
+            background: rgba(255, 255, 255, 0.14);
+            transform: translateY(-6px);
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+        }
+
+        .card-icon {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+            display: block;
+        }
+
+        .card h3 {
+            font-size: 1.2rem;
+            margin-bottom: 0.5rem;
+            color: #fff;
+        }
+
+        .card p {
+            font-size: 0.9rem;
+            color: rgba(255, 255, 255, 0.65);
+            line-height: 1.5;
+        }
+
+        /* ===== 按钮 ===== */
+        .btn-group {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-top: 2rem;
+        }
+
+        .btn {
+            display: inline-block;
+            padding: 0.9rem 2.2rem;
+            border-radius: 50px;
+            font-size: 1rem;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.3s ease;
+            border: none;
+            cursor: pointer;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: #fff;
+            box-shadow: 0 8px 30px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 12px 40px rgba(102, 126, 234, 0.6);
+        }
+
+        .btn-secondary {
+            background: transparent;
+            color: #fff;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .btn-secondary:hover {
+            border-color: #667eea;
+            background: rgba(102, 126, 234, 0.1);
+            transform: translateY(-3px);
+        }
+
+        /* ===== 页脚 ===== */
+        .footer {
+            margin-top: 3rem;
+            font-size: 0.85rem;
+            color: rgba(255, 255, 255, 0.35);
+        }
+
+        .footer a {
+            color: rgba(255, 255, 255, 0.5);
+            text-decoration: none;
+            transition: color 0.3s;
+        }
+
+        .footer a:hover {
+            color: #667eea;
+        }
+
+        /* ===== 响应式 ===== */
+        @media (max-width: 600px) {
+            h1 { font-size: 2.2rem; }
+            .subtitle { font-size: 1rem; }
+            .logo { width: 80px; height: 80px; font-size: 2.2rem; }
+            .cards { grid-template-columns: 1fr; }
+            .btn { padding: 0.75rem 1.5rem; font-size: 0.9rem; }
+        }
+    </style>
+</head>
+<body>
+    <!-- 背景粒子 -->
+    <div class="bg-particles">
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+    </div>
+
+    <!-- 主内容 -->
+    <div class="container">
+        <div class="logo">JW</div>
+
+        <h1>欢迎来到 JwCode</h1>
+        <p class="subtitle">
+            一个智能、高效的 AI 编程助手。<br>
+            专注于帮助开发者更快、更好地编写代码。
+        </p>
+
+        <!-- 功能卡片 -->
+        <div class="cards">
+            <div class="card">
+                <span class="card-icon">⚡</span>
+                <h3>快速响应</h3>
+                <p>毫秒级智能反馈，让编码效率倍增</p>
+            </div>
+            <div class="card">
+                <span class="card-icon">🧠</span>
+                <h3>智能分析</h3>
+                <p>深度理解代码语义，精准定位问题</p>
+            </div>
+            <div class="card">
+                <span class="card-icon">🔧</span>
+                <h3>全栈支持</h3>
+                <p>覆盖主流语言和框架，一站式解决</p>
+            </div>
+        </div>
+
+        <!-- 按钮 -->
+        <div class="btn-group">
+            <a href="#" class="btn btn-primary" onclick="showMessage()">开始使用</a>
+            <a href="#" class="btn btn-secondary" onclick="showTime()">查看时间</a>
+        </div>
+
+        <!-- 页脚 -->
+        <div class="footer">
+            <p>&copy; 2026 JwCode. Made with ❤️ | 
+                <a href="https://github.com" target="_blank">GitHub</a> · 
+                <a href="https://developer.mozilla.org/zh-CN/" target="_blank">MDN</a>
+            </p>
+        </div>
+    </div>
+
+    <script>
+        // 简单的交互
+        function showMessage() {
+            alert('🎉 欢迎使用 JwCode！\n\n您的 AI 编程助手已就绪！');
+        }
+
+        function showTime() {
+            const now = new Date();
+            const options = {
+                year: 'numeric', month: 'long', day: 'numeric',
+                hour: '2-digit', minute: '2-digit', second: '2-digit',
+                timeZoneName: 'short'
+            };
+            alert('🕐 当前时间：' + now.toLocaleDateString('zh-CN', options));
+        }
+
+        // 控制台彩蛋
+        console.log('%c JwCode 🚀 ', 'background: #667eea; color: #fff; font-size: 20px; padding: 8px 16px; border-radius: 8px;');
+        console.log('%c 智能编程，从这里开始！', 'color: #f093fb; font-size: 14px;');
+    </script>
+</body>
+</html>

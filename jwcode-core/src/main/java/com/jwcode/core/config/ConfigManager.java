@@ -167,6 +167,7 @@ public class ConfigManager {
     
     /**
      * 将嵌套 Map 展平为点分键
+     * List 类型使用 JSON 序列化而非 toString()，避免产生 Java 格式字符串
      */
     @SuppressWarnings("unchecked")
     private Map<String, String> flattenMap(Map<String, Object> map, String prefix) {
@@ -179,7 +180,13 @@ public class ConfigManager {
             if (value instanceof Map) {
                 result.putAll(flattenMap((Map<String, Object>) value, key));
             } else if (value instanceof List) {
-                result.put(key, value.toString());
+                // 【修复】使用 JSON 序列化，输出标准 JSON 数组格式（如 [{"id":"..."}]）
+                // 而非 Java toString() 格式（如 [{id=...}]）或 YAML 流格式
+                try {
+                    result.put(key, jsonMapper.writeValueAsString(value));
+                } catch (IOException e) {
+                    result.put(key, value.toString());
+                }
             } else {
                 result.put(key, value != null ? value.toString() : null);
             }
@@ -417,6 +424,7 @@ public class ConfigManager {
     
     /**
      * 将展平的 Map 转换为嵌套结构
+     * 自动检测 JSON 数组/对象字符串并反序列化，避免将 List/Map 存为纯字符串
      */
     private Map<String, Object> unflattenMap(Map<String, String> flatMap) {
         Map<String, Object> result = new HashMap<>();
@@ -439,10 +447,31 @@ public class ConfigManager {
                 current = next;
             }
             
-            current.put(parts[parts.length - 1], entry.getValue());
+            // 【修复】尝试将 JSON 数组/对象字符串反序列化为结构化对象
+            String rawValue = entry.getValue();
+            Object parsedValue = tryParseJsonValue(rawValue);
+            current.put(parts[parts.length - 1], parsedValue);
         }
         
         return result;
+    }
+    
+    /**
+     * 尝试将字符串解析为 JSON 数组或对象，失败则返回原字符串
+     */
+    private Object tryParseJsonValue(String value) {
+        if (value == null) return null;
+        String trimmed = value.trim();
+        if ((trimmed.startsWith("[") && trimmed.endsWith("]")) ||
+            (trimmed.startsWith("{") && trimmed.endsWith("}"))) {
+            try {
+                return yamlMapper.readValue(trimmed, Object.class);
+            } catch (IOException e) {
+                // 不是合法的 JSON，返回原字符串
+                return value;
+            }
+        }
+        return value;
     }
     
     // ==================== 配置导入/导出 ====================
