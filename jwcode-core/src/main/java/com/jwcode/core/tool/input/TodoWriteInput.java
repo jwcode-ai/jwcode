@@ -1,6 +1,7 @@
 package com.jwcode.core.tool.input;
 
 import com.fasterxml.jackson.annotation.JsonAlias;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
 
@@ -20,6 +21,7 @@ import java.util.List;
  *   <li><b>activeForm</b> — 进行时态显示文本</li>
  * </ul>
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 public record TodoWriteInput(
     
     /** 操作类型: "add", "edit", "delete", "replace_all", "mark" */

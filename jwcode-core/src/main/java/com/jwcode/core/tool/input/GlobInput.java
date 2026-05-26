@@ -31,9 +31,9 @@ public record GlobInput(
             isRegex = false;
         }
         if (maxResults == null) {
-            maxResults = 100;
-        } else if (maxResults > 1000) {
-            maxResults = 1000;
+            maxResults = 500;
+        } else if (maxResults > 5000) {
+            maxResults = 5000;
         } else if (maxResults < 1) {
             maxResults = 1;
         }
@@ -51,7 +51,7 @@ public record GlobInput(
      * 获取最大结果数量
      */
     public int getMaxResults() {
-        return maxResults != null ? maxResults : 100;
+        return maxResults != null ? maxResults : 500;
     }
     
     /**

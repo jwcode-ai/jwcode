@@ -3,6 +3,8 @@ package com.jwcode.cli.log;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 
+import com.jwcode.core.terminal.JLine3Terminal;
+
 /**
  * CLI 日志器 - 优化的终端日志输出
  * 
@@ -135,14 +137,14 @@ public class CliLogger {
             String line = String.format("┌─ %s %s", 
                 colorize("Tool:", CYAN), 
                 colorize(toolName, BOLD + CYAN));
-            System.out.println(line);
+            System.err.println(line);
             
             if (params != null && !params.isEmpty()) {
                 String truncated = params.length() > 80 ? 
                     params.substring(0, 77) + "..." : params;
-                System.out.println("│ " + colorize(truncated, GRAY));
+                System.err.println("│ " + colorize(truncated, GRAY));
             }
-            System.out.println("└");
+            System.err.println("└");
         } else {
             info("Calling tool: " + toolName);
         }
@@ -159,7 +161,7 @@ public class CliLogger {
                 colorize(symbol, color),
                 colorize(toolName, color),
                 success ? "success" : "failed");
-            System.out.println(line);
+            System.err.println(line);
         }
     }
     
@@ -167,16 +169,16 @@ public class CliLogger {
      * 打印流式内容
      */
     public void stream(String content) {
-        System.out.print(content);
-        System.out.flush();
+        System.err.print(content);
+        System.err.flush();
     }
     
     /**
      * 打印思考过程
      */
     public void thinking(String content) {
-        System.out.print(colorize(content, GRAY));
-        System.out.flush();
+        System.err.print(colorize(content, GRAY));
+        System.err.flush();
     }
     
     /**
@@ -198,28 +200,28 @@ public class CliLogger {
             bar.toString(),
             current, total);
         
-        System.out.print(line);
+        System.err.print(line);
         if (current == total) {
-            System.out.println();
+            System.err.println();
         }
-        System.out.flush();
+        System.err.flush();
     }
     
     /**
      * 打印分隔线
      */
     public void divider() {
-        System.out.println(colorize("─".repeat(50), GRAY));
+        System.err.println(colorize("─".repeat(50), GRAY));
     }
     
     /**
      * 打印标题
      */
     public void title(String text) {
-        System.out.println();
-        System.out.println(colorize("╔" + "═".repeat(48) + "╗", CYAN));
-        System.out.println(colorize("║" + center(text, 48) + "║", CYAN));
-        System.out.println(colorize("╚" + "═".repeat(48) + "╝", CYAN));
+        System.err.println();
+        System.err.println(colorize("╔" + "═".repeat(48) + "╗", CYAN));
+        System.err.println(colorize("║" + center(text, 48) + "║", CYAN));
+        System.err.println(colorize("╚" + "═".repeat(48) + "╝", CYAN));
     }
     
     // ============ 私有方法 ============
@@ -243,7 +245,16 @@ public class CliLogger {
         // 消息
         sb.append(message);
         
-        System.out.println(sb.toString());
+        String output = sb.toString();
+        
+        // JLine3 交互模式下使用 printAbove 避免覆盖提示符
+        JLine3Terminal terminal = JLine3Terminal.getInstance();
+        if (terminal != null && terminal.isInteractive()) {
+            terminal.printAbove(output);
+        } else {
+            // 非交互模式降级到 stderr
+            System.err.println(output);
+        }
     }
     
     private String colorize(String text, String color) {

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jwcode.core.mcp.model.McpServerInfo;
 import com.jwcode.core.tool.context.ToolExecutionContext;
+import java.util.function.Consumer;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -42,6 +43,16 @@ public class ListMcpResourcesTool implements Tool<ListMcpResourcesTool.Input, Li
                 }
                 """);
         } catch (Exception e) { return null; }
+    }
+    
+    @Override
+    public TypeReference<Input> getInputType() {
+        return new TypeReference<>() {};
+    }
+    
+    @Override
+    public TypeReference<Output> getOutputType() {
+        return new TypeReference<>() {};
     }
     
     @Override

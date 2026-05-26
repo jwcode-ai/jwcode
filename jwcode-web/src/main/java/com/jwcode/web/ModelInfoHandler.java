@@ -7,18 +7,21 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.logging.Logger;
 
 /**
  * ModelInfoHandler - 模型信息 API 处理器
  */
 public class ModelInfoHandler implements HttpHandler {
     
+    private static final Logger logger = Logger.getLogger(ModelInfoHandler.class.getName());
     private static final ObjectMapper mapper = new ObjectMapper();
     
     @Override
@@ -40,6 +43,12 @@ public class ModelInfoHandler implements HttpHandler {
                 } else {
                     sendError(exchange, 404, "Not found: " + path);
                 }
+            } else if ("POST".equals(method)) {
+                if ("/api/models".equals(path)) {
+                    handleAddModel(exchange);
+                } else {
+                    sendError(exchange, 404, "Not found: " + path);
+                }
             } else {
                 sendError(exchange, 405, "Method not allowed: " + method);
             }
@@ -51,7 +60,7 @@ public class ModelInfoHandler implements HttpHandler {
     
     private void handleOptions(HttpExchange exchange) throws IOException {
         exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
-        exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
         exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
         exchange.sendResponseHeaders(204, -1);
     }
@@ -60,39 +69,51 @@ public class ModelInfoHandler implements HttpHandler {
         JwcodeConfig config = YamlConfigLoader.getInstance().getConfig();
         List<Map<String, Object>> models = new ArrayList<>();
         
-        if (config != null && config.getDefaultProvider() != null) {
-            JwcodeConfig.ProviderConfig provider = config.getDefaultProvider();
+        if (config != null) {
+            String pn = config.getDefaultProviderName();
+            logger.info("[ModelAPI] defaultProviderName=" + pn + ", providers=" + config.getProviders().keySet());
+        }
+        
+        if (config != null && config.getProviders() != null) {
+            // 遍历所有 provider，收集所有模型的完整信息
+            String defaultProviderName = config.getDefaultProviderName();
             JwcodeConfig.ModelDefinition defaultModel = config.getDefaultModel();
-            String providerName = config.getDefaultProviderName();
             
-            if (provider.getModels() != null) {
-                for (JwcodeConfig.ModelDefinition model : provider.getModels()) {
-                    Map<String, Object> modelInfo = new HashMap<>();
-                    modelInfo.put("id", model.getId());
-                    modelInfo.put("name", model.getName());
-                    modelInfo.put("enabled", model.isEnabled());
-                    modelInfo.put("maxTokens", model.getMaxTokens());
-                    modelInfo.put("temperature", model.getTemperature());
-                    modelInfo.put("contextWindow", model.getContextWindow());
-                    modelInfo.put("isDefault", defaultModel != null && model.getId().equals(defaultModel.getId()));
-                    modelInfo.put("provider", providerName);
-                    modelInfo.put("status", model.isEnabled() ? "online" : "offline");
-                    
-                    if (model.getCost() != null) {
-                        Map<String, Object> costInfo = new HashMap<>();
-                        costInfo.put("input", model.getCost().getInput());
-                        costInfo.put("output", model.getCost().getOutput());
-                        costInfo.put("cacheRead", model.getCost().getCacheRead());
-                        costInfo.put("cacheWrite", model.getCost().getCacheWrite());
-                        modelInfo.put("cost", costInfo);
-                        modelInfo.put("price", costInfo);
+            for (Map.Entry<String, JwcodeConfig.ProviderConfig> entry : config.getProviders().entrySet()) {
+                String providerName = entry.getKey();
+                JwcodeConfig.ProviderConfig provider = entry.getValue();
+                
+                if (provider.getModels() != null) {
+                    for (JwcodeConfig.ModelDefinition model : provider.getModels()) {
+                        Map<String, Object> modelInfo = new HashMap<>();
+                        modelInfo.put("id", model.getId());
+                        modelInfo.put("name", model.getName());
+                        modelInfo.put("enabled", model.isEnabled());
+                        modelInfo.put("maxTokens", model.getMaxTokens());
+                        modelInfo.put("temperature", model.getTemperature());
+                        modelInfo.put("contextWindow", model.getContextWindow());
+                        modelInfo.put("isDefault", providerName.equals(defaultProviderName) 
+                            && defaultModel != null && model.getId().equals(defaultModel.getId()));
+                        modelInfo.put("provider", providerName);
+                        modelInfo.put("status", model.isEnabled() ? "online" : "offline");
+                        modelInfo.put("priority", model.getPriority());
+                        
+                        if (model.getCost() != null) {
+                            Map<String, Object> costInfo = new HashMap<>();
+                            costInfo.put("input", model.getCost().getInput());
+                            costInfo.put("output", model.getCost().getOutput());
+                            costInfo.put("cacheRead", model.getCost().getCacheRead());
+                            costInfo.put("cacheWrite", model.getCost().getCacheWrite());
+                            modelInfo.put("cost", costInfo);
+                            modelInfo.put("price", costInfo);
+                        }
+                        
+                        modelInfo.put("load", 0);
+                        modelInfo.put("maxLoad", 100);
+                        modelInfo.put("tokens", 0);
+                        
+                        models.add(modelInfo);
                     }
-                    
-                    modelInfo.put("load", 0);
-                    modelInfo.put("maxLoad", 100);
-                    modelInfo.put("tokens", 0);
-                    
-                    models.add(modelInfo);
                 }
             }
         }
@@ -121,6 +142,123 @@ public class ModelInfoHandler implements HttpHandler {
         }
         
         sendSuccess(exchange, 200, status);
+    }
+    
+    /**
+     * 处理添加模型请求 POST /api/models
+     * 请求体: { "provider": "providerName", "model": { "id": "...", "name": "...", ... } }
+     */
+    @SuppressWarnings("unchecked")
+    private void handleAddModel(HttpExchange exchange) throws IOException {
+        // 解析请求体
+        InputStream is = exchange.getRequestBody();
+        String body = new String(is.readAllBytes(), StandardCharsets.UTF_8);
+        
+        Map<String, Object> requestMap;
+        try {
+            requestMap = mapper.readValue(body, Map.class);
+        } catch (Exception e) {
+            sendError(exchange, 400, "Invalid JSON: " + e.getMessage());
+            return;
+        }
+        
+        String providerName = (String) requestMap.get("provider");
+        Map<String, Object> modelData = (Map<String, Object>) requestMap.get("model");
+        
+        if (providerName == null || providerName.isBlank()) {
+            sendError(exchange, 400, "provider is required");
+            return;
+        }
+        if (modelData == null) {
+            sendError(exchange, 400, "model is required");
+            return;
+        }
+        
+        String modelId = (String) modelData.get("id");
+        String modelName = (String) modelData.get("name");
+        if (modelId == null || modelId.isBlank()) {
+            sendError(exchange, 400, "model.id is required");
+            return;
+        }
+        if (modelName == null || modelName.isBlank()) {
+            modelName = modelId;
+        }
+        
+        // 获取当前配置
+        YamlConfigLoader loader = YamlConfigLoader.getInstance();
+        JwcodeConfig config = loader.getConfig();
+        
+        // 获取或创建 provider
+        JwcodeConfig.ProviderConfig provider = config.getProviders().get(providerName);
+        if (provider == null) {
+            provider = new JwcodeConfig.ProviderConfig();
+            provider.setBaseUrl((String) modelData.getOrDefault("baseUrl", "https://api.openai.com/v1"));
+            provider.setApiType((String) modelData.getOrDefault("apiType", "openai-completions"));
+            
+            // 如果有 apiKeys，一并设置
+            if (modelData.containsKey("apiKeys") && modelData.get("apiKeys") instanceof List) {
+                provider.setApiKeys((List<String>) modelData.get("apiKeys"));
+            }
+            
+            config.getProviders().put(providerName, provider);
+        }
+        
+        // 检查模型是否已存在
+        boolean exists = provider.getModels().stream()
+            .anyMatch(m -> m.getId().equals(modelId));
+        if (exists) {
+            sendError(exchange, 409, "Model '" + modelId + "' already exists in provider '" + providerName + "'");
+            return;
+        }
+        
+        // 创建新模型
+        JwcodeConfig.ModelDefinition newModel = new JwcodeConfig.ModelDefinition();
+        newModel.setId(modelId);
+        newModel.setName(modelName);
+        newModel.setEnabled((Boolean) modelData.getOrDefault("enabled", true));
+        
+        if (modelData.containsKey("temperature")) {
+            Object temp = modelData.get("temperature");
+            if (temp instanceof Number) {
+                newModel.setTemperature(((Number) temp).doubleValue());
+            }
+        }
+        if (modelData.containsKey("maxTokens")) {
+            Object mt = modelData.get("maxTokens");
+            if (mt instanceof Number) {
+                newModel.setMaxTokens(((Number) mt).intValue());
+            }
+        }
+        if (modelData.containsKey("contextWindow")) {
+            Object cw = modelData.get("contextWindow");
+            if (cw instanceof Number) {
+                newModel.setContextWindow(((Number) cw).intValue());
+            }
+        }
+        if (modelData.containsKey("priority")) {
+            Object p = modelData.get("priority");
+            if (p instanceof Number) {
+                newModel.setPriority(((Number) p).intValue());
+            }
+        }
+        
+        provider.getModels().add(newModel);
+        
+        // 保存配置到用户目录 C:\Users\HUAWEI\.jwcode\config.yaml
+        try {
+            loader.saveConfig(config);
+            logger.info("Saved new model '" + modelId + "' to provider '" + providerName + "'");
+        } catch (Exception e) {
+            sendError(exchange, 500, "Failed to save config: " + e.getMessage());
+            return;
+        }
+        
+        Map<String, Object> result = new HashMap<>();
+        result.put("model", modelData);
+        result.put("provider", providerName);
+        result.put("savedTo", loader.getUserConfigPath() != null ? loader.getUserConfigPath().toString() : "unknown");
+        
+        sendSuccess(exchange, 201, result);
     }
     
     private void sendSuccess(HttpExchange exchange, int statusCode, Object data) throws IOException {

@@ -1,0 +1,156 @@
+# ============================================================
+# 🟢 简单任务集 — 能力评测
+# 单步操作，验证基础工具调用能力
+# ============================================================
+tasks:
+
+  # ----- 工具调用：文件操作 -----
+  - id: SIMPLE_001
+    name: "创建文件并写入内容"
+    description: "在当前目录创建一个 hello.txt 文件，写入 'Hello JWCode'"
+    difficulty: SIMPLE
+    capability: tool_call
+    userPrompt: "在当前目录创建一个 hello.txt 文件，写入内容 'Hello JWCode'"
+    acceptanceChecks:
+      - type: FILE_EXISTS
+        params: { path: "hello.txt" }
+      - type: FILE_CONTENT_MATCHES
+        params: { path: "hello.txt", content: "Hello JWCode" }
+    timeoutSeconds: 30
+    aiEvalEnabled: false
+    skipInMockMode: true
+    tags: [file, basic]
+
+  - id: SIMPLE_002
+    name: "读取并提取文件信息"
+    description: "读取 pom.xml 的 version 标签内容"
+    difficulty: SIMPLE
+    capability: tool_call
+    userPrompt: "读取当前项目的 pom.xml 文件，找到并告诉我 version 标签的内容"
+    acceptanceChecks:
+      - type: FILE_EXISTS
+        params: { path: "pom.xml" }
+      - type: FILE_CONTENT_CONTAINS
+        params: { path: "pom.xml", substring: "<version>" }
+    timeoutSeconds: 30
+    aiEvalEnabled: false
+    tags: [file, read]
+
+  - id: SIMPLE_003
+    name: "搜索代码中的注解"
+    description: "搜索项目中所有 @Override 注解的使用次数"
+    difficulty: SIMPLE
+    capability: tool_call
+    userPrompt: "搜索 jwcode-core 模块中所有 Java 文件里 @Override 注解的使用次数，告诉我总数"
+    acceptanceChecks:
+      - type: FILE_CONTENT_CONTAINS
+        params: { path: "pom.xml", substring: "jwcode-core" }
+    timeoutSeconds: 30
+    aiEvalEnabled: false
+    tags: [search, grep]
+
+  - id: SIMPLE_004
+    name: "列出目录内容"
+    description: "列出 docs/ 目录下所有 .md 文件"
+    difficulty: SIMPLE
+    capability: tool_call
+    userPrompt: "列出 docs/ 目录下所有 .md 文件"
+    acceptanceChecks:
+      - type: DIR_EXISTS
+        params: { path: "docs" }
+    timeoutSeconds: 30
+    aiEvalEnabled: false
+    tags: [file, list]
+
+  - id: SIMPLE_005
+    name: "获取 Java 版本信息"
+    description: "执行 java -version 并提取版本号"
+    difficulty: SIMPLE
+    capability: tool_call
+    userPrompt: "执行 java -version 命令，告诉我使用的 Java 版本号"
+    acceptanceChecks:
+      - type: COMMAND_EXIT_CODE_ZERO
+        params: { command: "java -version" }
+    timeoutSeconds: 30
+    aiEvalEnabled: false
+    tags: [command, basic]
+
+  - id: SIMPLE_006
+    name: "创建目录"
+    description: "在 temp 目录下创建一个 test-output 目录"
+    difficulty: SIMPLE
+    capability: tool_call
+    userPrompt: "在 temp 目录下创建一个 test-output 目录"
+    acceptanceChecks:
+      - type: DIR_EXISTS
+        params: { path: "temp/test-output" }
+    timeoutSeconds: 30
+    aiEvalEnabled: false
+    skipInMockMode: true
+    tags: [file, directory]
+
+  - id: SIMPLE_007
+    name: "搜索特定文本"
+    description: "搜索项目中所有包含 'TODO' 的 Java 文件"
+    difficulty: SIMPLE
+    capability: tool_call
+    userPrompt: "搜索 jwcode-core 模块中所有包含 'TODO' 注释的 Java 文件，列出文件名"
+    acceptanceChecks:
+      - type: FILE_EXISTS
+        params: { path: "pom.xml" }
+    timeoutSeconds: 60
+    aiEvalEnabled: false
+    tags: [search, grep]
+
+  - id: SIMPLE_008
+    name: "文件内容替换"
+    description: "在文件中查找并替换指定文本"
+    difficulty: SIMPLE
+    capability: tool_call
+    userPrompt: "在 jwcode-core/src/main/java/com/jwcode/core/eval/ 目录下创建一个 version.txt 文件，写入内容 'version=1.0.0'，然后将版本号修改为 '2.0.0'"
+    acceptanceChecks:
+      - type: FILE_CONTENT_CONTAINS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/eval/version.txt", substring: "2.0.0" }
+    timeoutSeconds: 30
+    aiEvalEnabled: false
+    skipInMockMode: true
+    tags: [file, edit, replace]
+
+  - id: SIMPLE_009
+    name: "Git 仓库状态检查"
+    description: "检查当前 Git 仓库的状态"
+    difficulty: SIMPLE
+    capability: tool_call
+    userPrompt: "检查当前项目是否是 Git 仓库，如果是，告诉我当前分支名"
+    acceptanceChecks:
+      - type: COMMAND_EXIT_CODE_ZERO
+        params: { command: "git rev-parse --is-inside-work-tree" }
+    timeoutSeconds: 30
+    aiEvalEnabled: false
+    tags: [git, info]
+
+  - id: SIMPLE_010
+    name: "文件行数统计"
+    description: "统计指定文件的行数"
+    difficulty: SIMPLE
+    capability: tool_call
+    userPrompt: "统计 jwcode-core/src/main/java/com/jwcode/core/eval/EvalTask.java 文件的总行数"
+    acceptanceChecks:
+      - type: FILE_LINE_COUNT_BETWEEN
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/eval/EvalTask.java", min: 200, max: 600 }
+    timeoutSeconds: 30
+    aiEvalEnabled: false
+    tags: [file, statistics]
+
+  - id: SIMPLE_011
+    name: "环境信息查询"
+    description: "查询当前 Java 运行时版本"
+    difficulty: SIMPLE
+    capability: tool_call
+    userPrompt: "告诉我当前使用的 Java 版本和操作系统信息"
+    acceptanceChecks:
+      - type: COMMAND_EXIT_CODE_ZERO
+        params: { command: "java -version" }
+    timeoutSeconds: 30
+    aiEvalEnabled: false
+    tags: [command, info]

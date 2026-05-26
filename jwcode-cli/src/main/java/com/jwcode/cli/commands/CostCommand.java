@@ -3,11 +3,15 @@ package com.jwcode.cli.commands;
 import com.jwcode.cli.Command;
 import com.jwcode.cli.CommandContext;
 import com.jwcode.cli.CommandResult;
+import com.jwcode.core.service.CostTrackerService;
+import com.jwcode.core.service.CostTrackerService.CostEntry;
 
 import java.text.DecimalFormat;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -18,6 +22,12 @@ import java.util.Map;
 public class CostCommand implements Command {
     
     private static final DecimalFormat DECIMAL_FORMAT = new DecimalFormat("#.####");
+    
+    private final CostTrackerService costTrackerService;
+    
+    public CostCommand() {
+        this.costTrackerService = new CostTrackerService();
+    }
     
     @Override
     public String getName() {
@@ -134,36 +144,63 @@ public class CostCommand implements Command {
     }
     
     /**
-     * 获取成本数据
+     * 获取成本数据（从 CostTrackerService 获取真实数据）
      */
     private CostData getCostData(CommandContext context, CostFilter filter) {
-        // 从会话或成本追踪服务获取数据
-        // 这里使用模拟数据，实际实现需要从 CostTrackerService 获取
-        
         CostData data = new CostData();
         
-        // 获取实际的成本数据（如果有）
-        Map<String, Object> costInfo = context.getSession().getCostInfo();
+        // 从 CostTrackerService 获取真实成本数据
+        double totalCostDollars = costTrackerService.getTotalCostDollars();
+        List<CostEntry> recentHistory = costTrackerService.getCostHistory(100);
         
-        if (costInfo != null) {
-            data.inputTokens = getLongValue(costInfo, "input_tokens", 10000L);
-            data.outputTokens = getLongValue(costInfo, "output_tokens", 5000L);
-            data.totalTokens = data.inputTokens + data.outputTokens;
-            data.inputCost = getDoubleValue(costInfo, "input_cost", 0.015);
-            data.outputCost = getDoubleValue(costInfo, "output_cost", 0.03);
-            data.totalCost = data.inputCost + data.outputCost;
-            data.cachedTokens = getLongValue(costInfo, "cached_tokens", 0L);
-            data.cachedSavings = getDoubleValue(costInfo, "cached_savings", 0.0);
-            data.daysTracked = getDoubleValue(costInfo, "days_tracked", 1.0);
-            data.budgetLimit = getDoubleValue(costInfo, "budget_limit", 0.0);
+        if (!recentHistory.isEmpty()) {
+            long totalInputTokens = 0;
+            long totalOutputTokens = 0;
+            for (CostEntry entry : recentHistory) {
+                totalInputTokens += entry.inputTokens;
+                totalOutputTokens += entry.outputTokens;
+            }
+            data.inputTokens = totalInputTokens;
+            data.outputTokens = totalOutputTokens;
+            data.totalTokens = totalInputTokens + totalOutputTokens;
+            data.totalCost = totalCostDollars;
+            
+            // 估算输入/输出成本（按历史比例分配）
+            if (data.totalTokens > 0) {
+                double inputRatio = (double) totalInputTokens / data.totalTokens;
+                data.inputCost = totalCostDollars * inputRatio;
+                data.outputCost = totalCostDollars * (1 - inputRatio);
+            }
+            
+            // 计算追踪天数（从最早记录到现在）
+            if (recentHistory.size() >= 2) {
+                CostEntry first = recentHistory.get(0);
+                CostEntry last = recentHistory.get(recentHistory.size() - 1);
+                try {
+                    Instant firstTime = Instant.parse(first.timestamp);
+                    Instant lastTime = Instant.parse(last.timestamp);
+                    long daysBetween = java.time.Duration.between(firstTime, lastTime).toDays();
+                    data.daysTracked = Math.max(1.0, (double) daysBetween);
+                } catch (Exception e) {
+                    data.daysTracked = 1.0;
+                }
+            } else {
+                data.daysTracked = 1.0;
+            }
+            
+            // 从 session 获取预算限制
+            Map<String, Object> costInfo = context.getSession().getCostInfo();
+            if (costInfo != null) {
+                data.budgetLimit = getDoubleValue(costInfo, "budget_limit", 0.0);
+            }
         } else {
-            // 默认模拟数据
-            data.inputTokens = 10000L;
-            data.outputTokens = 5000L;
-            data.totalTokens = data.inputTokens + data.outputTokens;
-            data.inputCost = 0.015;
-            data.outputCost = 0.03;
-            data.totalCost = data.inputCost + data.outputCost;
+            // 无历史数据时显示零值
+            data.inputTokens = 0L;
+            data.outputTokens = 0L;
+            data.totalTokens = 0L;
+            data.inputCost = 0.0;
+            data.outputCost = 0.0;
+            data.totalCost = 0.0;
             data.daysTracked = 1.0;
         }
         

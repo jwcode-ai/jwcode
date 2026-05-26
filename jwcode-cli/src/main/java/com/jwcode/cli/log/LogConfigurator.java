@@ -19,7 +19,9 @@ public class LogConfigurator {
     private static final int MAX_LOG_FILES = 5;
     
     /**
-     * 配置正常模式（控制台 INFO+，文件 WARNING+）
+     * 配置正常模式（仅文件 WARNING+）。
+     * <p>注意：控制台日志由 Logback 统一管理（通过 LoggingBridge 桥接 JUL→SLF4J），
+     * 此处不再重复配置 ConsoleHandler，避免与 JLine3 的 stdout 行编辑冲突。</p>
      */
     public static void configureQuietMode() {
         try {
@@ -29,25 +31,14 @@ public class LogConfigurator {
                 Files.createDirectories(logPath);
             }
             
-            // 获取根日志器
-            Logger rootLogger = Logger.getLogger("");
-            rootLogger.setLevel(Level.INFO);
-            
-            // 清除现有处理器
-            for (Handler handler : rootLogger.getHandlers()) {
-                rootLogger.removeHandler(handler);
-            }
-            
-            // 控制台处理器：INFO 及以上
-            ConsoleHandler consoleHandler = new ConsoleHandler();
-            consoleHandler.setLevel(Level.INFO);
-            consoleHandler.setFormatter(new SimpleFormatter());
-            rootLogger.addHandler(consoleHandler);
-            
             // 文件处理器：WARNING 及以上（单文件模式，避免 .0 后缀）
             FileHandler fileHandler = new FileHandler(LOG_FILE, true);
             fileHandler.setLevel(Level.WARNING);
+            fileHandler.setEncoding("UTF-8");
             fileHandler.setFormatter(createDetailedFormatter());
+            
+            // 获取根日志器，仅添加文件处理器（不移除已有处理器，避免破坏 LoggingBridge）
+            Logger rootLogger = Logger.getLogger("");
             rootLogger.addHandler(fileHandler);
             
             // 诊断：强制写入一条日志确保文件创建
@@ -62,6 +53,7 @@ public class LogConfigurator {
     
     /**
      * 配置详细日志模式（用于调试）
+     * <p>控制台日志由 Logback 统一管理，此处仅配置文件处理器。</p>
      */
     public static void configureVerboseMode() {
         try {
@@ -71,30 +63,18 @@ public class LogConfigurator {
                 Files.createDirectories(logPath);
             }
             
-            // 获取根日志器
-            Logger rootLogger = Logger.getLogger("");
-            rootLogger.setLevel(Level.ALL);
-            
-            // 清除现有处理器
-            for (Handler handler : rootLogger.getHandlers()) {
-                rootLogger.removeHandler(handler);
-            }
-            
-            // 添加控制台处理器（全部级别）
-            ConsoleHandler consoleHandler = new ConsoleHandler();
-            consoleHandler.setLevel(Level.ALL);
-            consoleHandler.setFormatter(createDetailedFormatter());
-            rootLogger.addHandler(consoleHandler);
-            
             // 添加文件处理器（所有级别）
+            Logger rootLogger = Logger.getLogger("");
             FileHandler fileHandler = new FileHandler(LOG_FILE, MAX_LOG_SIZE, MAX_LOG_FILES, true);
             fileHandler.setLevel(Level.ALL);
+            fileHandler.setEncoding("UTF-8");
             fileHandler.setFormatter(createDetailedFormatter());
             rootLogger.addHandler(fileHandler);
             
             // 添加调试文件处理器（仅 finest 级别）
             FileHandler debugHandler = new FileHandler(DEBUG_LOG_FILE, MAX_LOG_SIZE, MAX_LOG_FILES, true);
             debugHandler.setLevel(Level.FINEST);
+            debugHandler.setEncoding("UTF-8");
             debugHandler.setFormatter(createDetailedFormatter());
             rootLogger.addHandler(debugHandler);
             

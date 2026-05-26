@@ -1,14 +1,16 @@
-import { useState, useEffect, useCallback, lazy, Suspense, startTransition } from 'react';
+import { useState, useEffect, useCallback, useRef, lazy, Suspense, startTransition } from 'react';
 import { MessageSquare, Terminal, FolderTree, Settings, Brain, Wrench, Target, Users, FileText, ScrollText, LucideIcon, Menu, X, ChevronDown, ChevronUp, ListChecks } from 'lucide-react';
 import { useChatStore } from './stores/chatStore';
 import { useSessionStore } from './stores/sessionStore';
 import { useTerminalStore } from './stores/terminalStore';
 import { useSettingsStore } from './stores/settingsStore';
 import { usePlanStore } from './stores/planStore';
+import { useHookApprovalStore } from './stores/useHookApprovalStore';
 import wsService from './services/websocket';
 import { useWebSocket } from './hooks/useWebSocket';
-import { Tab, TabId, LogEntry } from './types';
+import { Tab, TabId, LogEntry, SessionTask } from './types';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { api } from './services/api';
 
 // 懒加载非首屏组件
 const ModelsView = lazy(() => import('./components/Models/ModelsView').then(m => ({ default: m.ModelsView })));
@@ -22,6 +24,7 @@ const SessionGrid = lazy(() => import('./components/Chat/SessionGrid').then(m =>
 const SettingsPanel = lazy(() => import('./components/Settings/SettingsPanel').then(m => ({ default: m.SettingsPanel })));
 const LogsPanel = lazy(() => import('./components/Logs/LogsPanel').then(m => ({ default: m.LogsPanel })));
 const PlanPanel = lazy(() => import('./components/Plan/PlanPanel').then(m => ({ default: m.PlanPanel })));
+const HookApprovalModal = lazy(() => import('./components/Hook/HookApprovalModal').then(m => ({ default: m.HookApprovalModal })));
 
 // 懒加载组件的加载占位
 const PanelFallback = () => (
@@ -40,12 +43,12 @@ const TABS: Tab[] = [
   { id: 'skills', title: '技能', icon: 'Target' },
   { id: 'agents', title: 'Agents', icon: 'Users' },
   { id: 'settings', title: '设置', icon: 'Settings' },
-  { id: 'logs', title: '日志', icon: 'ScrollText' },
+  { id: 'logs', title: '日志', icon: 'ScrollText', },
 ];
 
 const ICON_MAP: Record<string, LucideIcon> = {
   MessageSquare, Terminal, FolderTree, Settings, Brain,
-  Wrench, Target, Users, FileText, ScrollText,
+  Wrench, Target, Users, FileText, ScrollText, ListChecks,
 };
 
 function App() {
@@ -55,9 +58,12 @@ function App() {
   const [unreadLogs, setUnreadLogs] = useState(0);
   const [isLogDrawerOpen, setIsLogDrawerOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [hookModalOpen, setHookModalOpen] = useState(false);
+  const [isTaskListOpen, setIsTaskListOpen] = useState(true);
 
   const { toggleTerminal } = useTerminalStore();
   const { theme, setTheme, workspaceDir, setWorkspaceDir } = useSettingsStore();
+  const approvalStore = useHookApprovalStore();
 
   // 使用 startTransition 包裹 Tab 切换，避免懒加载组件在同步事件中 suspend
   const handleTabChange = useCallback((tabId: TabId) => {
@@ -76,7 +82,7 @@ function App() {
         return;
       }
       setLogs(prev => [...prev, {
-        id: `error-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        id: `error-${Date.now()}-${crypto.randomUUID()}`,
         level: 'error' as LogEntry['level'],
         source: '浏览器',
         message: `未捕获错误: ${errorMsg}`,
@@ -87,7 +93,7 @@ function App() {
     const handleRejection = (event: PromiseRejectionEvent) => {
       const reason = event.reason?.message || event.reason || '未知原因';
       setLogs(prev => [...prev, {
-        id: `rejection-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        id: `rejection-${Date.now()}-${crypto.randomUUID()}`,
         level: 'error' as LogEntry['level'],
         source: 'Promise',
         message: `未捕获的 Promise 拒绝: ${reason}`,
@@ -113,6 +119,17 @@ function App() {
     closeSessionTab,
     renameSessionTab,
     getVisibleSessionTabs,
+    historySessions,
+    restoreHistorySession,
+    clearHistorySessions,
+    removeHistorySession,
+    autoNameSession,
+    tasksBySession,
+    addSessionTask,
+    toggleSessionTask,
+    removeSessionTask,
+    updateSessionTask,
+    setSessionTasks,
   } = useSessionStore();
 
   const { clearMessages } = useChatStore();
@@ -136,6 +153,18 @@ function App() {
   // WebSocket connection
   useWebSocket({ activeTab, setLogs, setUnreadLogs });
 
+  // 监听 switch-tab 自定义事件（用于 Plan 模式自动切换到 Plan 面板）
+  useEffect(() => {
+    const handler = (e: CustomEvent) => {
+      const tabId = e.detail as TabId;
+      if (tabId && tabId !== activeTab) {
+        handleTabChange(tabId);
+      }
+    };
+    window.addEventListener('switch-tab', handler as EventListener);
+    return () => window.removeEventListener('switch-tab', handler as EventListener);
+  }, [activeTab, handleTabChange]);
+
   // WebSocket connection status
   useEffect(() => {
     const unsubOpen = wsService.onOpen(() => setIsConnected(true));
@@ -150,12 +179,35 @@ function App() {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Hook 审批弹窗事件监听
+  useEffect(() => {
+    const handler = () => setHookModalOpen(true);
+    window.addEventListener('hook-approval-required', handler);
+    return () => window.removeEventListener('hook-approval-required', handler);
+  }, []);
+
+  // 自动模式变更时处理待审批项
+  useEffect(() => {
+    if (approvalStore.autoMode && approvalStore.pendingApprovals.length > 0) {
+      // autoMode 打开 → 关闭弹窗
+      setHookModalOpen(false);
+    }
+    if (approvalStore.pendingApprovals.length > 0 && !approvalStore.autoMode) {
+      setHookModalOpen(true);
+    }
+  }, [approvalStore.autoMode, approvalStore.pendingApprovals.length]);
+
   const handleNewSession = useCallback(() => {
     startTransition(() => {
-      const newId = addSessionTab();
+      // 新建会话继承当前工作目录
+      const newId = addSessionTab(undefined, workspaceDir);
       wsService.setSessionId(newId);
+
+      // 重置 planStore 全局状态，避免模式/确认状态残留
+      usePlanStore.getState().setMode('act');
+      usePlanStore.getState().setShowConfirmButton(false);
     });
-  }, [addSessionTab]);
+  }, [addSessionTab, workspaceDir]);
 
   const handleSwitchSession = useCallback((sessionId: string) => {
     setActiveSession(sessionId);
@@ -182,10 +234,32 @@ function App() {
 
     if (isGen) return;
 
+    const planStore = usePlanStore.getState();
+
+    // Plan 模式校验：如果有未确认的计划，阻止发送新消息
+    if (planStore.mode === 'plan' && planStore.showConfirmButton && !planStore.planConfirmed) {
+      console.warn('[App] Plan 模式下有待确认的计划，不能发送新消息');
+      // 添加系统提示消息告知用户
+      useChatStore.getState().addMessage(sessionId, {
+        id: `msg-${Date.now()}`,
+        type: 'system',
+        content: '⚠️ 当前有未确认的计划。请先在上方确认或取消当前计划，再发送新消息。',
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
     // 发送新消息时清除暂停状态
     useChatStore.getState().resumeGeneration(sessionId);
 
     wsService.setSessionId(sessionId);
+
+    // 首条用户消息自动命名会话
+    const msgs = useChatStore.getState().getMessages(sessionId);
+    const hasUserMsg = msgs.some((m) => m.type === 'user');
+    if (!hasUserMsg) {
+      autoNameSession(sessionId, content.trim());
+    }
 
     useChatStore.getState().addMessage(sessionId, {
       id: `msg-${Date.now()}`,
@@ -195,21 +269,27 @@ function App() {
     });
 
     // 根据 Plan/Act 模式决定消息类型
-    const currentMode = usePlanStore.getState().mode;
+    const currentMode = planStore.mode;
     if (currentMode === 'plan') {
+      // Plan 模式：发送 plan 消息，自动创建 Task（PENDING）
+      // 后端 handlePlanMessage 会处理规划流程
+      if (planStore.activePlanSessionId !== sessionId) {
+        planStore.startPlanning(sessionId, content.trim());
+      }
       wsService.send({
         type: 'plan',
         sessionId,
         message: content.trim(),
       });
     } else {
+      // Act/Chat 模式：直接发送 chat 消息
       wsService.send({
         type: 'chat',
         sessionId,
         message: content.trim(),
       });
     }
-  }, []);
+  }, [autoNameSession]);
 
   // 停止生成
   const stopGeneration = useCallback((sessionId: string) => {
@@ -255,12 +335,13 @@ function App() {
         useSessionStore.setState({
           sessionTabs: [],
           sessions: [],
+          sessionWorkspaceDirs: {},
           activeSessionId: null,
         });
 
-        // 4. 创建新会话
+        // 4. 创建新会话（携带新工作目录）
         setTimeout(() => {
-          useSessionStore.getState().addSessionTab('对话 1');
+          useSessionStore.getState().addSessionTab('对话 1', trimmed);
         }, 0);
       }
     });
@@ -273,182 +354,220 @@ function App() {
   };
 
 
-  // 任务概览组件（右侧面板顶部）- 按当前 session 显示
-  // 展示任务列表、生命周期状态、上下文信息
-  function TaskOverview() {
-    const plansBySession = usePlanStore((s) => s.plansBySession);
-    const planPhasesBySession = usePlanStore((s) => s.planPhasesBySession);
-    const sessionId = activeSessionId;
+  // 任务列表组件（右侧面板）- 每个会话维护独立任务列表，支持增删改
+  // 挂载时自动从后端 /api/tasks 拉取任务，实现与 MCP TaskCreate 的双向同步
+  function TaskListPanel() {
+    const sid = useSessionStore((s) => s.activeSessionId);
+    const tasks = sid ? (useSessionStore((s) => s.tasksBySession[sid]) || []) : [];
+    const [newTaskTitle, setNewTaskTitle] = useState('');
+    const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+    const [editValue, setEditValue] = useState('');
+    const inputRef = useRef<HTMLInputElement>(null);
+    const loadedRef = useRef(false);
 
-    if (!sessionId) {
-      return (
-        <div className="px-4 pb-3 text-[11px] text-dark-muted">
-          暂无执行中的任务
-        </div>
-      );
-    }
+    // 挂载时从后端加载任务列表（只执行一次）
+    useEffect(() => {
+      if (!sid || loadedRef.current) return;
+      loadedRef.current = true;
 
-    const currentPlan = plansBySession[sessionId];
-    const planPhase = planPhasesBySession[sessionId] || 'idle';
+      // 新 session 且本地任务为空时，不从后端拉取旧任务
+      const existing = useSessionStore.getState().tasksBySession[sid] || [];
+      if (existing.length === 0) return;
 
-    if (!currentPlan || planPhase === 'idle') {
-      return (
-        <div className="px-4 pb-3 text-[11px] text-dark-muted">
-          暂无执行中的任务
-        </div>
-      );
-    }
+      api.tasks.list().then(res => {
+        if (!res.success || !res.data) return;
+        const backendTasks: any[] = res.data;
+        if (backendTasks.length === 0) return;
 
-    // 收集所有任务（含嵌套子任务）
-    const allTasks = currentPlan.tasks || [];
-    const flattenTasks = (tasks: typeof allTasks): typeof allTasks => {
-      const result: typeof allTasks = [];
-      for (const t of tasks) {
-        result.push(t);
-        if (t.children?.length) result.push(...flattenTasks(t.children));
+        const existingTitles = new Set(existing.map(t => t.title));
+
+        // 将后端任务中尚未在本地存在的任务添加进来
+        const newTasks = backendTasks
+          .filter((bt: any) => !existingTitles.has(bt.title))
+          .map((bt: any) => ({
+            id: `session-task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            title: bt.title,
+            completed: bt.status === 'COMPLETED',
+            createdAt: Date.parse(bt.createdAt) || Date.now(),
+            backendId: bt.id,
+            backendStatus: bt.status as any,
+            description: bt.description,
+          }));
+
+        if (newTasks.length > 0) {
+          setSessionTasks(sid, [...existing, ...newTasks]);
+        }
+      }).catch(e => {
+        console.warn('[TaskListPanel] 从后端加载任务失败:', e);
+      });
+    }, [sid, setSessionTasks]);
+
+    const handleAdd = useCallback(async () => {
+      if (!newTaskTitle.trim() || !sid) return;
+
+      // 先在后端创建，获取 backendId
+      try {
+        const result = await api.tasks.create({ title: newTaskTitle.trim(), description: '' });
+        if (result.success && result.data) {
+          const backendTask = result.data as any;
+          addSessionTask(sid, newTaskTitle.trim(), backendTask.id, '');
+        } else {
+          // 后端创建失败，仅本地添加
+          addSessionTask(sid, newTaskTitle.trim());
+        }
+      } catch (e) {
+        console.warn('[TaskListPanel] 同步任务到后端失败:', e);
+        addSessionTask(sid, newTaskTitle.trim());
       }
-      return result;
-    };
-    const flatTasks = flattenTasks(allTasks);
 
-    const total = flatTasks.length;
-    const completed = flatTasks.filter((t) => t.status === 'completed').length;
-    const running = flatTasks.filter((t) => t.status === 'running').length;
-    const failed = flatTasks.filter((t) => t.status === 'failed').length;
-    const progress = total > 0 ? Math.round((completed / total) * 100) : 0;
+      setNewTaskTitle('');
+      setTimeout(() => inputRef.current?.focus(), 0);
+    }, [newTaskTitle, sid, addSessionTask]);
 
-    // 生命周期状态配置
-    const lifecycleConfig: Record<string, { icon: string; color: string; bg: string; label: string }> = {
-      pending: { icon: '⏳', color: 'text-gray-400', bg: 'bg-gray-500/10', label: '等待' },
-      running: { icon: '🔄', color: 'text-blue-400', bg: 'bg-blue-500/10', label: '执行中' },
-      completed: { icon: '✅', color: 'text-green-400', bg: 'bg-green-500/10', label: '完成' },
-      failed: { icon: '❌', color: 'text-red-400', bg: 'bg-red-500/10', label: '失败' },
-      skipped: { icon: '⏭️', color: 'text-gray-500', bg: 'bg-gray-500/5', label: '跳过' },
-    };
+    const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+      if (e.key === 'Enter') handleAdd();
+    }, [handleAdd]);
+
+    const handleEditStart = useCallback((task: { id: string; title: string }) => {
+      setEditingTaskId(task.id);
+      setEditValue(task.title);
+    }, []);
+
+    const handleEditConfirm = useCallback(() => {
+      if (editingTaskId && editValue.trim() && sid) {
+        updateSessionTask(sid, editingTaskId, editValue.trim());
+      }
+      setEditingTaskId(null);
+    }, [editingTaskId, editValue, sid, updateSessionTask]);
+
+    const handleEditKeyDown = useCallback((e: React.KeyboardEvent) => {
+      if (e.key === 'Enter') handleEditConfirm();
+      else if (e.key === 'Escape') setEditingTaskId(null);
+    }, [handleEditConfirm]);
+
+    // 根据 backendId 或 title 查找后端任务并执行操作
+    const syncBackendAction = useCallback(async (task: SessionTask, action: 'toggle' | 'delete') => {
+      const backendId = (task as any).backendId;
+      if (backendId) {
+        // 有 backendId，直接操作
+        if (action === 'toggle') {
+          const newStatus = task.completed ? 'PENDING' : 'COMPLETED';
+          await api.tasks.updateStatus(backendId, newStatus as any).catch(() => {});
+        } else {
+          await api.tasks.delete(backendId).catch(() => {});
+        }
+        return;
+      }
+      // 降级：按 title 匹配
+      try {
+        const res = await api.tasks.list();
+        if (res.success && res.data) {
+          const backendTask = (res.data as any[]).find((t: any) => t.title === task.title);
+          if (backendTask) {
+            if (action === 'toggle') {
+              const newStatus = task.completed ? 'PENDING' : 'COMPLETED';
+              await api.tasks.updateStatus(backendTask.id, newStatus as any).catch(() => {});
+            } else {
+              await api.tasks.delete(backendTask.id).catch(() => {});
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[TaskListPanel] 同步操作到后端失败:', e);
+      }
+    }, []);
 
     return (
-      <div className="px-3 pb-3 border-b border-dark-border">
-        {/* 总体进度条 */}
-        <div className="mb-2">
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-[10px] text-dark-muted truncate max-w-[160px]" title={currentPlan.goal}>
-              🎯 {currentPlan.goal}
-            </span>
-            <span className="text-[10px] text-dark-muted shrink-0 ml-2">
-              {completed}/{total} · {progress}%
-            </span>
-          </div>
-          <div className="w-full h-1.5 bg-dark-bg rounded-full overflow-hidden">
-            <div
-              className={`h-full rounded-full transition-all duration-500 ${
-                failed > 0 && running === 0 ? 'bg-red-500' : running > 0 ? 'bg-blue-500' : 'bg-green-500'
-              }`}
-              style={{ width: `${progress}%` }}
-            />
-          </div>
-          {/* 生命周期状态汇总 */}
-          <div className="flex items-center gap-2 mt-1 flex-wrap">
-            {running > 0 && (
-              <span className="flex items-center gap-1 text-[9px] text-blue-400">
-                <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-pulse" />
-                {running} 执行中
-              </span>
-            )}
-            {failed > 0 && (
-              <span className="flex items-center gap-1 text-[9px] text-red-400">
-                <span className="w-1.5 h-1.5 bg-red-400 rounded-full" />
-                {failed} 失败
-              </span>
-            )}
-            {planPhase === 'result' && <span className="text-[9px] text-green-400">✅ 全部完成</span>}
-            {planPhase === 'error' && <span className="text-[9px] text-red-400">❌ 规划失败</span>}
-          </div>
+      <div className="px-3 pb-2">
+        {/* 添加新任务 */}
+        <div className="flex items-center gap-1 mb-2">
+          <input
+            ref={inputRef}
+            value={newTaskTitle}
+            onChange={(e) => setNewTaskTitle(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="添加任务..."
+            className="flex-1 bg-dark-bg border border-dark-border rounded px-2 py-1 text-[11px] text-dark-text placeholder-dark-muted outline-none focus:border-accent-blue/50 transition-colors"
+          />
+          <button
+            onClick={handleAdd}
+            disabled={!newTaskTitle.trim()}
+            className="px-2 py-1 text-[10px] bg-accent-blue text-white rounded hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            添加
+          </button>
         </div>
 
-        {/* 任务列表（最多展示8个，滚动） */}
-        {flatTasks.length > 0 && (
-          <div className="max-h-[260px] overflow-y-auto custom-scrollbar space-y-1">
-            {flatTasks.slice(0, 12).map((task) => {
-              const lc = lifecycleConfig[task.status] || lifecycleConfig.pending;
-              const contextKeys = task.context ? Object.keys(task.context).filter(k => k === 'relatedFiles' || k === 'targetModule') : [];
+        {/* 任务列表 */}
+        {tasks.length === 0 ? (
+          <div className="text-[11px] text-dark-muted text-center py-2">
+            暂无任务，在上方输入添加
+          </div>
+        ) : (
+          <div className="max-h-[180px] overflow-y-auto custom-scrollbar space-y-0.5">
+            {tasks.map((task) => {
+              const isEditing = editingTaskId === task.id;
               return (
                 <div
                   key={task.id}
-                  className={`flex items-start gap-1.5 p-1.5 rounded text-[10px] transition-colors ${
-                    task.status === 'running'
-                      ? 'bg-blue-500/10 border border-blue-500/20'
-                      : 'hover:bg-dark-hover/50 border border-transparent'
-                  }`}
+                  className="flex items-center gap-1.5 px-2 py-1 rounded text-[11px] transition-colors hover:bg-dark-hover/50 group"
                 >
-                  {/* 生命周期状态图标 */}
-                  <span className={`shrink-0 mt-0.5 ${lc?.color || 'text-gray-400'}`} title={lc?.label || '未知'}>
-                    {lc?.icon || '❓'}
-                  </span>
-                  {/* 任务信息 */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <span className={`truncate font-medium ${
-                        task.status === 'completed' ? 'text-dark-muted line-through' : 'text-dark-text'
-                      }`}>
-                        {task.stepNumber && <span className="text-dark-muted mr-0.5">#{task.stepNumber}</span>}
-                        {task.title}
-                      </span>
-                    </div>
-                    {/* 描述预览 */}
-                    {task.description && task.description !== task.title && (
-                      <p className="text-[9px] text-dark-muted truncate mt-0.5">
-                        {task.description.length > 60 ? task.description.slice(0, 60) + '...' : task.description}
-                      </p>
+                  {/* 勾选框 */}
+                  <button
+                    onClick={() => {
+                      if (!sid) return;
+                      toggleSessionTask(sid, task.id);
+                      syncBackendAction(task, 'toggle');
+                    }}
+                    className={`shrink-0 w-3.5 h-3.5 rounded border flex items-center justify-center transition-colors
+                      ${task.completed
+                        ? 'bg-accent-green border-accent-green'
+                        : 'border-dark-border hover:border-accent-blue'
+                      }`}
+                  >
+                    {task.completed && (
+                      <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
+                        <path d="M1 4L3 6L7 2" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
                     )}
-                    {/* 上下文标签 */}
-                    {contextKeys.length > 0 && (
-                      <div className="flex items-center gap-1 mt-0.5 flex-wrap">
-                        {task.context?.relatedFiles && (
-                          <span className="text-[8px] px-1 py-0.5 bg-purple-500/10 text-purple-400 rounded truncate max-w-[120px]" title={task.context.relatedFiles}>
-                            📄 {task.context.relatedFiles.split(',')[0]}
-                            {task.context.relatedFiles.includes(',') && ' ...'}
-                          </span>
-                        )}
-                        {task.context?.targetModule && (
-                          <span className="text-[8px] px-1 py-0.5 bg-yellow-500/10 text-yellow-400 rounded truncate max-w-[100px]">
-                            📦 {task.context.targetModule}
-                          </span>
-                        )}
-                        {task.context?.constraints && (
-                          <span className="text-[8px] px-1 py-0.5 bg-red-500/10 text-red-400 rounded truncate max-w-[100px]" title={task.context.constraints}>
-                            ⚠️ 约束
-                          </span>
-                        )}
-                      </div>
-                    )}
-                    {/* 进度条（执行中时显示） */}
-                    {task.status === 'running' && task.progress != null && (
-                      <div className="w-full h-0.5 bg-dark-bg rounded-full overflow-hidden mt-1">
-                        <div
-                          className="h-full bg-blue-500 rounded-full transition-all duration-300"
-                          style={{ width: `${task.progress}%` }}
-                        />
-                      </div>
-                    )}
-                    {/* 错误信息 */}
-                    {task.error && (
-                      <p className="text-[9px] text-red-400 truncate mt-0.5">
-                        {task.error}
-                      </p>
-                    )}
-                  </div>
-                  {/* Agent 类型标签 */}
-                  <span className="text-[8px] px-1 py-0.5 bg-dark-bg rounded text-dark-muted shrink-0">
-                    {task.agentType}
-                  </span>
+                  </button>
+
+                  {/* 标题（编辑模式或显示模式） */}
+                  {isEditing ? (
+                    <input
+                      value={editValue}
+                      onChange={(e) => setEditValue(e.target.value)}
+                      onBlur={handleEditConfirm}
+                      onKeyDown={handleEditKeyDown}
+                      className="flex-1 bg-dark-bg border border-accent-blue rounded px-1 py-0.5 text-[11px] text-dark-text outline-none"
+                      autoFocus
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  ) : (
+                    <span
+                      className={`flex-1 truncate cursor-pointer ${task.completed ? 'text-dark-muted line-through' : 'text-dark-text'}`}
+                      onDoubleClick={() => handleEditStart(task)}
+                      title="双击编辑"
+                    >
+                      {task.title}
+                    </span>
+                  )}
+
+                  {/* 删除按钮 */}
+                  <button
+                    onClick={() => {
+                      if (!sid) return;
+                      removeSessionTask(sid, task.id);
+                      syncBackendAction(task, 'delete');
+                    }}
+                    className="opacity-0 group-hover:opacity-100 hover:bg-dark-hover rounded p-0.5 transition-all shrink-0"
+                    title="删除任务"
+                  >
+                    <X size={10} />
+                  </button>
                 </div>
               );
             })}
-            {flatTasks.length > 12 && (
-              <div className="text-center text-[9px] text-dark-muted py-1">
-                ... 还有 {flatTasks.length - 12} 个任务
-              </div>
-            )}
           </div>
         )}
       </div>
@@ -638,23 +757,99 @@ function App() {
             </div>
 
 
-            {/* Task Overview Section */}
+            {/* Session History Section (collapsible) */}
             <div className="shrink-0 border-b border-dark-border">
-              <div className="px-4 py-2.5 flex items-center justify-between">
+              <div
+                className="flex items-center justify-between px-4 py-2 cursor-pointer hover:bg-dark-hover transition-colors"
+                onClick={() => startTransition(() => {
+                  const panel = document.getElementById('session-history-panel');
+                  if (panel) {
+                    const isOpen = !panel.classList.contains('hidden');
+                    panel.classList.toggle('hidden', isOpen);
+                  }
+                })}
+              >
                 <h3 className="text-xs font-semibold flex items-center gap-1.5 text-dark-text">
-                  <ListChecks size={14} className="text-accent-blue" />
-                  任务概览
+                  <MessageSquare size={14} className="text-accent-blue" />
+                  会话历史
+                  <span className="text-[10px] font-normal text-dark-muted">({historySessions.length})</span>
                 </h3>
-                <button
-                  onClick={() => handleTabChange('plan')}
-                  className="text-[10px] text-accent-blue hover:underline"
-                >
-                  查看全部 →
-                </button>
+                <div className="flex items-center gap-2">
+                  {historySessions.length > 0 && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        clearHistorySessions();
+                      }}
+                      className="px-2 py-0.5 text-[10px] bg-dark-hover rounded hover:bg-dark-border transition-colors"
+                      title="清空历史"
+                    >
+                      清空
+                    </button>
+                  )}
+                </div>
               </div>
-              <TaskOverview />
+              <div id="session-history-panel" className={historySessions.length > 0 ? '' : 'hidden'}>
+                <div className="max-h-[160px] overflow-y-auto custom-scrollbar">
+                  <div className="px-3 pb-2 space-y-0.5">
+                    {historySessions.map((h) => (
+                      <div
+                        key={h.id}
+                        className="flex items-center gap-1.5 px-2 py-1.5 rounded text-[11px] transition-colors hover:bg-dark-hover/50 group cursor-pointer"
+                        onClick={() => {
+                          restoreHistorySession(h.id);
+                          wsService.setSessionId(h.id);
+                        }}
+                        title={`点击恢复「${h.title}」`}
+                      >
+                        <MessageSquare size={12} className="text-dark-muted shrink-0" />
+                        <span className="truncate flex-1 text-dark-text">{h.title}</span>
+                        <span className="text-[9px] text-dark-muted shrink-0">
+                          {new Date(h.createdAt).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            removeHistorySession(h.id);
+                          }}
+                          className="opacity-0 group-hover:opacity-100 hover:bg-dark-hover rounded p-0.5 transition-all shrink-0"
+                          title="从历史移除"
+                        >
+                          <X size={10} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              {historySessions.length === 0 && (
+                <div className="px-4 pb-3 text-[11px] text-dark-muted">
+                  暂无历史会话
+                </div>
+              )}
             </div>
 
+            {/* Task List Section (collapsible) - 每个会话维护独立任务列表 */}
+            <div className="shrink-0 border-b border-dark-border">
+              <div
+                className="flex items-center justify-between px-4 py-2 cursor-pointer hover:bg-dark-hover transition-colors"
+                onClick={() => startTransition(() => setIsTaskListOpen(!isTaskListOpen))}
+              >
+                <h3 className="text-xs font-semibold flex items-center gap-1.5 text-dark-text">
+                  <ListChecks size={14} className="text-accent-blue" />
+                  任务列表
+                  {activeSessionId && tasksBySession[activeSessionId] && (
+                    <span className="text-[10px] font-normal text-dark-muted">
+                      ({tasksBySession[activeSessionId].filter(t => !t.completed).length}/{tasksBySession[activeSessionId].length})
+                    </span>
+                  )}
+                </h3>
+                <div className="flex items-center gap-2">
+                  {isTaskListOpen ? <ChevronUp size={14} className="text-dark-muted" /> : <ChevronDown size={14} className="text-dark-muted" />}
+                </div>
+              </div>
+              {isTaskListOpen && <TaskListPanel />}
+            </div>
 
             {/* Log Section Header (collapsible) */}
             <div
@@ -689,6 +884,14 @@ function App() {
           </div>
         </div>
       </div>
+
+      {/* Hook 审批弹窗 */}
+      <Suspense fallback={null}>
+        <HookApprovalModal
+          isOpen={hookModalOpen}
+          onClose={() => setHookModalOpen(false)}
+        />
+      </Suspense>
     </ErrorBoundary>
   );
 }

@@ -13,6 +13,7 @@ export const api = {
   models: {
     list: () => apiClient.get<{ models: Model[]; defaultProvider: unknown }>('/api/models'),
     get: (id: string) => apiClient.get<Model>(`/api/models/${id}`),
+    create: (data: { provider: string; model: Record<string, unknown> }) => apiClient.post<{ model: Record<string, unknown>; provider: string; savedTo: string }>('/api/models', data),
     update: (id: string, data: Partial<Model>) => apiClient.put<Model>(`/api/models/${id}`, data),
     test: (id: string) => apiClient.post<{ success: boolean; message: string }>(`/api/models/${id}/test`),
   },

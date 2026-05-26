@@ -142,7 +142,7 @@ public class WorktreeListTool implements Tool<WorktreeListInput, WorktreeListOut
                 
                 for (int i = 0; i < worktrees.size(); i++) {
                     WorktreeInfo wt = worktrees.get(i);
-                    boolean isCurrent = (i == currentIndex);
+                    boolean isCurrent = (currentIndex != null && i == currentIndex);
                     
                     message.append(String.format("%n[%d] %s%s%n", 
                         i + 1,

@@ -196,10 +196,17 @@ public class YamlConfigLoader {
         try {
             String content = Files.readString(path);
             JwcodeConfig loaded = yamlMapper.readValue(content, JwcodeConfig.class);
-            log.info("Loaded config from: {}", path);
+            String providerName = loaded != null ? loaded.getDefaultProviderName() : "null";
+            log.info("Loaded config from: {} (defaultProvider={})", path, providerName);
             return Optional.of(loaded);
         } catch (IOException e) {
             log.warn("Failed to load config from {}: {}", path, e.getMessage());
+            // 输出文件内容前 200 字符帮助排查 YAML 解析问题
+            try {
+                String content = Files.readString(path);
+                log.warn("Config file content preview (first 200 chars): {}",
+                    content != null ? content.substring(0, Math.min(200, content.length())) : "null");
+            } catch (IOException ignored) {}
             return Optional.empty();
         }
     }
@@ -668,26 +675,8 @@ public class YamlConfigLoader {
     // ==================== 默认配置 ====================
     
     private JwcodeConfig createDefaultConfig() {
-        JwcodeConfig config = new JwcodeConfig();
-        
-        // 创建默认 moonshot 配置
-        JwcodeConfig.ProviderConfig moonshot = new JwcodeConfig.ProviderConfig();
-        moonshot.setBaseUrl("https://api.moonshot.cn");
-        moonshot.setApiType("openai-completions");
-        
-        // 添加默认模型
-        JwcodeConfig.ModelDefinition model = new JwcodeConfig.ModelDefinition();
-        model.setId("kimi-k2.5");
-        model.setName("kimi-k2.5");
-        model.setTemperature(1.0);
-        model.setMaxTokens(32768);
-        model.setContextWindow(2048000);
-        
-        moonshot.getModels().add(model);
-        config.getProviders().put("moonshot", moonshot);
-        config.setDefaultProvider("moonshot");
-        
-        return config;
+        // 返回空配置，所有值由配置文件决定
+        return new JwcodeConfig();
     }
     
     // ==================== 路径获取 ====================

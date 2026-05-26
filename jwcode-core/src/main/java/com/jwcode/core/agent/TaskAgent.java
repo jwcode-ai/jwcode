@@ -4,6 +4,11 @@ import com.jwcode.core.model.StructuredTask;
 import com.jwcode.core.model.StructuredTask.ExecutionMode;
 import com.jwcode.core.model.StructuredTask.TaskPhase;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -99,14 +104,35 @@ public class TaskAgent {
         Pattern.CASE_INSENSITIVE
     );
 
+    /** JSON 解析器 */
+    private static final ObjectMapper JSON_MAPPER = new ObjectMapper();
+
+    /** JSON 代码块匹配 — 匹配 ```json ... ``` */
+    private static final Pattern JSON_CODE_BLOCK_PATTERN = Pattern.compile(
+        "```json\\s*\\n?([\\s\\S]*?)\\n?```",
+        Pattern.CASE_INSENSITIVE
+    );
+
     /**
      * 解析 AI 的 plan 回复文本，生成结构化任务列表。
+     *
+     * <p>解析优先级：</p>
+     * <ol>
+     *   <li><b>JSON 代码块</b>（```json ... ```）— 最高优先级，精确解析</li>
+     *   <li><b>Phase 拆分 + 正则</b> — 无 JSON 时回退到传统正则解析</li>
+     * </ol>
      *
      * @param aiPlanResponse AI 回复的 plan 文本
      * @param taskIdPrefix   任务ID前缀
      * @return 结构化的任务列表（顶级为阶段组，子级为具体任务）
      */
     public List<StructuredTask> parsePlan(String aiPlanResponse, String taskIdPrefix) {
+        // Step 0: 优先尝试 JSON 代码块解析
+        List<StructuredTask> jsonTasks = parseJsonTaskList(aiPlanResponse, taskIdPrefix);
+        if (jsonTasks != null && !jsonTasks.isEmpty()) {
+            return jsonTasks;
+        }
+
         List<StructuredTask> phaseTasks = new ArrayList<>();
 
         // Step 1: 按 Phase 拆分
@@ -577,5 +603,322 @@ public class TaskAgent {
             case DOCUMENTATION: return "文档编写";
             default: return "通用任务";
         }
+    }
+
+    // ==================== JSON 代码块解析（Phase 2 优化） ====================
+
+    /**
+     * 从 AI plan 文本中提取并解析 JSON 代码块。
+     *
+     * <p>AI 在 Plan 模式下可以输出如下格式的 JSON 代码块：</p>
+     * <pre>
+     * ```json
+     * {
+     *   "tasks": [
+     *     {"id": "t1", "title": "...", "agentType": "explorer", "phase": "exploration", ...}
+     *   ]
+     * }
+     * ```
+     * </pre>
+     *
+     * @param aiPlanResponse AI 回复的 plan 文本
+     * @param taskIdPrefix   任务ID前缀
+     * @return 解析成功的结构化任务列表，无 JSON 块或解析失败时返回 null
+     */
+    public List<StructuredTask> parseJsonTaskList(String aiPlanResponse, String taskIdPrefix) {
+        if (aiPlanResponse == null || aiPlanResponse.isEmpty()) {
+            return null;
+        }
+
+        // 查找 JSON 代码块
+        Matcher matcher = JSON_CODE_BLOCK_PATTERN.matcher(aiPlanResponse);
+        if (!matcher.find()) {
+            return null; // 没有 JSON 代码块
+        }
+
+        String jsonContent = matcher.group(1).trim();
+        if (jsonContent.isEmpty()) {
+            return null;
+        }
+
+        try {
+            // 解析 JSON
+            JsonNode root = JSON_MAPPER.readTree(jsonContent);
+
+            // 支持两种顶层结构：
+            // 1. {"tasks": [...]}
+            // 2. [...] 直接是数组
+            ArrayNode tasksArray;
+            if (root.has("tasks") && root.get("tasks").isArray()) {
+                tasksArray = (ArrayNode) root.get("tasks");
+            } else if (root.isArray()) {
+                tasksArray = (ArrayNode) root;
+            } else {
+                return null;
+            }
+
+            if (tasksArray.size() == 0) {
+                return null;
+            }
+
+            // 解析每个任务
+            List<StructuredTask> tasks = new ArrayList<>();
+            int stepNumber = 1;
+
+            for (JsonNode taskNode : tasksArray) {
+                StructuredTask task = parseJsonTask(taskNode, taskIdPrefix, stepNumber);
+                if (task != null) {
+                    tasks.add(task);
+                    stepNumber++;
+                }
+            }
+
+            if (tasks.isEmpty()) {
+                return null;
+            }
+
+            // 处理依赖关系（将依赖 ID 从原始 ID 映射为实际 ID）
+            resolveJsonDependencies(tasks);
+
+            // 按阶段分组，创建阶段包装任务
+            return groupTasksByPhase(tasks, taskIdPrefix);
+
+        } catch (Exception e) {
+            // JSON 解析失败，返回 null 让调用方回退到正则解析
+            return null;
+        }
+    }
+
+    /**
+     * 从 JSON 节点解析单个 StructuredTask
+     */
+    private StructuredTask parseJsonTask(JsonNode node, String taskIdPrefix, int stepNumber) {
+        try {
+            String title = node.has("title") ? node.get("title").asText() : "Unnamed Task";
+            if (title.isEmpty()) title = "Unnamed Task";
+
+            String id = node.has("id") ? node.get("id").asText() : (taskIdPrefix + "-json-" + stepNumber);
+            // 确保 ID 唯一
+            if (!id.startsWith(taskIdPrefix)) {
+                id = taskIdPrefix + "-" + id;
+            }
+
+            String agentType = node.has("agentType") ? node.get("agentType").asText("default") : "default";
+            // 标准化 agentType
+            agentType = normalizeAgentType(agentType);
+
+            String description = node.has("description") ? node.get("description").asText("") : "";
+            if (description.isEmpty()) description = title;
+
+            // 解析阶段
+            TaskPhase phase = TaskPhase.GENERAL;
+            if (node.has("phase")) {
+                phase = parseJsonPhase(node.get("phase").asText());
+            }
+
+            // 解析执行模式
+            ExecutionMode mode = ExecutionMode.SEQUENTIAL;
+            if (node.has("executionMode")) {
+                String modeStr = node.get("executionMode").asText();
+                if ("concurrent".equalsIgnoreCase(modeStr) || "parallel".equalsIgnoreCase(modeStr)) {
+                    mode = ExecutionMode.CONCURRENT;
+                }
+            }
+
+            // 构建任务
+            StructuredTask.Builder builder = StructuredTask.builder()
+                .id(id)
+                .title(title)
+                .description(description)
+                .status("pending")
+                .agentType(agentType)
+                .stepNumber(stepNumber)
+                .phase(phase)
+                .executionMode(mode);
+
+            // 解析依赖
+            if (node.has("dependencies") && node.get("dependencies").isArray()) {
+                ArrayNode deps = (ArrayNode) node.get("dependencies");
+                List<String> dependencyIds = new ArrayList<>();
+                for (JsonNode dep : deps) {
+                    String depId = dep.asText();
+                    if (!depId.startsWith(taskIdPrefix)) {
+                        depId = taskIdPrefix + "-" + depId;
+                    }
+                    dependencyIds.add(depId);
+                }
+                builder.dependencies(dependencyIds);
+            }
+
+            // 解析上下文
+            if (node.has("context") && node.get("context").isObject()) {
+                Map<String, String> context = new HashMap<>();
+                node.get("context").fields().forEachRemaining(entry -> {
+                    context.put(entry.getKey(), entry.getValue().asText());
+                });
+                builder.context(context);
+            }
+
+            return builder.build();
+
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * 标准化 Agent 类型名称
+     */
+    private String normalizeAgentType(String agentType) {
+        switch (agentType.toLowerCase()) {
+            case "explorer":
+            case "explore":
+            case "exploration":
+                return "explore";
+            case "architect":
+            case "architecture":
+            case "design":
+                return "architect";
+            case "coder":
+            case "developer":
+            case "code":
+            case "implementation":
+                return "coder";
+            case "tester":
+            case "test":
+            case "testing":
+                return "test";
+            case "reviewer":
+            case "review":
+                return "reviewer";
+            case "documenter":
+            case "doc":
+            case "documentation":
+            case "docs":
+                return "doc";
+            case "debug":
+            case "debugger":
+                return "debug";
+            default:
+                return "default";
+        }
+    }
+
+    /**
+     * 解析 JSON 中的阶段名称
+     */
+    private TaskPhase parseJsonPhase(String phaseStr) {
+        if (phaseStr == null) return TaskPhase.GENERAL;
+        switch (phaseStr.toLowerCase()) {
+            case "exploration":
+            case "explore":
+            case "调研":
+            case "探索":
+                return TaskPhase.EXPLORATION;
+            case "design":
+            case "架构":
+            case "设计":
+                return TaskPhase.DESIGN;
+            case "implementation":
+            case "implement":
+            case "coding":
+            case "实现":
+            case "开发":
+                return TaskPhase.IMPLEMENTATION;
+            case "testing":
+            case "test":
+            case "测试":
+            case "验证":
+                return TaskPhase.TESTING;
+            case "review":
+            case "审查":
+            case "检查":
+                return TaskPhase.REVIEW;
+            case "documentation":
+            case "doc":
+            case "文档":
+                return TaskPhase.DOCUMENTATION;
+            default:
+                return TaskPhase.GENERAL;
+        }
+    }
+
+    /**
+     * 解析 JSON 依赖关系 — 将原始 ID 映射为实际 ID（处理 taskIdPrefix）
+     */
+    private void resolveJsonDependencies(List<StructuredTask> tasks) {
+        // 构建 ID 映射：原始ID → 实际ID
+        Map<String, String> idMap = new HashMap<>();
+        for (StructuredTask task : tasks) {
+            // 从实际 ID 中提取原始 ID（去掉 taskIdPrefix- 前缀）
+            String rawId = task.getId();
+            int prefixIdx = rawId.lastIndexOf('-');
+            if (prefixIdx > 0 && prefixIdx < rawId.length() - 1) {
+                String possibleRawId = rawId.substring(prefixIdx + 1);
+                idMap.put(possibleRawId, rawId);
+            }
+            idMap.put(rawId, rawId);
+        }
+
+        // 重新映射依赖
+        for (StructuredTask task : tasks) {
+            List<String> resolvedDeps = new ArrayList<>();
+            for (String dep : task.getDependencies()) {
+                String resolved = idMap.getOrDefault(dep, dep);
+                if (!resolvedDeps.contains(resolved)) {
+                    resolvedDeps.add(resolved);
+                }
+            }
+            task.getDependencies().clear();
+            task.getDependencies().addAll(resolvedDeps);
+        }
+    }
+
+    /**
+     * 将任务按阶段分组，创建阶段包装任务。
+     * 如果所有任务都是同一个阶段，则不包装。
+     */
+    private List<StructuredTask> groupTasksByPhase(List<StructuredTask> tasks, String taskIdPrefix) {
+        // 按阶段分组
+        Map<TaskPhase, List<StructuredTask>> phaseGroups = tasks.stream()
+            .collect(Collectors.groupingBy(StructuredTask::getPhase, LinkedHashMap::new, Collectors.toList()));
+
+        // 如果只有一个阶段且任务数 <= 1，直接返回
+        if (phaseGroups.size() <= 1 && tasks.size() <= 3) {
+            return tasks;
+        }
+
+        // 为每个阶段创建包装任务
+        List<StructuredTask> result = new ArrayList<>();
+        int phaseCounter = 1;
+
+        for (Map.Entry<TaskPhase, List<StructuredTask>> entry : phaseGroups.entrySet()) {
+            TaskPhase phase = entry.getKey();
+            List<StructuredTask> phaseTasks = entry.getValue();
+
+            if (phaseTasks.size() == 1) {
+                // 只有一个任务，不需要包装
+                result.add(phaseTasks.get(0));
+            } else {
+                // 多个任务，创建阶段包装
+                String phaseId = taskIdPrefix + "-phase-" + phaseCounter++;
+                String phaseTitle = getPhaseLabel(phase);
+
+                StructuredTask phaseWrapper = StructuredTask.builder()
+                    .id(phaseId)
+                    .title(phaseTitle)
+                    .description(phaseTitle + "阶段 — 共 " + phaseTasks.size() + " 个任务")
+                    .status("pending")
+                    .agentType("orchestrator")
+                    .phase(phase)
+                    .executionMode(ExecutionMode.SEQUENTIAL)
+                    .children(new ArrayList<>(phaseTasks))
+                    .build();
+
+                result.add(phaseWrapper);
+            }
+        }
+
+        return result;
     }
 }

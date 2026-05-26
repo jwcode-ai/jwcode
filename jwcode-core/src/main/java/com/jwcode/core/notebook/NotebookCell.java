@@ -75,6 +75,7 @@ public class NotebookCell {
     }
     
     // Cell 唯一标识
+    @JsonProperty("id")
     private String id;
     
     // Cell 类型

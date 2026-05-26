@@ -379,19 +379,36 @@ public class OpenAILLMService implements LLMService {
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
             
+            // SSE 事件累积缓冲区：一个 SSE 事件可能跨多个 data: 行
+            StringBuilder eventBuffer = new StringBuilder();
             String line;
+            
             while ((line = reader.readLine()) != null) {
                 // SSE 格式: data: {...}
                 if (line.startsWith("data: ")) {
-                    String data = line.substring(6).trim();
+                    // 累积 data: 后面的内容，保留换行以支持多行事件
+                    eventBuffer.append(line.substring(6)).append("\n");
+                    continue;
+                }
+                
+                // 空行或非 data: 行表示一个 SSE 事件结束
+                if (eventBuffer.length() > 0) {
+                    String eventData = eventBuffer.toString().trim();
+                    eventBuffer.setLength(0);
                     
                     // 流结束标记
-                    if ("[DONE]".equals(data)) {
+                    if ("[DONE]".equals(eventData)) {
+                        break;
+                    }
+                    
+                    // 检查是否为 JSON 格式（以 { 或 [ 开头）
+                    if (!eventData.startsWith("{") && !eventData.startsWith("[")) {
+                        log.warning("[OpenAI Stream] Non-JSON event received (treating as stream termination): " + eventData);
                         break;
                     }
                     
                     try {
-                        JsonNode json = mapper.readTree(data);
+                        JsonNode json = mapper.readTree(eventData);
                         
                         // 提取模型信息
                         if (json.has("model") && responseModel == null) {
@@ -458,8 +475,30 @@ public class OpenAILLMService implements LLMService {
                             processStreamToolCalls(toolCallsDelta, toolCallAccumulators, toolCallConsumer);
                         }
                         
+                    } catch (java.util.concurrent.CancellationException e) {
+                        // 流消费被取消（如 WebSocket 断开），立即终止
+                        log.info("[OpenAI Stream] Stream cancelled: " + e.getMessage());
+                        break;
                     } catch (Exception e) {
-                        log.info("[OpenAI Stream] Failed to parse event: " + e.getMessage());
+                        log.warning("[OpenAI Stream] Failed to parse JSON event. Data=" + eventData + ", error=" + e.toString());
+                    }
+                }
+            }
+            
+            // 处理缓冲区中残留的事件（流可能没有尾随空行）
+            if (eventBuffer.length() > 0) {
+                String eventData = eventBuffer.toString().trim();
+                if (!eventData.isEmpty()) {
+                    if ("[DONE]".equals(eventData)) {
+                        // 正常结束，不做处理
+                    } else if (eventData.startsWith("{") || eventData.startsWith("[")) {
+                        try {
+                            mapper.readTree(eventData);
+                        } catch (Exception e) {
+                            log.warning("[OpenAI Stream] Failed to parse trailing event: " + e.toString());
+                        }
+                    } else {
+                        log.warning("[OpenAI Stream] Non-JSON trailing event ignored: " + eventData);
                     }
                 }
             }

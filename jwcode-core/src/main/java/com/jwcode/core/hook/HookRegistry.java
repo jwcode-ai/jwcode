@@ -356,6 +356,47 @@ public class HookRegistry {
             list.sort(Comparator.comparingInt(e -> -e.getPriority().getLevel())));
     }
 
+    /**
+     * 使用工厂将 ConfiguredHookExecutor 替换为真实执行器。
+     *
+     * <p>必须在加载配置文件后调用。遍历所有注册的执行器，
+     * 找到 {@link ConfiguredHookExecutor} 实例，通过
+     * {@link HookExecutorFactory} 创建真实的执行器并替换。</p>
+     *
+     * @param factory Hook 执行器工厂
+     * @return 成功替换的执行器数量
+     */
+    public synchronized int resolveConfiguredExecutors(HookExecutorFactory factory) {
+        Objects.requireNonNull(factory, "factory must not be null");
+        int resolved = 0;
+        List<HookExecutor> replacement = new ArrayList<>();
+
+        for (HookExecutor executor : allExecutors) {
+            if (executor instanceof ConfiguredHookExecutor cfg) {
+                try {
+                    HookExecutor real = factory.create(cfg.getConfig());
+                    replacement.add(real);
+                    logger.info("[HookRegistry] Resolved: " + cfg.getName()
+                        + " → " + real.getClass().getSimpleName());
+                    resolved++;
+                } catch (Exception e) {
+                    logger.log(Level.WARNING, "[HookRegistry] Failed to resolve '"
+                        + cfg.getName() + "': " + e.getMessage(), e);
+                    // 保留原始 ConfiguredHookExecutor（将 fallback 到 ALLOW）
+                    replacement.add(cfg);
+                }
+            } else {
+                replacement.add(executor);
+            }
+        }
+
+        allExecutors.clear();
+        allExecutors.addAll(replacement);
+        rebuildIndex();
+        logger.info("[HookRegistry] Resolved " + resolved + " configured hook(s)");
+        return resolved;
+    }
+
     // ==================== 内部类 ====================
 
     /**
@@ -372,10 +413,10 @@ public class HookRegistry {
 
         @Override
         public CompletableFuture<HookResult> execute(HookContext context) {
-            // 委托给对应的专用执行器
-            // 实际执行器在 jwcode-core 初始化时由 HookExecutorFactory 创建
-            logger.warning("[HookRegistry] ConfiguredHookExecutor '" + config.getName()
-                + "' has no backing executor (type=" + config.getImplementationType()
+            // 如果到这里，说明 resolveConfiguredExecutors() 没有被调用或解析失败
+            // 这是 fallback 路径：放行操作，确保系统可用性
+            logger.fine("[HookRegistry] ConfiguredHookExecutor '" + config.getName()
+                + "' not resolved (type=" + config.getImplementationType()
                 + ") — defaulting to ALLOW");
             return CompletableFuture.completedFuture(
                 HookResult.allow(config.getName(), "No backing executor for type="

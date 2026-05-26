@@ -15,6 +15,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 /**
@@ -37,6 +39,9 @@ public class TaskStore {
     private final Path storagePath;
     private final ObjectMapper objectMapper;
     private volatile boolean autoSaveEnabled;
+    
+    /** 任务变更监听器列表 */
+    private final List<Consumer<TaskEvent>> taskListeners = new CopyOnWriteArrayList<>();
     
     /**
      * 单例实例
@@ -95,6 +100,60 @@ public class TaskStore {
         load();
     }
     
+    // ==================== 事件监听器 ====================
+    
+    /**
+     * 任务变更事件 — 当任务被创建、更新或删除时触发。
+     */
+    public static class TaskEvent {
+        private final String action;  // "created" | "updated" | "deleted"
+        private final Task task;
+        
+        public TaskEvent(String action, Task task) {
+            this.action = action;
+            this.task = task;
+        }
+        
+        public String getAction() { return action; }
+        public Task getTask() { return task; }
+        public String getTaskId() { return task != null ? task.getId() : null; }
+    }
+    
+    /**
+     * 添加任务变更监听器。
+     * <p>当任务被创建、更新或删除时，所有注册的监听器会被调用。</p>
+     *
+     * @param listener 监听器，接收 TaskEvent
+     */
+    public void addTaskListener(Consumer<TaskEvent> listener) {
+        if (listener != null) {
+            taskListeners.add(listener);
+        }
+    }
+    
+    /**
+     * 移除任务变更监听器。
+     *
+     * @param listener 之前注册的监听器
+     */
+    public void removeTaskListener(Consumer<TaskEvent> listener) {
+        taskListeners.remove(listener);
+    }
+    
+    /**
+     * 通知所有监听器
+     */
+    private void notifyListeners(String action, Task task) {
+        TaskEvent event = new TaskEvent(action, task);
+        for (Consumer<TaskEvent> listener : taskListeners) {
+            try {
+                listener.accept(event);
+            } catch (Exception e) {
+                logger.warn("TaskListener error: " + e.getMessage());
+            }
+        }
+    }
+    
     /**
      * 创建新任务
      * 
@@ -116,6 +175,9 @@ public class TaskStore {
         if (autoSaveEnabled) {
             save();
         }
+        
+        // 通知监听器
+        notifyListeners("created", task);
         
         return task;
     }
@@ -144,6 +206,9 @@ public class TaskStore {
             save();
         }
         
+        // 通知监听器
+        notifyListeners("updated", task);
+        
         return task;
     }
     
@@ -164,6 +229,8 @@ public class TaskStore {
             if (autoSaveEnabled) {
                 save();
             }
+            // 通知监听器
+            notifyListeners("deleted", removed);
             return true;
         }
         

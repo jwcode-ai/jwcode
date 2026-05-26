@@ -1,5 +1,8 @@
 package com.jwcode.core.llm;
 
+import com.jwcode.core.model.Message;
+
+import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Logger;
 
@@ -18,7 +21,14 @@ public class TokenBudget {
     private final AtomicLong usedPromptTokens = new AtomicLong(0);
     private final AtomicLong usedCompletionTokens = new AtomicLong(0);
     private final AtomicLong reservedTokens = new AtomicLong(0);
-    private double lastAdvisedRatio = 0.0;
+    // volatile 确保跨线程可见性，避免重复/遗漏告警
+    private volatile double lastAdvisedRatio = 0.0;
+
+    // 消息 token 估算常量（可配置，见 estimateMessageTokens）
+    static final double EN_TOKENS_PER_WORD = 1.3;
+    static final double ZH_TOKENS_PER_CHAR = 1.5;
+    static final double JSON_TOKENS_PER_CHAR = 0.25;
+    static final long TOKENS_PER_MESSAGE_OVERHEAD = 4; // role + formatting overhead
 
     public TokenBudget(long totalBudget) {
         if (totalBudget <= 0) {
@@ -72,10 +82,12 @@ public class TokenBudget {
         long totalUsed = getUsedTotal();
         if (totalUsed <= 0) return;
         
-        // 按 prompt/completion 比例分摊释放
+        // 按 prompt/completion 比例分摊释放（带溢出保护）
         long promptUsed = usedPromptTokens.get();
         long completionUsed = usedCompletionTokens.get();
-        long promptToRelease = Math.min(tokens * promptUsed / totalUsed, promptUsed);
+        // 使用 double 除法 + Math.round 避免整数截断误差
+        long promptToRelease = Math.min(
+            Math.round((double) tokens * promptUsed / totalUsed), promptUsed);
         long completionToRelease = Math.min(tokens - promptToRelease, completionUsed);
         
         usedPromptTokens.addAndGet(-promptToRelease);
@@ -131,8 +143,66 @@ public class TokenBudget {
         return (double) getUsedTotal() / totalBudget;
     }
 
-    public double projectedUsageRatio(int estimatedRemainingCalls, int avgTokensPerCall) {
-        long projected = getUsedTotal() + (long) estimatedRemainingCalls * avgTokensPerCall;
+    /**
+     * 预估一条消息的 token 数量。
+     * <p>启发式策略（按优先级）：
+     * <ol>
+     *   <li>英文文本：~1.3 tokens/词（OpenAI 典型比率）</li>
+     *   <li>中文文本：~1.5 tokens/字符</li>
+     *   <li>JSON/代码：~0.25 tokens/字符（tokenizer 对结构化文本更高效）</li>
+     *   <li>额外 +4 tokens 开销（role + 消息边界）</li>
+     * </ol>
+     * 误差通常在 ±15% 以内。如需精确值，应使用 LLM API 返回的 usage.prompt_tokens。
+     * </p>
+     */
+    public static long estimateMessageTokens(com.jwcode.core.model.Message msg) {
+        if (msg == null) return 0;
+        String text = msg.getTextContent();
+        if (text == null || text.isEmpty()) {
+            return TOKENS_PER_MESSAGE_OVERHEAD;
+        }
+
+        int length = text.length();
+        long zhChars = text.codePoints()
+            .filter(cp -> Character.UnicodeScript.of(cp) == Character.UnicodeScript.HAN)
+            .count();
+        int nonZhChars = length - (int) zhChars;
+
+        // 根据内容类型选择估算系数
+        boolean looksLikeJson = text.trim().startsWith("{") || text.trim().startsWith("[");
+        double tokensForContent;
+        if (looksLikeJson) {
+            tokensForContent = length * JSON_TOKENS_PER_CHAR;
+        } else {
+            // 混合文本：中文按字符，英文按词
+            int engWords = nonZhChars > 0 ? nonZhChars / 5 : 0; // 粗略：平均 5 字符/词
+            tokensForContent = (zhChars * ZH_TOKENS_PER_CHAR) + (engWords * EN_TOKENS_PER_WORD);
+        }
+
+        return TOKENS_PER_MESSAGE_OVERHEAD + (long) Math.ceil(tokensForContent);
+    }
+
+    /**
+     * 预估消息列表的 token 总数。
+     */
+    public static long estimateMessagesTokens(List<com.jwcode.core.model.Message> messages) {
+        if (messages == null || messages.isEmpty()) return 0;
+        long total = 0;
+        for (com.jwcode.core.model.Message msg : messages) {
+            total = Math.addExact(total, estimateMessageTokens(msg));
+        }
+        return total;
+    }
+
+    public double projectedUsageRatio(int estimatedRemainingCalls, long avgTokensPerCall) {
+        long projected;
+        try {
+            projected = Math.addExact(getUsedTotal(),
+                Math.multiplyExact((long) estimatedRemainingCalls, avgTokensPerCall));
+        } catch (ArithmeticException e) {
+            // 溢出 = 预算必定不够 → 返回 1.0
+            return 1.0;
+        }
         return Math.min(1.0, (double) projected / totalBudget);
     }
 

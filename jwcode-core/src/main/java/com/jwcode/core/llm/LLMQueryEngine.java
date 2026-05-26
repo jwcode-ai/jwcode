@@ -28,6 +28,8 @@ import com.jwcode.core.resilience.RecoveryExecutor;
 import com.jwcode.core.resilience.RecoveryProtocol;
 import com.jwcode.core.service.ContextWindowManager;
 import com.jwcode.core.service.SimpleCompactionStrategy;
+import com.jwcode.core.aicl.AICLPromptBuilder;
+import com.jwcode.core.agent.BudgetExhaustedHandler;
 import com.jwcode.core.task.TaskLifecycleManager;
 
 /**
@@ -53,8 +55,8 @@ public class LLMQueryEngine {
     private final java.util.Set<String> executedWriteTools = new java.util.HashSet<>();
     private final java.util.Set<String> executedReadTools = new java.util.HashSet<>();
     private final java.util.Set<String> executedCommandTools = new java.util.HashSet<>();
-    // 【反编造】预检标记：防止重复注入验证提示
-    private boolean fabricationCheckInjected = false;
+    // volatile 确保跨线程的 fabrication check 注入一致性
+    private volatile boolean fabricationCheckInjected = false;
     private final SimpleCompactionStrategy compactionStrategy;
     private final TaskLifecycleManager taskLifecycleManager;
     private long lastSeenCompactCount = 0;
@@ -72,6 +74,15 @@ public class LLMQueryEngine {
     private com.jwcode.core.agent.AgentBridge agentBridge;
     // CompactorAgent 引用（用于语义级上下文压缩）
     private com.jwcode.core.agent.CompactorAgent compactorAgent;
+    
+    // BudgetExhaustedHandler 引用（用于Token预算监控）
+    private com.jwcode.core.agent.BudgetExhaustedHandler budgetHandler;
+    // 【优化】无进展检测：连续仅工具调用无文本回复的轮数
+    private int consecutiveToolOnlyRounds = 0;
+    // 【优化】重复工具检测：记录上一轮的工具名列表，用于检测重复模式
+    private java.util.List<String> lastToolNames = new java.util.ArrayList<>();
+    // 【优化】重复工具检测计数器
+    private int repeatedToolPatternCount = 0;
     private static final ObjectMapper MAPPER = new ObjectMapper()
             .registerModule(new JavaTimeModule());
     
@@ -86,9 +97,14 @@ public class LLMQueryEngine {
         if (this.config.getMaxMessageHistory() > 0) {
             session.setMaxMessageHistory(this.config.getMaxMessageHistory());
         }
+        // 【修复】使用 session 的工作目录而非 user.dir，确保与验收检查一致
+        String sessionWd = session.getWorkingDirectory();
+        java.nio.file.Path wd = (sessionWd != null && !sessionWd.isEmpty())
+            ? java.nio.file.Path.of(sessionWd)
+            : java.nio.file.Path.of(System.getProperty("user.dir"));
         this.toolContext = ToolExecutionContext.builder()
             .session(session)
-            .workingDirectory(java.nio.file.Path.of(System.getProperty("user.dir")))
+            .workingDirectory(wd)
             .agentRegistry(agentRegistry)
             .llmService(llmService)
             .build();
@@ -102,6 +118,8 @@ public class LLMQueryEngine {
         initAgentBridge();
         // 创建 CompactorAgent（用于语义级上下文压缩）
         initCompactorAgent();
+        // 创建 BudgetExhaustedHandler（用于Token预算监控）
+        initBudgetHandler();
     }
 
     /**
@@ -116,6 +134,19 @@ public class LLMQueryEngine {
         } catch (Exception e) {
             logger.warning("[LLMQueryEngine] Failed to init CompactorAgent: " + e.getMessage());
             this.compactorAgent = null;
+        }
+    }
+    
+    /**
+     * 初始化 BudgetExhaustedHandler — 用于Token预算监控与自动处理
+     */
+    private void initBudgetHandler() {
+        try {
+            this.budgetHandler = BudgetExhaustedHandler.createDefault();
+            logger.info("[LLMQueryEngine] BudgetExhaustedHandler initialized");
+        } catch (Exception e) {
+            logger.warning("[LLMQueryEngine] Failed to init BudgetExhaustedHandler: " + e.getMessage());
+            this.budgetHandler = null;
         }
     }
 
@@ -183,8 +214,20 @@ public class LLMQueryEngine {
     }
     
     /**
-     * 获取可观测管道，用于注册自定义观察者
+     * 检查 Token 预算并在必要时触发处理
      */
+    private void checkTokenBudget() {
+        if (budgetHandler == null || tokenBudget == null || session == null) return;
+        try {
+            BudgetExhaustedHandler.BudgetAction action = 
+                budgetHandler.checkAndHandle(session, tokenBudget);
+            if (action != null && action != BudgetExhaustedHandler.BudgetAction.NONE) {
+                logger.info("[LLMQueryEngine] Budget action: " + action + " at " + String.format("%.1f%%", tokenBudget.usageRatio() * 100));
+            }
+        } catch (Exception e) {
+            logger.fine("[LLMQueryEngine] Budget check skipped: " + e.getMessage());
+        }
+    }
     public ObservationPipeline getPipeline() {
         return pipeline;
     }
@@ -252,6 +295,9 @@ public class LLMQueryEngine {
         // 注入环境信息（操作系统、工作目录、系统时间等），让 AI 了解当前环境
         injectEnvironmentInfo();
         
+        // 【优化】重置无进展检测计数器
+        resetStagnationDetectors();
+        
         // 开始对话循环，初始空回复计数为 0
         return runConversationLoop(0, 0);
     }
@@ -276,6 +322,9 @@ public class LLMQueryEngine {
         prompt.append(marker).append("\n");
         prompt.append("# 当前角色：").append(agent.getName()).append("\n\n");
         prompt.append(agent.getSystemPrompt()).append("\n\n");
+        
+        // 注入 AICL 上下文解析规则（让 AI 理解优先级和生命周期）
+        prompt.append(AICLPromptBuilder.buildCompactPrompt()).append("\n\n");
 
         // 显式列出可用工具（增强约束感）
         List<Tool<?, ?, ?>> allowedTools = toolExecutor.getEnabledTools().stream()
@@ -450,6 +499,16 @@ public class LLMQueryEngine {
     }
 
     /**
+     * 【优化】重置无进展检测计数器（新任务开始时调用）
+     */
+    private void resetStagnationDetectors() {
+        this.consecutiveToolOnlyRounds = 0;
+        this.lastToolNames = new java.util.ArrayList<>();
+        this.repeatedToolPatternCount = 0;
+        this.fabricationCheckInjected = false;
+    }
+
+    /**
      * 重置 TokenBudget（通常在上下文压缩后调用）
      */
     public void resetTokenBudget() {
@@ -464,6 +523,12 @@ public class LLMQueryEngine {
     private static final int SYSTEM_PROMPT_DEDUP_WINDOW = 5;
     // 空回复时的引导提示
     private static final String EMPTY_RESPONSE_PROMPT = "你上一条回复为空。请继续完成当前任务，如果已完成请添加 [FINISH] 标记。";
+    // 【优化】无进展检测：连续 N 轮仅工具调用无文本回复则强制终止
+    private static final int MAX_CONSECUTIVE_TOOL_ONLY_ROUNDS = 15;
+    // 【优化】重复工具检测：同一工具连续调用超过此阈值触发干预
+    private static final int MAX_REPEATED_TOOL_CALLS = 8;
+    // 【优化】[FINISH] 提示注入间隔：每 N 轮才检查一次，避免频繁注入
+    private static final int FINISH_REMINDER_INTERVAL = 5;
     
     /**
      * 对话循环
@@ -518,9 +583,9 @@ public class LLMQueryEngine {
                 session.markCompacted();
                 lastCompactTime = now; // 更新压缩时间
                 
-                // Token 银行：释放对应数量的 Token 预算
+                // Token 银行：基于消息内容估算释放的 token（替代硬编码 500）
                 int messagesRemoved = beforeCount - compacted.size();
-                long estimatedTokensSaved = (long) messagesRemoved * 500;
+                long estimatedTokensSaved = estimateCompactTokenSavings(compacted, messagesRemoved);
                 if (estimatedTokensSaved > 0) {
                     tokenBudget.releaseTokens(estimatedTokensSaved);
                     logger.info("[LLMQueryEngine] Token 银行: 自动压缩释放 " + estimatedTokensSaved 
@@ -572,12 +637,23 @@ public class LLMQueryEngine {
             );
         }
         
+        // 【优化】无进展检测：连续多轮仅工具调用无文本回复时强制终止
+        if (consecutiveToolOnlyRounds >= MAX_CONSECUTIVE_TOOL_ONLY_ROUNDS) {
+            logger.warning("[LLMQueryEngine] Stagnation detected: " + consecutiveToolOnlyRounds
+                + " consecutive tool-only rounds without progress, force terminating");
+            triggerStepComplete("LLM查询", "检测到任务停滞（连续" + consecutiveToolOnlyRounds + "轮仅工具调用无进展）");
+            return CompletableFuture.completedFuture(
+                QueryResult.error("任务停滞：连续" + consecutiveToolOnlyRounds + "轮工具调用无进展，已自动终止")
+            );
+        }
+        
         // 已移除累计超时检查，由 HTTP 层超时控制（OpenAILLMService 中的 timeoutSeconds）
         // 单次 LLM 请求的超时由 HTTP 客户端处理，不受工具执行时间影响
         
         // 【Phase 5】注入当前 Agent 的系统提示词（仅首次迭代，避免重复）
         if (iteration == 0) {
             injectAgentSystemPrompt();
+            checkTokenBudget();
         }
 
         // 转换会话消息到 LLM 格式
@@ -588,8 +664,8 @@ public class LLMQueryEngine {
         // 获取可用工具（已按 Agent 白名单过滤）
         List<LLMTool> tools = convertTools(toolExecutor.getEnabledTools());
         
-        // 提醒使用 [FINISH] 标记，但避免重复堆积系统提示
-        if (iteration < 20 && !hasRecentSystemPrompt("[FINISH]")) {
+        // 【优化】提醒使用 [FINISH] 标记：降低注入频率，每 FINISH_REMINDER_INTERVAL 轮才检查一次
+        if (iteration % FINISH_REMINDER_INTERVAL == 0 && !hasRecentSystemPrompt("[FINISH]")) {
             session.addMessage(Message.createSystemMessage(
                 "提示：如果任务已完成，请在回复末尾添加 [FINISH] 标记以结束对话。"
             ));
@@ -644,7 +720,6 @@ public class LLMQueryEngine {
         if (response.getReasoningContent() != null && !response.getReasoningContent().isEmpty()) {
             String think = response.getReasoningContent();
             logger.info("[LLMQueryEngine] AI思考内容: " + think);
-            System.out.println("🤔 AI思考: " + think);
         }
         
         // 创建助手消息
@@ -659,6 +734,42 @@ public class LLMQueryEngine {
             
             // 添加到会话
             session.addMessage(assistantMessage);
+            
+            // 【优化】无进展检测：检查回复是否仅有工具调用而无实质文本内容
+            String content = response.getContent();
+            boolean hasSubstantiveContent = content != null && !content.trim().isEmpty()
+                && content.trim().length() > 10; // 少于10个字符视为无实质内容
+            if (!hasSubstantiveContent) {
+                consecutiveToolOnlyRounds++;
+                logger.info("[LLMQueryEngine] Tool-only round #" + consecutiveToolOnlyRounds
+                    + " (no substantive text content)");
+            } else {
+                consecutiveToolOnlyRounds = 0; // 有实质内容则重置
+            }
+            
+            // 【优化】重复工具检测：检查本次工具名列表是否与上次高度重复
+            List<String> currentToolNames = response.getToolCalls().stream()
+                .map(tc -> tc.getFunction().getName())
+                .sorted()
+                .toList();
+            if (currentToolNames.equals(lastToolNames) && !currentToolNames.isEmpty()) {
+                repeatedToolPatternCount++;
+                logger.info("[LLMQueryEngine] Repeated tool pattern #" + repeatedToolPatternCount
+                    + ": " + currentToolNames);
+                if (repeatedToolPatternCount >= MAX_REPEATED_TOOL_CALLS) {
+                    logger.warning("[LLMQueryEngine] Repeated tool pattern exceeded threshold, injecting urgency prompt");
+                    session.addMessage(Message.createSystemMessage(
+                        "【系统提示】你已连续多次调用相同的工具集但未完成任务。"
+                        + "请评估当前策略是否有效：如果遇到阻碍，请尝试不同方法；"
+                        + "如果任务已实际完成，请直接输出 [FINISH] 结束对话。"
+                        + "不要重复调用相同工具而不产生进展。"
+                    ));
+                    repeatedToolPatternCount = 0; // 注入提示后重置计数器
+                }
+            } else {
+                repeatedToolPatternCount = 0; // 工具模式变化则重置
+            }
+            lastToolNames = new java.util.ArrayList<>(currentToolNames);
             
             // 触发事件：准备调用工具
             pipeline.publish(new ObservationEvent.Thinking("分析", "AI决定调用 " + response.getToolCalls().size() + " 个工具"));
@@ -728,8 +839,8 @@ public class LLMQueryEngine {
                 // 有有效内容或仅有思考内容，重置空回复计数
                 emptyResponseCount = 0;
                 
-                // 仅在无重复提示时追加结束标记提醒
-                if (!hasRecentSystemPrompt("[FINISH]")) {
+                // 【优化】降低 [FINISH] 提醒注入频率：每 FINISH_REMINDER_INTERVAL 轮才注入一次
+                if (iteration % FINISH_REMINDER_INTERVAL == 0 && !hasRecentSystemPrompt("[FINISH]")) {
                     session.addMessage(Message.createSystemMessage(
                         "提示：如果任务已完成，请在回复末尾添加 [FINISH] 标记以结束对话。例如：\"任务已完成。\n\n[FINISH]\""
                     ));
@@ -767,6 +878,9 @@ public class LLMQueryEngine {
         // 注入环境信息（操作系统、工作目录、系统时间等），让 AI 了解当前环境
         injectEnvironmentInfo();
         
+        // 【优化】重置无进展检测计数器
+        resetStagnationDetectors();
+        
         return runStreamConversationLoop(0, 0, contentConsumer, thinkingConsumer, toolCallConsumer);
     }
     
@@ -803,9 +917,9 @@ public class LLMQueryEngine {
                 session.markCompacted();
                 lastCompactTime = now; // 更新压缩时间
                 
-                // Token 银行：释放对应数量的 Token 预算
+                // Token 银行：基于消息内容估算释放的 token（替代硬编码 500）
                 int messagesRemoved = beforeCount - compacted.size();
-                long estimatedTokensSaved = (long) messagesRemoved * 500;
+                long estimatedTokensSaved = estimateCompactTokenSavings(compacted, messagesRemoved);
                 if (estimatedTokensSaved > 0) {
                     tokenBudget.releaseTokens(estimatedTokensSaved);
                     logger.info("[LLMQueryEngine] Token 银行: 自动压缩释放 " + estimatedTokensSaved 
@@ -860,9 +974,23 @@ public class LLMQueryEngine {
             );
         }
         
+        // 【优化】无进展检测：连续多轮仅工具调用无文本回复时强制终止
+        if (consecutiveToolOnlyRounds >= MAX_CONSECUTIVE_TOOL_ONLY_ROUNDS) {
+            logger.warning("[LLMQueryEngine] Stagnation detected: " + consecutiveToolOnlyRounds
+                + " consecutive tool-only rounds without progress, force terminating");
+            triggerStepComplete("LLM查询", "检测到任务停滞（连续" + consecutiveToolOnlyRounds + "轮仅工具调用无进展）");
+            if (contentConsumer != null) {
+                contentConsumer.accept("\n\n---\n⚠️ **任务停滞：连续 " + consecutiveToolOnlyRounds + " 轮工具调用无进展，已自动终止。**\n\n[FINISH]");
+            }
+            return CompletableFuture.completedFuture(
+                QueryResult.error("任务停滞：连续" + consecutiveToolOnlyRounds + "轮工具调用无进展，已自动终止")
+            );
+        }
+        
         // 【Phase 5】注入当前 Agent 的系统提示词（仅首次迭代，避免重复）
         if (iteration == 0) {
             injectAgentSystemPrompt();
+            checkTokenBudget();
         }
 
         // 转换会话消息到 LLM 格式
@@ -873,8 +1001,8 @@ public class LLMQueryEngine {
         // 获取可用工具
         List<LLMTool> tools = convertTools(toolExecutor.getEnabledTools());
         
-        // 提醒使用 [FINISH] 标记，但避免重复堆积系统提示
-        if (iteration < 20 && !hasRecentSystemPrompt("[FINISH]")) {
+        // 【优化】提醒使用 [FINISH] 标记：降低注入频率，每 FINISH_REMINDER_INTERVAL 轮才检查一次
+        if (iteration % FINISH_REMINDER_INTERVAL == 0 && !hasRecentSystemPrompt("[FINISH]")) {
             session.addMessage(Message.createSystemMessage(
                 "提示：如果任务已完成，请在回复末尾添加 [FINISH] 标记以结束对话。"
             ));
@@ -953,7 +1081,6 @@ public class LLMQueryEngine {
         if (response.getReasoningContent() != null && !response.getReasoningContent().isEmpty()) {
             String think = response.getReasoningContent();
             logger.info("[LLMQueryEngine] AI思考内容: " + think);
-            System.out.println("🤔 AI思考: " + think);
         }
         
         // 创建助手消息
@@ -967,6 +1094,42 @@ public class LLMQueryEngine {
             );
             
             session.addMessage(assistantMessage);
+            
+            // 【优化】无进展检测：检查回复是否仅有工具调用而无实质文本内容
+            String content = response.getContent();
+            boolean hasSubstantiveContent = content != null && !content.trim().isEmpty()
+                && content.trim().length() > 10;
+            if (!hasSubstantiveContent) {
+                consecutiveToolOnlyRounds++;
+                logger.info("[LLMQueryEngine] Tool-only round #" + consecutiveToolOnlyRounds
+                    + " (no substantive text content)");
+            } else {
+                consecutiveToolOnlyRounds = 0;
+            }
+            
+            // 【优化】重复工具检测
+            List<String> currentToolNames = response.getToolCalls().stream()
+                .map(tc -> tc.getFunction().getName())
+                .sorted()
+                .toList();
+            if (currentToolNames.equals(lastToolNames) && !currentToolNames.isEmpty()) {
+                repeatedToolPatternCount++;
+                logger.info("[LLMQueryEngine] Repeated tool pattern #" + repeatedToolPatternCount
+                    + ": " + currentToolNames);
+                if (repeatedToolPatternCount >= MAX_REPEATED_TOOL_CALLS) {
+                    logger.warning("[LLMQueryEngine] Repeated tool pattern exceeded threshold, injecting urgency prompt");
+                    session.addMessage(Message.createSystemMessage(
+                        "【系统提示】你已连续多次调用相同的工具集但未完成任务。"
+                        + "请评估当前策略是否有效：如果遇到阻碍，请尝试不同方法；"
+                        + "如果任务已实际完成，请直接输出 [FINISH] 结束对话。"
+                        + "不要重复调用相同工具而不产生进展。"
+                    ));
+                    repeatedToolPatternCount = 0;
+                }
+            } else {
+                repeatedToolPatternCount = 0;
+            }
+            lastToolNames = new java.util.ArrayList<>(currentToolNames);
             
             pipeline.publish(new ObservationEvent.Thinking("分析", "AI决定调用 " + response.getToolCalls().size() + " 个工具"));
             
@@ -1005,6 +1168,16 @@ public class LLMQueryEngine {
                 }
 
                 logger.info("[LLMQueryEngine] 检测到结束标记 " + FINISH_MARKER + "，结束对话");
+
+                // 【修复】通过 contentConsumer 回放完整内容（移除 [FINISH] 标记），
+                // 确保即使流式过程中 contentConsumer 为 null，最终内容也能送达
+                if (contentConsumer != null && content != null) {
+                    String displayContent = content.replace(FINISH_MARKER, "").trim();
+                    if (!displayContent.isEmpty()) {
+                        contentConsumer.accept(displayContent);
+                    }
+                }
+
                 triggerStepComplete("LLM查询", "完成回复");
                 return CompletableFuture.completedFuture(
                     QueryResult.success(assistantMessage)
@@ -1035,8 +1208,8 @@ public class LLMQueryEngine {
                 // 有有效内容或仅有思考内容，重置空回复计数
                 emptyResponseCount = 0;
                 
-                // 仅在无重复提示时追加结束标记提醒
-                if (!hasRecentSystemPrompt("[FINISH]")) {
+                // 【优化】降低 [FINISH] 提醒注入频率：每 FINISH_REMINDER_INTERVAL 轮才注入一次
+                if (iteration % FINISH_REMINDER_INTERVAL == 0 && !hasRecentSystemPrompt("[FINISH]")) {
                     session.addMessage(Message.createSystemMessage(
                         "提示：如果任务已完成，请在回复末尾添加 [FINISH] 标记以结束对话。例如：\"任务已完成。\\n\\n[FINISH]\""
                     ));
@@ -1342,6 +1515,25 @@ public class LLMQueryEngine {
     }
     
     /**
+     * 估算压缩释放的 token 数（替代硬编码 500 tokens/消息）。
+     * <p>策略：对被压缩前的消息列表采样，使用 TokenBudget.estimateMessageTokens
+     * 对最后 messagesRemoved 条消息（通常是最旧的）进行估算求和。</p>
+     */
+    private long estimateCompactTokenSavings(List<Message> currentMessages, int messagesRemoved) {
+        if (messagesRemoved <= 0 || currentMessages == null || currentMessages.isEmpty()) {
+            return 0;
+        }
+        // 采样被移除的消息（假设压缩从旧→新，取最后 messagesRemoved 条来估算）
+        int sampleStart = Math.max(0, currentMessages.size() - messagesRemoved);
+        long total = 0;
+        for (int i = sampleStart; i < currentMessages.size(); i++) {
+            total += TokenBudget.estimateMessageTokens(currentMessages.get(i));
+        }
+        // 至少返回移除数 * 100 作为保底（避免极端低估导致无限循环压缩）
+        return Math.max(total, (long) messagesRemoved * 100);
+    }
+
+    /**
      * 创建上下文窗口管理器 - 根据模型实际支持的上下文窗口动态配置
      */
     private ContextWindowManager createContextWindowManager() {
@@ -1378,10 +1570,9 @@ public class LLMQueryEngine {
             session.setMessages(messages);
             session.markCompacted();
             
-            // 【Token 银行】压缩联动：释放对应数量的 Token 预算
-            // 估算：每条消息约 500 tokens（含 system prompt 和工具结果）
+            // 【Token 银行】压缩联动：基于消息内容估算释放的 token
             int messagesRemoved = originalCount - messages.size();
-            long estimatedTokensSaved = (long) messagesRemoved * 500;
+            long estimatedTokensSaved = estimateCompactTokenSavings(messages, messagesRemoved);
             if (estimatedTokensSaved > 0) {
                 tokenBudget.releaseTokens(estimatedTokensSaved);
                 logger.info("[LLMQueryEngine] Token 银行: 压缩释放 " + estimatedTokensSaved 

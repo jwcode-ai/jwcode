@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { Message } from '../types';
 
 interface TokenUsage {
   promptTokens: number;
@@ -18,6 +19,7 @@ interface TokenState {
   setShowTokenInfo: (show: boolean) => void;
   addToHistory: (usage: TokenUsage) => void;
   estimateTokens: (text: string) => number;
+  recalculateFromMessages: (messages: Message[]) => void;
   pruneContext: (targetRatio: number) => { cutMessages: number; recoveredTokens: number };
   resetUsage: () => void;
 }
@@ -57,6 +59,59 @@ export const useTokenStore = create<TokenState>((set, get) => ({
   })),
 
   estimateTokens: (text) => estimateTokenCount(text),
+
+  recalculateFromMessages: (messages) => {
+    if (!messages || messages.length === 0) {
+      set({
+        currentUsage: { promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCost: 0 },
+      });
+      return;
+    }
+
+    const estimate = get().estimateTokens;
+    let promptTokens = 0;
+    let completionTokens = 0;
+
+    for (const msg of messages) {
+      // 计算消息主体内容
+      let text = msg.content || '';
+
+      // 加上 thinking 内容
+      if (msg.thinking) text += ' ' + msg.thinking;
+
+      // 加上 steps 中的 thought/action/result
+      if (msg.steps) {
+        for (const step of msg.steps) {
+          if (step.thought) text += ' ' + step.thought;
+          if (step.action) text += ' ' + step.action;
+          if (step.result) text += ' ' + step.result;
+        }
+      }
+
+      // 加上 toolCalls 参数
+      if (msg.toolCalls) {
+        for (const tc of msg.toolCalls) {
+          if (tc.args) text += ' ' + (typeof tc.args === 'string' ? tc.args : JSON.stringify(tc.args));
+        }
+      }
+
+      const tokens = estimate(text);
+      if (msg.type === 'user') {
+        promptTokens += tokens;
+      } else {
+        completionTokens += tokens;
+      }
+    }
+
+    const totalTokens = promptTokens + completionTokens;
+
+    // 粗略成本估算: $0.15/M prompt, $0.60/M completion (GPT-4o 参考)
+    const estimatedCost = (promptTokens / 1_000_000) * 0.15 + (completionTokens / 1_000_000) * 0.60;
+
+    set({
+      currentUsage: { promptTokens, completionTokens, totalTokens, estimatedCost },
+    });
+  },
 
   pruneContext: (targetRatio) => {
     const state = get();

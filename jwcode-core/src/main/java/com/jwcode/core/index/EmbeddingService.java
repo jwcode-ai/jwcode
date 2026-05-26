@@ -2,6 +2,7 @@ package com.jwcode.core.index;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jwcode.core.config.JwcodeConfig;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -20,6 +21,9 @@ import java.util.logging.Logger;
  * 支持基于 contentHash 的本地缓存，避免重复计算。</p>
  *
  * <p>当 LLM API 不可用时，回退到基于关键词的 TF-IDF 风格稀疏向量。</p>
+ *
+ * <p>v2：支持通过 {@link JwcodeConfig.ProviderConfig} 使用模型池，
+ * 在 callEmbeddingApi 中动态获取 API Key，失败时自动轮换 key。</p>
  */
 public class EmbeddingService {
 
@@ -29,8 +33,14 @@ public class EmbeddingService {
     /** embedding API 端点 */
     private final String apiEndpoint;
 
-    /** API Key */
+    /** API Key（单 key 模式，保留向后兼容） */
     private final String apiKey;
+
+    /** 模型池配置（v2：多 key 轮询模式） */
+    private final JwcodeConfig.ProviderConfig providerConfig;
+
+    /** 是否使用模型池模式 */
+    private final boolean useProviderPool;
 
     /** 模型名称 */
     private final String modelName;
@@ -50,6 +60,9 @@ public class EmbeddingService {
     /** 最大批量大小 */
     private static final int MAX_BATCH_SIZE = 20;
 
+    /** 使用模型池时的最大 key 重试次数 */
+    private static final int MAX_KEY_RETRIES = 3;
+
     /**
      * @param apiEndpoint embedding API 端点（如 https://api.openai.com/v1/embeddings）
      * @param apiKey      API Key
@@ -59,6 +72,8 @@ public class EmbeddingService {
     public EmbeddingService(String apiEndpoint, String apiKey, String modelName, int dimension) {
         this.apiEndpoint = apiEndpoint;
         this.apiKey = apiKey;
+        this.providerConfig = null;
+        this.useProviderPool = false;
         this.modelName = modelName;
         this.dimension = dimension;
         this.httpClient = HttpClient.newHttpClient();
@@ -74,10 +89,42 @@ public class EmbeddingService {
     }
 
     /**
+     * 使用模型池（ProviderConfig）构造 EmbeddingService。
+     * 每次调用 API 时从 providerConfig 动态获取 key，失败时自动轮换。
+     *
+     * @param providerConfig 提供商配置（含多 key 轮询）
+     * @param apiEndpoint    embedding API 端点
+     * @param modelName      模型名称
+     * @param dimension      向量维度
+     */
+    public EmbeddingService(JwcodeConfig.ProviderConfig providerConfig, String apiEndpoint, String modelName, int dimension) {
+        this.apiEndpoint = apiEndpoint;
+        this.apiKey = null;
+        this.providerConfig = providerConfig;
+        this.useProviderPool = true;
+        this.modelName = modelName;
+        this.dimension = dimension;
+        this.httpClient = HttpClient.newHttpClient();
+        this.cache = new ConcurrentHashMap<>();
+        this.available = providerConfig != null
+            && !providerConfig.getApiKeys().isEmpty()
+            && apiEndpoint != null && !apiEndpoint.isBlank();
+
+        if (available) {
+            logger.info("EmbeddingService initialized with provider pool: endpoint=" + apiEndpoint
+                + ", model=" + modelName + ", dim=" + dimension
+                + ", keys=" + providerConfig.getApiKeys().size());
+        } else {
+            logger.info("EmbeddingService: no API key configured, using fallback keyword vectors");
+        }
+    }
+
+    /**
      * 创建禁用远程 API 的本地 fallback 实例
      */
     public static EmbeddingService createLocalFallback(int dimension) {
-        return new EmbeddingService(null, null, "local-fallback", dimension);
+        // 使用显式 (String) 转型消除构造器重载歧义
+        return new EmbeddingService((String) null, (String) null, "local-fallback", dimension);
     }
 
     // ==================== 单文本嵌入 ====================
@@ -105,6 +152,15 @@ public class EmbeddingService {
         if (available) {
             try {
                 vector = callEmbeddingApi(List.of(text)).get(0);
+            } catch (EmbeddingApiException e) {
+                if (e.isPermanent()) {
+                    logger.warning("Embedding API permanently unavailable (HTTP " + e.getStatusCode()
+                        + "), disabling API. Using fallback.");
+                    available = false;
+                } else {
+                    logger.warning("Embedding API call failed: " + e.getMessage() + ". Using fallback.");
+                }
+                vector = fallbackEmbed(text);
             } catch (Exception e) {
                 logger.warning("Embedding API call failed: " + e.getMessage() + ". Using fallback.");
                 vector = fallbackEmbed(text);
@@ -164,6 +220,18 @@ public class EmbeddingService {
             if (available) {
                 try {
                     batchVectors = callEmbeddingApi(batch);
+                } catch (EmbeddingApiException e) {
+                    if (e.isPermanent()) {
+                        logger.warning("Embedding batch API permanently unavailable (HTTP " + e.getStatusCode()
+                            + "), disabling API. Using fallback.");
+                        available = false;
+                    } else {
+                        logger.warning("Embedding batch API failed: " + e.getMessage() + ". Using fallback.");
+                    }
+                    batchVectors = new ArrayList<>();
+                    for (String text : batch) {
+                        batchVectors.add(fallbackEmbed(text));
+                    }
                 } catch (Exception e) {
                     logger.warning("Embedding batch API failed: " + e.getMessage() + ". Using fallback.");
                     batchVectors = new ArrayList<>();
@@ -194,9 +262,80 @@ public class EmbeddingService {
 
     /**
      * 调用 embedding API
+     *
+     * <p>如果使用模型池模式（useProviderPool=true），每次调用前从 providerConfig 获取 key，
+     * 调用失败时标记 key 不可用并自动轮换重试。</p>
      */
     @SuppressWarnings("unchecked")
     private List<float[]> callEmbeddingApi(List<String> texts) throws Exception {
+        if (useProviderPool && providerConfig != null) {
+            return callEmbeddingApiWithPool(texts);
+        }
+        return callEmbeddingApiWithKey(texts, apiKey);
+    }
+
+    /**
+     * 使用模型池模式调用 embedding API（多 key 轮询 + 失败重试）
+     *
+     * <p>404/405 等永久性错误不重试（端点不存在，换 key 也无效），直接抛异常让上层 fallback。</p>
+     */
+    private List<float[]> callEmbeddingApiWithPool(List<String> texts) throws Exception {
+        Exception lastException = null;
+        List<String> attemptedKeys = new ArrayList<>();
+        for (int attempt = 0; attempt < MAX_KEY_RETRIES; attempt++) {
+            String currentKey = providerConfig.getCurrentApiKey();
+            if (currentKey == null) {
+                logger.warning("Embedding API: no healthy API key available (attempt " + (attempt + 1) + "/" + MAX_KEY_RETRIES + ")");
+                // 所有 key 都不可用，重置健康状态再试一次
+                providerConfig.resetKeyHealth();
+                currentKey = providerConfig.getCurrentApiKey();
+                if (currentKey == null) {
+                    break;
+                }
+            }
+
+            // 避免同一轮中重复尝试同一个 key
+            if (attemptedKeys.contains(currentKey)) {
+                continue;
+            }
+            attemptedKeys.add(currentKey);
+
+            try {
+                return callEmbeddingApiWithKey(texts, currentKey);
+            } catch (EmbeddingApiException e) {
+                lastException = e;
+                // 404/405 是永久性错误（端点不存在/方法不允许），换 key 无效，直接终止重试
+                if (e.isPermanent()) {
+                    logger.warning("Embedding API returned " + e.getStatusCode()
+                        + " (permanent error), skipping key retries. "
+                        + "Provider may not support embeddings.");
+                    throw e;
+                }
+                // 401/403/429/5xx 是可重试错误，标记 key 并重试
+                logger.warning("Embedding API call failed with key (attempt " + (attempt + 1) + "): "
+                    + e.getMessage() + ". Marking key as failed and retrying...");
+                providerConfig.markKeyFailed(currentKey);
+            } catch (Exception e) {
+                lastException = e;
+                logger.warning("Embedding API call failed with key (attempt " + (attempt + 1) + "): "
+                    + e.getMessage() + ". Marking key as failed and retrying...");
+                providerConfig.markKeyFailed(currentKey);
+            }
+        }
+        // 所有 key 都重试失败
+        if (lastException != null) {
+            throw lastException;
+        }
+        throw new RuntimeException("Embedding API failed after " + MAX_KEY_RETRIES
+            + " key retries. All keys exhausted.");
+    }
+
+    /**
+     * 使用指定 key 调用 embedding API
+     *
+     * @throws EmbeddingApiException 包含 HTTP 状态码，便于上层区分永久性/可重试错误
+     */
+    private List<float[]> callEmbeddingApiWithKey(List<String> texts, String key) throws Exception {
         // 构建请求体
         Map<String, Object> requestBody = new LinkedHashMap<>();
         requestBody.put("model", modelName);
@@ -207,7 +346,7 @@ public class EmbeddingService {
         HttpRequest request = HttpRequest.newBuilder()
             .uri(URI.create(apiEndpoint))
             .header("Content-Type", "application/json")
-            .header("Authorization", "Bearer " + apiKey)
+            .header("Authorization", "Bearer " + key)
             .POST(HttpRequest.BodyPublishers.ofString(json, StandardCharsets.UTF_8))
             .build();
 
@@ -215,8 +354,9 @@ public class EmbeddingService {
             HttpResponse.BodyHandlers.ofString());
 
         if (response.statusCode() != 200) {
-            throw new RuntimeException("Embedding API returned " + response.statusCode()
-                + ": " + response.body());
+            throw new EmbeddingApiException(response.statusCode(),
+                "Embedding API returned " + response.statusCode()
+                    + ": " + truncateBody(response.body()));
         }
 
         // 解析响应
@@ -225,7 +365,8 @@ public class EmbeddingService {
 
         List<Map<String, Object>> data = (List<Map<String, Object>>) respMap.get("data");
         if (data == null) {
-            throw new RuntimeException("Embedding API response missing 'data' field");
+            throw new EmbeddingApiException(response.statusCode(),
+                "Embedding API response missing 'data' field");
         }
 
         // 按 index 排序（API 返回顺序可能不同）
@@ -235,8 +376,9 @@ public class EmbeddingService {
         for (Map<String, Object> item : data) {
             List<Double> embedding = (List<Double>) item.get("embedding");
             if (embedding == null) {
-                throw new RuntimeException("Embedding API response missing 'embedding' for index "
-                    + item.get("index"));
+                throw new EmbeddingApiException(response.statusCode(),
+                    "Embedding API response missing 'embedding' for index "
+                        + item.get("index"));
             }
             float[] vec = new float[embedding.size()];
             for (int i = 0; i < embedding.size(); i++) {
@@ -246,6 +388,14 @@ public class EmbeddingService {
         }
 
         return vectors;
+    }
+
+    /**
+     * 截断响应体，避免日志/异常信息过长
+     */
+    private static String truncateBody(String body) {
+        if (body == null) return "";
+        return body.length() > 200 ? body.substring(0, 200) + "..." : body;
     }
 
     // ==================== Fallback 嵌入 ====================
@@ -333,5 +483,36 @@ public class EmbeddingService {
 
     public int getDimension() {
         return dimension;
+    }
+
+    // ==================== 内部异常类 ====================
+
+    /**
+     * Embedding API 异常，携带 HTTP 状态码以便区分永久性/可重试错误。
+     *
+     * <p>永久性错误（404/405/400）：端点不存在、方法不允许、请求格式错误 — 换 key 无效。</p>
+     * <p>可重试错误（401/403/429/5xx）：鉴权、限流、服务端临时故障 — 换 key 或重试可能有效。</p>
+     */
+    static class EmbeddingApiException extends RuntimeException {
+        private final int statusCode;
+
+        EmbeddingApiException(int statusCode, String message) {
+            super(message);
+            this.statusCode = statusCode;
+        }
+
+        int getStatusCode() {
+            return statusCode;
+        }
+
+        /**
+         * 是否为永久性错误（换 key / 重试无效）
+         */
+        boolean isPermanent() {
+            // 404 Not Found — 端点不存在
+            // 405 Method Not Allowed — HTTP 方法不对
+            // 400 Bad Request — 请求格式错误（模型不支持等）
+            return statusCode == 404 || statusCode == 405 || statusCode == 400;
+        }
     }
 }

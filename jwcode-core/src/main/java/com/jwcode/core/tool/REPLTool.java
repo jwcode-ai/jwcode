@@ -198,8 +198,18 @@ public class REPLTool implements Tool<REPLTool.Input, REPLTool.Output, REPLTool.
                 if (executor == null) {
                     Output output = new Output();
                     output.success = false;
-                    output.error = "Unsupported language or REPL not available: " + language;
+                    output.error = "Unsupported language or REPL not available: " + language
+                        + ". Java REPL requires JDK 9+ (JShell), JavaScript REPL requires Nashorn/GraalVM JS engine.";
                     output.exitCode = "UNSUPPORTED_LANGUAGE";
+                    return ToolResult.success(output);
+                }
+                
+                if (!executor.isAvailable()) {
+                    Output output = new Output();
+                    output.success = false;
+                    output.error = "REPL executor for '" + language + "' is not available. "
+                        + "Java REPL requires JDK 9+ (JShell), JavaScript REPL requires Nashorn/GraalVM JS engine.";
+                    output.exitCode = "EXECUTOR_UNAVAILABLE";
                     return ToolResult.success(output);
                 }
                 

@@ -16,6 +16,7 @@ import com.jwcode.core.llm.*;
 import com.jwcode.core.mcp.*;
 import com.jwcode.core.service.ToolExecutionService;
 import com.jwcode.core.service.UsageService;
+import com.jwcode.core.service.AutoUpdateService;
 import com.jwcode.core.model.Message;
 import com.jwcode.core.session.Session;
 import com.jwcode.core.session.SessionManager;
@@ -61,6 +62,34 @@ public class JwCodeApplication implements AutoCloseable {
         initializeBackgroundInfrastructure();
         registerCommands();
         initializeTerminal();
+        checkForUpdates();
+    }
+    
+    /**
+     * 启动时异步检查更新
+     */
+    private void checkForUpdates() {
+        CompletableFuture.runAsync(() -> {
+            try {
+                String currentVersion = getClass().getPackage().getImplementationVersion();
+                if (currentVersion == null) currentVersion = "dev";
+                AutoUpdateService updateService = new AutoUpdateService(currentVersion, null, null);
+                AutoUpdateService.UpdateStatus status = updateService.checkForUpdates().get();
+                if (status != null && status.hasUpdate) {
+                    System.out.println();
+                    System.out.println(CliLogger.YELLOW + "=== 有新版本可用 ===" + CliLogger.RESET);
+                    System.out.println("当前版本: " + currentVersion);
+                    System.out.println("最新版本: " + status.latestVersion);
+                    if (status.releaseNotes != null) {
+                        System.out.println("更新说明: " + status.releaseNotes);
+                    }
+                    System.out.println("运行 'jwcode update' 进行更新");
+                    System.out.println();
+                }
+            } catch (Exception e) {
+                // 静默忽略更新检查失败
+            }
+        });
     }
     
     private void initializeTerminal() {
@@ -185,7 +214,7 @@ public class JwCodeApplication implements AutoCloseable {
             // 【Phase 3 接线】WireEventBus 订阅：后台任务完成 → 通知 IdleDetector
             WireEventBus.getInstance().subscribe(event -> {
                 if (event instanceof WireEventBus.TaskCompletedEvent tce) {
-                    CliLogger.getInstance().info("[WireEventBus] 后台任务完成 | taskId=" +
+                    CliLogger.getInstance().debug("[WireEventBus] 后台任务完成 | taskId=" +
                         tce.getSourceId() + " | success=" + tce.isSuccess() +
                         " | exitCode=" + tce.getExitCode());
                 }
@@ -193,7 +222,7 @@ public class JwCodeApplication implements AutoCloseable {
             
             this.idleDetector = new IdleDetector(taskStore);
             idleDetector.setOnIdleTaskComplete(task -> {
-                CliLogger.getInstance().info("[IdleDetector] 后台任务完成 | taskId=" + task.getId() + " | status=" + task.getStatus());
+                CliLogger.getInstance().debug("[IdleDetector] 后台任务完成 | taskId=" + task.getId() + " | status=" + task.getStatus());
             });
             idleDetector.start();
             
@@ -517,6 +546,7 @@ public class JwCodeApplication implements AutoCloseable {
         registerCommand(new CheckpointCommand());
         registerCommand(new UsageCommand());
         registerCommand(new TestModelCommand());
+        registerCommand(new TestCommand());
         registerCommand(new WebCommand());
         registerCommand(new WhoamiCommand());
         registerCommand(new NewCommand());
@@ -745,6 +775,9 @@ public class JwCodeApplication implements AutoCloseable {
      * 使用 JLine3 终端的交互模式
      */
     private void runInteractiveModeWithJLine3() {
+        // 标记终端进入交互模式，后台日志将通过 printAbove 输出
+        terminal.setInteractive(true);
+        
         terminal.println("提示: 输入自然语言与 AI 对话，或输入 'help' 查看命令。");
         terminal.println("Tip: 使用上下箭头键可以查看命令历史，Tab 键可以自动补全。");
         terminal.println("Tip: 多行输入请在行末使用 \\ 续行");
@@ -792,8 +825,14 @@ public class JwCodeApplication implements AutoCloseable {
      * 处理自然语言查询（带思考过程和工具调用显示）
      */
     private void handleNaturalLanguageQuery(String input) {
-        System.out.print("\n" + CliLogger.CYAN + "🤔 思考中..." + CliLogger.RESET);
-        System.out.flush();
+        // JLine3 交互模式下使用 printAbove 避免覆盖提示符
+        JLine3Terminal jlineTerminal = JLine3Terminal.getInstance();
+        if (jlineTerminal != null && jlineTerminal.isInteractive()) {
+            jlineTerminal.printAbove(CliLogger.CYAN + "🤔 思考中..." + CliLogger.RESET);
+        } else {
+            System.err.print("\n" + CliLogger.CYAN + "🤔 思考中..." + CliLogger.RESET);
+            System.err.flush();
+        }
 
         CliLogger logger = CliLogger.getInstance();
         logger.debug("=== handleNaturalLanguageQuery 开始 ===");
@@ -814,13 +853,27 @@ public class JwCodeApplication implements AutoCloseable {
             llmQueryEngine.setStepCallback(null);
 
             if (result.isSuccess()) {
+                // 优先从 StepCallback 获取内容（流式累积）
                 String content = renderer.getContent();
-                if (content != null && !content.trim().isEmpty()) {
-                    System.out.println("\n" + CliLogger.GREEN + "💬 回复:" + CliLogger.RESET);
-                    System.out.println(content);
+
+                // 如果 StepCallback 没有收集到内容，回退到 QueryResult 中的消息
+                if ((content == null || content.trim().isEmpty()) && result.getMessage() != null
+                    && result.getMessage().getContent() != null) {
+                    content = result.getMessage().getTextContent();
+                }
+
+                // 移除 [FINISH] 结束标记
+                if (content != null) {
+                    content = content.replace("[FINISH]", "").trim();
+                }
+
+                if (content != null && !content.isEmpty()) {
+                    terminal.println();
+                    terminal.println(CliLogger.GREEN + "💬 回复:" + CliLogger.RESET);
+                    terminal.println(content);
                 }
             } else {
-                System.out.println(CliLogger.RED + "❌ " + result.getErrorMessage() + CliLogger.RESET);
+                terminal.println(CliLogger.RED + "❌ " + result.getErrorMessage() + CliLogger.RESET);
             }
 
             logger.debug("=== handleNaturalLanguageQuery 结束 ===");
@@ -1414,7 +1467,8 @@ public class JwCodeApplication implements AutoCloseable {
      * 后备交互模式
      */
     private void runInteractiveModeFallback() {
-        Scanner scanner = new Scanner(System.in);
+        // 显式指定 UTF-8 编码，避免 Windows GBK 默认编码导致中文截断
+        Scanner scanner = new Scanner(System.in, java.nio.charset.StandardCharsets.UTF_8);
         
         System.out.println("提示: 输入自然语言与 AI 对话，或输入 'help' 查看命令。");
         System.out.println("Tip: 多行输入请在行末使用 \\ 续行");
@@ -1468,7 +1522,7 @@ public class JwCodeApplication implements AutoCloseable {
      * 处理自然语言查询（后备模式）
      */
     private void handleNaturalLanguageQueryFallback(String input) {
-        System.out.print("? 正在思考...");
+        System.err.print("? 正在思考...");
 
         try {
             TerminalStepRenderer renderer = new TerminalStepRenderer();
@@ -1486,9 +1540,9 @@ public class JwCodeApplication implements AutoCloseable {
             if (result.isSuccess()) {
                 String content = renderer.getContent();
                 if (content != null && !content.trim().isEmpty()) {
-                    System.out.println("\n" + content + "\n");
+                    System.err.println("\n" + content + "\n");
                 } else {
-                    System.out.println("\n(空响应)\n");
+                    System.err.println("\n(空响应)\n");
                 }
             } else {
                 System.err.println("\n错误: " + result.getErrorMessage() + "\n");
@@ -1510,20 +1564,20 @@ public class JwCodeApplication implements AutoCloseable {
 
         @Override
         public void onStepStart(String stepName, String description) {
-            System.out.println(CliLogger.CYAN + "▶ " + stepName + CliLogger.RESET);
+            System.err.println(CliLogger.CYAN + "▶ " + stepName + CliLogger.RESET);
             if (description != null && !description.isEmpty()) {
-                System.out.println(CliLogger.GRAY + "  " + description + CliLogger.RESET);
+                System.err.println(CliLogger.GRAY + "  " + description + CliLogger.RESET);
             }
         }
 
         @Override
         public void onStepThinking(String stepName, String thought) {
-            System.out.println(CliLogger.BLUE + "  💭 " + thought + CliLogger.RESET);
+            System.err.println(CliLogger.BLUE + "  💭 " + thought + CliLogger.RESET);
         }
 
         @Override
         public void onStepAction(String stepName, String action) {
-            System.out.println(CliLogger.YELLOW + "  ⚡ " + action + CliLogger.RESET);
+            System.err.println(CliLogger.YELLOW + "  ⚡ " + action + CliLogger.RESET);
         }
 
         @Override
@@ -1536,8 +1590,8 @@ public class JwCodeApplication implements AutoCloseable {
                 printedToolCalls.add(key);
                 String args = toolCallAccumulators.get(key).toString();
                 String name = toolCallNames.getOrDefault(key, "Unknown");
-                System.out.println(CliLogger.MAGENTA + "    🔧 " + name + CliLogger.RESET);
-                System.out.println(CliLogger.GRAY + "      请求: " + args + CliLogger.RESET);
+                System.err.println(CliLogger.MAGENTA + "    🔧 " + name + CliLogger.RESET);
+                System.err.println(CliLogger.GRAY + "      请求: " + args + CliLogger.RESET);
             }
         }
 
@@ -1545,14 +1599,14 @@ public class JwCodeApplication implements AutoCloseable {
         public void onToolResult(String toolName, String result) {
             String preview = result != null && result.length() > 300
                 ? result.substring(0, 300) + "..." : result;
-            System.out.println(CliLogger.GREEN + "      ✅ 结果: " + preview + CliLogger.RESET);
+            System.err.println(CliLogger.GREEN + "      ✅ 结果: " + preview + CliLogger.RESET);
         }
 
         @Override
         public void onStepComplete(String stepName, String result) {
-            System.out.println(CliLogger.GREEN + "  ✓ " + stepName + CliLogger.RESET);
+            System.err.println(CliLogger.GREEN + "  ✓ " + stepName + CliLogger.RESET);
             if ("LLM查询".equals(stepName)) {
-                System.out.println();
+                System.err.println();
             }
         }
 
@@ -1602,6 +1656,11 @@ public class JwCodeApplication implements AutoCloseable {
      * 主入口
      */
     public static void main(String[] args) {
+        // 设置 UTF-8 编码，确保 Windows 终端正确显示中文
+        System.setProperty("file.encoding", "UTF-8");
+        System.setProperty("sun.stdout.encoding", "UTF-8");
+        System.setProperty("sun.stderr.encoding", "UTF-8");
+
         // 安装 JUL → SLF4J 桥接，统一日志框架
         com.jwcode.core.log.LoggingBridge.install();
 

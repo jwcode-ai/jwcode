@@ -1,0 +1,227 @@
+# ============================================================
+# 🟡 中等任务集 — 能力评测
+# 多步操作，多工具链式调用，验证编排能力
+# ============================================================
+tasks:
+
+  - id: MEDIUM_001
+    name: "创建 Java 测试类骨架"
+    description: "在测试目录下创建一个 JUnit 5 测试类骨架"
+    difficulty: MEDIUM
+    capability: tool_call
+    userPrompt: "在 jwcode-core/src/test/java/com/jwcode/core/eval/ 目录下创建一个名为 ExampleEvalTest.java 的 JUnit 5 测试类，包含一个基本的 @Test 方法"
+    acceptanceChecks:
+      - type: FILE_EXISTS
+        params: { path: "jwcode-core/src/test/java/com/jwcode/core/eval/ExampleEvalTest.java" }
+      - type: FILE_CONTENT_CONTAINS
+        params: { path: "jwcode-core/src/test/java/com/jwcode/core/eval/ExampleEvalTest.java", substring: "@Test" }
+      - type: FILE_CONTENT_CONTAINS
+        params: { path: "jwcode-core/src/test/java/com/jwcode/core/eval/ExampleEvalTest.java", substring: "class ExampleEvalTest" }
+    timeoutSeconds: 120
+    aiEvalEnabled: false
+    skipInMockMode: true
+    tags: [file, java, test]
+
+  - id: MEDIUM_002
+    name: "统计代码行数"
+    description: "统计 jwcode-core 模块的 Java 代码行数，按包分组"
+    difficulty: MEDIUM
+    capability: code_understand
+    userPrompt: "统计 jwcode-core/src/main/java 目录下所有 .java 文件的代码行数，按顶级包分组输出统计结果"
+    acceptanceChecks:
+      - type: DIR_EXISTS
+        params: { path: "jwcode-core/src/main/java" }
+    timeoutSeconds: 120
+    aiEvalEnabled: false
+    tags: [code, analysis, statistics]
+
+  - id: MEDIUM_003
+    name: "查找未使用的导入"
+    description: "分析 Java 文件中可能未使用的 import 语句"
+    difficulty: MEDIUM
+    capability: code_understand
+    userPrompt: "分析 jwcode-core 模块中任意 3 个 Java 文件，检查是否有未使用的 import 语句，输出报告"
+    acceptanceChecks:
+      - type: FILE_CONTENT_CONTAINS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/tool/input/TodoItem.java", substring: "import" }
+      - type: COMMAND_EXIT_CODE_ZERO
+        params: { command: "findstr /n \"import\" jwcode-core\\src\\main\\java\\com\\jwcode\\core\\tool\\input\\TodoItem.java" }
+    timeoutSeconds: 180
+    aiEvalEnabled: true
+    tags: [code, analysis, quality]
+
+  - id: MEDIUM_004
+    name: "文件内容替换"
+    description: "在文件中查找并替换指定文本"
+    difficulty: MEDIUM
+    capability: tool_call
+    userPrompt: "在 jwcode-core/src/main/java/com/jwcode/core/eval/ 目录下创建一个 Config.java 文件，包含一个 CONFIG_VERSION 常量值为 '1.0.0'，然后将版本号修改为 '2.0.0'"
+    acceptanceChecks:
+      - type: FILE_EXISTS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/eval/Config.java" }
+      - type: FILE_CONTENT_CONTAINS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/eval/Config.java", substring: "2.0.0" }
+      - type: FILE_CONTENT_CONTAINS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/eval/Config.java", substring: "CONFIG_VERSION" }
+    timeoutSeconds: 180
+    aiEvalEnabled: false
+    skipInMockMode: true
+    tags: [file, edit, replace]
+
+  - id: MEDIUM_005
+    name: "多文件批量操作"
+    description: "批量创建多个相关文件"
+    difficulty: MEDIUM
+    capability: tool_call
+    userPrompt: "在 jwcode-core/src/main/java/com/jwcode/core/eval/model/ 目录下创建三个 Java 类：User.java（包含 id、name 字段）、Order.java（包含 id、userId、amount 字段）、Product.java（包含 id、title、price 字段），每个类都要有构造器、getter 和 setter"
+    acceptanceChecks:
+      - type: FILE_EXISTS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/eval/model/User.java" }
+      - type: FILE_EXISTS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/eval/model/Order.java" }
+      - type: FILE_EXISTS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/eval/model/Product.java" }
+      - type: FILE_CONTENT_CONTAINS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/eval/model/User.java", substring: "class User" }
+      - type: FILE_CONTENT_CONTAINS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/eval/model/Order.java", substring: "class Order" }
+      - type: FILE_CONTENT_CONTAINS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/eval/model/Product.java", substring: "class Product" }
+    timeoutSeconds: 120
+    aiEvalEnabled: false
+    skipInMockMode: true
+    tags: [file, batch, model]
+
+  - id: MEDIUM_006
+    name: "Git 分支信息查询"
+    description: "查询当前 Git 仓库的分支信息"
+    difficulty: MEDIUM
+    capability: tool_call
+    userPrompt: "检查当前项目是否是 Git 仓库，如果是，告诉我当前所在分支和最近的 3 条提交记录"
+    acceptanceChecks:
+      - type: COMMAND_EXIT_CODE_ZERO
+        params: { command: "git rev-parse --is-inside-work-tree" }
+    timeoutSeconds: 120
+    aiEvalEnabled: false
+    tags: [git, info]
+
+  - id: MEDIUM_007
+    name: "模块结构验证"
+    description: "验证 Maven 模块的目录结构"
+    difficulty: MEDIUM
+    capability: tool_call
+    userPrompt: "检查 jwcode-common 模块的目录结构，确认 src/main/java 和 pom.xml 存在"
+    acceptanceChecks:
+      - type: DIR_EXISTS
+        params: { path: "jwcode-common/src/main/java" }
+      - type: FILE_EXISTS
+        params: { path: "jwcode-common/pom.xml" }
+    timeoutSeconds: 120
+    aiEvalEnabled: false
+    tags: [maven, structure, build]
+
+  - id: MEDIUM_008
+    name: "配置信息查询"
+    description: "读取项目配置文件"
+    difficulty: MEDIUM
+    capability: config_system
+    userPrompt: "读取 jwcode-core/pom.xml 文件，找到 jwcode-core 的 artifactId 和对 jwcode-common 的依赖版本"
+    acceptanceChecks:
+      - type: FILE_CONTENT_CONTAINS
+        params: { path: "jwcode-core/pom.xml", substring: "jwcode-common" }
+    timeoutSeconds: 120
+    aiEvalEnabled: false
+    tags: [config, read, maven]
+
+  - id: MEDIUM_009
+    name: "会话管理操作"
+    description: "创建和查询会话信息"
+    difficulty: MEDIUM
+    capability: session_mgmt
+    userPrompt: "查看当前会话信息，包括会话 ID、工作目录和消息数量"
+    acceptanceChecks:
+      - type: DIR_EXISTS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/session" }
+    timeoutSeconds: 120
+    aiEvalEnabled: false
+    tags: [session, info]
+
+  - id: MEDIUM_010
+    name: "搜索代码索引"
+    description: "搜索项目中的类定义"
+    difficulty: MEDIUM
+    capability: search_index
+    userPrompt: "在 jwcode-core 模块中搜索所有实现了 Command 接口的类，列出完整类名"
+    acceptanceChecks:
+      - type: DIR_EXISTS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/command" }
+    timeoutSeconds: 180
+    aiEvalEnabled: false
+    tags: [search, code, index]
+
+  # ============================================================
+  # LLMQueryEngine 迭代优化 — 验证无进展检测和重复工具检测
+  # ============================================================
+
+  - id: MEDIUM_011
+    name: "LLMQueryEngine 无进展检测"
+    description: "验证连续仅工具调用无文本回复时自动终止"
+    difficulty: MEDIUM
+    capability: error_resilience
+    userPrompt: "请连续执行 20 次 BashTool 执行 'echo hello' 命令，每次只执行命令不输出任何分析文字，看看系统能否自动检测到停滞并终止"
+    acceptanceChecks:
+      - type: DIR_EXISTS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/llm" }
+      - type: FILE_CONTENT_CONTAINS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/llm/LLMQueryEngine.java", substring: "consecutiveToolOnlyRounds" }
+    timeoutSeconds: 120
+    aiEvalEnabled: false
+    tags: [llm, stagnation, optimization]
+
+  - id: MEDIUM_012
+    name: "LLMQueryEngine 重复工具检测"
+    description: "验证重复调用相同工具集时注入干预提示"
+    difficulty: MEDIUM
+    capability: error_resilience
+    userPrompt: "请反复使用 FileReadTool 读取同一个文件（pom.xml）8 次，每次读取后不要做任何其他操作，看看系统是否会检测到重复模式并给出提示"
+    acceptanceChecks:
+      - type: DIR_EXISTS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/llm" }
+      - type: FILE_CONTENT_CONTAINS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/llm/LLMQueryEngine.java", substring: "repeatedToolPatternCount" }
+    timeoutSeconds: 120
+    aiEvalEnabled: false
+    tags: [llm, repeat, optimization]
+
+  - id: MEDIUM_013
+    name: "[FINISH] 标记快速结束"
+    description: "验证任务完成后正确输出 [FINISH] 标记结束对话"
+    difficulty: MEDIUM
+    capability: tool_call
+    userPrompt: "请在 jwcode-core/src/main/java/com/jwcode/core/eval/ 目录下创建一个 Readme.java 文件，内容为 '// Done'，然后立即输出 [FINISH] 结束，不要在 [FINISH] 后继续调用任何工具"
+    acceptanceChecks:
+      - type: FILE_EXISTS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/eval/Readme.java" }
+      - type: FILE_CONTENT_CONTAINS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/eval/Readme.java", substring: "Done" }
+    timeoutSeconds: 60
+    aiEvalEnabled: false
+    skipInMockMode: true
+    tags: [llm, finish, optimization]
+
+  - id: MEDIUM_014
+    name: "LLMQueryEngine Token 预算保护"
+    description: "验证 Token 预算耗尽时自动触发上下文压缩并继续"
+    difficulty: MEDIUM
+    capability: error_resilience
+    userPrompt: "请先读取 jwcode-core/src/main/java/com/jwcode/core/llm/LLMQueryEngine.java 文件的前 50 行，然后告诉我文件中是否包含 'tokenBudget' 和 'COMPACT_COOLDOWN_MS' 这两个字段"
+    acceptanceChecks:
+      - type: DIR_EXISTS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/llm" }
+      - type: FILE_CONTENT_CONTAINS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/llm/LLMQueryEngine.java", substring: "tokenBudget" }
+      - type: FILE_CONTENT_CONTAINS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/llm/LLMQueryEngine.java", substring: "COMPACT_COOLDOWN_MS" }
+    timeoutSeconds: 60
+    aiEvalEnabled: false
+    tags: [llm, token, optimization]

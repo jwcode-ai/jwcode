@@ -11,6 +11,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
@@ -40,6 +41,12 @@ public class TaskExecutionAgent {
 
     private static final Logger logger = Logger.getLogger(TaskExecutionAgent.class.getName());
 
+    // 线程池配置：IO 密集型（子Agent LLM调用），核心=CPU*2，最大=CPU*4，有界队列
+    private static final int EXEC_CORE_POOL_SIZE = Math.max(4, Runtime.getRuntime().availableProcessors() * 2);
+    private static final int EXEC_MAX_POOL_SIZE = Math.max(8, Runtime.getRuntime().availableProcessors() * 4);
+    private static final int EXEC_QUEUE_CAPACITY = 50;
+    private static final long EXEC_KEEPALIVE_SEC = 120;
+
     private final A2AFacade a2aFacade;
     private final PlanTaskBroadcaster broadcaster;
     private final String sessionId;
@@ -67,8 +74,28 @@ public class TaskExecutionAgent {
         this.broadcaster = broadcaster;
         this.sessionId = sessionId;
         this.memoryAgent = memoryAgent;
-        this.executorService = Executors.newFixedThreadPool(
-            Math.max(2, Runtime.getRuntime().availableProcessors()));
+        // IO 密集型线程池：核心 CPU*2，最大 CPU*4，有界队列 + 降级策略
+        this.executorService = new ThreadPoolExecutor(
+            EXEC_CORE_POOL_SIZE,
+            EXEC_MAX_POOL_SIZE,
+            EXEC_KEEPALIVE_SEC, TimeUnit.SECONDS,
+            new LinkedBlockingQueue<>(EXEC_QUEUE_CAPACITY),
+            new ThreadFactory() {
+                private final AtomicInteger counter = new AtomicInteger(0);
+                @Override
+                public Thread newThread(Runnable r) {
+                    Thread t = new Thread(r, "task-exec-" + counter.getAndIncrement());
+                    t.setDaemon(true);
+                    return t;
+                }
+            },
+            (r, executor) -> {
+                // 超载降级：记录告警，降级为同步串行执行当前批次
+                logger.warning("[TaskExecutionAgent] 线程池已满 (core=" + EXEC_CORE_POOL_SIZE
+                    + ", max=" + EXEC_MAX_POOL_SIZE + "), 降级为同步执行");
+                r.run();
+            }
+        );
         this.sharedContext = new ConcurrentHashMap<>();
     }
 
@@ -204,16 +231,25 @@ public class TaskExecutionAgent {
             // 从剩余列表中移除就绪任务
             remaining.removeAll(ready);
 
-            // 并行执行就绪任务
+            // 并行执行就绪任务（orTimeout 防止单任务卡死整个批次）
             List<CompletableFuture<Void>> futures = new ArrayList<>();
             for (StructuredTask task : ready) {
                 CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
                     executeSingleTask(task, goal, result);
-                }, executorService);
+                }, executorService)
+                .orTimeout(600, TimeUnit.SECONDS)  // 单任务 10 分钟超时
+                .exceptionally(ex -> {
+                    logger.warning("[TaskExecutionAgent] 并发任务超时或失败: " + task.getId()
+                        + " - " + ex.getMessage());
+                    task.setStatus("failed");
+                    task.setError("Timeout or error: " + ex.getMessage());
+                    result.addFailure(task.getId(), ex.getMessage());
+                    return null;
+                });
                 futures.add(future);
             }
 
-            // 等待当前批次所有并行任务完成
+            // 等待当前批次所有并行任务完成（异常已被 exceptionally 吞掉，不会抛异常）
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
         }
     }

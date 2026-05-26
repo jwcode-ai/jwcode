@@ -1,7 +1,8 @@
 import { memo, useState, useMemo } from 'react';
 import { ChevronDown, ChevronUp, ListChecks } from 'lucide-react';
-import { PlanTask } from '../../types';
+import { SessionTask } from '../../types';
 import { usePlanStore } from '../../stores/planStore';
+import { useSessionStore } from '../../stores/sessionStore';
 import { TaskTree } from '../Plan/TaskTree';
 
 const AGENT_ICONS: Record<string, string> = {
@@ -34,35 +35,38 @@ export const SessionTaskBoard = memo(function SessionTaskBoard({ sessionId }: Se
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<TaskViewMode>('list');
 
-  const plan = usePlanStore((s) => s.plansBySession[sessionId]);
+  // planStore 只用于控制显隐（phase），任务数据统一从 sessionStore 读取
   const phase = usePlanStore((s) => s.planPhasesBySession[sessionId] || 'idle');
+  const tasks = useSessionStore((s) => s.tasksBySession[sessionId] || []);
 
-  const tasks = plan?.tasks || [];
-  const hasActivePlan = phase !== 'idle' && tasks.length > 0;
+  // 过滤掉已结束的 plan（result/error/idle），只在活跃阶段显示看板
+  const isTerminalPhase = phase === 'result' || phase === 'error' || phase === 'idle';
+  const hasActivePlan = !isTerminalPhase && tasks.length > 0;
 
   // 统计
   const stats = useMemo(() => {
     const total = tasks.length;
-    const completed = tasks.filter((t) => t.status === 'completed').length;
-    const running = tasks.filter((t) => t.status === 'running').length;
-    const failed = tasks.filter((t) => t.status === 'failed').length;
+    const completed = tasks.filter((t) => t.planStatus === 'completed' || t.completed).length;
+    const running = tasks.filter((t) => t.planStatus === 'running').length;
+    const failed = tasks.filter((t) => t.planStatus === 'failed').length;
     const progress = total > 0 ? Math.round((completed / total) * 100) : 0;
     return { total, completed, running, failed, progress };
   }, [tasks]);
 
   // 按状态分组
   const grouped = useMemo(() => {
-    const groups: Record<string, PlanTask[]> = {
+    const groups: Record<string, SessionTask[]> = {
       pending: [],
       running: [],
       completed: [],
       failed: [],
     };
     tasks.forEach((t) => {
-      const key = t.status === 'skipped' ? 'pending' : t.status;
+      const status = t.planStatus || 'pending';
+      const key = status === 'skipped' ? 'pending' : status;
       if (groups[key]) groups[key].push(t);
     });
-    return groups as { pending: PlanTask[]; running: PlanTask[]; completed: PlanTask[]; failed: PlanTask[] };
+    return groups as { pending: SessionTask[]; running: SessionTask[]; completed: SessionTask[]; failed: SessionTask[] };
   }, [tasks]);
 
   if (!hasActivePlan) return null;
@@ -152,7 +156,7 @@ export const SessionTaskBoard = memo(function SessionTaskBoard({ sessionId }: Se
             {viewMode === 'tree' ? (
               /* 树形视图 */
               <TaskTree
-                tasks={tasks}
+                tasks={tasks as any}
                 activeTaskId={selectedTaskId}
                 onTaskClick={(task) => setSelectedTaskId(selectedTaskId === task.id ? null : task.id)}
               />
@@ -225,15 +229,16 @@ export const SessionTaskBoard = memo(function SessionTaskBoard({ sessionId }: Se
 
 // 单个任务项
 interface TaskItemProps {
-  task: PlanTask;
+  task: SessionTask;
   isSelected: boolean;
   onClick: () => void;
   formatDuration: (start?: number, end?: number) => string;
 }
 
 const TaskItem = memo(function TaskItem({ task, isSelected, onClick, formatDuration }: TaskItemProps) {
-  const statusCfg = STATUS_CONFIG[task.status] || STATUS_CONFIG.pending;
-  const agentIcon = AGENT_ICONS[task.agentType] || AGENT_ICONS.default;
+  const status = task.planStatus || 'pending';
+  const statusCfg = STATUS_CONFIG[status] || STATUS_CONFIG.pending;
+  const agentIcon = AGENT_ICONS[task.agentType || 'default'] || AGENT_ICONS.default;
 
   return (
     <div
@@ -242,7 +247,7 @@ const TaskItem = memo(function TaskItem({ task, isSelected, onClick, formatDurat
         rounded-lg border p-2 cursor-pointer transition-all
         ${statusCfg.bg} border-dark-border
         ${isSelected ? 'ring-1 ring-accent-blue' : 'hover:border-dark-muted/30'}
-        ${task.status === 'running' ? 'border-l-2 border-l-accent-blue' : 'border-l-2 border-l-transparent'}
+        ${status === 'running' ? 'border-l-2 border-l-accent-blue' : 'border-l-2 border-l-transparent'}
       `}
     >
       <div className="flex items-center gap-2">
@@ -253,14 +258,14 @@ const TaskItem = memo(function TaskItem({ task, isSelected, onClick, formatDurat
             <span className={`text-[10px] ${statusCfg.color} shrink-0`}>{statusCfg.icon}</span>
           </div>
           <div className="flex items-center gap-2 text-[10px] text-dark-muted">
-            <span>{task.agentType}</span>
+            <span>{task.agentType || 'task'}</span>
             {task.startedAt && <span>⏱ {formatDuration(task.startedAt, task.completedAt)}</span>}
           </div>
         </div>
       </div>
 
       {/* Progress bar for running tasks */}
-      {task.status === 'running' && task.progress !== undefined && (
+      {status === 'running' && task.progress !== undefined && (
         <div className="mt-1.5">
           <div className="w-full h-1 bg-dark-bg rounded-full overflow-hidden">
             <div
@@ -277,13 +282,13 @@ const TaskItem = memo(function TaskItem({ task, isSelected, onClick, formatDurat
           {task.description && (
             <p className="text-[10px] text-dark-muted">{task.description}</p>
           )}
-          {task.status === 'failed' && task.error && (
+          {task.planStatus === 'failed' && task.error && (
             <p className="text-[10px] text-red-400">❌ {task.error}</p>
           )}
           {task.result && (
             <p className="text-[10px] text-green-400">✅ {task.result}</p>
           )}
-          {task.dependencies.length > 0 && (
+          {task.dependencies && task.dependencies.length > 0 && (
             <p className="text-[10px] text-dark-muted">🔗 依赖 {task.dependencies.length} 个任务</p>
           )}
         </div>

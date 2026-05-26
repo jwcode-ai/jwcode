@@ -14,6 +14,9 @@ import java.util.*;
  */
 public class JLine3Terminal implements AutoCloseable {
     
+    private static volatile JLine3Terminal instance;
+    private volatile boolean interactive = false;
+    
     private final Terminal terminal;
     private final LineReader lineReader;
     private final History history;
@@ -35,6 +38,31 @@ public class JLine3Terminal implements AutoCloseable {
         
         // 初始化命令补全
         this.commandCompletions = initializeCompletions();
+        
+        // 注册为全局实例
+        instance = this;
+    }
+    
+    /**
+     * 获取当前 JLine3Terminal 实例（可能为 null）。
+     */
+    public static JLine3Terminal getInstance() {
+        return instance;
+    }
+    
+    /**
+     * 标记终端进入/退出交互模式。
+     * 交互模式下，后台日志将通过 printAbove 输出，避免干扰提示符。
+     */
+    public void setInteractive(boolean interactive) {
+        this.interactive = interactive;
+    }
+    
+    /**
+     * 检查终端是否处于交互模式。
+     */
+    public boolean isInteractive() {
+        return interactive;
     }
     
     /**
@@ -157,6 +185,33 @@ public class JLine3Terminal implements AutoCloseable {
     public void println() {
         terminal.writer().println();
         terminal.flush();
+    }
+    
+    /**
+     * 在输入行上方打印消息（不干扰当前输入）。
+     * <p>使用 JLine3 的 printAbove 机制，在用户输入行上方输出日志，
+     * 然后自动重绘提示符和当前输入内容。适用于后台任务日志输出。</p>
+     *
+     * @param message 要打印的消息
+     */
+    public void printAbove(String message) {
+        try {
+            lineReader.printAbove(message);
+        } catch (Exception e) {
+            // 降级：直接输出到终端
+            terminal.writer().println(message);
+            terminal.flush();
+        }
+    }
+    
+    /**
+     * 在输入行上方打印格式化消息。
+     *
+     * @param format 消息格式
+     * @param args   格式化参数
+     */
+    public void printAbove(String format, Object... args) {
+        printAbove(String.format(format, args));
     }
     
     /**

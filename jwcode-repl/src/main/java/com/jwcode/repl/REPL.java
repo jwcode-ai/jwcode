@@ -74,6 +74,9 @@ public class REPL implements AutoCloseable {
     public REPL() throws IOException {
         this.terminal = TerminalBuilder.builder()
                 .name("JWCode")
+                .system(true)
+                .jna(true)
+                .encoding(java.nio.charset.StandardCharsets.UTF_8)
                 .build();
         
         this.lineReader = LineReaderBuilder.builder()

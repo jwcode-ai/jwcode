@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jwcode.core.tool.context.ToolExecutionContext;
+import com.jwcode.core.service.FileHistoryService;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -18,6 +19,9 @@ import java.util.function.Consumer;
  * FileWriteTool - 文件写入工具
  */
 public class FileWriteTool implements Tool<FileWriteTool.Input, FileWriteTool.Output, FileWriteTool.Progress> {
+    
+    // FileHistoryService 用于记录文件变更历史
+    private static final FileHistoryService fileHistoryService = new FileHistoryService();
     
     private static final ObjectMapper MAPPER = new ObjectMapper();
     
@@ -40,10 +44,12 @@ public class FileWriteTool implements Tool<FileWriteTool.Input, FileWriteTool.Ou
                - path 参数必须是完整的文件路径（包含文件名和扩展名），例如："D:/test.txt"
                - 不要只传入目录路径，必须包含文件名
                - content 参数是要写入的文件内容
+               - reason 参数是可选的编辑原因说明
                - 如果父目录不存在，会自动创建
                
                示例：
                - 正确：{"path": "D:/test.txt", "content": "Hello World"}
+               - 正确：{"path": "D:/test.txt", "content": "Hello World", "reason": "创建测试文件"}
                - 错误：{"path": "D:/"} （缺少文件名）
                """;
     }
@@ -56,7 +62,8 @@ public class FileWriteTool implements Tool<FileWriteTool.Input, FileWriteTool.Ou
                  "type": "object",
                  "properties": {
                    "path": {"type": "string", "description": "完整的文件路径（包含文件名和扩展名，例如：D:/test.txt）"},
-                   "content": {"type": "string", "description": "文件内容"}
+                   "content": {"type": "string", "description": "文件内容"},
+                   "reason": {"type": "string", "description": "编辑原因（可选）"}
                  },
                  "required": ["path", "content"]
                }
@@ -162,7 +169,13 @@ public class FileWriteTool implements Tool<FileWriteTool.Input, FileWriteTool.Ou
                     Files.createDirectories(parentDir);
                 }
                 
+                // 记录文件变更历史
+                String oldContent = Files.exists(filePath) ? Files.readString(filePath) : "";
                 Files.writeString(filePath, input.content, StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+                String historyReason = input.reason != null && !input.reason.isEmpty()
+                    ? "FileWriteTool: " + input.reason
+                    : "FileWriteTool: write";
+                fileHistoryService.recordFileChange(filePath.toString(), oldContent, input.content, historyReason);
                 long size = Files.size(filePath);
                 
                 Output output = new Output();
@@ -232,12 +245,19 @@ public class FileWriteTool implements Tool<FileWriteTool.Input, FileWriteTool.Ou
         public String path;
         public String file_path;
         public String content;
+        public String reason;
         
         public Input() {}
         
         public Input(String path, String content) {
             this.path = path;
             this.content = content;
+        }
+        
+        public Input(String path, String content, String reason) {
+            this.path = path;
+            this.content = content;
+            this.reason = reason;
         }
         
         /**

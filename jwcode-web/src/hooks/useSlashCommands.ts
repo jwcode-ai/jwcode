@@ -124,17 +124,6 @@ export function useSlashCommands(options: UseSlashCommandsOptions) {
       },
     },
     {
-      id: 'tasks',
-      name: 'tasks',
-      description: '切换到任务面板',
-      icon: '📋',
-      local: true,
-      action: () => {
-        setActiveTab('tasks');
-        return { success: true, message: '已切换到任务面板' };
-      },
-    },
-    {
       id: 'settings',
       name: 'settings',
       description: '切换到设置面板',

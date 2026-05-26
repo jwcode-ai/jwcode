@@ -21,8 +21,8 @@ public class ProgressIndicator {
         animationThread = new Thread(() -> {
             while (running) {
                 String frame = frames[frameIndex % frames.length];
-                System.out.print("\r" + CliLogger.CYAN + frame + " " + message + CliLogger.RESET);
-                System.out.flush();
+                System.err.print("\r" + CliLogger.CYAN + frame + " " + message + CliLogger.RESET);
+                System.err.flush();
                 
                 frameIndex++;
                 try {
@@ -51,8 +51,8 @@ public class ProgressIndicator {
             }
         }
         // 清除当前行
-        System.out.print("\r" + " ".repeat(80) + "\r");
-        System.out.flush();
+        System.err.print("\r" + " ".repeat(80) + "\r");
+        System.err.flush();
     }
     
     /**

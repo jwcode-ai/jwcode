@@ -1,5 +1,7 @@
 package com.jwcode.web;
 
+import com.jwcode.core.config.JwcodeConfig;
+import com.jwcode.core.config.YamlConfigLoader;
 import com.jwcode.core.index.CodebaseIndexer;
 import com.jwcode.core.index.EmbeddingService;
 import com.jwcode.core.index.IndexConfig;
@@ -130,15 +132,18 @@ public class WebServer {
     /**
      * 初始化代码库语义搜索索引 — CodebaseIndexer + SemanticSearchTool。
      *
-     * <p>使用本地 TF-IDF 风格 fallback embedding（无需外部 API），
-     * 后续可升级为调用远程 embedding API。</p>
+     * <p>优先从 YAML 配置读取 provider 创建 EmbeddingService（使用模型池），
+     * 未配置 API key 时自动降级为本地 TF-IDF 风格 fallback embedding。</p>
      */
     private void initializeCodebaseIndexer() {
         try {
             String workingDir = System.getProperty("user.dir");
             java.nio.file.Path workspaceRoot = java.nio.file.Path.of(workingDir).toAbsolutePath().normalize();
             IndexConfig indexConfig = IndexConfig.forWorkspace(workspaceRoot);
-            EmbeddingService embeddingService = EmbeddingService.createLocalFallback(256);
+
+            // 从 YAML 配置读取 provider，构建 EmbeddingService（模型池模式）
+            EmbeddingService embeddingService = createEmbeddingServiceFromConfig();
+
             this.codebaseIndexer = new CodebaseIndexer(workspaceRoot, indexConfig, embeddingService);
 
             // 注册 SemanticSearchTool，使子 Agent 可用自然语言搜索代码库
@@ -168,6 +173,87 @@ public class WebServer {
             logger.warning("代码库索引初始化失败（语义搜索不可用）: " + e.getMessage());
             this.codebaseIndexer = null;
         }
+    }
+
+    /**
+     * 从 YAML 配置创建 EmbeddingService。
+     *
+     * <p>优先级：</p>
+     * <ol>
+     *   <li>YAML 配置中有 provider 且配置了 api-keys → 使用模型池模式</li>
+     *   <li>环境变量 OPENAI_API_KEY → 使用单 key 模式</li>
+     *   <li>均未配置 → 本地 fallback</li>
+     * </ol>
+     */
+    private EmbeddingService createEmbeddingServiceFromConfig() {
+        // 1. 尝试从 YAML 配置读取 provider
+        try {
+            YamlConfigLoader configLoader = YamlConfigLoader.getInstance();
+            JwcodeConfig config = configLoader.getConfig();
+            JwcodeConfig.ProviderConfig provider = config.getDefaultProvider();
+
+            if (provider != null
+                && provider.getApiKeys() != null
+                && !provider.getApiKeys().isEmpty()
+                && provider.getBaseUrl() != null
+                && !provider.getBaseUrl().isBlank()) {
+
+                // 检查 provider 是否配置了 embedding 模型
+                boolean hasEmbeddingModel = false;
+                if (provider.getModels() != null) {
+                    for (JwcodeConfig.ModelDefinition model : provider.getModels()) {
+                        if (model.getId() != null && model.getId().toLowerCase().contains("embedding")) {
+                            hasEmbeddingModel = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (hasEmbeddingModel) {
+                    String endpoint = provider.getBaseUrl() + "/v1/embeddings";
+                    int dimension = config.getSettings() != null
+                        && config.getSettings().getSearch() != null
+                        && config.getSettings().getSearch().getEmbeddingDimension() > 0
+                        ? config.getSettings().getSearch().getEmbeddingDimension() : 256;
+
+                    String embeddingModel = "text-embedding-ada-002";
+                    for (JwcodeConfig.ModelDefinition model : provider.getModels()) {
+                        if (model.getId() != null && model.getId().toLowerCase().contains("embedding")) {
+                            embeddingModel = model.getId();
+                            break;
+                        }
+                    }
+
+                    logger.info("使用 YAML 配置的 provider 创建 EmbeddingService: "
+                        + "provider=" + (config.getDefaultProviderName() != null ? config.getDefaultProviderName() : "default")
+                        + ", endpoint=" + endpoint
+                        + ", model=" + embeddingModel
+                        + ", keys=" + provider.getApiKeys().size());
+
+                    return new EmbeddingService(provider, endpoint, embeddingModel, dimension);
+                }
+
+                // provider 没有配置 embedding 模型（如 DeepSeek），跳过 API 模式
+                logger.info("Provider 未配置 embedding 模型，跳过 API 调用，使用本地 fallback");
+            }
+        } catch (Exception e) {
+            logger.warning("从 YAML 配置创建 EmbeddingService 失败: " + e.getMessage()
+                + "，将尝试其他方式");
+        }
+
+        // 2. 尝试从环境变量读取
+        String envKey = System.getenv("OPENAI_API_KEY");
+        String envEndpoint = System.getenv("OPENAI_API_ENDPOINT");
+        if (envKey != null && !envKey.isBlank()) {
+            String endpoint = (envEndpoint != null && !envEndpoint.isBlank())
+                ? envEndpoint : "https://api.openai.com/v1/embeddings";
+            logger.info("使用环境变量 OPENAI_API_KEY 创建 EmbeddingService");
+            return new EmbeddingService(endpoint, envKey, "text-embedding-ada-002", 256);
+        }
+
+        // 3. 均未配置，使用本地 fallback
+        logger.info("未检测到 API key 配置，使用本地 fallback embedding（TF-IDF 风格）");
+        return EmbeddingService.createLocalFallback(256);
     }
     
     /**

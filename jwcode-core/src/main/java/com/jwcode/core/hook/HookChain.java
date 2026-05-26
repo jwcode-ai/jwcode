@@ -128,7 +128,10 @@ public class HookChain {
             // 5. 审计
             auditLog(context, result);
 
-            // 6. 短路：终止性决策
+            // 6. WebSocket 广播（前端实时展示 Hook 拦截事件）
+            HookEventBroadcaster.broadcast(context, result);
+
+            // 7. 短路：终止性决策
             if (result.getDecision().isTerminal()) {
                 logger.info("[HookChain] Short-circuit: " + executor.getName()
                     + " returned " + result.getDecision());

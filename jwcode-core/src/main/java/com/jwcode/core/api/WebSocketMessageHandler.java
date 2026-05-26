@@ -5,7 +5,9 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.jwcode.core.agent.EnhancedOrchestratorAgent;
 import com.jwcode.core.config.SystemPromptLoader;
+import com.jwcode.core.hook.HookApprovalManager;
 import com.jwcode.core.llm.LLMService;
+import com.jwcode.core.plan.PlanModeManager;
 import com.jwcode.core.llm.LLMQueryEngine;
 import com.jwcode.core.llm.LLMQueryEngine.EngineConfig;
 import com.jwcode.core.llm.LLMQueryEngine.QueryResult;
@@ -14,8 +16,8 @@ import com.jwcode.core.model.PlanTask;
 import com.jwcode.core.session.Session;
 import com.jwcode.core.session.SessionManager;
 import com.jwcode.core.tool.ToolExecutor;
-import com.jwcode.core.tool.ToolRegistry;
-
+import com.jwcode.core.tool.ToolRegistry;import com.jwcode.core.task.Task;
+import com.jwcode.core.task.TaskStatus;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -67,6 +69,9 @@ public class WebSocketMessageHandler {
         this.toolRegistry = toolRegistry;
         this.wsServer = wsServer;
         this.queryEngines = new ConcurrentHashMap<>();
+
+        // 设置 Hook 审批 WebSocket 广播
+        setupHookApprovalBroadcaster();
     }
 
     /**
@@ -91,12 +96,26 @@ public class WebSocketMessageHandler {
         switch (type) {
             case "plan":
                 return handlePlanMessage(session, message);
+            case "plan_confirm":
+                return handlePlanConfirm(session, message);
+            case "plan_refine":
+                return handlePlanRefine(session, message);
+            case "plan_mode_change":
+                return handlePlanModeChange(session, message);
             case "chat":
+                // Act 模式下走 Orchestrator 自动创建任务并执行
+                if (PlanModeManager.getInstance().isActMode()) {
+                    return handleActMessage(session, message);
+                }
                 return handleChatMessage(session, message);
             case "workspace":
                 return handleWorkspaceMessage(session, message);
             case "ping":
                 return CompletableFuture.completedFuture("{\"type\":\"pong\"}");
+            case "hook_allow":
+                return handleHookApproval(message, true);
+            case "hook_deny":
+                return handleHookApproval(message, false);
             default:
                 logger.warning("[WSHandler] Unknown message type: " + type);
                 return CompletableFuture.completedFuture(
@@ -105,16 +124,19 @@ public class WebSocketMessageHandler {
     }
 
     /**
-     * 处理 Plan 模式消息 — 通过 EnhancedOrchestratorAgent 进行意图分析、任务拆解、分配子Agent
+     * 处理 Plan 模式消息 — 两阶段流程的 Phase 1：仅规划，不执行。
      *
-     * <p>关键改进：在调用 Orchestrator 之前，先设置 sessionId 和 PlanTaskBroadcaster，
-     * 这样 Orchestrator 在执行子任务时能通过 WebSocket 实时广播任务状态到前端。</p>
+     * <p>此方法只做意图分析和任务拆解，生成 Plan 文本和任务树后，
+     * 通过 WebSocket 广播 plan_tasks + plan_complete(waiting_confirm)，
+     * 等待用户在前端确认后，再由 handlePlanConfirm 触发执行。</p>
+     *
+     * <p>关键改进：将原来的"规划+执行"一步完成拆分为"规划→确认→执行"两阶段，
+     * 符合 AGENTS.md 中 Plan/Act 模式的规范。</p>
      */
     private CompletableFuture<String> handlePlanMessage(Session session, String message) {
         Supplier<String> supplier = () -> {
             try {
                 // 0. 设置 Orchestrator 的 sessionId 和 PlanTaskBroadcaster
-                // 这样 Orchestrator 在执行子任务时能广播 plan_task_start/update/result 消息
                 orchestrator.setSessionId(session.getId());
                 orchestrator.setPlanTaskBroadcaster(PlanTaskBroadcaster.getInstance());
 
@@ -125,21 +147,35 @@ public class WebSocketMessageHandler {
                         "data", "开始分析用户请求..."
                 ));
 
-                // 2. 通过 Orchestrator 处理（意图分析 → 任务拆解 → 分配子Agent）
-                // Orchestrator 内部会通过 PlanTaskBroadcaster 广播 plan_task_start/update/result
-                String result = orchestrator.processInput(message);
+                // 2. 仅执行规划阶段（意图分析 → 任务拆解 → 生成计划文本 + 任务树）
+                //    不执行任何子任务，只生成计划
+                String planResult = orchestrator.processPlanOnly(message);
 
-                // 3. 通知前端：规划完成
+                // 3. 广播 plan_tasks — 发送完整的任务树到前端
+                //    EnhancedOrchestratorAgent.processPlanOnly 内部已通过
+                //    PlanTaskBroadcaster 广播 plan_thinking 和 plan_tasks
+                //    但需要确保 plan_tasks 已发送
+                List<PlanTask> taskTree = orchestrator.buildPlanTaskTree();
+                if (!taskTree.isEmpty()) {
+                    com.fasterxml.jackson.databind.ObjectMapper mapper =
+                        new com.fasterxml.jackson.databind.ObjectMapper();
+                    String tasksJson = mapper.writeValueAsString(taskTree);
+                    PlanTaskBroadcaster.getInstance().broadcastPlanTasks(session.getId(), tasksJson);
+                }
+
+                // 4. 通知前端：规划完成，等待用户确认
+                //    关键：带上 status: "waiting_confirm" 让前端显示确认按钮
                 broadcastToSession(session.getId(), Map.of(
                         "type", "plan_complete",
                         "sessionId", session.getId(),
-                        "data", result
+                        "status", "waiting_confirm",
+                        "data", planResult
                 ));
 
-                // 4. 将结果作为 assistant 消息添加到会话
-                session.addMessage(Message.createAssistantMessage(result));
+                // 5. 将计划文本作为 assistant 消息添加到会话（供用户预览）
+                session.addMessage(Message.createAssistantMessage(planResult));
 
-                return result;
+                return planResult;
 
             } catch (Exception e) {
                 logger.severe("[WSHandler] Plan processing failed: " + e.getMessage());
@@ -147,6 +183,293 @@ public class WebSocketMessageHandler {
                         "type", "plan_error",
                         "sessionId", session.getId(),
                         "data", "规划失败: " + e.getMessage()
+                ));
+                return "Error: " + e.getMessage();
+            }
+        };
+        return CompletableFuture.supplyAsync(supplier);
+    }
+
+    /**
+     * 处理 plan_refine 消息 — 用户完善计划后重新规划。
+     *
+     * <p>当用户在前端 PlanPanel 的确认区域输入补充说明并点击"完善计划"按钮后，
+     * 前端发送 plan_refine 消息到此方法。此方法复用 handlePlanMessage 的规划逻辑，
+     * 重新进行意图分析和任务拆解，生成新的 Plan 文本和任务树，
+     * 然后通过 WebSocket 广播 plan_tasks + plan_complete(waiting_confirm) 更新前端。</p>
+     */
+    private CompletableFuture<String> handlePlanRefine(Session session, String message) {
+        Supplier<String> supplier = () -> {
+            try {
+                // 提取用户补充的完善内容
+                String refineMessage = message;
+                try {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> msgMap = MAPPER.readValue(message, Map.class);
+                    if (msgMap.containsKey("message")) {
+                        refineMessage = (String) msgMap.get("message");
+                    }
+                } catch (Exception ignored) {}
+
+                // 通知前端：开始重新规划（完善中）
+                broadcastToSession(session.getId(), Map.of(
+                        "type", "plan_start",
+                        "sessionId", session.getId(),
+                        "data", "根据补充说明重新规划..."
+                ));
+
+                // 复用 handlePlanMessage 的核心逻辑：重新规划
+                // 将补充说明与原有 goal 合并作为新输入
+                List<Message> history = session.getMessages();
+                String originalGoal = "";
+                for (int i = history.size() - 1; i >= 0; i--) {
+                    Message msg = history.get(i);
+                    if ("user".equals(msg.getRole())) {
+                        originalGoal = msg.getTextContent();
+                        break;
+                    }
+                }
+                String combinedInput = originalGoal.isEmpty()
+                        ? refineMessage
+                        : originalGoal + "\n\n【补充说明】" + refineMessage;
+
+                // 设置 Orchestrator
+                orchestrator.setSessionId(session.getId());
+                orchestrator.setPlanTaskBroadcaster(PlanTaskBroadcaster.getInstance());
+
+                // 执行规划
+                String planResult = orchestrator.processPlanOnly(combinedInput);
+
+                // 广播 plan_tasks — 发送更新后的任务树
+                List<PlanTask> taskTree = orchestrator.buildPlanTaskTree();
+                if (!taskTree.isEmpty()) {
+                    com.fasterxml.jackson.databind.ObjectMapper mapper =
+                        new com.fasterxml.jackson.databind.ObjectMapper();
+                    String tasksJson = mapper.writeValueAsString(taskTree);
+                    PlanTaskBroadcaster.getInstance().broadcastPlanTasks(session.getId(), tasksJson);
+                }
+
+                // 广播 plan_complete — 通知前端规划完成，等待确认
+                broadcastToSession(session.getId(), Map.of(
+                        "type", "plan_complete",
+                        "sessionId", session.getId(),
+                        "status", "waiting_confirm",
+                        "data", planResult
+                ));
+
+                // 将更新后的计划文本添加到会话
+                session.addMessage(Message.createAssistantMessage(
+                        "【完善后的计划】\n" + planResult));
+
+                return planResult;
+
+            } catch (Exception e) {
+                logger.severe("[WSHandler] Plan refine failed: " + e.getMessage());
+                broadcastToSession(session.getId(), Map.of(
+                        "type", "plan_error",
+                        "sessionId", session.getId(),
+                        "data", "完善计划失败: " + e.getMessage()
+                ));
+                return "Error: " + e.getMessage();
+            }
+        };
+        return CompletableFuture.supplyAsync(supplier);
+    }
+
+    /**
+     * 处理 plan_confirm 消息 — 两阶段流程的 Phase 2：执行已确认的计划。
+     *
+     * <p>当用户在前端点击"确认执行"按钮后，前端发送 plan_confirm 消息到此方法。
+     * 此方法调用 EnhancedOrchestratorAgent.processConfirmedPlan() 执行已确认的计划。
+     * 执行前自动创建 Task（PENDING），执行中更新为 RUNNING，完成后更新为 COMPLETED。</p>
+     */
+    private CompletableFuture<String> handlePlanConfirm(Session session, String message) {
+        Supplier<String> supplier = () -> {
+            try {
+                // 0. 设置 Orchestrator 的 sessionId 和 PlanTaskBroadcaster
+                orchestrator.setSessionId(session.getId());
+                orchestrator.setPlanTaskBroadcaster(PlanTaskBroadcaster.getInstance());
+
+                // 0.5 自动创建 Task（PENDING 状态）
+                String goal = message;
+                try {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> msgMap = MAPPER.readValue(message, Map.class);
+                    if (msgMap.containsKey("goal")) {
+                        goal = (String) msgMap.get("goal");
+                    }
+                } catch (Exception ignored) {}
+
+                Task planTask = new Task();
+                planTask.setTitle("Plan: " + (goal.length() > 50 ? goal.substring(0, 50) + "..." : goal));
+                planTask.setDescription(goal);
+                planTask.setStatus(TaskStatus.PLANNED);
+                planTask.setPriority(5);
+                // 使用 TaskStore 持久化（如果有）
+                com.jwcode.core.task.TaskStore taskStore =
+                    com.jwcode.core.task.TaskStore.getInstance();
+                com.jwcode.core.task.Task created = taskStore.create(planTask);
+
+                // 广播 Task 创建
+                if (wsServer != null) {
+                    wsServer.broadcastTaskUpdate(created.getId(), "created", created);
+                }
+
+                // 1. 通知前端：开始执行
+                broadcastToSession(session.getId(), Map.of(
+                        "type", "plan_start",
+                        "sessionId", session.getId(),
+                        "data", "开始执行已确认的计划..."
+                ));
+
+                // 1.5 更新 Task 为 RUNNING
+                created.setStatus(TaskStatus.EXECUTING);
+                created.setStartedAt(java.time.LocalDateTime.now());
+                taskStore.update(created);
+                if (wsServer != null) {
+                    wsServer.broadcastTaskUpdate(created.getId(), "updated", created);
+                }
+
+                // 2. 获取当前 session 的 AI 回复（plan 文本）作为执行依据
+                List<Message> history = session.getMessages();
+                String aiPlanResponse = "";
+                for (int i = history.size() - 1; i >= 0; i--) {
+                    Message msg = history.get(i);
+                    if ("assistant".equals(msg.getRole())) {
+                        aiPlanResponse = msg.getTextContent();
+                        break;
+                    }
+                }
+
+                // 3. 执行已确认的计划
+                String result = orchestrator.processConfirmedPlan(aiPlanResponse, goal);
+
+                // 3.5 更新 Task 为 COMPLETED
+                created.setStatus(TaskStatus.COMPLETED);
+                created.setProgress(100);
+                created.setCompletedAt(java.time.LocalDateTime.now());
+                created.setOutput(new StringBuilder(result));
+                taskStore.update(created);
+                if (wsServer != null) {
+                    wsServer.broadcastTaskUpdate(created.getId(), "updated", created);
+                }
+
+                // 5. 通知前端：执行完成
+                broadcastToSession(session.getId(), Map.of(
+                        "type", "plan_complete",
+                        "sessionId", session.getId(),
+                        "status", "completed",
+                        "data", result
+                ));
+
+                // 6. 将执行结果作为 assistant 消息添加到会话
+                session.addMessage(Message.createAssistantMessage(result));
+
+                return result;
+
+            } catch (Exception e) {
+                logger.severe("[WSHandler] Plan confirm execution failed: " + e.getMessage());
+                broadcastToSession(session.getId(), Map.of(
+                        "type", "plan_error",
+                        "sessionId", session.getId(),
+                        "data", "执行失败: " + e.getMessage()
+                ));
+                return "Error: " + e.getMessage();
+            }
+        };
+        return CompletableFuture.supplyAsync(supplier);
+    }
+
+    /**
+     * 处理 plan_mode_change 消息 — 前端 Plan/Act 模式切换同步到后端。
+     *
+     * <p>当前端用户点击 Plan/Act 切换按钮时，前端通过 WebSocket 发送
+     * plan_mode_change 消息到后端。此方法调用 PlanModeManager 进行模式切换，
+     * 并将结果广播给所有客户端。</p>
+     */
+    private CompletableFuture<String> handlePlanModeChange(Session session, String message) {
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = MAPPER.readValue(message, Map.class);
+            String newMode = (String) data.get("newMode");
+            String previousMode = (String) data.get("previousMode");
+
+            if (newMode == null) {
+                return CompletableFuture.completedFuture(
+                    "{\"type\":\"error\",\"data\":\"Missing newMode\"}");
+            }
+
+            PlanModeManager modeManager = PlanModeManager.getInstance();
+            boolean success;
+
+            switch (newMode) {
+                case "plan":
+                    success = modeManager.enterPlanMode("前端用户手动切换");
+                    break;
+                case "act":
+                    success = modeManager.enterActMode();
+                    break;
+                default:
+                    success = modeManager.exitPlanMode("前端用户手动切换");
+                    break;
+            }
+
+            logger.info("[WSHandler] Plan mode change: " + previousMode + " → " + newMode
+                + " (success=" + success + ")");
+
+            // 广播模式变更到所有客户端
+            if (wsServer != null) {
+                wsServer.broadcast(Map.of(
+                    "type", "plan_mode_change",
+                    "sessionId", session.getId(),
+                    "data", MAPPER.writeValueAsString(Map.of(
+                        "previousMode", previousMode,
+                        "newMode", newMode,
+                        "success", success,
+                        "timestamp", System.currentTimeMillis()
+                    ))
+                ));
+            }
+
+            return CompletableFuture.completedFuture(
+                "{\"type\":\"plan_mode_change_ack\",\"data\":\"ok\"}");
+
+        } catch (Exception e) {
+            logger.severe("[WSHandler] Plan mode change failed: " + e.getMessage());
+            return CompletableFuture.completedFuture(
+                "{\"type\":\"error\",\"data\":\"Mode change failed: " + e.getMessage() + "\"}");
+        }
+    }
+
+    /**
+     * 处理 Act 模式消息 — 通过 Orchestrator 自动创建任务并执行。
+     *
+     * <p>Act 模式下，用户发送的消息不再走普通对话路径，而是交给
+     * EnhancedOrchestratorAgent.processInput() 进行意图分析、任务拆解、
+     * 分配子Agent执行，并广播 plan_tasks + plan_complete 到前端。</p>
+     */
+    private CompletableFuture<String> handleActMessage(Session session, String message) {
+        Supplier<String> supplier = () -> {
+            try {
+                // 1. 设置 Orchestrator 的 sessionId 和 PlanTaskBroadcaster
+                orchestrator.setSessionId(session.getId());
+                orchestrator.setPlanTaskBroadcaster(PlanTaskBroadcaster.getInstance());
+
+                // 2. 调用 Orchestrator 的 processInput — 规划+执行一步完成
+                //    内部会自动广播 plan_start、plan_thinking、plan_tasks、plan_complete
+                String result = orchestrator.processInput(message);
+
+                // 4. 将执行结果作为 assistant 消息添加到会话
+                session.addMessage(Message.createAssistantMessage(result));
+
+                return result;
+
+            } catch (Exception e) {
+                logger.severe("[WSHandler] Act processing failed: " + e.getMessage());
+                broadcastToSession(session.getId(), Map.of(
+                        "type", "plan_error",
+                        "sessionId", session.getId(),
+                        "data", "Act 执行失败: " + e.getMessage()
                 ));
                 return "Error: " + e.getMessage();
             }
@@ -339,10 +662,75 @@ public class WebSocketMessageHandler {
     }
 
     /**
-     * 向指定会话广播消息
+     * 设置 Hook 审批的 WebSocket 广播器。
+     * 当 Hook 返回 ASK 时，通过 WebSocket 通知前端。
+     */
+    private void setupHookApprovalBroadcaster() {
+        HookApprovalManager.getInstance().setWebSocketBroadcaster(request -> {
+            try {
+                Map<String, Object> msg = Map.of(
+                    "type", "hook_ask",
+                    "approvalId", request.id,
+                    "toolName", request.toolName,
+                    "askPayload", request.askPayload != null ? request.askPayload : ""
+                );
+                broadcastToSession(null, msg);
+            } catch (Exception e) {
+                logger.warning("[WSHandler] Hook broadcast error: " + e.getMessage());
+            }
+        });
+    }
+
+    /**
+     * 处理 Hook 审批响应（allow/deny）。
+     */
+    private CompletableFuture<String> handleHookApproval(String message, boolean approved) {
+        try {
+            Map<String, Object> msgMap = MAPPER.readValue(message, Map.class);
+            String approvalId = (String) msgMap.get("approvalId");
+            if (approvalId == null || approvalId.isEmpty()) {
+                return CompletableFuture.completedFuture("{\"type\":\"error\",\"data\":\"Missing approvalId\"}");
+            }
+            if (approved) {
+                HookApprovalManager.getInstance().approve(approvalId);
+            } else {
+                HookApprovalManager.getInstance().deny(approvalId);
+            }
+            return CompletableFuture.completedFuture("{\"type\":\"hook_response_ack\"}");
+        } catch (Exception e) {
+            logger.warning("[WSHandler] Hook approval error: " + e.getMessage());
+            return CompletableFuture.completedFuture("{\"type\":\"error\",\"data\":\"" + e.getMessage() + "\"}");
+        }
+    }
+
+    /**
+     * 向指定会话广播消息。
+     *
+     * <p>如果 sessionId 不为空，使用定向发送（sendToSession），
+     * 避免将会话专属消息广播到所有连接，减少网络压力和消息丢失风险。
+     * 如果 sessionId 为空或定向发送失败，则回退到全局广播。</p>
      */
     private void broadcastToSession(String sessionId, Map<String, Object> data) {
-        if (wsServer != null) {
+        if (wsServer == null) return;
+
+        // 确保 data 中始终包含 sessionId 字段
+        if (sessionId != null && !data.containsKey("sessionId")) {
+            // 使用 copy 避免修改传入的 Map
+            Map<String, Object> enriched = new java.util.HashMap<>(data);
+            enriched.put("sessionId", sessionId);
+            data = enriched;
+        }
+
+        if (sessionId != null && !sessionId.isEmpty()) {
+            // 优先定向发送到该 session 对应的连接
+            boolean sent = wsServer.sendToSession(sessionId, data);
+            if (!sent) {
+                // 定向发送失败（如连接已断开），回退到全局广播
+                logger.fine("[WSHandler] sendToSession failed for " + sessionId + ", falling back to broadcast");
+                wsServer.broadcast(data);
+            }
+        } else {
+            // 没有 sessionId 时使用全局广播
             wsServer.broadcast(data);
         }
     }

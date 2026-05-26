@@ -8,9 +8,6 @@ import java.util.List;
  * @param success 是否成功
  * @param tasks 任务列表
  * @param total 总数
- * @param page 当前页码
- * @param pageSize 每页大小
- * @param totalPages 总页数
  * @param message 错误消息（失败时）
  * 
  * @author JWCode Team
@@ -20,9 +17,6 @@ public record TaskListOutput(
     boolean success,
     List<TaskSummary> tasks,
     int total,
-    int page,
-    int pageSize,
-    int totalPages,
     String message
 ) {
     public TaskListOutput {
@@ -31,13 +25,12 @@ public record TaskListOutput(
         }
     }
     
-    public static TaskListOutput success(List<TaskSummary> tasks, int total, int page, int pageSize) {
-        int totalPages = (int) Math.ceil((double) total / pageSize);
-        return new TaskListOutput(true, tasks, total, page, pageSize, totalPages, null);
+    public static TaskListOutput success(List<TaskSummary> tasks, int total) {
+        return new TaskListOutput(true, tasks, total, null);
     }
     
     public static TaskListOutput error(String message) {
-        return new TaskListOutput(false, List.of(), 0, 0, 0, 0, message);
+        return new TaskListOutput(false, List.of(), 0, message);
     }
     
     /**

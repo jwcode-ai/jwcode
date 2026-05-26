@@ -1,15 +1,40 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useTokenStore } from '../../stores/tokenStore';
 import { useChatStore } from '../../stores/chatStore';
-import { Trash2, ChevronDown, ChevronUp, Gauge, Scissors } from 'lucide-react';
+import { useSessionStore } from '../../stores/sessionStore';
+import { Trash2, ChevronDown, ChevronUp, Gauge, Scissors, MessageSquare } from 'lucide-react';
 
 export function ContextManager() {
-  const { currentUsage, maxContextTokens, showTokenInfo, setShowTokenInfo, pruneContext } = useTokenStore();
+  const { currentUsage, maxContextTokens, showTokenInfo, setShowTokenInfo, pruneContext, estimateTokens } = useTokenStore();
   const messagesBySession = useChatStore((s) => s.messagesBySession);
-  // 使用当前激活会话的消息
-  const messages = Object.values(messagesBySession).flat();
+  const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  // 只使用当前激活会话的消息
+  const messages = activeSessionId ? (messagesBySession[activeSessionId] || []) : [];
   const [expanded, setExpanded] = useState(false);
   const [pruneRatio, setPruneRatio] = useState(0.5);
+
+  // 实时计算当前会话的 token 明细
+  const tokenDetails = useMemo(() => {
+    if (messages.length === 0) return null;
+    let totalChars = 0;
+    let userTokens = 0;
+    let assistantTokens = 0;
+    for (const msg of messages) {
+      const text = msg.content || '';
+      totalChars += text.length;
+      const tokens = estimateTokens(text);
+      if (msg.type === 'user') userTokens += tokens;
+      else assistantTokens += tokens;
+    }
+    const total = userTokens + assistantTokens;
+    return {
+      totalChars,
+      userTokens,
+      assistantTokens,
+      total,
+      avgPerMsg: Math.round(total / messages.length),
+    };
+  }, [messages, estimateTokens]);
 
   const usagePercent = maxContextTokens > 0 
     ? Math.min(100, Math.round((currentUsage.totalTokens / maxContextTokens) * 100))
@@ -74,30 +99,65 @@ export function ContextManager() {
 
       {expanded && (
         <div className="px-3 pb-3 space-y-2">
-          {/* Token breakdown */}
-          <div className="grid grid-cols-3 gap-2">
-            <div className="bg-dark-bg rounded p-2 text-center">
-              <div className="text-[10px] text-dark-muted">提示词</div>
-              <div className="text-sm font-mono text-accent-blue">
-                {currentUsage.promptTokens.toLocaleString()}
+          {/* Token breakdown — 带滚动条，消息多时可滚动 */}
+          <div className="max-h-[160px] overflow-y-auto scrollbar-thin scrollbar-thumb-dark-border scrollbar-track-transparent">
+            <div className="grid grid-cols-3 gap-2">
+              <div className="bg-dark-bg rounded p-2 text-center">
+                <div className="text-[10px] text-dark-muted">提示词</div>
+                <div className="text-sm font-mono text-accent-blue">
+                  {currentUsage.promptTokens.toLocaleString()}
+                </div>
+                {tokenDetails && (
+                  <div className="text-[9px] text-dark-muted/60 mt-0.5">
+                    ~{tokenDetails.userTokens.toLocaleString()} (消息)
+                  </div>
+                )}
+              </div>
+              <div className="bg-dark-bg rounded p-2 text-center">
+                <div className="text-[10px] text-dark-muted">补全</div>
+                <div className="text-sm font-mono text-accent-green">
+                  {currentUsage.completionTokens.toLocaleString()}
+                </div>
+                {tokenDetails && (
+                  <div className="text-[9px] text-dark-muted/60 mt-0.5">
+                    ~{tokenDetails.assistantTokens.toLocaleString()} (消息)
+                  </div>
+                )}
+              </div>
+              <div className="bg-dark-bg rounded p-2 text-center">
+                <div className="text-[10px] text-dark-muted">总计</div>
+                <div className={`text-sm font-mono ${getStatusColor()}`}>
+                  {currentUsage.totalTokens.toLocaleString()}
+                </div>
+                {tokenDetails && (
+                  <div className="text-[9px] text-dark-muted/60 mt-0.5">
+                    ~{tokenDetails.total.toLocaleString()} (消息)
+                  </div>
+                )}
               </div>
             </div>
-            <div className="bg-dark-bg rounded p-2 text-center">
-              <div className="text-[10px] text-dark-muted">补全</div>
-              <div className="text-sm font-mono text-accent-green">
-                {currentUsage.completionTokens.toLocaleString()}
+
+            {/* Token 明细行 */}
+            {tokenDetails && (
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                <div className="bg-dark-bg/60 rounded p-1.5 text-center">
+                  <div className="text-[9px] text-dark-muted">总字符数</div>
+                  <div className="text-xs font-mono text-dark-text">
+                    {tokenDetails.totalChars.toLocaleString()}
+                  </div>
+                </div>
+                <div className="bg-dark-bg/60 rounded p-1.5 text-center">
+                  <div className="text-[9px] text-dark-muted">平均 token/条</div>
+                  <div className="text-xs font-mono text-dark-text">
+                    {tokenDetails.avgPerMsg.toLocaleString()}
+                  </div>
+                </div>
               </div>
-            </div>
-            <div className="bg-dark-bg rounded p-2 text-center">
-              <div className="text-[10px] text-dark-muted">总计</div>
-              <div className={`text-sm font-mono ${getStatusColor()}`}>
-                {currentUsage.totalTokens.toLocaleString()}
-              </div>
-            </div>
+            )}
           </div>
 
           {/* Cost estimate */}
-          {currentUsage.estimatedCost && (
+          {currentUsage.estimatedCost !== undefined && currentUsage.estimatedCost > 0 && (
             <div className="text-[10px] text-dark-muted text-center">
               预估成本: ${currentUsage.estimatedCost.toFixed(4)}
             </div>
@@ -141,8 +201,14 @@ export function ContextManager() {
           </div>
 
           {/* Message count */}
-          <div className="text-[10px] text-dark-muted text-center">
-            当前 {messages.length} 条消息 · 如需重置请清空对话
+          <div className="flex items-center justify-center gap-1 text-[10px] text-dark-muted">
+            <MessageSquare size={10} />
+            <span>
+              当前 <span className="text-dark-text font-mono">{messages.length}</span> 条消息
+              {tokenDetails && (
+                <> · 共 <span className="text-dark-text font-mono">{tokenDetails.totalChars.toLocaleString()}</span> 字符</>
+              )}
+            </span>
           </div>
         </div>
       )}

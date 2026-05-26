@@ -209,6 +209,14 @@ public class A2AFacade {
     }
 
     /**
+     * 获取本地调度器引用。
+     * <p>用于在初始化阶段注入 Hook 链到 LocalAgentDispatcher。</p>
+     */
+    public LocalAgentDispatcher getLocalDispatcher() {
+        return (LocalAgentDispatcher) fallbackDispatcher;
+    }
+
+    /**
      * 关闭
      *
      * <p>当 primaryDispatcher 和 fallbackDispatcher 指向同一个对象时（本地模式），

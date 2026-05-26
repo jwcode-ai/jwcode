@@ -292,9 +292,7 @@ public class GitTool implements Tool<GitInput, GitOutput, Void> {
         if (input == null) {
             return ToolValidationResult.invalid("输入不能为空");
         }
-        if (input.operation() == null || input.operation().isEmpty()) {
-            return ToolValidationResult.invalid("操作类型不能为空");
-        }
+        // operation 可为空，call() 方法中的 inferOperation() 会自动推断默认操作（如 "status"）
         
         return ToolValidationResult.valid();
     }

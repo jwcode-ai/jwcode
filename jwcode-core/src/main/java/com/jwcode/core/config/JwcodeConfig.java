@@ -59,7 +59,7 @@ public class JwcodeConfig {
      * 默认使用的提供商
      */
     @JsonProperty("default-provider")
-    private String defaultProvider = "moonshot";
+    private String defaultProvider;
     
     /**
      * 备用提供商（当默认提供商触发硬性配额限制时自动切换）
@@ -89,9 +89,18 @@ public class JwcodeConfig {
     
     /**
      * 获取默认提供商配置
+     * 如果未设置 defaultProvider，则取 providers 中第一个；都没有则返回空配置
      */
     public ProviderConfig getDefaultProvider() {
-        return providers.getOrDefault(defaultProvider, createDefaultProvider());
+        if (defaultProvider != null && providers.containsKey(defaultProvider)) {
+            return providers.get(defaultProvider);
+        }
+        // 未设置默认提供商时，取第一个可用的
+        if (!providers.isEmpty()) {
+            Map.Entry<String, ProviderConfig> first = providers.entrySet().iterator().next();
+            return first.getValue();
+        }
+        return createDefaultProvider();
     }
     
     /**
@@ -497,6 +506,9 @@ public class JwcodeConfig {
         
         @JsonProperty("read-timeout")
         private int readTimeout = 10000;
+        
+        @JsonProperty("embedding-dimension")
+        private int embeddingDimension = 256;
     }
     
     /**

@@ -271,7 +271,23 @@ public class TaskApiServer {
                 task.setDescription((String) body.get("description"));
             }
             if (body.containsKey("status")) {
-                task.setStatus(TaskStatus.valueOf((String) body.get("status")));
+                TaskStatus newStatus = TaskStatus.valueOf((String) body.get("status"));
+                // 状态转换校验
+                if (!TaskStatus.isValidTransition(task.getStatus(), newStatus)) {
+                    sendJson(exchange, 422, Map.of(
+                        "error", "非法的状态转换: " + task.getStatus() + " → " + newStatus,
+                        "currentStatus", task.getStatus().name(),
+                        "requestedStatus", newStatus.name()
+                    ));
+                    return;
+                }
+                task.setStatus(newStatus);
+                // 自动记录时间戳
+                if (newStatus == TaskStatus.RUNNING || newStatus == TaskStatus.EXECUTING) {
+                    task.setStartedAt(java.time.LocalDateTime.now());
+                } else if (newStatus.isFinished()) {
+                    task.setCompletedAt(java.time.LocalDateTime.now());
+                }
             }
             if (body.containsKey("priority")) {
                 task.setPriority(((Number) body.get("priority")).intValue());
@@ -301,7 +317,23 @@ public class TaskApiServer {
             Map<String, Object> body = MAPPER.readValue(exchange.getRequestBody(), Map.class);
             
             if (body.containsKey("status")) {
-                task.setStatus(TaskStatus.valueOf((String) body.get("status")));
+                TaskStatus newStatus = TaskStatus.valueOf((String) body.get("status"));
+                // 状态转换校验
+                if (!TaskStatus.isValidTransition(task.getStatus(), newStatus)) {
+                    sendJson(exchange, 422, Map.of(
+                        "error", "非法的状态转换: " + task.getStatus() + " → " + newStatus,
+                        "currentStatus", task.getStatus().name(),
+                        "requestedStatus", newStatus.name()
+                    ));
+                    return;
+                }
+                task.setStatus(newStatus);
+                // 自动记录时间戳
+                if (newStatus == TaskStatus.RUNNING || newStatus == TaskStatus.EXECUTING) {
+                    task.setStartedAt(java.time.LocalDateTime.now());
+                } else if (newStatus.isFinished()) {
+                    task.setCompletedAt(java.time.LocalDateTime.now());
+                }
             }
             
             Task updated = taskStore.update(task);

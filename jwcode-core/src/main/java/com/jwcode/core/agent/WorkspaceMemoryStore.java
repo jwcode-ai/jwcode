@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
+import java.io.BufferedWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -12,8 +13,10 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.concurrent.*;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
 
 /**
  * WorkspaceMemoryStore — 工作目录级内存持久化存储。
@@ -48,11 +51,29 @@ public class WorkspaceMemoryStore {
     private final Path prefsFile;
     private final Path planContextFile;
 
-    // 内存缓存
+    // 内存缓存（带 TTL）
     private Map<String, Object> identityCache;
+    private volatile long identityCacheLoadTime;
     private Map<String, Object> patternsCache;
+    private volatile long patternsCacheLoadTime;
     private Map<String, Object> insightsCache;
+    private volatile long insightsCacheLoadTime;
     private Map<String, Object> prefsCache;
+    private volatile long prefsCacheLoadTime;
+
+    /** 缓存过期时间（毫秒），超过后自动重新加载 */
+    private static final long CACHE_TTL_MS = 300_000; // 5 分钟
+
+    // ────── 异步写入缓冲区 ──────
+    /** 写入缓冲区：累积任务记录后批量落盘 */
+    private final BlockingQueue<String> writeBuffer = new LinkedBlockingQueue<>();
+    /** 后台写入线程 */
+    private final Thread writerThread;
+    /** 批量落盘触发阈值 */
+    private static final int BATCH_SIZE = 50;
+    /** 最大刷新间隔（毫秒） */
+    private static final long FLUSH_INTERVAL_MS = 5000;
+    private volatile boolean running = true;
 
     public WorkspaceMemoryStore(Path workspaceRoot) {
         this.memoryDir = workspaceRoot.resolve(".jwcode").resolve("memory");
@@ -63,6 +84,10 @@ public class WorkspaceMemoryStore {
         this.prefsFile = memoryDir.resolve("user_prefs.json");
         this.planContextFile = memoryDir.resolve("plan_context.md");
         initDirectory();
+        // 启动后台写入线程
+        this.writerThread = new Thread(this::drainWriteBuffer, "memory-store-writer");
+        this.writerThread.setDaemon(true);
+        this.writerThread.start();
     }
 
     /**
@@ -92,42 +117,46 @@ public class WorkspaceMemoryStore {
     // ==================== 读操作 ====================
 
     /**
-     * 加载项目身份
+     * 加载项目身份（带 5 分钟 TTL 缓存）
      */
     @SuppressWarnings("unchecked")
     public Map<String, Object> loadIdentity() {
-        if (identityCache != null) return identityCache;
+        if (identityCache != null && !isCacheStale(identityCacheLoadTime)) return identityCache;
         identityCache = loadJson(identityFile);
+        identityCacheLoadTime = System.currentTimeMillis();
         return identityCache;
     }
 
     /**
-     * 加载代码模式
+     * 加载代码模式（带 TTL）
      */
     @SuppressWarnings("unchecked")
     public Map<String, Object> loadPatterns() {
-        if (patternsCache != null) return patternsCache;
+        if (patternsCache != null && !isCacheStale(patternsCacheLoadTime)) return patternsCache;
         patternsCache = loadJson(patternsFile);
+        patternsCacheLoadTime = System.currentTimeMillis();
         return patternsCache;
     }
 
     /**
-     * 加载洞察
+     * 加载洞察（带 TTL）
      */
     @SuppressWarnings("unchecked")
     public Map<String, Object> loadInsights() {
-        if (insightsCache != null) return insightsCache;
+        if (insightsCache != null && !isCacheStale(insightsCacheLoadTime)) return insightsCache;
         insightsCache = loadJson(insightsFile);
+        insightsCacheLoadTime = System.currentTimeMillis();
         return insightsCache;
     }
 
     /**
-     * 加载用户偏好
+     * 加载用户偏好（带 TTL）
      */
     @SuppressWarnings("unchecked")
     public Map<String, Object> loadPreferences() {
-        if (prefsCache != null) return prefsCache;
+        if (prefsCache != null && !isCacheStale(prefsCacheLoadTime)) return prefsCache;
         prefsCache = loadJson(prefsFile);
+        prefsCacheLoadTime = System.currentTimeMillis();
         return prefsCache;
     }
 
@@ -241,17 +270,43 @@ public class WorkspaceMemoryStore {
     }
 
     /**
-     * 追加任务完成记录（JSONL 格式）
+     * 追加任务完成记录（异步批量写入，降低磁盘 IO 频率）。
      */
     public void appendTaskRecord(Map<String, Object> record) {
         try {
             record.putIfAbsent("timestamp", TS_FORMAT.format(Instant.now()));
             String line = MAPPER.writeValueAsString(record) + "\n";
-            Files.writeString(taskHistoryFile, line,
-                    StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+            writeBuffer.offer(line); // 非阻塞入队
         } catch (IOException e) {
-            logger.log(Level.WARNING, "Failed to write task record", e);
+            logger.log(Level.WARNING, "Failed to serialize task record", e);
         }
+    }
+
+    /**
+     * 加载最近 N 条任务历史（流式读取，避免全量加载 OOM）。
+     */
+    public List<Map<String, Object>> loadRecentTaskHistory(int limit) {
+        List<Map<String, Object>> history = new ArrayList<>();
+        try {
+            if (!Files.exists(taskHistoryFile)) return history;
+            // 流式读取，只保留最后 N 条
+            List<String> lines = Files.readAllLines(taskHistoryFile);
+            int start = Math.max(0, lines.size() - limit);
+            for (int i = start; i < lines.size(); i++) {
+                String line = lines.get(i);
+                if (line.trim().isEmpty()) continue;
+                try {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> entry = MAPPER.readValue(line, Map.class);
+                    history.add(entry);
+                } catch (IOException e) {
+                    // 跳过损坏的行
+                }
+            }
+        } catch (IOException e) {
+            logger.log(Level.WARNING, "Failed to load recent task history", e);
+        }
+        return history;
     }
 
     /**
@@ -299,8 +354,100 @@ public class WorkspaceMemoryStore {
      */
     public void clearCache() {
         identityCache = null;
+        identityCacheLoadTime = 0;
         patternsCache = null;
+        patternsCacheLoadTime = 0;
         insightsCache = null;
+        insightsCacheLoadTime = 0;
         prefsCache = null;
+        prefsCacheLoadTime = 0;
+    }
+
+    /**
+     * 检查缓存是否过期。
+     */
+    private boolean isCacheStale(long loadTime) {
+        return loadTime == 0 || (System.currentTimeMillis() - loadTime) > CACHE_TTL_MS;
+    }
+
+    // ────── 异步写入引擎 ──────
+
+    /**
+     * 后台线程：从缓冲区取记录，批量写入磁盘。
+     */
+    private void drainWriteBuffer() {
+        List<String> batch = new ArrayList<>(BATCH_SIZE);
+        long lastFlush = System.currentTimeMillis();
+
+        while (running) {
+            try {
+                // 阻塞等待第一条记录（最多等 FLUSH_INTERVAL_MS）
+                String first = writeBuffer.poll(FLUSH_INTERVAL_MS, TimeUnit.MILLISECONDS);
+                if (first != null) {
+                    batch.add(first);
+                    // 尽力批量取剩余记录（非阻塞 drainTo）
+                    writeBuffer.drainTo(batch, BATCH_SIZE - 1);
+                }
+
+                // 触发条件：批次满 或 时间到
+                if (!batch.isEmpty() &&
+                    (batch.size() >= BATCH_SIZE ||
+                     System.currentTimeMillis() - lastFlush >= FLUSH_INTERVAL_MS)) {
+                    flushBatch(batch);
+                    batch.clear();
+                    lastFlush = System.currentTimeMillis();
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+
+        // 退出前刷新残留数据
+        if (!batch.isEmpty()) {
+            writeBuffer.drainTo(batch);
+            flushBatch(batch);
+        }
+    }
+
+    /**
+     * 批量写入缓冲区记录。
+     */
+    private void flushBatch(List<String> batch) {
+        if (batch.isEmpty()) return;
+        try (BufferedWriter writer = Files.newBufferedWriter(taskHistoryFile,
+                StandardOpenOption.CREATE, StandardOpenOption.APPEND)) {
+            for (String line : batch) {
+                writer.write(line);
+            }
+        } catch (IOException e) {
+            logger.log(Level.WARNING, "Failed to flush " + batch.size() + " task records", e);
+        }
+    }
+
+    /**
+     * 强制刷新所有待写入数据到磁盘（优雅关闭时调用）。
+     */
+    public void flush() {
+        List<String> remaining = new ArrayList<>();
+        writeBuffer.drainTo(remaining);
+        if (!remaining.isEmpty()) {
+            flushBatch(remaining);
+        }
+    }
+
+    /**
+     * 关闭后台写入线程并刷新数据。
+     */
+    public void shutdown() {
+        running = false;
+        writerThread.interrupt();
+        try {
+            writerThread.join(5000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        flush();
+        logger.fine("[WorkspaceMemoryStore] Shutdown complete");
     }
 }

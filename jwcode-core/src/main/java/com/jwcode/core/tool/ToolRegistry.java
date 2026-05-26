@@ -54,8 +54,10 @@ public class ToolRegistry {
     public ToolRegistry register(Tool<?, ?, ?> tool) {
         Preconditions.checkNotNull(tool, "tool cannot be null");
         String name = tool.getName();
-        Preconditions.checkArgument(!toolsByName.containsKey(name), 
-                "Tool with name '%s' is already registered", name);
+        if (toolsByName.containsKey(name)) {
+            logger.warning("Tool with name '" + name + "' is already registered, skipping");
+            return this;
+        }
         
         toolsByName.put(name, tool);
         tools.add(tool);
@@ -247,6 +249,7 @@ public class ToolRegistry {
         registry.register(new MergeFilesTool());
         registry.register(new FileEditTool());
         registry.register(new FileWriteTool());
+        registry.register(new DownloadTool());
         registry.register(new GrepTool());
         registry.register(new GlobTool());
         registry.register(new WebFetchTool());
@@ -304,6 +307,12 @@ public class ToolRegistry {
      */
     public SemanticSearchTool registerSemanticSearch(
             com.jwcode.core.index.CodebaseIndexer indexer) {
+        String toolName = "SemanticSearchTool";
+        // 幂等性检查：如果已注册则直接返回现有实例
+        if (toolsByName.containsKey(toolName)) {
+            logger.info("[ToolRegistry] SemanticSearchTool 已存在，跳过重复注册");
+            return (SemanticSearchTool) toolsByName.get(toolName);
+        }
         SemanticSearchTool tool = new SemanticSearchTool(indexer);
         register(tool);
         logger.info("[ToolRegistry] SemanticSearchTool 已注册");

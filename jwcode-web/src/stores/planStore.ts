@@ -1,8 +1,102 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { Plan, PlanTask, StructuredTask, PlanPhase, MessageQueueItem } from '../types';
+import wsService from '../services/websocket';
 
 export type PlanMode = 'plan' | 'act' | 'normal';
+
+// ==================== 任务变更解析类型 ====================
+
+export type TaskDiffType = 'added' | 'updated' | 'removed';
+
+export interface TaskDiffItem {
+  type: TaskDiffType;
+  task: StructuredTask;
+  /** 仅 updated 类型有：旧任务快照 */
+  oldTask?: StructuredTask;
+  /** 变更描述（如："新增任务: 实现登录功能"） */
+  description: string;
+}
+
+export interface TaskDiffResult {
+  added: TaskDiffItem[];
+  updated: TaskDiffItem[];
+  removed: TaskDiffItem[];
+  total: number;
+}
+
+/**
+ * 递归对比新旧结构化任务树，返回变更结果
+ * 
+ * 对比策略：
+ * - 按 id 匹配：旧有但新没有 = removed，新有但旧没有 = added
+ * - 都有但 title/description/status/agentType 不同 = updated
+ * - 递归对比子任务
+ */
+export function diffTasks(
+  oldTasks: StructuredTask[],
+  newTasks: StructuredTask[],
+): TaskDiffResult {
+  const result: TaskDiffResult = { added: [], updated: [], removed: [], total: 0 };
+
+  const oldMap = new Map<string, StructuredTask>();
+  const buildMap = (tasks: StructuredTask[]) => {
+    for (const t of tasks) {
+      oldMap.set(t.id, t);
+      if (t.children?.length) buildMap(t.children);
+    }
+  };
+  buildMap(oldTasks);
+
+  const newIds = new Set<string>();
+  const visitNew = (tasks: StructuredTask[]) => {
+    for (const t of tasks) {
+      newIds.add(t.id);
+      const old = oldMap.get(t.id);
+      if (!old) {
+        // 新增任务
+        result.added.push({
+          type: 'added',
+          task: t,
+          description: `🆕 新增任务: ${t.title}`,
+        });
+      } else if (
+        old.title !== t.title ||
+        old.description !== t.description ||
+        old.status !== t.status ||
+        old.agentType !== t.agentType
+      ) {
+        // 更新任务
+        result.updated.push({
+          type: 'updated',
+          task: t,
+          oldTask: old,
+          description: `🔄 更新任务: ${old.title} → ${t.title}`,
+        });
+      }
+      if (t.children?.length) visitNew(t.children);
+    }
+  };
+  visitNew(newTasks);
+
+  // 查找已删除的任务
+  const visitOld = (tasks: StructuredTask[]) => {
+    for (const t of tasks) {
+      if (!newIds.has(t.id)) {
+        result.removed.push({
+          type: 'removed',
+          task: t,
+          description: `🗑️ 删除任务: ${t.title}`,
+        });
+      }
+      if (t.children?.length) visitOld(t.children);
+    }
+  };
+  visitOld(oldTasks);
+
+  result.total = result.added.length + result.updated.length + result.removed.length;
+  return result;
+}
 
 interface ModeChangeEntry {
   previousMode: PlanMode;
@@ -50,6 +144,7 @@ interface PlanState {
   // Plan 确认状态（用户确认后才执行）
   showConfirmButton: boolean;         // 是否显示确认按钮
   planConfirmed: boolean;             // 是否已确认
+  planRefining: boolean;              // 是否正在完善计划（重新规划中）
 
   // Actions
   startPlanning: (sessionId: string, goal: string) => void;
@@ -71,11 +166,17 @@ interface PlanState {
   setShowConfirmButton: (show: boolean) => void;
   confirmPlan: (sessionId: string) => void;
   clearPendingPlan: (sessionId: string) => void;
+  setPlanRefining: (refining: boolean) => void;
 
   // 结构化任务管理
   setStructuredTasks: (sessionId: string, tasks: StructuredTask[]) => void;
   updateStructuredTask: (sessionId: string, taskId: string, updates: Partial<StructuredTask>) => void;
   getStructuredTasks: (sessionId: string) => StructuredTask[];
+
+  // 任务变更解析
+  taskDiffBySession: Record<string, TaskDiffResult>;
+  setTaskDiff: (sessionId: string, diff: TaskDiffResult) => void;
+  clearTaskDiff: (sessionId: string) => void;
 
   // Sprint Contract 状态跟踪
   activeContractId: string | null;
@@ -119,6 +220,10 @@ export const usePlanStore = create<PlanState>()(
       // Plan 确认状态
       showConfirmButton: false,
       planConfirmed: false,
+      planRefining: false,
+
+      // 任务变更解析
+      taskDiffBySession: {},
 
       // Sprint Contract 状态
       activeContractId: null,
@@ -247,6 +352,7 @@ export const usePlanStore = create<PlanState>()(
 
       setMode: (mode) => {
         const previousMode = get().mode;
+        if (previousMode === mode) return; // 相同模式不重复切换
         set((state) => ({
           mode,
           modeHistory: [
@@ -259,6 +365,21 @@ export const usePlanStore = create<PlanState>()(
             },
           ],
         }));
+        // 通过 WebSocket 通知后端模式变更
+        try {
+          const activeSessionId = get().activePlanSessionId;
+          wsService.send({
+            type: 'plan_mode_change',
+            sessionId: activeSessionId || '',
+            data: JSON.stringify({
+              previousMode,
+              newMode: mode,
+              timestamp: Date.now(),
+            }),
+          });
+        } catch (e) {
+          console.warn('[PlanStore] Failed to notify mode change via WS:', e);
+        }
       },
 
       toggleMode: () => {
@@ -330,7 +451,10 @@ export const usePlanStore = create<PlanState>()(
 
       confirmPlan: (sessionId) => {
         const state = get();
-        // 通过 WebSocket 发送 plan_confirm 消息到后端
+        // 1. 自动切换到 Act 模式（用户确认后应进入执行模式）
+        state.setMode('act');
+
+        // 2. 通过 WebSocket 发送 plan_confirm 消息到后端
         try {
           // 使用动态导入的 wsService 避免循环依赖
           const wsService = (window as any).__wsService;
@@ -353,7 +477,10 @@ export const usePlanStore = create<PlanState>()(
         set({
           planConfirmed: false,
           showConfirmButton: false,
+          planRefining: false,
         }),
+
+      setPlanRefining: (refining) => set({ planRefining: refining }),
 
       // === 步骤提示 ===
 
@@ -408,15 +535,37 @@ export const usePlanStore = create<PlanState>()(
         return get().structuredTasksBySession[sessionId] || [];
       },
 
+      /**
+       * 设置任务变更解析结果
+       */
+      setTaskDiff: (sessionId, diff) =>
+        set((state) => ({
+          taskDiffBySession: {
+            ...state.taskDiffBySession,
+            [sessionId]: diff,
+          },
+        })),
+
+      /**
+       * 清除任务变更解析结果
+       */
+      clearTaskDiff: (sessionId) =>
+        set((state) => {
+          const { [sessionId]: _, ...rest } = state.taskDiffBySession;
+          return { taskDiffBySession: rest };
+        }),
+
       clearPlan: (sessionId) =>
         set((state) => {
           const { [sessionId]: _, ...restPlans } = state.plansBySession;
           const { [sessionId]: __, ...restPhases } = state.planPhasesBySession;
           const { [sessionId]: ___, ...restStructured } = state.structuredTasksBySession;
+          const { [sessionId]: ____, ...restDiff } = state.taskDiffBySession;
           return {
             plansBySession: restPlans,
             planPhasesBySession: restPhases,
             structuredTasksBySession: restStructured,
+            taskDiffBySession: restDiff,
           };
         }),
 
@@ -451,6 +600,8 @@ export const usePlanStore = create<PlanState>()(
           messageQueue: [],
           currentStepPrompt: null,
           thinkingStatusBySession: {},
+          taskDiffBySession: {},
+          planRefining: false,
         }),
     }),
     {

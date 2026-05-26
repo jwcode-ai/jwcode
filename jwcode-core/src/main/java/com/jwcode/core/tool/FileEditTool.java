@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.jwcode.core.tool.context.ToolExecutionContext;
 import com.jwcode.core.tool.input.FileEditInput;
 import com.jwcode.core.tool.output.FileEditOutput;
+import com.jwcode.core.service.FileHistoryService;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -24,6 +25,9 @@ import java.util.logging.Logger;
 public class FileEditTool implements Tool<FileEditInput, FileEditOutput, FileEditTool.FileEditProgress> {
     
     private static final Logger logger = Logger.getLogger(FileEditTool.class.getName());
+    
+    // FileHistoryService 用于记录文件变更历史
+    private static final FileHistoryService fileHistoryService = new FileHistoryService();
     
     @Override
     public String getName() {
@@ -109,6 +113,14 @@ public class FileEditTool implements Tool<FileEditInput, FileEditOutput, FileEdi
                 
                 // 写入文件
                 Files.writeString(filePath, editResult.newContent(), StandardOpenOption.TRUNCATE_EXISTING);
+                
+                // 记录文件变更历史
+                fileHistoryService.recordFileChange(
+                    filePath.toString(), 
+                    fileContent, 
+                    editResult.newContent(),
+                    "FileEditTool: " + (input.reason() != null ? input.reason() : "edit")
+                );
                 
                 // 构建输出
                 FileEditOutput output = new FileEditOutput(

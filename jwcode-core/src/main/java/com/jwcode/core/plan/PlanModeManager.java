@@ -88,7 +88,7 @@ public class PlanModeManager {
     
     /** Plan Mode 下始终允许的工具名称 */
     private static final Set<String> PLAN_MODE_ALWAYS_ALLOWED_TOOLS = Set.of(
-        "TodoWrite",
+        // "TodoWrite" 已移除：Plan 模式只做计划，不做任何写操作（包括 TodoWrite）
         "AskUserQuestion",
         "SmartAnalyze",
         "ToolSearch",
@@ -102,6 +102,8 @@ public class PlanModeManager {
         "REPL",
         "FileWrite",
         "FileEdit",
+        "FileDelete",
+        "FileCreate",
         "NotebookEdit",
         "Git",
         "RemoteTrigger",
@@ -109,7 +111,10 @@ public class PlanModeManager {
         "SendMessage",
         "TeamCreate",
         "TeamDelete",
-        "McpAuth"
+        "McpAuth",
+        // AgentTool 在 Plan 模式下也应禁止 — Plan 模式只做调研不做执行
+        // 如果需要创建子 Agent 做调研，应通过 Orchestrator 的只读子 Agent 机制
+        "AgentTool"
     );
     
     // 单例
@@ -455,18 +460,32 @@ public class PlanModeManager {
     // ==================== 替代工具建议 ====================
     
     /**
+     * 判断当前模式是否为"只读调研"模式。
+     *
+     * <p>Plan 模式下，所有操作都应是只读的。此方法供 Orchestrator 和子 Agent 判断
+     * 是否应使用只读策略（如 Explorer 只读调研，而非 Coder 写代码）。</p>
+     *
+     * @return Plan 模式下返回 true
+     */
+    public boolean isPlanModeReadOnly() {
+        return currentMode == Mode.PLAN;
+    }
+
+    /**
      * 获取被禁用工具的替代建议
      */
     private String getReplacementSuggestion(String blockedToolName) {
         return switch (blockedToolName) {
             case "Bash", "PowerShell", "REPL" ->
                 "\n💡 替代方案：用 SmartAnalyzeTool 分析项目结构，用 GlobTool 搜索文件，用 FileReadTool 读取文件内容。";
-            case "FileWrite", "FileEdit" ->
+            case "FileWrite", "FileEdit", "FileDelete", "FileCreate" ->
                 "\n💡 替代方案：Plan Mode 下不能写文件。先用 FileReadTool 读取现有内容，规划好后再退出 Plan Mode 执行写操作。";
             case "Git" ->
                 "\n💡 替代方案：用 GlobTool + FileReadTool 查看文件状态，用 SmartAnalyzeTool 分析项目结构。";
             case "NotebookEdit" ->
                 "\n💡 替代方案：用 FileReadTool 读取 notebook 内容进行规划。";
+            case "AgentTool" ->
+                "\n💡 替代方案：Plan Mode 下不能创建子 Agent 执行任务。用 SmartAnalyzeTool、GlobTool、FileReadTool 等只读工具做调研。";
             default ->
                 "\n💡 提示：Plan Mode 只允许只读操作。尝试用 SmartAnalyzeTool、GlobTool、FileReadTool 等只读工具替代。";
         };

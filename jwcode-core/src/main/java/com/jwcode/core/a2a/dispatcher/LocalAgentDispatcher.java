@@ -9,6 +9,7 @@ import com.jwcode.core.hook.HookEventType;
 import com.jwcode.core.hook.HookResult;
 import com.jwcode.core.llm.LLMFactory;
 import com.jwcode.core.llm.LLMQueryEngine;
+import com.jwcode.core.llm.LLMQueryEnginePool;
 import com.jwcode.core.llm.LLMService;
 import com.jwcode.core.session.Session;
 import com.jwcode.core.tool.ToolExecutor;
@@ -16,6 +17,7 @@ import com.jwcode.core.tool.ToolRegistry;
 
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
 
 /**
@@ -46,6 +48,9 @@ public class LocalAgentDispatcher implements AgentDispatcher {
     // Hook 拦截链
     private volatile HookChain hookChain;
 
+    // LLMQueryEngine 对象池（消除每次子任务 new 引擎的 GC 压力）
+    private final LLMQueryEnginePool enginePool;
+
     public LocalAgentDispatcher(AgentRegistry agentRegistry) {
         this(agentRegistry, null, null, null);
     }
@@ -60,10 +65,35 @@ public class LocalAgentDispatcher implements AgentDispatcher {
         this.agentRegistry = agentRegistry;
         this.agentCards = new ConcurrentHashMap<>();
         this.taskStore = new ConcurrentHashMap<>();
-        this.executor = Executors.newCachedThreadPool();
+        // 有界线程池：核心2/最大8，队列20，拒绝时由调用方处理（不阻塞IO线程）
+        this.executor = new ThreadPoolExecutor(
+            DISPATCHER_CORE_POOL_SIZE,
+            DISPATCHER_MAX_POOL_SIZE,
+            DISPATCHER_KEEPALIVE_SEC, TimeUnit.SECONDS,
+            new LinkedBlockingQueue<>(DISPATCHER_QUEUE_CAPACITY),
+            new ThreadFactory() {
+                private final AtomicInteger counter = new AtomicInteger(0);
+                @Override
+                public Thread newThread(Runnable r) {
+                    Thread t = new Thread(r, "agent-dispatcher-" + counter.getAndIncrement());
+                    t.setDaemon(true);
+                    return t;
+                }
+            },
+            (r, executor) -> {
+                // 线程池满：降级为在调用者线程执行（调度器线程非IO线程，安全）
+                ThreadPoolExecutor tpe = (ThreadPoolExecutor) executor;
+                logger.warning("[LocalAgentDispatcher] 线程池已满 (core=" + DISPATCHER_CORE_POOL_SIZE
+                    + ", max=" + DISPATCHER_MAX_POOL_SIZE + ", queue=" + DISPATCHER_QUEUE_CAPACITY
+                    + ")，降级为同步执行。活跃=" + tpe.getActiveCount()
+                    + ", 队列=" + tpe.getQueue().size());
+                r.run();
+            }
+        );
         this.llmService = llmService;
         this.toolRegistry = toolRegistry;
         this.toolExecutor = toolExecutor;
+        this.enginePool = new LLMQueryEnginePool();
         registerDefaultAgents();
     }
 
@@ -258,22 +288,21 @@ public class LocalAgentDispatcher implements AgentDispatcher {
         logger.info("LocalDispatcher: submitting task " + task.getTaskId() +
                     " to agent " + agentName + " (skill: " + task.getSkillId() + ")");
 
-        // 异步执行 — 真正通过 LLMQueryEngine 调用子Agent
+        // 异步执行 — 异常自然传播到 CompletableFuture
         return CompletableFuture.supplyAsync(() -> {
-            try {
-                // 【修复】真正执行子Agent任务，而非模拟
-                TaskOutput output = executeSubAgentTask(agentName, task);
-                task.complete(output);
-                logger.info("LocalDispatcher: task " + task.getTaskId() + " completed by agent " + agentName);
-                return output;
-
-            } catch (Exception e) {
-                task.fail(e.getMessage());
-                logger.warning("LocalDispatcher: task " + task.getTaskId() + " failed: " + e.getMessage());
-                throw new CompletionException(e);
-            }
+            TaskOutput output = executeSubAgentTask(agentName, task);
+            task.complete(output);
+            logger.info("LocalDispatcher: task " + task.getTaskId() + " completed by agent " + agentName);
+            return output;
         }, executor);
     }
+
+    // 线程池配置：IO 密集型，有界队列 + 拒绝时返回友好错误
+    private static final int DISPATCHER_CORE_POOL_SIZE = 2;
+    private static final int DISPATCHER_MAX_POOL_SIZE = 8;
+    private static final int DISPATCHER_QUEUE_CAPACITY = 20;
+    private static final long DISPATCHER_KEEPALIVE_SEC = 60;
+    private static final long DISPATCHER_SHUTDOWN_TIMEOUT_SEC = 30;
 
     /** 默认同步超时时间（毫秒）：简单任务 30 秒，复杂任务 5 分钟 */
     private static final long DEFAULT_SYNC_TIMEOUT_MS = 300_000; // 5 分钟
@@ -328,10 +357,14 @@ public class LocalAgentDispatcher implements AgentDispatcher {
 
     @Override
     public void shutdown() {
+        enginePool.clear();
         executor.shutdown();
         try {
-            if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+            if (!executor.awaitTermination(DISPATCHER_SHUTDOWN_TIMEOUT_SEC, TimeUnit.SECONDS)) {
                 executor.shutdownNow();
+                if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+                    logger.warning("[LocalAgentDispatcher] 部分任务未能在关闭前完成");
+                }
             }
         } catch (InterruptedException e) {
             executor.shutdownNow();
@@ -398,27 +431,34 @@ public class LocalAgentDispatcher implements AgentDispatcher {
         // 构建任务提示词（将由 engine.query() 自动添加到 session，避免重复）
         String taskPrompt = buildTaskPrompt(agentName, task);
 
-        // 3. 创建 LLMQueryEngine
+        // 3. 从池中借取 LLMQueryEngine（复用，避免每次 new 的 GC 压力）
         ToolExecutor executor = this.toolExecutor != null
             ? this.toolExecutor
             : new ToolExecutor(toolRegistry != null ? toolRegistry : ToolRegistry.createDefault());
 
-        LLMQueryEngine engine = LLMQueryEngine.builder()
-            .session(subSession)
-            .llmService(llmService)
-            .toolExecutor(executor)
-            .toolRegistry(toolRegistry != null ? toolRegistry : ToolRegistry.createDefault())
-            .agentRegistry(agentRegistry)
-            .config(LLMQueryEngine.EngineConfig.defaultConfig())
-            .build();
+        String poolKey = "subtask-" + task.getTaskId() + "-" + agentName;
+        LLMQueryEngine engine = enginePool.borrow(
+            poolKey, subSession, llmService, executor,
+            toolRegistry != null ? toolRegistry : ToolRegistry.createDefault(),
+            agentRegistry);
 
         // 切换到子Agent（让工具过滤生效）
         agentRegistry.switchTo(agentId);
 
-        // 4. 执行查询（query() 内部会自动 addMessage + injectEnvironmentInfo + injectAgentSystemPrompt）
+        // 4. 执行查询（异步非阻塞：orTimeout 替代 get 阻塞）
         TaskOutput output;
         try {
-            LLMQueryEngine.QueryResult result = engine.query(taskPrompt).get(5, TimeUnit.MINUTES);
+            LLMQueryEngine.QueryResult result = engine.query(taskPrompt)
+                .orTimeout(DEFAULT_SYNC_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                .exceptionally(ex -> {
+                    Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                    String errorMsg = cause instanceof TimeoutException
+                        ? "Sub-agent task timed out after " + (DEFAULT_SYNC_TIMEOUT_MS / 1000) + "s"
+                        : "Sub-agent task failed: " + cause.getMessage();
+                    logger.warning("[LocalAgentDispatcher] Async task exception: " + errorMsg);
+                    return LLMQueryEngine.QueryResult.error(errorMsg);
+                })
+                .get(); // 最终 get 在 exceptionally 之后，不会再抛 ExecutionException
 
             // 5. 包装结果
             if (result != null && result.isSuccess()) {
@@ -443,6 +483,8 @@ public class LocalAgentDispatcher implements AgentDispatcher {
             triggerSubagentHook(HookEventType.SUBAGENT_STOP, agentName, task);
             // 切回 Orchestrator
             agentRegistry.switchTo("orchestrator");
+            // 归还引擎到池（子任务 session 通常是一次性的，完成后清理）
+            enginePool.evict(poolKey);
         }
         return output;
     }

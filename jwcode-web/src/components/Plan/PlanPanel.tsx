@@ -1,6 +1,7 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { usePlanStore } from '../../stores/planStore';
 import { useSessionStore } from '../../stores/sessionStore';
+import wsService from '../../services/websocket';
 
 import { PlanTask, StructuredTask } from '../../types';
 import { KanbanBoard } from './KanbanBoard';
@@ -11,8 +12,9 @@ import { PlanSkeleton } from './PlanSkeleton';
 import { TaskTree } from './TaskTree';
 import { StepProgressBar } from './StepProgressBar';
 import { StructuredTaskView, StructuredTaskSummary } from './StructuredTaskView';
+import SprintContractView from './SprintContractView';
 
-type ViewMode = 'kanban' | 'timeline' | 'tree' | 'structured';
+type ViewMode = 'kanban' | 'timeline' | 'tree' | 'structured' | 'contract';
 
 /**
  * PlanPanel — Plan/Act 模式面板
@@ -40,6 +42,8 @@ export function PlanPanel() {
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('kanban');
   const [showPlanContent, setShowPlanContent] = useState(false);
+  const [refineInput, setRefineInput] = useState('');
+  const refineTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   // 获取当前 session 的 plan
   const currentPlan = activeSessionId ? plansBySession[activeSessionId] : null;
@@ -133,11 +137,38 @@ export function PlanPanel() {
   // === 模式历史 ===
   const lastModeChange = modeHistory.length > 0 ? modeHistory[modeHistory.length - 1] : null;
 
-  // Planning phase - show skeleton or confirm button
+  // === 辅助函数：递归计算总任务数 ===
+  const countTotalTasks = (tasks: StructuredTask[]): number => {
+    let count = 0;
+    for (const t of tasks) {
+      count++;
+      if (t.children?.length) {
+        count += countTotalTasks(t.children);
+      }
+    }
+    return count;
+  };
+
+  // === 发送完善计划请求 ===
+  const handleRefine = useCallback(() => {
+    if (!refineInput.trim() || !activeSessionId) return;
+    const planStore = usePlanStore.getState();
+    planStore.setPlanRefining(true);
+    wsService.send({
+      type: 'plan_refine',
+      sessionId: activeSessionId,
+      message: refineInput.trim(),
+    });
+    setRefineInput('');
+  }, [refineInput, activeSessionId]);
+
+  // Planning phase - show skeleton, task preview, or confirm button
   if (planPhase === 'planning' || !currentPlan) {
     const showConfirm = usePlanStore((s) => s.showConfirmButton);
+    const planRefining = usePlanStore((s) => s.planRefining);
     const confirmPlan = usePlanStore((s) => s.confirmPlan);
     const clearPendingPlan = usePlanStore((s) => s.clearPendingPlan);
+    const totalTaskCount = countTotalTasks(currentStructuredTasks);
 
     return (
       <div className="flex-1 flex flex-col overflow-hidden">
@@ -154,37 +185,117 @@ export function PlanPanel() {
         </div>
         <div className="flex-1 flex flex-col overflow-hidden p-4">
           {showConfirm ? (
-            <div className="flex flex-col items-center justify-center h-full">
-              <div className="max-w-lg text-center">
-                <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-purple-500/10 flex items-center justify-center">
-                  <span className="text-2xl">📋</span>
-                </div>
-                <h2 className="text-lg font-semibold text-dark-text mb-2">
-                  AI 分析完成
-                </h2>
-                <p className="text-sm text-dark-muted mb-6">
-                  AI 已完成需求分析并生成了任务计划。请查看上方 AI 的回复内容，
-                  确认无误后点击下方按钮开始执行。
-                </p>
-                <div className="flex items-center justify-center gap-3">
-                  <button
-                    onClick={() => confirmPlan(activeSessionId || '')}
-                    className="px-6 py-2.5 text-sm bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors flex items-center gap-2"
-                  >
-                    <span>⚡</span>
-                    <span>确认执行</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      clearPendingPlan(activeSessionId || '');
-                      handleNewPlan();
-                    }}
-                    className="px-4 py-2.5 text-sm bg-dark-surface border border-dark-border rounded-lg hover:bg-dark-hover transition-colors"
-                  >
-                    重新规划
-                  </button>
+            <div className="flex flex-col h-full">
+              {/* 确认执行按钮区域 */}
+              <div className="flex flex-col items-center justify-center mb-4 shrink-0">
+                <div className="max-w-lg text-center">
+                  <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-purple-500/10 flex items-center justify-center">
+                    <span className="text-2xl">📋</span>
+                  </div>
+                  <h2 className="text-lg font-semibold text-dark-text mb-2">
+                    AI 分析完成
+                  </h2>
+                  <p className="text-sm text-dark-muted mb-4">
+                    AI 已完成需求分析并生成了任务计划。请查看上方 AI 的回复内容，
+                    确认无误后点击下方按钮开始执行。
+                  </p>
+                  {/* 完善计划输入框 */}
+                  <div className="w-full mb-4">
+                    <div className="relative">
+                      <textarea
+                        ref={refineTextareaRef}
+                        value={refineInput}
+                        onChange={(e) => setRefineInput(e.target.value)}
+                        placeholder="可以输入补充说明来调整任务计划..."
+                        className="w-full bg-dark-bg border border-dark-border rounded-lg px-3 py-2 text-sm text-dark-text placeholder-dark-muted resize-none focus:outline-none focus:border-accent-blue min-h-[60px] max-h-[120px] transition-colors"
+                        rows={2}
+                        disabled={planRefining}
+                        onInput={(e) => {
+                          const target = e.currentTarget;
+                          target.style.height = 'auto';
+                          target.style.height = Math.min(target.scrollHeight, 120) + 'px';
+                        }}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between mt-2">
+                      <span className="text-[10px] text-dark-muted">
+                        {planRefining ? '🔄 正在重新规划...' : '完善后 AI 将重新生成任务计划'}
+                      </span>
+                      <button
+                        onClick={handleRefine}
+                        disabled={!refineInput.trim() || planRefining}
+                        className="px-3 py-1.5 text-xs bg-accent-blue text-white rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-1"
+                      >
+                        {planRefining ? '🔄 规划中...' : '📋 完善计划'}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-center gap-3">
+                    <button
+                      onClick={() => confirmPlan(activeSessionId || '')}
+                      disabled={planRefining}
+                      className="px-6 py-2.5 text-sm bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <span>⚡</span>
+                      <span>确认执行</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        clearPendingPlan(activeSessionId || '');
+                        handleNewPlan();
+                      }}
+                      disabled={planRefining}
+                      className="px-4 py-2.5 text-sm bg-dark-surface border border-dark-border rounded-lg hover:bg-dark-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      重新规划
+                    </button>
+                  </div>
                 </div>
               </div>
+              {/* 结构化任务预览（如果有） */}
+              {hasStructuredTasks && (
+                <div className="flex-1 overflow-y-auto min-h-0">
+                  <div className="bg-dark-surface rounded-lg border border-dark-border p-4">
+                    <div className="mb-3 flex items-center justify-between">
+                      <h3 className="text-sm font-medium text-dark-text">
+                        ⚡ 结构化任务预览
+                      </h3>
+                      <span className="text-xs text-dark-muted">
+                        {currentStructuredTasks.length} 个阶段 · 共 {totalTaskCount} 个任务
+                      </span>
+                    </div>
+                    {/* 任务变更摘要 */}
+                    {(() => {
+                      const diff = usePlanStore.getState().taskDiffBySession[activeSessionId || ''];
+                      if (!diff || diff.total === 0) return null;
+                      return (
+                        <div className="mb-3 flex flex-wrap gap-2">
+                          {diff.added.length > 0 && (
+                            <span className="text-[11px] px-2 py-0.5 rounded-full bg-green-500/15 text-green-400 border border-green-500/30">
+                              🆕 +{diff.added.length} 新增
+                            </span>
+                          )}
+                          {diff.updated.length > 0 && (
+                            <span className="text-[11px] px-2 py-0.5 rounded-full bg-yellow-500/15 text-yellow-400 border border-yellow-500/30">
+                              🔄 ~{diff.updated.length} 更新
+                            </span>
+                          )}
+                          {diff.removed.length > 0 && (
+                            <span className="text-[11px] px-2 py-0.5 rounded-full bg-red-500/15 text-red-400 border border-red-500/30">
+                              🗑️ -{diff.removed.length} 删除
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()}
+                    <StructuredTaskView
+                      tasks={currentStructuredTasks}
+                      activeTaskId={activeTaskId}
+                      onTaskClick={handleTaskClick}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <PlanSkeleton />
@@ -362,6 +473,16 @@ export function PlanPanel() {
                   </span>
                 )}
               </button>
+              <button
+                onClick={() => setViewMode('contract')}
+                className={`px-3 py-1.5 text-xs rounded-md transition-all ${
+                  viewMode === 'contract'
+                    ? 'bg-accent-blue text-white'
+                    : 'text-dark-muted hover:text-dark-text'
+                }`}
+              >
+                Sprint
+              </button>
             </div>
 
             {/* Progress summary */}
@@ -446,6 +567,9 @@ export function PlanPanel() {
                 </div>
               )}
             </div>
+          )}
+          {viewMode === 'contract' && (
+            <SprintContractView sessionId={activeSessionId || ''} />
           )}
         </div>
 

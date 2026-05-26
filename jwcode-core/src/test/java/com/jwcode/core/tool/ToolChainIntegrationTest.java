@@ -6,8 +6,14 @@ import com.jwcode.core.tool.context.ToolExecutionContext;
 import com.jwcode.core.tool.execution.ToolExecutionStateMachine;
 import com.jwcode.core.tool.execution.ToolExecutionState;
 import com.jwcode.core.tool.ToolProgress;
+import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.*;
 
+import java.io.IOException;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
@@ -248,5 +254,74 @@ public class ToolChainIntegrationTest {
             () -> assertDoesNotThrow(() -> registry.getTool("GlobTool")),
             () -> assertDoesNotThrow(() -> registry.getTool("GrepTool"))
         );
+    }
+
+    // ==================== DownloadTool 集成测试 ====================
+
+    @Test
+    @DisplayName("DownloadTool 集成 - 注册与元数据完整性")
+    void testDownloadToolRegistryAndMetadata() {
+        assertTrue(registry.contains("Download"), "DownloadTool 应在注册表中");
+        Tool tool = registry.getTool("Download");
+        assertAll("DownloadTool 元数据",
+            () -> assertEquals("Download", tool.getName()),
+            () -> assertNotNull(tool.getDescription(), "描述不应为空"),
+            () -> assertFalse(tool.getDescription().isBlank(), "描述不应为空白"),
+            () -> assertNotNull(tool.getPrompt(), "Prompt 不应为空"),
+            () -> assertFalse(tool.getPrompt().isBlank(), "Prompt 不应为空白"),
+            () -> assertNotNull(tool.getInputSchema(), "InputSchema 不应为 null"),
+            () -> assertNotNull(tool.getInputType(), "InputType 不应为 null"),
+            () -> assertNotNull(tool.getOutputType(), "OutputType 不应为 null"),
+            () -> assertEquals(ToolCategory.FILE_OPERATION, tool.getCategory()),
+            () -> assertFalse(tool.isReadOnly(null), "Download 不是只读工具"),
+            () -> assertTrue(tool.getSideEffects().contains(SideEffect.NETWORK)),
+            () -> assertTrue(tool.getSideEffects().contains(SideEffect.WRITE_FILE))
+        );
+    }
+
+    @Test
+    @DisplayName("DownloadTool 集成 - 通过 ToolExecutor 执行下载")
+    void testDownloadToolIntegrationViaExecutor() throws Exception {
+        // 启动本地 HTTP 服务器
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        int port = server.getAddress().getPort();
+        server.setExecutor(null);
+        String content = "DownloadTool integration test content";
+        server.createContext("/integrate.txt", exchange -> {
+            exchange.getResponseHeaders().set("Content-Type", "text/plain");
+            byte[] body = content.getBytes();
+            exchange.sendResponseHeaders(200, body.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(body);
+            }
+        });
+        server.start();
+
+        try {
+            // 通过 ToolExecutor 执行 Download 工具
+            JsonNode input = mapper.createObjectNode()
+                .put("url", "http://localhost:" + port + "/integrate.txt")
+                .put("destination", "target/integrate-test-download.txt");
+
+            ToolExecutionContext context = ToolExecutionContext.builder().build();
+
+            CompletableFuture<ToolExecutor.ToolExecutionResult> future =
+                executor.execute("Download", input, context);
+
+            ToolExecutor.ToolExecutionResult result = future.get(30, TimeUnit.SECONDS);
+
+            assertNotNull(result, "执行结果不应为 null");
+            assertTrue(result.isSuccess(), "下载应成功");
+
+            // 验证文件存在
+            Path downloaded = Path.of("target/integrate-test-download.txt");
+            assertTrue(Files.exists(downloaded), "下载的文件应存在");
+            String fileContent = Files.readString(downloaded);
+            assertEquals(content, fileContent, "文件内容应匹配");
+            Files.deleteIfExists(downloaded);
+
+        } finally {
+            server.stop(0);
+        }
     }
 }

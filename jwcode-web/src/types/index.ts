@@ -9,6 +9,27 @@ export interface Message {
   thinking?: string;
   steps?: Step[];
   toolCalls?: ToolCall[];
+  /** Hook 审批信息 — 当此消息为权限申请时存在 */
+  hookApproval?: HookApprovalInfo;
+}
+
+/**
+ * HookApprovalInfo — 嵌入对话的权限申请信息。
+ *
+ * 当后端 Hook 返回 ASK 决策时，前端在对话中插入一条包含此信息的消息，
+ * 用户可以直接在对话中点击"允许"/"拒绝"或通过下拉菜单选择更细粒度的控制。
+ */
+export interface HookApprovalInfo {
+  /** 审批 ID */
+  approvalId: string;
+  /** 工具名称 */
+  toolName: string;
+  /** ASK 载荷（展示给用户的提示信息） */
+  askPayload: string;
+  /** 审批状态：pending=待审批, approved=已批准, denied=已拒绝 */
+  status: 'pending' | 'approved' | 'denied';
+  /** 时间戳 */
+  timestamp: number;
 }
 
 // Step types
@@ -203,6 +224,8 @@ export type WSMessageType =
   | 'plan_complete'
   | 'plan_error'
   | 'plan_confirm'
+  | 'plan_refine'
+  | 'plan_mode_change'
   // 步骤提示消息
   | 'step_prompt'
   // TodoWrite 消息
@@ -220,7 +243,12 @@ export type WSMessageType =
   | 'pause'
   | 'resume'
   | 'generation_paused'
-  | 'generation_resumed';
+  | 'generation_resumed'
+  // Hook 审批消息
+  | 'hook_ask'
+  | 'hook_allow'
+  | 'hook_deny'
+  | 'hook_response_ack';
 
 
 export interface WSMessage {
@@ -259,8 +287,59 @@ export interface UpdateTaskInput {
   progress?: number;
 }
 
+// 会话内任务类型（每个会话维护独立的任务列表）
+// 统一数据源：SessionTaskBoard 和 TaskListPanel 都从此读取
+export interface SessionTask {
+  id: string;
+  title: string;
+  completed: boolean;
+  createdAt: number;
+  /** 关联的后端任务 ID（通过 MCP TaskCreate 创建的任务） */
+  backendId?: string;
+  /** 后端任务状态 */
+  backendStatus?: TaskStatus;
+  /** 后端任务描述 */
+  description?: string;
+
+  // === Plan 任务扩展字段（AI 任务执行状态） ===
+  /** Plan 任务状态：pending/running/completed/failed/skipped */
+  planStatus?: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+  /** Agent 类型 */
+  agentType?: string;
+  /** 依赖的其他任务 ID */
+  dependencies?: string[];
+  /** 子任务列表 */
+  children?: SessionTask[];
+  /** 执行结果 */
+  result?: string;
+  /** 错误信息 */
+  error?: string;
+  /** 开始时间 */
+  startedAt?: number;
+  /** 完成时间 */
+  completedAt?: number;
+  /** 进度 0-100 */
+  progress?: number;
+  /** 执行日志 */
+  logs?: string[];
+  /** 步骤编号 */
+  stepNumber?: number;
+  /** 步骤动作 */
+  action?: string;
+  /** AI 提示词 */
+  stepPrompt?: string;
+  /** 任务上下文 */
+  context?: Record<string, string>;
+  /** 执行模式 */
+  executionMode?: 'SEQUENTIAL' | 'CONCURRENT';
+  /** 所属阶段 */
+  phase?: string;
+  /** 并发组 ID */
+  parallelGroup?: string;
+}
+
 // Tab types
-export type TabId = 'chat' | 'plan' | 'terminal' | 'files' | 'models' | 'tools' | 'skills' | 'agents' | 'settings' | 'logs' | 'tasks';
+export type TabId = 'chat' | 'plan' | 'terminal' | 'files' | 'models' | 'tools' | 'skills' | 'agents' | 'settings' | 'logs';
 
 export interface Tab {
   id: TabId;

@@ -20,6 +20,8 @@ import java.util.logging.Logger;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
+import com.jwcode.core.tool.FileNameCache;
+
 /**
  * Glob 文件搜索工具（重构后）
  * 
@@ -35,8 +37,11 @@ public class GlobTool implements Tool<GlobInput, GlobOutput, GlobTool.GlobProgre
     
     private static final Logger logger = Logger.getLogger(GlobTool.class.getName());
     
-    private static final int DEFAULT_MAX_RESULTS = 100;
-    private static final int MAX_MAX_RESULTS = 1000;
+    private static final int DEFAULT_MAX_RESULTS = 500;
+    private static final int MAX_MAX_RESULTS = 5000;
+
+    /** 文件名索引缓存（加速重复搜索） */
+    private FileNameCache fileNameCache;
     
     @Override
     public String getName() {
@@ -73,6 +78,8 @@ public class GlobTool implements Tool<GlobInput, GlobOutput, GlobTool.GlobProgre
                
                排除模式示例:
                 - "**/node_modules/**" - 排除 node_modules 目录
+               
+               注意: 结果会被缓存，相同参数的重复搜索会直接返回缓存结果，无需重复调用。
                 - "**/*.min.js" - 排除压缩的 JS 文件
                 """;
     }
@@ -156,6 +163,41 @@ public class GlobTool implements Tool<GlobInput, GlobOutput, GlobTool.GlobProgre
     }
     
     /**
+     * 获取或初始化 FileNameCache。
+     */
+    private FileNameCache getFileNameCache(ToolExecutionContext context) {
+        if (fileNameCache == null) {
+            java.nio.file.Path wd = context != null && context.getWorkingDirectory() != null
+                ? context.getWorkingDirectory()
+                : java.nio.file.Path.of(System.getProperty("user.dir"));
+            // 找到项目根（包含 .jwcode 目录的父目录）
+            java.nio.file.Path root = findProjectRoot(wd);
+            fileNameCache = new FileNameCache(root);
+            // 首次使用：如果缓存无效则重建
+            if (!fileNameCache.isValid()) {
+                fileNameCache.rebuild();
+            } else {
+                fileNameCache.refresh();
+            }
+        }
+        return fileNameCache;
+    }
+
+    /**
+     * 向上查找包含 .jwcode 目录的项目根。
+     */
+    private java.nio.file.Path findProjectRoot(java.nio.file.Path start) {
+        java.nio.file.Path current = start.normalize().toAbsolutePath();
+        while (current != null) {
+            if (java.nio.file.Files.exists(current.resolve(".jwcode"))) {
+                return current;
+            }
+            current = current.getParent();
+        }
+        return start.normalize().toAbsolutePath();
+    }
+
+    /**
      * 搜索文件
      */
     private ToolResult<GlobOutput> searchFiles(GlobInput input, ToolExecutionContext context) {
@@ -175,8 +217,26 @@ public class GlobTool implements Tool<GlobInput, GlobOutput, GlobTool.GlobProgre
              Path startPath = Paths.get(searchPath);
             
             logger.fine("GlobTool: 搜索 pattern=" + pattern + ", path=" + startPath + ", isRegex=" + isRegex);
-            
-            List<String> matchedFiles = performSearch(startPath, pattern, isRegex, excludePattern, maxResults);
+
+            // 【文件名缓存加速】优先使用 FileNameCache
+            boolean useCache = true;
+            // 如果搜索路径不是项目根目录，且不是以项目根开头的路径，则回退到全量遍历
+            if (context != null && context.getWorkingDirectory() != null) {
+                java.nio.file.Path wd = context.getWorkingDirectory();
+                java.nio.file.Path root = findProjectRoot(wd);
+                if (!startPath.normalize().toAbsolutePath().startsWith(root)) {
+                    useCache = false;
+                }
+            }
+
+            List<String> matchedFiles;
+            if (useCache) {
+                FileNameCache cache = getFileNameCache(context);
+                matchedFiles = cache.search(pattern, isRegex, excludePattern, maxResults);
+                logger.fine("GlobTool: 使用缓存搜索 | pattern=" + pattern + " | 结果数=" + matchedFiles.size());
+            } else {
+                matchedFiles = performSearch(startPath, pattern, isRegex, excludePattern, maxResults);
+            }
             
             // 构建输出
             GlobOutput output = GlobOutput.success(

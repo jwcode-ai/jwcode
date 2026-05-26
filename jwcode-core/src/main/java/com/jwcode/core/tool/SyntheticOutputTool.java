@@ -1,7 +1,11 @@
 package com.jwcode.core.tool;
+
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jwcode.core.tool.context.ToolExecutionContext;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 
 public class SyntheticOutputTool implements Tool<SyntheticOutputTool.Input, SyntheticOutputTool.Output, SyntheticOutputTool.Progress> {
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -16,7 +20,28 @@ public class SyntheticOutputTool implements Tool<SyntheticOutputTool.Input, Synt
     }
     
     @Override
-    public CompletableFuture<ToolResult<Output>> call(Input args, ToolContext context, CanUseToolFn canUseTool, Object parentMessage, java.util.function.Consumer<ToolProgress<Progress>> onProgress) {
+    public TypeReference<Input> getInputType() {
+        return new TypeReference<>() {};
+    }
+    
+    @Override
+    public TypeReference<Output> getOutputType() {
+        return new TypeReference<>() {};
+    }
+    
+    /**
+     * 新版 3 参数 call() — ToolExecutor 实际调用的入口
+     */
+    @Override
+    public CompletableFuture<ToolResult<Output>> call(
+            Input input,
+            ToolExecutionContext context,
+            Consumer<ToolProgress<Progress>> onProgress) {
+        return call(input, (ToolContext) null, null, null, onProgress);
+    }
+    
+    @Override
+    public CompletableFuture<ToolResult<Output>> call(Input args, ToolContext context, CanUseToolFn canUseTool, Object parentMessage, Consumer<ToolProgress<Progress>> onProgress) {
         return CompletableFuture.completedFuture(ToolResult.success(new Output()));
     }
     

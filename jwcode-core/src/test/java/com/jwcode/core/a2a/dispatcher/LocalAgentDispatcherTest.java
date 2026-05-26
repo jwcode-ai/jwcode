@@ -128,9 +128,15 @@ class LocalAgentDispatcherTest {
 
         CompletableFuture<TaskOutput> future = noLlmDispatcher.submitTask("Coder", task);
         ExecutionException ex = assertThrows(ExecutionException.class, () -> future.get());
-        assertTrue(ex.getCause() instanceof IllegalStateException,
+        // CompletableFuture.supplyAsync 内部会将非 CompletionException 包装一层
+        // 链: ExecutionException → CompletionException → IllegalStateException
+        Throwable rootCause = ex.getCause();
+        if (rootCause instanceof java.util.concurrent.CompletionException) {
+            rootCause = rootCause.getCause();
+        }
+        assertTrue(rootCause instanceof IllegalStateException,
                 "Should throw IllegalStateException when LLMService is null");
-        assertTrue(ex.getCause().getMessage().contains("LLMService not available"),
+        assertTrue(rootCause.getMessage().contains("LLMService not available"),
                 "Error message should mention LLMService not available");
     }
 

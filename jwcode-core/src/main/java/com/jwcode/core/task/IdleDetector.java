@@ -61,7 +61,7 @@ public class IdleDetector {
         });
 
         scheduler.scheduleAtFixedRate(this::check, CHECK_INTERVAL_MS, CHECK_INTERVAL_MS, TimeUnit.MILLISECONDS);
-        logger.info("[IdleDetector] 已启动");
+        logger.debug("[IdleDetector] 已启动");
     }
 
     /**
@@ -77,7 +77,7 @@ public class IdleDetector {
     public void stop() {
         running = false;
         scheduler.shutdownNow();
-        logger.info("[IdleDetector] 已停止");
+        logger.debug("[IdleDetector] 已停止");
     }
 
     // ==================== 内部检查 ====================
@@ -96,7 +96,7 @@ public class IdleDetector {
                 continue;
             }
 
-            logger.info("[IdleDetector] 空闲时检测到已完成任务 | taskId={} | idle={}ms",
+            logger.debug("[IdleDetector] 空闲时检测到已完成任务 | taskId={} | idle={}ms",
                 task.getId(), idleDuration);
 
             task.addTag("_idleHandled");

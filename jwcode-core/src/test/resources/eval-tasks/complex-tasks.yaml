@@ -1,0 +1,128 @@
+# ============================================================
+# 🔴 复杂任务集 — 能力评测
+# 多步操作 + 多 Agent 协作 + 分析推理，验证高级能力
+# ============================================================
+tasks:
+
+  - id: COMPLEX_001
+    name: "包依赖关系分析"
+    description: "分析 jwcode-core 模块的包依赖关系，生成依赖图"
+    difficulty: COMPLEX
+    capability: code_understand
+    userPrompt: "分析 jwcode-core 模块中 com.jwcode.core 包下的所有子包之间的依赖关系（import 关系），找出哪个包被依赖最多，哪个包依赖其他包最多，输出分析报告"
+    acceptanceChecks:
+      - type: DIR_EXISTS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core" }
+      - type: FILE_CONTENT_CONTAINS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/a2a/A2AConfig.java", substring: "import" }
+    timeoutSeconds: 300
+    aiEvalEnabled: true
+    tags: [code, analysis, dependency, architecture]
+
+  - id: COMPLEX_002
+    name: "测试覆盖率缺失分析"
+    description: "找出所有没有对应测试的源文件，生成改进报告"
+    difficulty: COMPLEX
+    capability: code_understand
+    userPrompt: "扫描 jwcode-core/src/main/java 目录下的所有 Java 源文件，对照 jwcode-core/src/test/java 目录下的测试文件，找出哪些源文件没有对应的测试类，按包分组输出缺失报告"
+    acceptanceChecks:
+      - type: DIR_EXISTS
+        params: { path: "jwcode-core/src/main/java" }
+      - type: DIR_EXISTS
+        params: { path: "jwcode-core/src/test/java" }
+      - type: FILE_CONTENT_CONTAINS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/eval/EvalTask.java", substring: "acceptanceChecks" }
+    timeoutSeconds: 300
+    aiEvalEnabled: true
+    tags: [code, analysis, test, coverage]
+
+  - id: COMPLEX_003
+    name: "代码重构方案设计"
+    description: "分析指定模块的代码结构，给出重构建议"
+    difficulty: COMPLEX
+    capability: code_understand
+    userPrompt: "分析 jwcode-core 中 tool 包的结构，了解所有工具类的组织方式，评估当前设计的优缺点，给出重构建议方案（包括包结构调整、接口抽取、公共逻辑提取等）"
+    acceptanceChecks:
+      - type: DIR_EXISTS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/tool" }
+      - type: FILE_CONTENT_CONTAINS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/tool/ToolRegistry.java", substring: "register" }
+    timeoutSeconds: 300
+    aiEvalEnabled: true
+    tags: [code, analysis, refactor, architecture]
+
+  - id: COMPLEX_004
+    name: "性能瓶颈识别"
+    description: "分析项目中的潜在性能问题"
+    difficulty: COMPLEX
+    capability: code_understand
+    userPrompt: "分析 jwcode-core 模块中的代码，查找潜在的性能问题（如不必要的对象创建、低效的数据结构、可能的 N+1 查询等），输出性能分析报告和改进建议"
+    acceptanceChecks:
+      - type: DIR_EXISTS
+        params: { path: "jwcode-core/src/main/java" }
+      - type: FILE_CONTENT_CONTAINS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/eval/EvalTask.java", substring: "timeoutSeconds" }
+    timeoutSeconds: 300
+    aiEvalEnabled: true
+    tags: [code, analysis, performance]
+
+  - id: COMPLEX_005
+    name: "Agent 协作任务：生成代码并审查"
+    description: "让 CoderAgent 生成代码，ReviewerAgent 审查，验证 Agent 协作"
+    difficulty: COMPLEX
+    capability: agent_collab
+    userPrompt: "请帮我完成以下任务：1) 在 jwcode-core/src/main/java/com/jwcode/core/eval/ 下创建一个 StringUtils.java 工具类，包含 isEmpty、isBlank、truncate 三个静态方法 2) 检查生成的代码是否符合 Java 编码规范"
+    acceptanceChecks:
+      - type: FILE_EXISTS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/eval/StringUtils.java" }
+      - type: FILE_CONTENT_CONTAINS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/eval/StringUtils.java", substring: "isEmpty" }
+      - type: FILE_CONTENT_CONTAINS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/eval/StringUtils.java", substring: "isBlank" }
+      - type: FILE_CONTENT_CONTAINS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/eval/StringUtils.java", substring: "truncate" }
+    timeoutSeconds: 180
+    aiEvalEnabled: true
+    skipInMockMode: true
+    tags: [agent, collaboration, code]
+
+  - id: COMPLEX_006
+    name: "错误恢复能力测试"
+    description: "执行错误命令后尝试恢复，验证系统的容错能力"
+    difficulty: COMPLEX
+    capability: error_resilience
+    userPrompt: "先执行一个不存在的命令 'nonexistent-cmd-12345'，观察错误信息，然后执行 'echo recovery-success' 确认系统仍然正常工作"
+    acceptanceChecks:
+      - type: COMMAND_EXIT_CODE_ZERO
+        params: { command: "echo recovery-success" }
+    timeoutSeconds: 300
+    aiEvalEnabled: true
+    tags: [error, resilience, recovery]
+
+  - id: COMPLEX_007
+    name: "多步骤数据分析"
+    description: "综合多个数据源进行分析"
+    difficulty: COMPLEX
+    capability: code_understand
+    userPrompt: "分析 jwcode-core 模块的代码规模：1) 统计 src/main/java 下有多少个 Java 文件 2) 统计 src/test/java 下有多少个测试文件 3) 计算测试文件与源文件的比例"
+    acceptanceChecks:
+      - type: DIR_EXISTS
+        params: { path: "jwcode-core/src/main/java" }
+      - type: DIR_EXISTS
+        params: { path: "jwcode-core/src/test/java" }
+    timeoutSeconds: 300
+    aiEvalEnabled: true
+    tags: [code, analysis, statistics]
+
+  - id: COMPLEX_008
+    name: "Hook 系统能力验证"
+    description: "验证 Hook 系统的注册和触发机制"
+    difficulty: COMPLEX
+    capability: tool_call
+    userPrompt: "查看 jwcode-core 中 hook 包的结构，了解有哪些 Hook 类型和事件类型，列出所有支持的 HookEventType"
+    acceptanceChecks:
+      - type: DIR_EXISTS
+        params: { path: "jwcode-core/src/main/java/com/jwcode/core/hook" }
+    timeoutSeconds: 300
+    aiEvalEnabled: true
+    tags: [hook, system, analysis]

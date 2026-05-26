@@ -186,6 +186,12 @@
                 <artifactId>jline-reader</artifactId>
                 <version>${jline.version}</version>
             </dependency>
+            <!-- JNA 终端提供者：Windows 原生控制台 API，解决 CJK 输入截断 -->
+            <dependency>
+                <groupId>org.jline</groupId>
+                <artifactId>jline-terminal-jna</artifactId>
+                <version>${jline.version}</version>
+            </dependency>
 
             <dependency>
                 <groupId>com.squareup.okhttp3</groupId>

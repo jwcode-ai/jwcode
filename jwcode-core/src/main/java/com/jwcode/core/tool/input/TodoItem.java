@@ -1,5 +1,6 @@
 package com.jwcode.core.tool.input;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
@@ -15,6 +16,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * 
  * <p>状态机：pending → in_progress → completed（任意时刻只有一个 in_progress）</p>
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 public record TodoItem(
     
     /** 唯一标识符 */

@@ -170,6 +170,9 @@ public class NotebookParser {
      */
     public String toJson(Notebook notebook) {
         try {
+            // 确保 Notebook 结构完整（Jupyter 规范要求）
+            ensureCompleteStructure(notebook);
+            
             // 使用自定义的 PrettyPrinter 确保输出格式与 Jupyter 兼容
             DefaultPrettyPrinter printer = new DefaultPrettyPrinter();
             printer.indentArraysWith(DefaultIndenter.SYSTEM_LINEFEED_INSTANCE);
@@ -178,6 +181,64 @@ public class NotebookParser {
         } catch (Exception e) {
             logger.log(Level.SEVERE, "Failed to serialize notebook", e);
             throw new RuntimeException("Failed to serialize notebook", e);
+        }
+    }
+    
+    /**
+     * 确保 Notebook 结构完整，符合 Jupyter Notebook 规范
+     * 修复缺少的必需字段，防止序列化时丢失关键元数据
+     */
+    private void ensureCompleteStructure(Notebook notebook) {
+        // 确保 nbformat 和 nbformat_minor 有值
+        if (notebook.getNbformat() == 0) {
+            notebook.setNbformat(4);
+        }
+        if (notebook.getNbformatMinor() == 0) {
+            notebook.setNbformatMinor(5);
+        }
+        
+        // 确保 metadata 不为 null
+        if (notebook.getMetadata() == null) {
+            notebook.setMetadata(new Notebook.NotebookMetadata());
+        }
+        
+        // 确保 kernelspec 存在
+        if (notebook.getMetadata().getKernelSpec() == null) {
+            Notebook.KernelSpec kernelSpec = new Notebook.KernelSpec();
+            kernelSpec.setName("python3");
+            kernelSpec.setDisplayName("Python 3 (ipykernel)");
+            kernelSpec.setLanguage("python");
+            notebook.getMetadata().setKernelSpec(kernelSpec);
+        }
+        
+        // 确保 language_info 存在
+        if (notebook.getMetadata().getLanguageInfo() == null) {
+            Notebook.LanguageInfo langInfo = new Notebook.LanguageInfo();
+            langInfo.setName("python");
+            langInfo.setVersion("3.10.0");
+            notebook.getMetadata().setLanguageInfo(langInfo);
+        }
+        
+        // 确保每个 cell 有 id 和 cell_type
+        if (notebook.getCells() != null) {
+            for (int i = 0; i < notebook.getCells().size(); i++) {
+                NotebookCell cell = notebook.getCells().get(i);
+                if (cell.getId() == null || cell.getId().isEmpty()) {
+                    cell.setId(String.format("%08x", i));
+                }
+                if (cell.getCellType() == null) {
+                    cell.setCellType(NotebookCell.CellType.CODE);
+                }
+                if (cell.getSource() == null) {
+                    cell.setSource(new java.util.ArrayList<>());
+                }
+                if (cell.getOutputs() == null) {
+                    cell.setOutputs(new java.util.ArrayList<>());
+                }
+                if (cell.getMetadata() == null) {
+                    cell.setMetadata(new java.util.HashMap<>());
+                }
+            }
         }
     }
     

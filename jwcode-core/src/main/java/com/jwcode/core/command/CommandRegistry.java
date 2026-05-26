@@ -98,6 +98,7 @@ public class CommandRegistry {
         registry.register(new ConfigCommand());
         registry.register(new StatusCommand());
         registry.register(new ModelCommand());
+        registry.register(new EvalCommand());
         return registry;
     }
 }

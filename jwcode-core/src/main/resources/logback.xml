@@ -1,7 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
-    <!-- 控制台输出 -->
+    <!-- 控制台输出（输出到 stderr，避免干扰 JLine3 的 stdout 行编辑） -->
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <target>System.err</target>
+        <encoder>
+            <charset>UTF-8</charset>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- JLine3 感知输出：交互模式下使用 printAbove 避免覆盖提示符 -->
+    <appender name="JLINE3" class="com.jwcode.core.terminal.JLine3Appender">
         <encoder>
             <charset>UTF-8</charset>
             <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
@@ -22,7 +31,10 @@
     </appender>
 
     <!-- JWCode 日志级别 -->
-    <logger name="com.jwcode" level="INFO" />
+    <logger name="com.jwcode" level="INFO" additivity="false">
+        <appender-ref ref="JLINE3" />
+        <appender-ref ref="FILE" />
+    </logger>
     <logger name="com.jwcode.core.a2a" level="INFO" />
     <logger name="com.jwcode.core.tool" level="INFO" />
 
@@ -30,7 +42,7 @@
     <logger name="org.java_websocket" level="WARN" />
     <logger name="io.netty" level="WARN" />
 
-    <!-- 根日志级别 -->
+    <!-- 根日志级别：CONSOLE 作为兜底（非 com.jwcode 的日志走这里） -->
     <root level="WARN">
         <appender-ref ref="CONSOLE" />
         <appender-ref ref="FILE" />

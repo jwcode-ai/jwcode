@@ -7,6 +7,9 @@ import com.jwcode.core.a2a.model.AgentCard;
 import com.jwcode.core.a2a.model.TaskOutput;
 import com.jwcode.core.api.PlanTaskBroadcaster;
 import com.jwcode.core.config.ResourcePromptLoader;
+import com.jwcode.core.hook.HookSystemInitializer;
+import com.jwcode.core.agent.AgentMessageBus;
+import com.jwcode.core.agent.AgentStateManager;
 import com.jwcode.core.llm.LLMService;
 import com.jwcode.core.model.PlanTask;
 import com.jwcode.core.model.StructuredTask;
@@ -27,6 +30,8 @@ import com.jwcode.core.tool.ToolRegistry;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+
+import java.nio.file.Path;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -99,6 +104,18 @@ public class EnhancedOrchestratorAgent {
     
     /** 分层任务表征（Phase 4 接线）：防 Goal 漂移 */
     private LayeredTaskRepresentation layeredTask;
+    
+    /** Agent 消息总线 — 用于 Agent 间事件发布/订阅 */
+    private final AgentMessageBus messageBus;
+    
+    /** Agent 状态管理器 — 用于状态持久化和跨会话恢复 */
+    private final AgentStateManager stateManager;
+    
+    /** Agent 唯一标识 */
+    private final String agentId;
+    
+    /** Agent 名称 */
+    private final String agentName;
 
     /**
      * 默认构造器（无 LLMService — 子Agent将回退到模拟执行）
@@ -133,6 +150,10 @@ public class EnhancedOrchestratorAgent {
         this.llmService = llmService;
         this.taskAgent = new TaskAgent();
         this.currentStructuredTasks = new ArrayList<>();
+        this.messageBus = new AgentMessageBus();
+        this.stateManager = new AgentStateManager();
+        this.agentId = "enhanced-orchestrator-" + UUID.randomUUID().toString().substring(0, 8);
+        this.agentName = "EnhancedOrchestratorAgent";
         initA2A(toolRegistry, toolExecutor, agentRegistry);
     }
 
@@ -146,6 +167,20 @@ public class EnhancedOrchestratorAgent {
     }
 
     /**
+     * 获取 Agent 唯一标识
+     */
+    public String getId() {
+        return agentId;
+    }
+
+    /**
+     * 获取 Agent 名称
+     */
+    public String getName() {
+        return agentName;
+    }
+
+    /**
      * 初始化 A2A 协议支持
      * 将 ToolRegistry、ToolExecutor、AgentRegistry 传递给 A2AFacade，Orchestrator 自身不持有
      */
@@ -156,6 +191,23 @@ public class EnhancedOrchestratorAgent {
             this.a2aFacade = new A2AFacade(registry, new A2AConfig(), llmService, toolRegistry, toolExecutor);
             logger.info("A2A Facade initialized: " + a2aFacade.getDispatcherName()
                 + " | llmService=" + (llmService != null ? "available" : "null (mock fallback)"));
+            
+            // 发布 Agent 初始化事件
+            messageBus.publish("agent.init", Map.of(
+                "agentId", getId(),
+                "agentName", getName(),
+                "timestamp", java.time.Instant.now().toString()
+            ));
+            
+            // 初始化 Hook 系统（接线：HookRegistry → HookChain → 三大拦截点）
+            try {
+                Path projectRoot = Path.of(System.getProperty("user.dir", "."));
+                HookSystemInitializer.initialize(
+                    projectRoot, toolExecutor, null,
+                    a2aFacade.getLocalDispatcher());
+            } catch (Exception hookEx) {
+                logger.warning("[Orchestrator] Hook system init skipped: " + hookEx.getMessage());
+            }
         } catch (Exception e) {
             logger.warning("Failed to initialize A2A Facade: " + e.getMessage());
             this.a2aFacade = null;
@@ -202,6 +254,120 @@ public class EnhancedOrchestratorAgent {
             default:
                 return startNewTask(analysis, null);
         }
+    }
+
+    /**
+     * 仅执行规划阶段（Plan Only）— 两阶段流程的 Phase 1。
+     *
+     * <p>只做意图分析和任务拆解，生成计划文本和任务树，但不执行任何子任务。
+     * 生成的计划将通过 WebSocket 广播给前端，等待用户确认后由
+     * processConfirmedPlan() 执行。</p>
+     *
+     * <p>与 processInput() 的区别：
+     * <ul>
+     *   <li>processInput() = 规划 + 执行（一步完成，适用于简单/chat模式）</li>
+     *   <li>processPlanOnly() = 仅规划（适用于 Plan 模式的两阶段流程）</li>
+     * </ul>
+     * </p>
+     *
+     * @param userInput 用户输入
+     * @return 计划文本（供用户预览和确认）
+     */
+    public String processPlanOnly(String userInput) {
+        // Step 1: 意图识别
+        AnalysisResult analysis = intentAnalyzer.analyze(userInput, currentTaskId);
+
+        logger.info("[PlanOnly] Intent analysis: " + analysis);
+
+        // Step 2: 重置任务上下文（但不执行）
+        this.currentTaskId = UUID.randomUUID().toString().substring(0, 8);
+        this.currentTaskGoal = analysis.getSummary();
+        this.taskStartTime = LocalDateTime.now();
+        this.completedSubTasks.clear();
+        this.changes.clear();
+        this.testResults.clear();
+        this.reviewFindings.clear();
+        this.timeline.clear();
+        this.recommendations.clear();
+        this.contextBus.clear();
+
+        // 初始化分层任务表征
+        this.layeredTask = new LayeredTaskRepresentation(analysis.getSummary());
+
+        // 广播 plan_thinking — 更新规划状态
+        if (planTaskBroadcaster != null && sessionId != null) {
+            planTaskBroadcaster.broadcastPlanThinking(sessionId,
+                "正在分析需求: " + analysis.getSummary());
+        }
+
+        StringBuilder sb = new StringBuilder();
+
+        // 输出任务分析结果
+        sb.append("## 🔍 需求分析结果\n\n");
+        sb.append("| 维度 | 值 |\n");
+        sb.append("|------|-----|\n");
+        sb.append("| 任务 ID | `").append(currentTaskId).append("` |\n");
+        sb.append("| 任务类型 | ").append(analysis.getTaskType().getDisplayName()).append(" |\n");
+        sb.append("| 复杂度 | ").append(analysis.getComplexity().getDisplayName()).append(" |\n");
+        if (!analysis.getModulesInvolved().isEmpty()) {
+            sb.append("| 涉及模块 | ").append(String.join(", ", analysis.getModulesInvolved())).append(" |\n");
+        }
+        if (!analysis.getTechStack().isEmpty()) {
+            sb.append("| 技术栈 | ").append(analysis.getTechStack()).append(" |\n");
+        }
+        sb.append("\n");
+
+        // 生成执行计划
+        sb.append("## 📋 执行计划\n\n");
+
+        switch (analysis.getComplexity()) {
+            case SIMPLE:
+                sb.append("**复杂度**: 简单\n\n");
+                sb.append("**策略**: 直接指派给单个子Agent\n\n");
+                String simpleAgent = getAgentForTaskType(analysis.getTaskType());
+                sb.append("| 步骤 | Agent | 描述 |\n");
+                sb.append("|------|-------|------|\n");
+                sb.append("| 1 | ").append(simpleAgent).append(" | ").append(analysis.getSummary()).append(" |\n");
+                break;
+
+            case MEDIUM:
+                sb.append("**复杂度**: 中等\n\n");
+                sb.append("**策略**: 拆分为子任务串行执行\n\n");
+                List<SubTaskPlan> mediumSteps = buildMediumPlan(analysis, null);
+                sb.append("| 步骤 | Agent | 描述 |\n");
+                sb.append("|------|-------|------|\n");
+                int stepNum = 1;
+                for (SubTaskPlan step : mediumSteps) {
+                    sb.append("| ").append(stepNum++).append(" | ").append(step.agentName).append(" | ").append(step.description).append(" |\n");
+                }
+                break;
+
+            case COMPLEX:
+                sb.append("**复杂度**: 复杂\n\n");
+                sb.append("**策略**: 多阶段执行（调研→设计→实现→测试→审查→GAN迭代）\n\n");
+                sb.append("| 阶段 | Agent | 描述 |\n");
+                sb.append("|------|-------|------|\n");
+                sb.append("| 1 | Explorer | 代码库调研与结构分析 |\n");
+                sb.append("| 2 | Architect | 方案设计与接口定义 |\n");
+                sb.append("| 3 | Coder | 编码实现 |\n");
+                sb.append("| 4 | Tester | 测试验证 |\n");
+                sb.append("| 5 | Reviewer | 代码审查 |\n");
+                sb.append("| 6 | Generator⇄Evaluator | GAN迭代优化 |\n");
+                break;
+        }
+
+        sb.append("\n---\n");
+        sb.append("\n✅ **规划完成**。请确认以上计划，确认后将开始执行。\n");
+        sb.append("\n> 💡 提示：你可以修改计划或补充需求，然后重新生成。");
+
+        // 构建占位任务树（用于前端展示，实际执行时再填充）
+        if (planTaskBroadcaster != null && sessionId != null) {
+            // 先广播 plan_thinking 更新
+            planTaskBroadcaster.broadcastPlanThinking(sessionId,
+                "规划完成，等待用户确认...");
+        }
+
+        return sb.toString();
     }
 
     /**
@@ -1233,7 +1399,118 @@ public class EnhancedOrchestratorAgent {
         // Step 3: 初始化 TaskExecutionAgent
         initTaskExecutionAgent();
 
-        // Step 4: 使用 TaskExecutionAgent 逐步执行
+        // Step 4: 使用 TaskExecutionAgent 逐步执行（Do 阶段）
+        TaskExecutionAgent.ExecutionResult execResult = null;
+        if (taskExecutionAgent != null) {
+            sb.append("### 🚀 开始执行任务（Do 阶段）\n\n");
+
+            execResult = taskExecutionAgent.execute(structuredTasks, goal);
+
+            sb.append(formatExecutionResult(execResult));
+        } else {
+            sb.append("⚠️ TaskExecutionAgent 未初始化，无法执行任务。\n");
+            sb.append("请确保 A2AFacade 已正确配置。\n");
+            return sb.toString();
+        }
+
+        // Step 5: Check 阶段 — 验证执行结果
+        sb.append("\n---\n");
+        sb.append("### 🔍 结果验证（Check 阶段）\n\n");
+
+        boolean allPassed = true;
+        if (execResult != null && execResult.failedCount > 0) {
+            allPassed = false;
+            sb.append("⚠️ 检测到 **").append(execResult.failedCount).append("** 个子任务失败：\n\n");
+            for (String error : execResult.errors) {
+                sb.append("- ❌ ").append(error).append("\n");
+            }
+            sb.append("\n");
+        }
+
+        if (execResult != null && execResult.skippedCount > 0) {
+            sb.append("⏭️ **").append(execResult.skippedCount).append("** 个子任务被跳过。\n\n");
+        }
+
+        if (allPassed) {
+            sb.append("✅ **所有子任务执行成功！**\n\n");
+        }
+
+        // Step 6: Act 阶段 — 根据 Check 结果决策
+        sb.append("### 🎯 决策（Act 阶段）\n\n");
+
+        if (allPassed) {
+            sb.append("✅ **全部通过** — 任务完成，无需额外操作。\n");
+            // 广播 plan_complete
+            if (planTaskBroadcaster != null && sessionId != null) {
+                planTaskBroadcaster.broadcastPlanComplete(sessionId, "全部任务执行成功");
+            }
+        } else {
+            // 判断是否有关键路径失败
+            boolean criticalPathFailed = hasCriticalPathFailure(structuredTasks, execResult);
+
+            if (criticalPathFailed) {
+                sb.append("❌ **关键路径失败** — 需要人工介入。\n\n");
+                sb.append("建议：请检查上述错误，修改后重新执行。\n");
+                // 广播 plan_error
+                if (planTaskBroadcaster != null && sessionId != null) {
+                    planTaskBroadcaster.broadcastPlanError(sessionId,
+                        "关键路径执行失败，需要人工介入");
+                }
+            } else {
+                sb.append("⚠️ **非关键路径失败** — 已跳过失败任务，继续执行其余任务。\n\n");
+                sb.append("建议：检查非关键路径的错误，确认是否需要重新执行。\n");
+                // 广播 plan_complete（部分成功）
+                if (planTaskBroadcaster != null && sessionId != null) {
+                    planTaskBroadcaster.broadcastPlanComplete(sessionId,
+                        "部分任务执行完成（" + execResult.successCount + "成功，"
+                        + execResult.failedCount + "失败）");
+                }
+            }
+        }
+
+        return sb.toString();
+    }
+
+    /**
+     * 直接使用已解析的结构化任务列表执行（跳过 AI plan 文本解析步骤）。
+     *
+     * <p>这是 Phase 2 优化的核心方法 — 当 AI 在 Plan 模式下输出了 JSON 格式的
+     * 任务列表时，后端可以直接解析 JSON 并传入此方法，跳过 TaskAgent 的正则解析，
+     * 避免 Plan→Act 交接断裂。</p>
+     *
+     * @param structuredTasks 已解析的结构化任务列表
+     * @param goal            任务总体目标
+     * @return 执行结果字符串
+     */
+    public String executeWithStructuredTasks(List<StructuredTask> structuredTasks, String goal) {
+        // 重置上下文
+        this.currentTaskId = "plan-" + UUID.randomUUID().toString().substring(0, 8);
+        this.currentTaskGoal = goal;
+        this.taskStartTime = LocalDateTime.now();
+        this.currentStructuredTasks = new ArrayList<>(structuredTasks);
+
+        StringBuilder sb = new StringBuilder();
+
+        // Step 0: 注入 MemoryAgent 记忆上下文
+        if (memoryAgent != null && memoryAgent.isEnabled()) {
+            String memoryContext = memoryAgent.getPlanContextPrompt();
+            if (!memoryContext.isEmpty()) {
+                sb.append("## 🧠 项目记忆上下文\n\n");
+                sb.append("> MemoryAgent 提供的项目记忆已自动注入到任务分析中。\n\n");
+            }
+        }
+
+        sb.append("## 📋 结构化任务（JSON 解析）\n\n");
+        sb.append(formatStructuredTaskSummary(structuredTasks, 0));
+        sb.append("\n");
+
+        // Step 1: 广播结构化任务树到前端
+        broadcastStructuredTasks(structuredTasks);
+
+        // Step 2: 初始化 TaskExecutionAgent
+        initTaskExecutionAgent();
+
+        // Step 3: 使用 TaskExecutionAgent 逐步执行
         if (taskExecutionAgent != null) {
             sb.append("### 🚀 开始执行任务\n\n");
 
@@ -1245,6 +1522,9 @@ public class EnhancedOrchestratorAgent {
             sb.append("⚠️ TaskExecutionAgent 未初始化，无法执行任务。\n");
             sb.append("请确保 A2AFacade 已正确配置。\n");
         }
+
+        logger.info("[Orchestrator] executeWithStructuredTasks completed: goal=" + goal
+            + ", tasks=" + structuredTasks.size());
 
         return sb.toString();
     }
@@ -1324,81 +1604,18 @@ public class EnhancedOrchestratorAgent {
         if (planTaskBroadcaster == null || sessionId == null) return;
 
         try {
-            // 将 StructuredTask 转换为 PlanTask 树（向前兼容）
-            List<PlanTask> planTasks = new ArrayList<>();
-            for (StructuredTask st : tasks) {
-                planTasks.add(st.toPlanTask());
-            }
-
             com.fasterxml.jackson.databind.ObjectMapper mapper =
                 new com.fasterxml.jackson.databind.ObjectMapper();
-            String tasksJson = mapper.writeValueAsString(planTasks);
-            planTaskBroadcaster.broadcastPlanTasks(sessionId, tasksJson);
-
-            // 同时广播结构化任务元数据（含执行模式信息）
-            broadcastStructuredTaskMeta(tasks);
+            // 直接发送完整的 StructuredTask 列表，Jackson 自动序列化所有字段
+            // 前端期望格式: {"structuredTasks": [{"id":"...", "title":"...", "executionMode":"SEQUENTIAL", "phase":"IMPLEMENTATION", ...}]}
+            String payload = mapper.writeValueAsString(Map.of("structuredTasks", tasks));
+            planTaskBroadcaster.broadcastPlanData(sessionId, payload);
 
             logger.info("[Orchestrator] Broadcasted " + countAllStructuredTasks(tasks)
                 + " structured tasks to session " + sessionId);
         } catch (Exception e) {
             logger.warning("Failed to broadcast structured tasks: " + e.getMessage());
         }
-    }
-
-    /**
-     * 广播结构化任务元数据（执行模式、阶段、依赖关系）
-     */
-    private void broadcastStructuredTaskMeta(List<StructuredTask> tasks) {
-        if (planTaskBroadcaster == null || sessionId == null || tasks.isEmpty()) return;
-
-        try {
-            List<Map<String, Object>> metaList = new ArrayList<>();
-            for (StructuredTask task : tasks) {
-                metaList.add(buildTaskMeta(task));
-            }
-
-            com.fasterxml.jackson.databind.ObjectMapper mapper =
-                new com.fasterxml.jackson.databind.ObjectMapper();
-            String metaJson = mapper.writeValueAsString(Map.of("structuredTasks", metaList));
-
-            // 使用 broadcastPlanData 直接发送原始结构化数据（不额外嵌套 tasks 层）
-            planTaskBroadcaster.broadcastPlanData(sessionId, metaJson);
-        } catch (Exception e) {
-            logger.warning("Failed to broadcast structured task meta: " + e.getMessage());
-        }
-    }
-
-    /**
-     * 递归构建任务元数据
-     */
-    private Map<String, Object> buildTaskMeta(StructuredTask task) {
-        Map<String, Object> meta = new LinkedHashMap<>();
-        meta.put("id", task.getId());
-        meta.put("title", task.getTitle());
-        meta.put("description", task.getDescription());
-        meta.put("executionMode", task.getExecutionMode().name());
-        meta.put("phase", task.getPhase().name());
-        meta.put("stepNumber", task.getStepNumber());
-        meta.put("parallelGroup", task.getParallelGroup());
-        meta.put("agentType", task.getAgentType());
-        meta.put("status", task.getStatus());
-        meta.put("dependencies", task.getDependencies());
-        meta.put("progress", task.getProgress());
-
-        // 包含任务上下文
-        if (task.getContext() != null && !task.getContext().isEmpty()) {
-            meta.put("context", task.getContext());
-        }
-
-        if (task.getChildren() != null && !task.getChildren().isEmpty()) {
-            List<Map<String, Object>> childMetas = new ArrayList<>();
-            for (StructuredTask child : task.getChildren()) {
-                childMetas.add(buildTaskMeta(child));
-            }
-            meta.put("children", childMetas);
-        }
-
-        return meta;
     }
 
     /**
@@ -1513,6 +1730,43 @@ public class EnhancedOrchestratorAgent {
             case "documenter": return "文档编写";
             default: return agentType;
         }
+    }
+
+    /**
+     * 判断是否有关键路径失败。
+     *
+     * <p>关键路径定义为：阶段 1（调研）或阶段 3（实现）中的任务失败。
+     * 非关键路径包括：测试、审查、文档等辅助性任务。</p>
+     *
+     * @param tasks      结构化任务列表
+     * @param execResult 执行结果
+     * @return 如果关键路径上有任务失败返回 true
+     */
+    private boolean hasCriticalPathFailure(List<StructuredTask> tasks,
+                                            TaskExecutionAgent.ExecutionResult execResult) {
+        if (execResult == null || execResult.failedCount == 0) return false;
+
+        // 检查阶段 1（调研）和阶段 3（实现）是否有失败
+        for (int i = 0; i < tasks.size(); i++) {
+            StructuredTask phase = tasks.get(i);
+            StructuredTask.TaskPhase phaseType = phase.getPhase();
+
+            // 调研阶段或实现阶段 → 关键路径
+            if (phaseType == StructuredTask.TaskPhase.EXPLORATION
+                || phaseType == StructuredTask.TaskPhase.IMPLEMENTATION) {
+
+                List<StructuredTask> children = phase.getChildren();
+                if (children != null) {
+                    for (StructuredTask child : children) {
+                        if ("failed".equals(child.getStatus())) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
+        return false;
     }
 
     // ==================== Getters ====================

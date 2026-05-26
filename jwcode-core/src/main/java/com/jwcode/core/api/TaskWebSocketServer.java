@@ -7,6 +7,7 @@ import com.jwcode.core.a2a.model.AgentCard;
 import com.jwcode.core.a2a.model.Skill;
 import com.jwcode.core.a2a.registry.A2ARegistry;
 import com.jwcode.core.a2a.registry.AgentSession;
+import com.jwcode.core.task.TaskStore;
 import org.java_websocket.WebSocket;
 import org.java_websocket.handshake.ClientHandshake;
 import org.java_websocket.server.WebSocketServer;
@@ -283,6 +284,21 @@ public class TaskWebSocketServer extends WebSocketServer {
         
         logger.info("[TaskWebSocket] Heartbeat started (interval: " + HEARTBEAT_INTERVAL + "s)");
         logger.info("[TaskWebSocket] Cleanup started (interval: " + CLEANUP_INTERVAL + "s)");
+        
+        // 注册 TaskStore 监听器 — 任务变更时自动广播到所有 WebSocket 客户端
+        TaskStore.getInstance().addTaskListener(event -> {
+            try {
+                String action = event.getAction();
+                com.jwcode.core.task.Task task = event.getTask();
+                if (task != null) {
+                    broadcastTaskUpdate(task.getId(), action, task);
+                    logger.fine("[TaskWebSocket] Task broadcast: " + action + " " + task.getId());
+                }
+            } catch (Exception e) {
+                logger.warning("[TaskWebSocket] Task broadcast error: " + e.getMessage());
+            }
+        });
+        logger.info("[TaskWebSocket] TaskStore listener registered for real-time task push");
     }
     
     // ==================== 定向推送方法 ====================
@@ -296,7 +312,7 @@ public class TaskWebSocketServer extends WebSocketServer {
             sendMessage(conn, data);
             return true;
         }
-        logger.warning("[TaskWebSocket] Agent not found or disconnected: " + agentId);
+        logger.fine("[TaskWebSocket] Agent not found or disconnected: " + agentId);
         return false;
     }
     
@@ -309,7 +325,7 @@ public class TaskWebSocketServer extends WebSocketServer {
             sendMessage(conn, data);
             return true;
         }
-        logger.warning("[TaskWebSocket] Session not found or disconnected: " + sessionId);
+        logger.fine("[TaskWebSocket] Session not found or disconnected: " + sessionId);
         return false;
     }
     
@@ -322,7 +338,7 @@ public class TaskWebSocketServer extends WebSocketServer {
             sendMessage(conn, data);
             return true;
         }
-        logger.warning("[TaskWebSocket] Connection not found: " + connectionId);
+        logger.fine("[TaskWebSocket] Connection not found: " + connectionId);
         return false;
     }
     
@@ -334,23 +350,37 @@ public class TaskWebSocketServer extends WebSocketServer {
             String json = MAPPER.writeValueAsString(data);
             conn.send(json);
         } catch (Exception e) {
-            logger.warning("[TaskWebSocket] Error sending message: " + e.getMessage());
+            String connId = connectionIds.get(conn);
+            logger.log(Level.WARNING, "[TaskWebSocket] Error sending message to " +
+                    (connId != null ? connId : conn.getRemoteSocketAddress()) +
+                    ": " + e.getMessage(), e);
         }
     }
     
     /**
      * Broadcast message to all connected clients
+     * 
+     * <p>每个连接单独 try/catch，防止单个连接异常中断整个广播循环。
+     * 同时记录每个失败连接的 connectionId 便于诊断。</p>
      */
     public void broadcast(Map<String, Object> data) {
+        String json;
         try {
-            String json = MAPPER.writeValueAsString(data);
-            for (WebSocket conn : connections) {
-                if (conn.isOpen()) {
-                    conn.send(json);
-                }
-            }
+            json = MAPPER.writeValueAsString(data);
         } catch (Exception e) {
-            logger.warning("[TaskWebSocket] Error broadcasting: " + e.getMessage());
+            logger.warning("[TaskWebSocket] Error serializing broadcast data: " + e.getMessage());
+            return;
+        }
+        for (WebSocket conn : connections) {
+            if (!conn.isOpen()) continue;
+            try {
+                conn.send(json);
+            } catch (Exception e) {
+                String connId = connectionIds.get(conn);
+                logger.warning("[TaskWebSocket] Broadcast send failed to " +
+                        (connId != null ? connId : conn.getRemoteSocketAddress()) +
+                        ": " + e.getMessage());
+            }
         }
     }
     

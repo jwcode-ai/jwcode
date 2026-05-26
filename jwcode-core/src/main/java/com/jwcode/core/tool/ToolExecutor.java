@@ -1,6 +1,7 @@
 package com.jwcode.core.tool;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.jwcode.core.hook.HookApprovalManager;
 import com.jwcode.core.hook.HookChain;
 import com.jwcode.core.hook.HookContext;
 import com.jwcode.core.hook.HookDecision;
@@ -27,7 +28,7 @@ public class ToolExecutor {
     private final ToolRegistry toolRegistry;
     private final PermissionChecker permissionChecker;
     private final ToolExecutionListener executionListener;
-    private final HookChain hookChain;
+    private volatile HookChain hookChain;
     
     public ToolExecutor() {
         this(ToolRegistry.createDefault(), null, null, null);
@@ -59,6 +60,23 @@ public class ToolExecutor {
         this.permissionChecker = permissionChecker;
         this.executionListener = executionListener;
         this.hookChain = hookChain;
+    }
+
+    /**
+     * 设置 Hook 拦截链（支持构造后注入）。
+     * <p>线程安全：使用 volatile 保证多线程可见性。</p>
+     *
+     * @param hookChain Hook 拦截链，可为 null 表示禁用 Hook
+     */
+    public void setHookChain(HookChain hookChain) {
+        this.hookChain = hookChain;
+    }
+
+    /**
+     * 获取当前 Hook 拦截链。
+     */
+    public HookChain getHookChain() {
+        return hookChain;
     }
     
     /**
@@ -178,7 +196,7 @@ public class ToolExecutor {
                 HookResult hookResult = hookChain.execute(hookCtx);
 
                 if (hookResult.getDecision() == HookDecision.DENY) {
-                    logger.warning("[ToolExecutor] PRE_TOOL_USE DENY: " + toolName
+                    logger.warning("[Hook] PRE_TOOL_USE DENY: " + toolName
                         + " | reason=" + hookResult.getReason());
                     return CompletableFuture.completedFuture(
                         ToolResult.error("Hook拒绝: " + hookResult.getReason()));
@@ -186,21 +204,40 @@ public class ToolExecutor {
                 if (hookResult.getDecision() == HookDecision.MODIFY
                     && hookResult.getModifiedInput() != null) {
                     I modifiedInput = tool.parseInput(hookResult.getModifiedInput());
-                    logger.fine("[ToolExecutor] PRE_TOOL_USE MODIFY: " + toolName);
+                    logger.fine("[Hook] PRE_TOOL_USE MODIFY: " + toolName);
                     // 使用修改后的输入重新执行（hookChain置null防止递归）
                     ToolExecutor inner = new ToolExecutor(
                         toolRegistry, permissionChecker, executionListener, null);
                     return inner.execute(tool, modifiedInput, context, onProgress);
                 }
                 if (hookResult.getDecision() == HookDecision.ASK) {
-                    logger.info("[ToolExecutor] PRE_TOOL_USE ASK: " + toolName
-                        + " | " + hookResult.getAskPayload());
-                    return CompletableFuture.completedFuture(
-                        ToolResult.error("HOOK_ASK:" + hookResult.getAskPayload()));
+                    String askPayload = hookResult.getAskPayload();
+                    logger.info("[Hook] PRE_TOOL_USE ASK: " + toolName
+                        + " | " + askPayload);
+                    // 发起审批请求，等待用户决策
+                    try {
+                        Boolean approved = HookApprovalManager.getInstance()
+                            .requestApproval(toolName, askPayload != null ? askPayload : "", 60_000)
+                            .get(65, java.util.concurrent.TimeUnit.SECONDS);
+                        if (approved == null || !approved) {
+                            return CompletableFuture.completedFuture(
+                                ToolResult.error("用户拒绝了 Hook 审批: " + askPayload));
+                        }
+                        logger.info("[Hook] PRE_TOOL_USE ASK approved by user: " + toolName);
+                        // 审批通过，继续执行
+                    } catch (java.util.concurrent.TimeoutException e) {
+                        logger.warning("[Hook] PRE_TOOL_USE ASK timeout: " + toolName);
+                        return CompletableFuture.completedFuture(
+                            ToolResult.error("Hook审批超时: " + askPayload));
+                    } catch (Exception e) {
+                        logger.warning("[Hook] PRE_TOOL_USE ASK error: " + e.getMessage());
+                        return CompletableFuture.completedFuture(
+                            ToolResult.error("Hook审批异常: " + e.getMessage()));
+                    }
                 }
                 // ALLOW / DEFER / VOID → continue
             } catch (Exception e) {
-                logger.warning("[ToolExecutor] PRE_TOOL_USE hook error: " + e.getMessage()
+                logger.warning("[Hook] PRE_TOOL_USE error: " + e.getMessage()
                     + " (fail-open, continuing)");
             }
         }
@@ -248,9 +285,11 @@ public class ToolExecutor {
                 hookCtx = HookContext.forPostToolUse(
                     null, null, toolName, resultJson);
             }
+            logger.info("[Hook] POST_TOOL_USE: " + toolName
+                + (error != null ? " FAILURE" : " OK"));
             hookChain.execute(hookCtx);
         } catch (Exception e) {
-            logger.fine("[ToolExecutor] Post-hook error (ignored): " + e.getMessage());
+            logger.fine("[Hook] Post-hook error (ignored): " + e.getMessage());
         }
     }
     
@@ -344,11 +383,11 @@ public class ToolExecutor {
     /**
      * 检查权限
      * 
-     * <p>集成 PlanModeManager 的 Plan Mode 权限隔离：</p>
+     * <p>集成 PlanModeManager 的 Plan Mode 权限隔离 + PermissionChecker 运行时权限检查：</p>
      * <ul>
      *   <li>Plan Mode 下只允许只读工具</li>
      *   <li>Plan Mode 下禁用写工具（FileWrite、FileEdit、Bash 等）</li>
-     *   <li>非 Plan Mode 下所有工具都允许</li>
+     *   <li>非 Plan Mode 下通过 PermissionChecker 做细粒度权限判断</li>
      * </ul>
      */
     private <I, O, P> boolean hasPermission(Tool<I, O, P> tool, I input) {
@@ -360,11 +399,57 @@ public class ToolExecutor {
                 logger.warning("Plan Mode 权限拒绝: " + tool.getName() + " - " + planResult.getReason());
                 return false;
             }
+            // Plan Mode 下通过后直接放行（不再走 PermissionChecker）
             return true;
         }
         
-        // 2. 非 Plan Mode 下的常规权限检查
-        // 只读工具通常不需要额外权限检查
+        // 2. 【修复】集成 PermissionChecker 运行时权限检查
+        //    非 Plan Mode 下，如果配置了 PermissionChecker，则用它做细粒度检查
+        if (permissionChecker != null && tool != null) {
+            String toolName = tool.getName();
+            
+            // 根据工具类型选择对应的权限检查
+            boolean hasPerm;
+            switch (toolName) {
+                case "BashTool":
+                case "PowerShell":
+                    hasPerm = permissionChecker.hasPermission("execute", toolName);
+                    break;
+                case "REPL":
+                    hasPerm = permissionChecker.hasPermission("execute", "REPL");
+                    break;
+                case "Git":
+                    hasPerm = permissionChecker.hasPermission("execute", "Git");
+                    break;
+                case "Download":
+                    hasPerm = permissionChecker.hasPermission("write", "Download");
+                    break;
+                case "NotebookEdit":
+                    hasPerm = permissionChecker.hasPermission("write", "NotebookEdit");
+                    break;
+                case "ScheduleCron":
+                    hasPerm = permissionChecker.hasPermission("execute", "ScheduleCron");
+                    break;
+                default:
+                    // 其他工具：只读工具直接放行，破坏性操作需确认
+                    if (tool.isReadOnly(input)) {
+                        hasPerm = true;
+                    } else if (tool.isDestructive(input) && tool.requiresApproval(input)) {
+                        hasPerm = permissionChecker.hasPermission("write", toolName);
+                    } else {
+                        hasPerm = true;
+                    }
+                    break;
+            }
+            
+            if (!hasPerm) {
+                logger.warning("PermissionChecker 拒绝: " + tool.getName());
+                return false;
+            }
+            return true;
+        }
+        
+        // 3. 无 PermissionChecker 时的兜底逻辑
         if (tool != null) {
             if (tool.isReadOnly(input)) {
                 return true;
@@ -372,7 +457,6 @@ public class ToolExecutor {
             
             // 破坏性操作需要确认
             if (tool.isDestructive(input) && tool.requiresApproval(input)) {
-                // 这里可以实现更复杂的权限逻辑
                 return true; // 暂时允许
             }
         }

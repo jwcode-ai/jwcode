@@ -1,5 +1,8 @@
 package com.jwcode.core.advanced.thinking;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.CompletableFuture;
@@ -13,6 +16,8 @@ import java.util.function.Supplier;
  */
 public class ThinkingModeManager {
     
+    private static final Logger logger = LoggerFactory.getLogger(ThinkingModeManager.class);
+    
     private volatile boolean thinkingModeEnabled = false;
     private ThinkingConfig config;
     
@@ -25,7 +30,7 @@ public class ThinkingModeManager {
      */
     public boolean toggle() {
         thinkingModeEnabled = !thinkingModeEnabled;
-        System.out.println("[ThinkingMode] " + (thinkingModeEnabled ? "开启" : "关闭") + " 深度推理模式");
+        logger.info("[ThinkingMode] {} 深度推理模式", thinkingModeEnabled ? "开启" : "关闭");
         return thinkingModeEnabled;
     }
     
@@ -34,7 +39,7 @@ public class ThinkingModeManager {
      */
     public void setEnabled(boolean enabled) {
         this.thinkingModeEnabled = enabled;
-        System.out.println("[ThinkingMode] 深度推理模式: " + (enabled ? "开启" : "关闭"));
+        logger.info("[ThinkingMode] 深度推理模式: {}", enabled ? "开启" : "关闭");
     }
     
     /**
@@ -52,7 +57,7 @@ public class ThinkingModeManager {
             Instant start = Instant.now();
             
             if (thinkingModeEnabled) {
-                System.out.println("[ThinkingMode] 开始深度推理: " + taskDescription);
+                logger.info("[ThinkingMode] 开始深度推理: {}", taskDescription);
                 
                 // 模拟深度思考过程
                 simulateThinkingProcess(taskDescription);
@@ -61,7 +66,7 @@ public class ThinkingModeManager {
                 T result = task.get();
                 
                 Duration duration = Duration.between(start, Instant.now());
-                System.out.println("[ThinkingMode] 深度推理完成，耗时: " + duration.toMillis() + "ms");
+                logger.info("[ThinkingMode] 深度推理完成，耗时: {}ms", duration.toMillis());
                 
                 return new ThinkingResult<>(result, duration, true, generateThinkingTrace(taskDescription));
             } else {
