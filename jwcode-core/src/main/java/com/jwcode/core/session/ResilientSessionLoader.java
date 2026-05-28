@@ -153,7 +153,7 @@ public class ResilientSessionLoader {
                         Map<String, Object> msgMap = objectMapper.convertValue(msgNode, new TypeReference<>() {});
                         Message msg = parseMessageSafely(msgMap);
                         if (msg != null) session.addMessage(msg);
-                    } catch (Exception ignored) {}
+                    } catch (Exception ignored) { logger.debug("Message parse skipped"); }
                 }
             }
         } catch (Exception e) {

@@ -1,15 +1,18 @@
 package com.jwcode.core.advanced.analyzer;
 
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 /**
- * 集成测试：对真实项目 jwclaw 运行 SmartAnalyzeTool，观察 agent 格式输出
+ * 集成测试：对当前项目运行 SmartAnalyzeTool。
+ * 需要真实项目目录，CI 环境默认禁用。
  */
 class SmartProjectAnalyzerIntegrationTest {
 
     @Test
-    void printAgentOptimizedReportForJwclaw() {
-        String projectRoot = "C:/Users/HUAWEI/Desktop/jwclaw/jwclaw";
+    @Disabled("Requires a real project directory; set project.root system property to enable")
+    void printAgentOptimizedReport() {
+        String projectRoot = System.getProperty("project.root", System.getProperty("user.dir"));
         SmartProjectAnalyzer analyzer = new SmartProjectAnalyzer(projectRoot);
         ProjectAnalysisReport report = analyzer.analyze();
 

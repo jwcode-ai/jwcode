@@ -658,7 +658,7 @@ public class CodebaseIndexer {
                 try (var stream = Files.list(filesDir)) {
                     stream.forEach(f -> {
                         try { Files.deleteIfExists(f); }
-                        catch (IOException ignored) {}
+                        catch (IOException ignored) { logger.fine("Delete failed: " + f); }
                     });
                 }
             }

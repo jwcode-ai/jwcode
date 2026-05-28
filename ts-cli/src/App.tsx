@@ -45,6 +45,7 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
   const [input, setInput] = useState('');
   const [showPalette, setShowPalette] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  const [helpScroll, setHelpScroll] = useState(0);
   const [showApproval, setShowApproval] = useState<{
     approvalId: string; toolName: string; payload: string;
   } | null>(null);
@@ -53,8 +54,10 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
   const clientRef = useRef<JwCodeClient | null>(null);
   const { stdout } = useStdout();
   const terminalRows = (stdout as NodeJS.WriteStream)?.rows || 24;
+  const terminalCols = (stdout as NodeJS.WriteStream)?.columns || 80;
   // Reserve rows for: status(1) + scroll-hint(1) + plan-waiting(optional) + input-border(2) + palette(optional)
-  const reservedRows = 7;
+  const reservedRows = 8;
+  const hline = '─'.repeat(terminalCols);
 
   // Initialize WebSocket connection
   useEffect(() => {
@@ -99,6 +102,7 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
       const def = SLASH_COMMANDS[cmd];
       if (def === null) {
         setShowHelp(true);
+        setHelpScroll(0);
         return;
       }
       const { action, needsArg } = def;
@@ -163,8 +167,10 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
   }, [onExit, state.planMode]);
 
   const handleSubmit = useCallback((value: string) => {
+    // When palette is open, Enter is handled by CommandPalette — avoid double execution
+    if (showPalette) return;
     executeCommand(value);
-  }, [executeCommand]);
+  }, [executeCommand, showPalette]);
 
   // / opens command palette; backspace past / closes it
   const handleChange = useCallback((value: string) => {
@@ -390,6 +396,25 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
       handleApprovalDeny(showApproval.approvalId);
       return;
     }
+    if (key.escape && showHelp) {
+      setShowHelp(false);
+      return;
+    }
+    // Help scrolling (when help is visible)
+    if (showHelp) {
+      const helpLines = HELP_TEXT.split('\n');
+      const helpMax = Math.max(5, terminalRows - 12);
+      if (key.pageUp || key.upArrow) {
+        setHelpScroll(prev => Math.min(prev + (key.pageUp ? helpMax : 1), helpLines.length - 1));
+        return;
+      }
+      if (key.pageDown || key.downArrow) {
+        setHelpScroll(prev => Math.max(0, prev - (key.pageDown ? helpMax : 1)));
+        return;
+      }
+      if (key.home) { setHelpScroll(helpLines.length - 1); return; }
+      if (key.end) { setHelpScroll(0); return; }
+    }
     // Scroll: arrow keys = fine, page keys = coarse
     if (key.pageUp) {
       updateAppState(prev => ({
@@ -427,6 +452,11 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
       updateAppState(prev => ({ ...prev, scrollOffset: 0 }));
       return;
     }
+    // Tab: toggle plan/act mode
+    if (key.tab) {
+      updateAppState(prev => ({ ...prev, planMode: !prev.planMode }));
+      return;
+    }
   });
 
   const placeholder = '';
@@ -437,7 +467,7 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
       <Box flexGrow={1} flexDirection="column">
         <ChatArea messages={state.messages} currentMessage={state.currentMessage} scrollOffset={state.scrollOffset} terminalRows={terminalRows} reservedRows={reservedRows} />
       </Box>
-      {/* Input — fixed at bottom */}
+      {/* Input — fixed below ChatArea, above any status/palette; ChatArea height stable */}
       <Box flexDirection="row" borderStyle="single" borderColor={state.connected ? 'cyan' : 'red'} paddingLeft={1}>
         <Text color="green" bold>&gt; </Text>
         <Box flexGrow={1}>
@@ -450,7 +480,26 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
           />
         </Box>
       </Box>
-      {/* Status / palette / help — rendered below input,不影响 ChatArea 高度 */}
+      {/* Mode toggle */}
+      <Box paddingLeft={2} height={1}>
+        <Text
+          color={state.planMode ? 'cyan' : 'grey'}
+          bold={state.planMode}
+          dimColor={!state.planMode}
+        >
+          {state.planMode ? '◉ Plan' : '○ Plan'}
+        </Text>
+        <Text>  </Text>
+        <Text
+          color={!state.planMode ? 'green' : 'grey'}
+          bold={!state.planMode}
+          dimColor={state.planMode}
+        >
+          {!state.planMode ? '◉ Act' : '○ Act'}
+        </Text>
+        <Text dimColor>  Tab 切换</Text>
+      </Box>
+      {/* Status / palette / help — below input,不影响 ChatArea 高度 */}
       {!state.connected && (
         <Box>
           <Text color="red">后端未连接 — WebSocket 重试中。如后端未启动请用 </Text>
@@ -463,13 +512,23 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
         </Box>
       )}
       {showPalette && <CommandPalette filter={input} onSelect={handlePaletteSelect} />}
-      {showHelp && (
-        <Box flexDirection="column" borderStyle="single" borderColor="cyan" paddingX={1}>
-          {HELP_TEXT.split('\n').map((line, i) => (
-            <Text key={i} color="cyan">{line}</Text>
-          ))}
-        </Box>
-      )}
+      {showHelp && (() => {
+        const helpLines = HELP_TEXT.split('\n');
+        const helpMax = Math.max(5, terminalRows - 12);
+        const helpEnd = Math.max(0, helpLines.length - helpScroll);
+        const helpStart = Math.max(0, helpEnd - helpMax);
+        const visibleHelp = helpLines.slice(helpStart, helpEnd);
+        return (
+          <Box flexDirection="column" borderStyle="single" borderColor="cyan" paddingX={1}>
+            {helpLines.length > helpMax && (
+              <Box><Text dimColor>  {helpStart + 1}-{helpEnd} / {helpLines.length}  PgUp/PgDn翻页 / Esc关闭</Text></Box>
+            )}
+            {visibleHelp.map((line, i) => (
+              <Text key={i} color="cyan">{line}</Text>
+            ))}
+          </Box>
+        );
+      })()}
       {showApproval && (
         <ApprovalModal
           toolName={showApproval.toolName}

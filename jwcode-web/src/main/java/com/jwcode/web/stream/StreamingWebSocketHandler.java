@@ -663,8 +663,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                     sendMessage(conn, MessageType.ERROR, "Unknown message type: " + clientMsg.type);
             }
         } catch (Exception e) {
-            logger.severe("处理消息失败: " + e.getMessage());
-            e.printStackTrace();
+            logger.log(java.util.logging.Level.SEVERE, "处理消息失败", e);
             sendMessage(conn, MessageType.ERROR, "Invalid message format: " + e.getMessage());
         }
     }
@@ -1422,8 +1421,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                 return;
                 
             } catch (Exception e) {
-                logger.severe("Plan 查询执行失败: " + e.getMessage());
-                e.printStackTrace();
+                logger.log(java.util.logging.Level.SEVERE, "Plan 查询执行失败", e);
                 sendMessage(querySessionId, MessageType.PLAN_ERROR, escapeJson("Plan 执行失败: " + e.getMessage()));
                 WebSocketLogBroadcaster.getInstance().broadcast(
                     LogEntry.error("Plan 异常: " + e.getMessage())
@@ -1872,8 +1870,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             session.setMetadata("plan_goal", null);
             
         } catch (Exception e) {
-            logger.severe("Plan 确认执行失败: " + e.getMessage());
-            e.printStackTrace();
+            logger.log(java.util.logging.Level.SEVERE, "Plan 确认执行失败", e);
             sendMessage(querySessionId, MessageType.PLAN_ERROR, 
                 escapeJson("Plan 执行失败: " + e.getMessage()));
             WebSocketLogBroadcaster.getInstance().broadcast(
@@ -2898,8 +2895,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             }
             
         } catch (Exception e) {
-            logger.severe("查询执行失败: " + e.getMessage());
-            e.printStackTrace();
+            logger.log(java.util.logging.Level.SEVERE, "查询执行失败", e);
             
             sendMessage(querySessionId, MessageType.ERROR, escapeJson("执行失败: " + e.getMessage()));
             WebSocketLogBroadcaster.getInstance().broadcast(

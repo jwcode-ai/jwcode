@@ -7,33 +7,13 @@ import { render } from "ink";
 import { createElement } from "react";
 
 // src/App.tsx
-import { useState as useState5, useEffect as useEffect4, useRef as useRef2, useCallback as useCallback2 } from "react";
-import { Box as Box6, Text as Text6, useInput as useInput4, useApp, useStdout as useStdout2 } from "ink";
+import { useState as useState4, useEffect as useEffect3, useRef, useCallback as useCallback2 } from "react";
+import { Box as Box6, Text as Text6, useInput as useInput4, useApp, useStdout } from "ink";
 
 // src/components/TextInput.tsx
-import { useEffect, useRef } from "react";
-import { Box, Text, useInput, useStdout } from "ink";
-import { jsx } from "react/jsx-runtime";
+import { Box, Text, useInput } from "ink";
+import { jsx, jsxs } from "react/jsx-runtime";
 function TextInput({ value, onChange, onSubmit, placeholder, disabled }) {
-  const { stdout } = useStdout();
-  const valueRef = useRef(value);
-  valueRef.current = value;
-  useEffect(() => {
-    const writeCursor = /* @__PURE__ */ __name(() => {
-      const rows = process.stdout?.rows || 40;
-      const cols = process.stdout?.columns || 120;
-      const targetRow = rows - 1;
-      const textLen = valueRef.current.length;
-      const targetCol = Math.min(4 + textLen, cols - 1);
-      stdout.write(`\x1B[${targetRow};${targetCol}H\x1B[?25h`);
-    }, "writeCursor");
-    const interval = setInterval(writeCursor, 120);
-    writeCursor();
-    return () => {
-      clearInterval(interval);
-      stdout.write("\x1B[?25l");
-    };
-  }, [stdout]);
   useInput((input, key) => {
     if (disabled) return;
     if (key.return) {
@@ -46,7 +26,10 @@ function TextInput({ value, onChange, onSubmit, placeholder, disabled }) {
   });
   const display = value || "";
   const showPlaceholder = !display && placeholder;
-  return /* @__PURE__ */ jsx(Box, { children: /* @__PURE__ */ jsx(Text, { dimColor: !showPlaceholder, children: showPlaceholder ? placeholder : display }) });
+  return /* @__PURE__ */ jsxs(Box, { children: [
+    display ? /* @__PURE__ */ jsx(Text, { children: display }) : /* @__PURE__ */ jsx(Text, { dimColor: true, children: placeholder }),
+    /* @__PURE__ */ jsx(Text, { dimColor: true, children: "\u258A" })
+  ] });
 }
 __name(TextInput, "TextInput");
 
@@ -287,7 +270,7 @@ var JwCodeClient = class {
 import { Box as Box2, Text as Text2 } from "ink";
 
 // src/hooks/useAppState.ts
-import { useEffect as useEffect2, useState as useState2, useCallback } from "react";
+import { useEffect, useState, useCallback } from "react";
 
 // src/store.ts
 function createStore(initialState2, onChange) {
@@ -332,8 +315,8 @@ function getStore() {
 __name(getStore, "getStore");
 function useAppState() {
   const store = getStore();
-  const [state, setState] = useState2(store.getState());
-  useEffect2(() => {
+  const [state, setState] = useState(store.getState());
+  useEffect(() => {
     return store.subscribe(() => setState(store.getState()));
   }, []);
   return state;
@@ -345,7 +328,7 @@ function updateAppState(updater) {
 __name(updateAppState, "updateAppState");
 
 // src/components/StatusLine.tsx
-import { jsx as jsx2, jsxs } from "react/jsx-runtime";
+import { jsx as jsx2, jsxs as jsxs2 } from "react/jsx-runtime";
 function formatTokens(n) {
   if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
   if (n >= 1e3) return `${Math.round(n / 1e3)}K`;
@@ -362,8 +345,8 @@ function StatusLine() {
   const plan = planMode ? " [PLAN]" : "";
   const auto = autoMode ? " [AUTO]" : "";
   const isError = statusText.startsWith("Error:");
-  return /* @__PURE__ */ jsxs(Box2, { flexDirection: "column", width: "100%", paddingRight: 1, children: [
-    /* @__PURE__ */ jsxs(Box2, { height: 1, children: [
+  return /* @__PURE__ */ jsxs2(Box2, { flexDirection: "column", width: "100%", paddingRight: 1, children: [
+    /* @__PURE__ */ jsxs2(Box2, { height: 1, children: [
       /* @__PURE__ */ jsx2(Text2, { bold: true, color: "cyan", children: "jwcode" }),
       /* @__PURE__ */ jsx2(Text2, { color: "yellow", children: plan }),
       /* @__PURE__ */ jsx2(Text2, { color: "magenta", children: auto }),
@@ -372,7 +355,7 @@ function StatusLine() {
       /* @__PURE__ */ jsx2(Text2, { children: "   tokens: " }),
       /* @__PURE__ */ jsx2(Text2, { color: "yellow", children: formatTokens(usage.totalTokens) }),
       /* @__PURE__ */ jsx2(Text2, { children: "  " }),
-      /* @__PURE__ */ jsxs(Text2, { color: pct > 90 ? "red" : "white", children: [
+      /* @__PURE__ */ jsxs2(Text2, { color: pct > 90 ? "red" : "white", children: [
         bar,
         " ",
         pct,
@@ -386,7 +369,7 @@ __name(StatusLine, "StatusLine");
 
 // src/components/ChatArea.tsx
 import { Box as Box3, Text as Text3 } from "ink";
-import { jsx as jsx3, jsxs as jsxs2 } from "react/jsx-runtime";
+import { jsx as jsx3, jsxs as jsxs3 } from "react/jsx-runtime";
 var SEP = "\u2500".repeat(60);
 function ChatArea({ messages, currentMessage, scrollOffset, terminalRows, reservedRows }) {
   const allMessages = currentMessage ? [...messages.filter((m) => m.id !== currentMessage.id)] : messages;
@@ -400,26 +383,26 @@ function ChatArea({ messages, currentMessage, scrollOffset, terminalRows, reserv
   const isScrolledUp = clampedOffset > 0;
   const hiddenAbove = start;
   const hiddenBelow = clampedOffset;
-  return /* @__PURE__ */ jsxs2(Box3, { flexDirection: "column", width: "100%", children: [
-    isScrolledUp && /* @__PURE__ */ jsx3(Box3, { children: /* @__PURE__ */ jsxs2(Text3, { color: "yellow", dimColor: true, children: [
+  return /* @__PURE__ */ jsxs3(Box3, { flexDirection: "column", width: "100%", children: [
+    isScrolledUp && /* @__PURE__ */ jsx3(Box3, { children: /* @__PURE__ */ jsxs3(Text3, { color: "yellow", dimColor: true, children: [
       "\u25B2 \u4E0A\u65B9 ",
       hiddenAbove,
       " \u6761\u6D88\u606F (\u2191/PgUp \u4E0A\u7FFB, PgDn \u4E0B\u7FFB, End \u5230\u5E95\u90E8)"
     ] }) }),
-    !isScrolledUp && total > maxVisible && /* @__PURE__ */ jsx3(Box3, { children: /* @__PURE__ */ jsxs2(Text3, { color: "grey", dimColor: true, children: [
+    !isScrolledUp && total > maxVisible && /* @__PURE__ */ jsx3(Box3, { children: /* @__PURE__ */ jsxs3(Text3, { color: "grey", dimColor: true, children: [
       "... ",
       total - maxVisible,
       " \u6761\u66F4\u65E9\u7684\u6D88\u606F (\u2191/PgUp \u67E5\u770B)"
     ] }) }),
-    visibleMessages.map((msg) => /* @__PURE__ */ jsxs2(Box3, { flexDirection: "column", marginBottom: 1, children: [
-      msg.type === "user" && /* @__PURE__ */ jsxs2(Box3, { flexDirection: "column", children: [
+    visibleMessages.map((msg) => /* @__PURE__ */ jsxs3(Box3, { flexDirection: "column", marginBottom: 1, children: [
+      msg.type === "user" && /* @__PURE__ */ jsxs3(Box3, { flexDirection: "column", children: [
         /* @__PURE__ */ jsx3(Text3, { dimColor: true, children: SEP }),
-        /* @__PURE__ */ jsxs2(Text3, { color: "green", bold: true, children: [
+        /* @__PURE__ */ jsxs3(Text3, { color: "green", bold: true, children: [
           "> ",
           msg.content
         ] })
       ] }),
-      msg.type === "assistant" && /* @__PURE__ */ jsxs2(Box3, { flexDirection: "column", children: [
+      msg.type === "assistant" && /* @__PURE__ */ jsxs3(Box3, { flexDirection: "column", children: [
         /* @__PURE__ */ jsx3(Text3, { children: " " }),
         msg.steps.map((step, i) => /* @__PURE__ */ jsx3(StepDisplay, { step }, step.id || i)),
         msg.thinking && /* @__PURE__ */ jsx3(Text3, { dimColor: true, italic: true, children: truncate(msg.thinking, 200) }),
@@ -427,12 +410,12 @@ function ChatArea({ messages, currentMessage, scrollOffset, terminalRows, reserv
         msg.content && /* @__PURE__ */ jsx3(Text3, { children: msg.content }),
         /* @__PURE__ */ jsx3(Text3, { dimColor: true, children: SEP })
       ] }),
-      msg.type === "system" && /* @__PURE__ */ jsx3(Box3, { children: /* @__PURE__ */ jsxs2(Text3, { color: "red", children: [
+      msg.type === "system" && /* @__PURE__ */ jsx3(Box3, { children: /* @__PURE__ */ jsxs3(Text3, { color: "red", children: [
         "Error: ",
         msg.content
       ] }) })
     ] }, msg.id)),
-    currentMessage && /* @__PURE__ */ jsxs2(Box3, { flexDirection: "column", children: [
+    currentMessage && /* @__PURE__ */ jsxs3(Box3, { flexDirection: "column", children: [
       currentMessage.thinking && /* @__PURE__ */ jsx3(Text3, { dimColor: true, italic: true, children: truncate(currentMessage.thinking, 200) }),
       currentMessage.toolCalls.map((tc, i) => /* @__PURE__ */ jsx3(ToolCallDisplay, { tc }, tc.id || i)),
       currentMessage.content && /* @__PURE__ */ jsx3(Text3, { children: currentMessage.content })
@@ -443,22 +426,22 @@ __name(ChatArea, "ChatArea");
 function StepDisplay({ step }) {
   const icon = step.status === "success" ? "\u2713" : step.status === "error" ? "\u2717" : "\u25B6";
   const color = step.status === "success" ? "green" : step.status === "error" ? "red" : "cyan";
-  return /* @__PURE__ */ jsxs2(Box3, { flexDirection: "column", children: [
-    /* @__PURE__ */ jsxs2(Text3, { color, children: [
+  return /* @__PURE__ */ jsxs3(Box3, { flexDirection: "column", children: [
+    /* @__PURE__ */ jsxs3(Text3, { color, children: [
       "  ",
       icon,
       " ",
       step.title
     ] }),
-    step.thought && /* @__PURE__ */ jsxs2(Text3, { color: "blue", dimColor: true, children: [
+    step.thought && /* @__PURE__ */ jsxs3(Text3, { color: "blue", dimColor: true, children: [
       "    ",
       truncate(step.thought, 200)
     ] }),
-    step.action && /* @__PURE__ */ jsxs2(Text3, { color: "yellow", children: [
+    step.action && /* @__PURE__ */ jsxs3(Text3, { color: "yellow", children: [
       "    ",
       truncate(step.action, 200)
     ] }),
-    step.result && /* @__PURE__ */ jsxs2(Text3, { color: "green", children: [
+    step.result && /* @__PURE__ */ jsxs3(Text3, { color: "green", children: [
       "    ",
       truncate(step.result, 300)
     ] })
@@ -469,15 +452,15 @@ function ToolCallDisplay({ tc }) {
   const argsStr = tc.args ? truncate(formatJson(tc.args), 200) : "";
   const statusIcon = tc.status === "complete" ? "\u2713" : tc.status === "running" ? "\u25F7" : "\u2717";
   const statusColor = tc.status === "complete" ? "green" : tc.status === "running" ? "yellow" : "red";
-  return /* @__PURE__ */ jsxs2(Box3, { flexDirection: "column", paddingLeft: 1, children: [
-    /* @__PURE__ */ jsxs2(Box3, { children: [
-      /* @__PURE__ */ jsxs2(Text3, { color: statusColor, children: [
+  return /* @__PURE__ */ jsxs3(Box3, { flexDirection: "column", paddingLeft: 1, children: [
+    /* @__PURE__ */ jsxs3(Box3, { children: [
+      /* @__PURE__ */ jsxs3(Text3, { color: statusColor, children: [
         "  ",
         statusIcon,
         " "
       ] }),
       /* @__PURE__ */ jsx3(Text3, { bold: true, color: "magenta", children: tc.name }),
-      argsStr && /* @__PURE__ */ jsxs2(Text3, { dimColor: true, children: [
+      argsStr && /* @__PURE__ */ jsxs3(Text3, { dimColor: true, children: [
         "  ",
         argsStr
       ] })
@@ -501,7 +484,7 @@ function truncate(s, max) {
 __name(truncate, "truncate");
 
 // src/components/CommandPalette.tsx
-import { useState as useState3, useMemo, useEffect as useEffect3 } from "react";
+import { useState as useState2, useMemo, useEffect as useEffect2 } from "react";
 import { Box as Box4, Text as Text4, useInput as useInput2 } from "ink";
 
 // src/commands/index.ts
@@ -595,9 +578,9 @@ var HELP_TEXT = `
 \u255A\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255D`;
 
 // src/components/CommandPalette.tsx
-import { jsx as jsx4, jsxs as jsxs3 } from "react/jsx-runtime";
+import { jsx as jsx4, jsxs as jsxs4 } from "react/jsx-runtime";
 function CommandPalette({ filter, onSelect }) {
-  const [selected, setSelected] = useState3(0);
+  const [selected, setSelected] = useState2(0);
   const visible = useMemo(() => {
     const f = filter.replace(/^\//, "").toLowerCase();
     if (!f) return ALL_COMMANDS;
@@ -605,7 +588,7 @@ function CommandPalette({ filter, onSelect }) {
       (c) => c.cmd.toLowerCase().includes(f) || c.desc.includes(f)
     );
   }, [filter]);
-  useEffect3(() => {
+  useEffect2(() => {
     setSelected(0);
   }, [filter]);
   useInput2((_input, key) => {
@@ -629,25 +612,25 @@ function CommandPalette({ filter, onSelect }) {
   });
   const maxShow = 12;
   const sliced = visible.slice(0, maxShow);
-  return /* @__PURE__ */ jsxs3(Box4, { flexDirection: "column", borderStyle: "single", borderColor: "cyan", paddingX: 1, width: 52, children: [
-    /* @__PURE__ */ jsxs3(Box4, { children: [
+  return /* @__PURE__ */ jsxs4(Box4, { flexDirection: "column", borderStyle: "single", borderColor: "cyan", paddingX: 1, width: 52, children: [
+    /* @__PURE__ */ jsxs4(Box4, { children: [
       /* @__PURE__ */ jsx4(Text4, { bold: true, color: "cyan", children: "\u547D\u4EE4\u5217\u8868" }),
       /* @__PURE__ */ jsx4(Text4, { dimColor: true, children: "  \u2191\u2193\u9009\u62E9 / \u56DE\u8F66\u786E\u8BA4 / Esc\u53D6\u6D88" })
     ] }),
-    sliced.map((cmd, i) => /* @__PURE__ */ jsxs3(Box4, { paddingLeft: 1, children: [
+    sliced.map((cmd, i) => /* @__PURE__ */ jsxs4(Box4, { paddingLeft: 1, children: [
       /* @__PURE__ */ jsx4(Text4, { color: i === selected ? "cyan" : void 0, bold: i === selected, children: i === selected ? "> " : "  " }),
       /* @__PURE__ */ jsx4(Text4, { color: "green", children: cmd.cmd }),
-      /* @__PURE__ */ jsxs3(Text4, { dimColor: true, children: [
+      /* @__PURE__ */ jsxs4(Text4, { dimColor: true, children: [
         "  ",
         cmd.desc
       ] }),
-      /* @__PURE__ */ jsxs3(Text4, { color: cmd.via === "ws" ? "yellow" : "blue", dimColor: i !== selected, children: [
+      /* @__PURE__ */ jsxs4(Text4, { color: cmd.via === "ws" ? "yellow" : "blue", dimColor: i !== selected, children: [
         "(",
         cmd.via === "ws" ? "\u540E\u7AEF" : "\u672C\u5730",
         ")"
       ] })
     ] }, cmd.cmd)),
-    visible.length > maxShow && /* @__PURE__ */ jsx4(Box4, { children: /* @__PURE__ */ jsxs3(Text4, { dimColor: true, children: [
+    visible.length > maxShow && /* @__PURE__ */ jsx4(Box4, { children: /* @__PURE__ */ jsxs4(Text4, { dimColor: true, children: [
       "  ... \u8FD8\u6709 ",
       visible.length - maxShow,
       " \u6761\u547D\u4EE4"
@@ -657,11 +640,11 @@ function CommandPalette({ filter, onSelect }) {
 __name(CommandPalette, "CommandPalette");
 
 // src/components/ApprovalModal.tsx
-import { useState as useState4 } from "react";
+import { useState as useState3 } from "react";
 import { Box as Box5, Text as Text5, useInput as useInput3 } from "ink";
-import { jsx as jsx5, jsxs as jsxs4 } from "react/jsx-runtime";
+import { jsx as jsx5, jsxs as jsxs5 } from "react/jsx-runtime";
 function ApprovalModal({ toolName, payload, onAllow, onDeny }) {
-  const [selected, setSelected] = useState4(0);
+  const [selected, setSelected] = useState3(0);
   useInput3((_input, key) => {
     if (key.escape || key.tab) {
       onDeny();
@@ -694,27 +677,27 @@ function ApprovalModal({ toolName, payload, onAllow, onDeny }) {
     }
   });
   const desc = payload ? payload.length > 200 ? payload.slice(0, 200) + "..." : payload : "";
-  return /* @__PURE__ */ jsxs4(Box5, { flexDirection: "column", borderStyle: "round", borderColor: "yellow", paddingX: 2, paddingY: 1, marginTop: 1, children: [
+  return /* @__PURE__ */ jsxs5(Box5, { flexDirection: "column", borderStyle: "round", borderColor: "yellow", paddingX: 2, paddingY: 1, marginTop: 1, children: [
     /* @__PURE__ */ jsx5(Box5, { marginBottom: 1, children: /* @__PURE__ */ jsx5(Text5, { bold: true, children: "Do you want to proceed?" }) }),
-    /* @__PURE__ */ jsxs4(Box5, { flexDirection: "column", marginLeft: 2, marginBottom: 1, children: [
-      /* @__PURE__ */ jsx5(Box5, { children: /* @__PURE__ */ jsxs4(Text5, { color: selected === 0 ? "green" : void 0, children: [
+    /* @__PURE__ */ jsxs5(Box5, { flexDirection: "column", marginLeft: 2, marginBottom: 1, children: [
+      /* @__PURE__ */ jsx5(Box5, { children: /* @__PURE__ */ jsxs5(Text5, { color: selected === 0 ? "green" : void 0, children: [
         selected === 0 ? " \u276F" : "  ",
         " 1. Allow"
       ] }) }),
-      /* @__PURE__ */ jsx5(Box5, { children: /* @__PURE__ */ jsxs4(Text5, { color: selected === 1 ? "red" : void 0, children: [
+      /* @__PURE__ */ jsx5(Box5, { children: /* @__PURE__ */ jsxs5(Text5, { color: selected === 1 ? "red" : void 0, children: [
         selected === 1 ? " \u276F" : "  ",
         " 2. Deny"
       ] }) })
     ] }),
-    /* @__PURE__ */ jsxs4(Box5, { marginBottom: 1, children: [
+    /* @__PURE__ */ jsxs5(Box5, { marginBottom: 1, children: [
       /* @__PURE__ */ jsx5(Text5, { dimColor: true, children: "Tool: " }),
       /* @__PURE__ */ jsx5(Text5, { color: "cyan", children: toolName }),
-      desc ? /* @__PURE__ */ jsxs4(Text5, { dimColor: true, children: [
+      desc ? /* @__PURE__ */ jsxs5(Text5, { dimColor: true, children: [
         "  ",
         desc
       ] }) : null
     ] }),
-    /* @__PURE__ */ jsxs4(Box5, { children: [
+    /* @__PURE__ */ jsxs5(Box5, { children: [
       /* @__PURE__ */ jsx5(Text5, { dimColor: true, children: " Esc to cancel \xB7 " }),
       /* @__PURE__ */ jsx5(Text5, { dimColor: true, children: "\u2191\u2193 to select \xB7 " }),
       /* @__PURE__ */ jsx5(Text5, { dimColor: true, children: "Enter to confirm" })
@@ -749,7 +732,7 @@ function createMessage(type, content = "") {
 __name(createMessage, "createMessage");
 
 // src/App.tsx
-import { jsx as jsx6, jsxs as jsxs5 } from "react/jsx-runtime";
+import { jsx as jsx6, jsxs as jsxs6 } from "react/jsx-runtime";
 function cleanArgs(raw) {
   let s = raw;
   for (let i = 0; i < 10; i++) {
@@ -772,17 +755,19 @@ function cleanArgs(raw) {
 }
 __name(cleanArgs, "cleanArgs");
 function App({ backendUrl, wsUrl, onExit }) {
-  const [input, setInput] = useState5("");
-  const [showPalette, setShowPalette] = useState5(false);
-  const [showHelp, setShowHelp] = useState5(false);
-  const [showApproval, setShowApproval] = useState5(null);
+  const [input, setInput] = useState4("");
+  const [showPalette, setShowPalette] = useState4(false);
+  const [showHelp, setShowHelp] = useState4(false);
+  const [showApproval, setShowApproval] = useState4(null);
   const { exit } = useApp();
   const state = useAppState();
-  const clientRef = useRef2(null);
-  const { stdout } = useStdout2();
+  const clientRef = useRef(null);
+  const { stdout } = useStdout();
   const terminalRows = stdout?.rows || 24;
-  const reservedRows = 7;
-  useEffect4(() => {
+  const terminalCols = stdout?.columns || 80;
+  const reservedRows = 8;
+  const hline = "\u2500".repeat(terminalCols);
+  useEffect3(() => {
     const client = new JwCodeClient(backendUrl, wsUrl);
     clientRef.current = client;
     wireHandlers(client);
@@ -903,8 +888,9 @@ function App({ backendUrl, wsUrl, onExit }) {
     clientRef.current.chat(text, state.planMode);
   }, [onExit, state.planMode]);
   const handleSubmit = useCallback2((value) => {
+    if (showPalette) return;
     executeCommand(value);
-  }, [executeCommand]);
+  }, [executeCommand, showPalette]);
   const handleChange = useCallback2((value) => {
     setInput(value);
     if (value.startsWith("/")) {
@@ -1145,12 +1131,16 @@ function App({ backendUrl, wsUrl, onExit }) {
       updateAppState((prev) => ({ ...prev, scrollOffset: 0 }));
       return;
     }
+    if (key.tab) {
+      updateAppState((prev) => ({ ...prev, planMode: !prev.planMode }));
+      return;
+    }
   });
   const placeholder = "";
-  return /* @__PURE__ */ jsxs5(Box6, { flexDirection: "column", width: "100%", height: "100%", children: [
+  return /* @__PURE__ */ jsxs6(Box6, { flexDirection: "column", width: "100%", height: "100%", children: [
     /* @__PURE__ */ jsx6(StatusLine, {}),
     /* @__PURE__ */ jsx6(Box6, { flexGrow: 1, flexDirection: "column", children: /* @__PURE__ */ jsx6(ChatArea, { messages: state.messages, currentMessage: state.currentMessage, scrollOffset: state.scrollOffset, terminalRows, reservedRows }) }),
-    /* @__PURE__ */ jsxs5(Box6, { flexDirection: "row", borderStyle: "single", borderColor: state.connected ? "cyan" : "red", paddingLeft: 1, children: [
+    /* @__PURE__ */ jsxs6(Box6, { flexDirection: "row", borderStyle: "single", borderColor: state.connected ? "cyan" : "red", paddingLeft: 1, children: [
       /* @__PURE__ */ jsx6(Text6, { color: "green", bold: true, children: "> " }),
       /* @__PURE__ */ jsx6(Box6, { flexGrow: 1, children: /* @__PURE__ */ jsx6(
         TextInput,
@@ -1163,7 +1153,29 @@ function App({ backendUrl, wsUrl, onExit }) {
         }
       ) })
     ] }),
-    !state.connected && /* @__PURE__ */ jsxs5(Box6, { children: [
+    /* @__PURE__ */ jsxs6(Box6, { paddingLeft: 2, height: 1, children: [
+      /* @__PURE__ */ jsx6(
+        Text6,
+        {
+          color: state.planMode ? "cyan" : "grey",
+          bold: state.planMode,
+          dimColor: !state.planMode,
+          children: state.planMode ? "\u25C9 Plan" : "\u25CB Plan"
+        }
+      ),
+      /* @__PURE__ */ jsx6(Text6, { children: "  " }),
+      /* @__PURE__ */ jsx6(
+        Text6,
+        {
+          color: !state.planMode ? "green" : "grey",
+          bold: !state.planMode,
+          dimColor: state.planMode,
+          children: !state.planMode ? "\u25C9 Act" : "\u25CB Act"
+        }
+      ),
+      /* @__PURE__ */ jsx6(Text6, { dimColor: true, children: "  Tab \u5207\u6362" })
+    ] }),
+    !state.connected && /* @__PURE__ */ jsxs6(Box6, { children: [
       /* @__PURE__ */ jsx6(Text6, { color: "red", children: "\u540E\u7AEF\u672A\u8FDE\u63A5 \u2014 WebSocket \u91CD\u8BD5\u4E2D\u3002\u5982\u540E\u7AEF\u672A\u542F\u52A8\u8BF7\u7528 " }),
       /* @__PURE__ */ jsx6(Text6, { color: "yellow", bold: true, children: "npm start" })
     ] }),

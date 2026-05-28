@@ -30,7 +30,7 @@ public class FileWriteToolTest {
     }
     
     static void testDesktopWrite(FileWriteTool tool) throws Exception {
-        String desktopPath = "C:/Users/HUAWEI/Desktop/test_jwcode_tool.txt";
+        String desktopPath = System.getProperty("java.io.tmpdir") + "/test_jwcode_tool.txt";
         String content = "Test Time: 2026-04-12 16:56\nContent written by FileWriteTool\nLine 3";
         
         FileWriteTool.Input input = new FileWriteTool.Input(desktopPath, content);
@@ -59,7 +59,7 @@ public class FileWriteToolTest {
     }
     
     static void testDesktopWriteChinese(FileWriteTool tool) throws Exception {
-        String desktopPath = "C:/Users/HUAWEI/Desktop/test_chinese.txt";
+        String desktopPath = System.getProperty("java.io.tmpdir") + "/test_chinese.txt";
         String content = "Test Time: 2026-04-12\nChinese content test";
         
         FileWriteTool.Input input = new FileWriteTool.Input(desktopPath, content);

@@ -215,7 +215,7 @@ public class WebSocketMessageHandler {
                     if (msgMap.containsKey("message")) {
                         refineMessage = (String) msgMap.get("message");
                     }
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) { logger.fine("Message parse skipped: " + ignored.getMessage()); }
 
                 // 通知前端：开始重新规划（完善中）
                 broadcastToSession(session.getId(), Map.of(
@@ -304,7 +304,7 @@ public class WebSocketMessageHandler {
                     if (msgMap.containsKey("goal")) {
                         goal = (String) msgMap.get("goal");
                     }
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) { logger.fine("Message parse skipped: " + ignored.getMessage()); }
 
                 Task planTask = new Task();
                 planTask.setTitle("Plan: " + (goal.length() > 50 ? goal.substring(0, 50) + "..." : goal));

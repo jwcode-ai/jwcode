@@ -53,7 +53,7 @@ public class ModelInfoHandler implements HttpHandler {
                 sendError(exchange, 405, "Method not allowed: " + method);
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            logger.log(java.util.logging.Level.SEVERE, "ModelInfoHandler error", e);
             sendError(exchange, 500, "Internal error: " + e.getMessage());
         }
     }

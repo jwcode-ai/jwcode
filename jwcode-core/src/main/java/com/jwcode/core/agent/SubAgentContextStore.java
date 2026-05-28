@@ -188,7 +188,7 @@ public class SubAgentContextStore {
                 Files.walk(dir)
                     .sorted(Comparator.reverseOrder())
                     .forEach(p -> {
-                        try { Files.delete(p); } catch (IOException ignored) {}
+                        try { Files.delete(p); } catch (IOException ignored) { logger.debug("Delete failed: {}", p); }
                     });
                 logger.info("[SubAgentContextStore] 已删除 | agentId={}", agentId);
             }

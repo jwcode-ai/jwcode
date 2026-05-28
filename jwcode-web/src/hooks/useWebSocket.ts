@@ -9,6 +9,8 @@ import { useSettingsStore } from '../stores/settingsStore';
 import { useHookApprovalStore } from '../stores/useHookApprovalStore';
 import { LogEntry, SessionTask } from '../types';
 
+const DEBUG = false;
+
 interface UseWebSocketOptions {
   activeTab: string;
   setLogs: React.Dispatch<React.SetStateAction<LogEntry[]>>;
@@ -71,14 +73,14 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
     const activeSessionId = useSessionStore.getState().activeSessionId;
     const sessionId = msg.sessionId || activeSessionId;
     if (!sessionId) {
-      console.warn('[WS] 无法确定消息的 sessionId，消息被丢弃:', rawType);
+      DEBUG && console.warn('[WS] 无法确定消息的 sessionId，消息被丢弃:', rawType);
       return;
     }
 
     // 如果消息的 sessionId 与当前活跃 sessionId 不同，记录日志但不丢弃
     // （例如后台任务完成通知可能属于其他会话）
     if (msg.sessionId && msg.sessionId !== activeSessionId) {
-      console.log(`[WS] 消息 sessionId(${msg.sessionId}) 与当前活跃 sessionId(${activeSessionId}) 不同，但仍会处理`);
+      DEBUG && console.log(`[WS] 消息 sessionId(${msg.sessionId}) 与当前活跃 sessionId(${activeSessionId}) 不同，但仍会处理`);
     }
 
     // 处理 hook_ask 消息（Hook ASK 审批）— 嵌入到对话中
@@ -121,7 +123,7 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
           timestamp: Date.now(),
         });
       } catch (e) {
-        console.warn('[WS] hook_ask parse error:', e);
+        DEBUG && console.warn('[WS] hook_ask parse error:', e);
       }
       return;
     }
@@ -149,22 +151,22 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
           };
           const existing = sessionStore.tasksBySession[sid] || [];
           sessionStore.setSessionTasks(sid, [...existing, sessionTask]);
-          console.log('[WS] Task created via push:', taskData.title);
+          DEBUG && console.log('[WS] Task created via push:', taskData.title);
         } else if ((action === 'updated' || action === 'status_changed') && taskData) {
           // 更新任务状态
           sessionStore.updateTaskPlanStatus(sid, taskId, {
             backendStatus: taskData.status,
             progress: taskData.progress,
           });
-          console.log('[WS] Task updated via push:', taskId, taskData.status);
+          DEBUG && console.log('[WS] Task updated via push:', taskId, taskData.status);
         } else if (action === 'deleted') {
           // 删除任务
           const existing = sessionStore.tasksBySession[sid] || [];
           sessionStore.setSessionTasks(sid, existing.filter(t => t.id !== taskId && t.backendId !== taskId));
-          console.log('[WS] Task deleted via push:', taskId);
+          DEBUG && console.log('[WS] Task deleted via push:', taskId);
         }
       } catch (e) {
-        console.warn('[WS] task_update parse error:', e);
+        DEBUG && console.warn('[WS] task_update parse error:', e);
       }
       return;
     }
@@ -175,7 +177,7 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
       try {
         switch (rawType) {
           case 'plan_start':
-            console.log('[WS] plan_start:', rawData);
+            DEBUG && console.log('[WS] plan_start:', rawData);
             planStore.startPlanning(sessionId, rawData || '');
             // 创建 assistant message，使后续 content 消息能正确追加
             chatStore.getState().startGeneration(sessionId);
@@ -189,12 +191,12 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
 
           case 'plan_thinking':
             // 更新规划状态描述 - 将思考内容同步到 plan store 供前端展示
-            console.log('[WS] plan_thinking:', rawData);
+            DEBUG && console.log('[WS] plan_thinking:', rawData);
             planStore.setThinkingStatus(sessionId, rawData || '正在分析需求...');
             break;
 
           case 'plan_tasks': {
-            console.log('[WS] plan_tasks:', rawData);
+            DEBUG && console.log('[WS] plan_tasks:', rawData);
             const data = JSON.parse(rawData || '{}');
 
             // 检查是否包含结构化任务数据
@@ -240,7 +242,7 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
               };
               const tasks = flattenTasks(structuredTasksData);
               sessionStore.setSessionTasks(sessionId, tasks);
-              console.log('[WS] Structured tasks written to sessionStore:', tasks.length);
+              DEBUG && console.log('[WS] Structured tasks written to sessionStore:', tasks.length);
 
               // 同步写入 planStore.structuredTasksBySession（供 PlanPanel 结构化视图使用）
               // 保持 StructuredTask 完整结构（不 flatten），保留树形
@@ -271,12 +273,12 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
                 const diff = diffTasks(oldTasks, structuredTasks);
                 planStore.setTaskDiff(sessionId, diff);
                 if (diff.total > 0) {
-                  console.log('[WS] Task diff:', diff);
+                  DEBUG && console.log('[WS] Task diff:', diff);
                 }
               }
               
               planStore.setStructuredTasks(sessionId, structuredTasks);
-              console.log('[WS] Structured tasks synced to planStore:', structuredTasks.length);
+              DEBUG && console.log('[WS] Structured tasks synced to planStore:', structuredTasks.length);
 
               // 自动切换到 Plan Tab
               window.dispatchEvent(new CustomEvent('switch-tab', { detail: 'plan' }));
@@ -310,14 +312,14 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
           case 'plan_refine': {
             // 用户在前端 PlanPanel 点击"完善计划"后，后端重新规划
             // 前端只需清除 planRefining 状态（后端会通过 plan_tasks + plan_complete 更新）
-            console.log('[WS] plan_refine received:', rawData);
+            DEBUG && console.log('[WS] plan_refine received:', rawData);
             planStore.setPlanRefining(false);
             break;
           }
 
           case 'plan_task_start': {
             const data = JSON.parse(rawData || '{}');
-            console.log('[WS] plan_task_start:', data.id);
+            DEBUG && console.log('[WS] plan_task_start:', data.id);
             // 统一数据源：写入 sessionStore
             useSessionStore.getState().updateTaskPlanStatus(sessionId, data.id, {
               planStatus: 'running',
@@ -338,7 +340,7 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
 
           case 'plan_task_result': {
             const data = JSON.parse(rawData || '{}');
-            console.log('[WS] plan_task_result:', data.id, data.status);
+            DEBUG && console.log('[WS] plan_task_result:', data.id, data.status);
             useSessionStore.getState().updateTaskPlanStatus(sessionId, data.id, {
               planStatus: data.status || 'completed',
               result: data.result,
@@ -350,7 +352,7 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
           }
 
           case 'plan_complete': {
-            console.log('[WS] plan_complete:', rawData);
+            DEBUG && console.log('[WS] plan_complete:', rawData);
             const planData = JSON.parse(rawData || '{}');
             
             // 无论 status 字段是否存在，都结束生成状态（兼容后端纯字符串 data 的情况）
@@ -363,7 +365,7 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
               // AI 分析完成，等待用户确认
               planStore.setPhase(sessionId, 'planning');
               planStore.setShowConfirmButton(true);
-              console.log('[WS] Plan 分析完成，等待用户确认');
+              DEBUG && console.log('[WS] Plan 分析完成，等待用户确认');
             } else {
               // 执行完成（兜底：status 为 'completed' 或 undefined 均走此分支）
               planStore.setPhase(sessionId, 'result');
@@ -396,7 +398,7 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
 
           case 'plan_mode_change': {
             // Phase 3: 后端 PlanModeManager 模式切换同步到前端
-            console.log('[WS] plan_mode_change:', rawData);
+            DEBUG && console.log('[WS] plan_mode_change:', rawData);
             try {
               const modeData = JSON.parse(rawData || '{}');
               const newMode = modeData.newMode;
@@ -407,7 +409,7 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
               } else if (newMode === 'normal') {
                 planStore.setMode('normal');
               }
-              console.log(`[Plan] 模式已同步: ${modeData.previousMode} → ${newMode}`);
+              DEBUG && console.log(`[Plan] 模式已同步: ${modeData.previousMode} → ${newMode}`);
             } catch (e) {
               console.error('[Plan] 模式同步解析失败:', e);
             }
@@ -416,7 +418,7 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
 
           case 'step_prompt': {
             const data = JSON.parse(rawData || '{}');
-            console.log('[WS] step_prompt: step', data.stepNumber, data.action);
+            DEBUG && console.log('[WS] step_prompt: step', data.stepNumber, data.action);
             planStore.setCurrentStepPrompt({
               sessionId,
               taskId: data.taskId || '',
@@ -485,7 +487,7 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
         break;
 
       case 'content':
-        console.log(`[WS] 收到 content 消息, data长度=${(msg.data || '').length}, sessionId=${sessionId}, data前50字符=${(msg.data || '').substring(0, 50)}`);
+        DEBUG && console.log(`[WS] 收到 content 消息, data长度=${(msg.data || '').length}, sessionId=${sessionId}, data前50字符=${(msg.data || '').substring(0, 50)}`);
         chatStore.getState().appendToLastMessage(sessionId, msg.data || '');
         break;
 
@@ -652,7 +654,7 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
         try {
           const commands = JSON.parse(msg.data || '[]');
           useCommandStore.getState().setBackendCommands(commands);
-          console.log(`[WS] 已加载 ${commands.length} 个后端命令`);
+          DEBUG && console.log(`[WS] 已加载 ${commands.length} 个后端命令`);
         } catch (e) {
           console.error('Failed to parse commands list:', e);
         }
@@ -665,13 +667,13 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
       case 'workspace_changed':
         try {
           const wsData = JSON.parse(msg.data || '{}');
-          console.log('[WS] 工作目录已切换:', wsData.oldDir, '->', wsData.newDir);
+          DEBUG && console.log('[WS] 工作目录已切换:', wsData.oldDir, '->', wsData.newDir);
           // 同步更新前端 store，确保前后端工作目录一致
           if (wsData.newDir) {
             useSettingsStore.getState().setWorkspaceDir(wsData.newDir);
           }
         } catch (e) {
-          console.log('[WS] 工作目录已切换:', msg.data);
+          DEBUG && console.log('[WS] 工作目录已切换:', msg.data);
         }
         break;
 
@@ -722,7 +724,7 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
             });
           }
         } catch (e) {
-          console.warn('[WS] todo_update parse error:', e);
+          DEBUG && console.warn('[WS] todo_update parse error:', e);
         }
         break;
       }
@@ -740,7 +742,7 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
             }
           }
         } catch (e) {
-          console.warn('[WS] todo_item_done parse error:', e);
+          DEBUG && console.warn('[WS] todo_item_done parse error:', e);
         }
         break;
       }

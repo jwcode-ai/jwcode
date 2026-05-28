@@ -294,7 +294,9 @@ public class ToolExecutor {
                     try {
                         resultJson = SHARED_MAPPER
                             .valueToTree(result.getData());
-                    } catch (Exception ignored) {}
+                    } catch (Exception ignored) {
+                        logger.fine("Failed to serialize tool result: " + ignored.getMessage());
+                    }
                 }
                 hookCtx = HookContext.forPostToolUse(
                     null, null, toolName, resultJson);

@@ -89,7 +89,7 @@ public class AICLDeserializer {
         Matcher ctxMatcher = CTX_CONTEXT.matcher(xml);
         if (ctxMatcher.find()) {
             sessionId = ctxMatcher.group(1);
-            try { turn = Integer.parseInt(ctxMatcher.group(2)); } catch (NumberFormatException ignored) {}
+            try { turn = Integer.parseInt(ctxMatcher.group(2)); } catch (NumberFormatException ignored) { logger.fine("Parse int failed"); }
         }
 
         // 解析控制层
@@ -130,19 +130,19 @@ public class AICLDeserializer {
 
             // 生命周期字段
             if (attrs.containsKey("ttl")) {
-                try { builder.ttl(Integer.parseInt(attrs.get("ttl"))); } catch (NumberFormatException ignored) {}
+                try { builder.ttl(Integer.parseInt(attrs.get("ttl"))); } catch (NumberFormatException ignored) { logger.fine("Parse int failed"); }
             }
             if (attrs.containsKey("last-access")) {
-                try { builder.lastAccess(Long.parseLong(attrs.get("last-access"))); } catch (NumberFormatException ignored) {}
+                try { builder.lastAccess(Long.parseLong(attrs.get("last-access"))); } catch (NumberFormatException ignored) { logger.fine("Parse int failed"); }
             }
             if (attrs.containsKey("access-count")) {
-                try { builder.accessCount(Integer.parseInt(attrs.get("access-count"))); } catch (NumberFormatException ignored) {}
+                try { builder.accessCount(Integer.parseInt(attrs.get("access-count"))); } catch (NumberFormatException ignored) { logger.fine("Parse int failed"); }
             }
             if (attrs.containsKey("generation")) {
-                try { builder.generation(Integer.parseInt(attrs.get("generation"))); } catch (NumberFormatException ignored) {}
+                try { builder.generation(Integer.parseInt(attrs.get("generation"))); } catch (NumberFormatException ignored) { logger.fine("Parse int failed"); }
             }
             if (attrs.containsKey("tokens")) {
-                try { builder.estimatedTokens(Long.parseLong(attrs.get("tokens"))); } catch (NumberFormatException ignored) {}
+                try { builder.estimatedTokens(Long.parseLong(attrs.get("tokens"))); } catch (NumberFormatException ignored) { logger.fine("Parse int failed"); }
             }
 
             // 解析子元素
@@ -184,7 +184,7 @@ public class AICLDeserializer {
                 long total = Long.parseLong(m.group(1));
                 long used = Long.parseLong(m.group(2));
                 return new ContextControl.ContextBudget(total, used);
-            } catch (NumberFormatException ignored) {}
+            } catch (NumberFormatException ignored) { logger.fine("Parse int failed"); }
         }
         return null;
     }
@@ -196,7 +196,7 @@ public class AICLDeserializer {
                 String policy = m.group(1);
                 double threshold = Double.parseDouble(m.group(2));
                 return new ContextControl.EvictionConfig(policy, threshold);
-            } catch (NumberFormatException ignored) {}
+            } catch (NumberFormatException ignored) { logger.fine("Parse int failed"); }
         }
         return null;
     }
@@ -216,7 +216,7 @@ public class AICLDeserializer {
                 int ttl = Integer.parseInt(m.group(1));
                 int maxGen = Integer.parseInt(m.group(2));
                 return new ContextControl.LifecycleDefaults(ttl, maxGen);
-            } catch (NumberFormatException ignored) {}
+            } catch (NumberFormatException ignored) { logger.fine("Parse int failed"); }
         }
         return null;
     }

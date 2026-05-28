@@ -294,12 +294,7 @@ public class IncrementalAnalysisEngine {
     private void updateSymbolGraphIncrementally(SyntaxTree oldTree, SyntaxTree newTree, Path file) {
         // Simplified incremental update: remove all symbols for this file and rebuild
         String filePrefix = "file:" + file;
-        globalSymbolGraph.getAllNodes().stream()
-            .filter(n -> n.getLocation() != null && n.getLocation().file().equals(file.toString()))
-            .forEach(n -> {
-                // SymbolGraph doesn't support removal; we rebuild the whole graph
-                // for changed files in the next analysis cycle.
-            });
+        // Note: SymbolGraph removal not supported; whole graph is rebuilt next cycle
         // Rebuild from the new tree
         var builder = new SymbolGraphBuilder();
         var subGraph = builder.build(List.of(newTree));

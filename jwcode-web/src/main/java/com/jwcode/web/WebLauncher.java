@@ -51,7 +51,6 @@ public class WebLauncher {
 
         } catch (Exception e) {
             System.err.println("Startup failed: " + e.getMessage());
-            e.printStackTrace();
         }
     }
 }

@@ -161,7 +161,7 @@ public class SmartAnalyzeTool implements Tool<SmartAnalyzeInput, SmartAnalyzeOut
                         // 常见转换：/home/ubuntu -> C:/Users/ubuntu, /jwcode -> 当前工作目录
                         if (projectRoot.equals("/jwcode") || projectRoot.equals("/jwcode/")) {
                             // 特殊处理：转换为当前工作目录
-                            projectRoot = System.getProperty("user.dir", "C:/Users/HUAWEI/Desktop/jwcode");
+                            projectRoot = System.getProperty("user.dir", ".");
                             logger.fine("SmartTool: 将 /jwcode 转换为: " + projectRoot);
                         } else if (projectRoot.startsWith("/home/")) {
                             // /home/username -> C:/Users/username
@@ -171,7 +171,7 @@ public class SmartAnalyzeTool implements Tool<SmartAnalyzeInput, SmartAnalyzeOut
                         } else if (projectRoot.startsWith("/")) {
                             // 其他 /xxx 路径，尝试相对于用户目录转换
                             String remainder = projectRoot.substring(1);
-                            String userHome = System.getProperty("user.home", "C:\\Users\\HUAWEI");
+                            String userHome = System.getProperty("user.home", ".");
                             projectRoot = userHome + "\\" + remainder;
                             logger.fine("SmartTool: 将 Unix 路径转换为: " + projectRoot);
                         }

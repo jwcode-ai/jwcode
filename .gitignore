@@ -47,3 +47,8 @@ eval-results/*
 logs/jwcode.log
 ts-cli/node_modules/*
 jwcode-core/.jwcode/*
+*.json
+jwcode-core/logs/*
+jwcode-mcp/target/maven-archiver/pom.properties
+jwcode-mcp/target/maven-status/maven-compiler-plugin/compile/default-compile/createdFiles.lst
+jwcode-mcp/target/maven-status/maven-compiler-plugin/compile/default-compile/inputFiles.lst

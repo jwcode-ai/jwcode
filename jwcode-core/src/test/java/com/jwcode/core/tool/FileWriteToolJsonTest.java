@@ -19,12 +19,13 @@ public class FileWriteToolJsonTest {
         
         // Test 1: JSON with "path" field (as defined in Input class)
         System.out.println("Test 1: JSON with 'path' field");
-        String json1 = "{\"path\": \"C:/Users/HUAWEI/Desktop/test_path.txt\", \"content\": \"Content with path field\"}";
+        String tmpDir = System.getProperty("java.io.tmpdir").replace("\\", "/");
+        String json1 = "{\"path\": \"" + tmpDir + "/test_path.txt\", \"content\": \"Content with path field\"}";
         testJsonInput(tool, json1);
         
         // Test 2: JSON with "file_path" field (as used in FileWriteInput record)
         System.out.println("\nTest 2: JSON with 'file_path' field");
-        String json2 = "{\"file_path\": \"C:/Users/HUAWEI/Desktop/test_file_path.txt\", \"content\": \"Content with file_path field\"}";
+        String json2 = "{\"file_path\": \"" + tmpDir + "/test_file_path.txt\", \"content\": \"Content with file_path field\"}";
         testJsonInput(tool, json2);
         
         // Test 3: JSON schema comparison

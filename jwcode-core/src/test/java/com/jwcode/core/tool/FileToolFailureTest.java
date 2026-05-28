@@ -39,7 +39,8 @@ class FileToolFailureTest {
     @Test
     void testFileWriteToNonexistentParentAutoCreate() throws Exception {
         ToolExecutor executor = new ToolExecutor();
-        String path = "C:/Users/HUAWEI/Desktop/jwcode/__test_auto_create_dir/test.txt";
+        String tmpDir = System.getProperty("java.io.tmpdir");
+        String path = tmpDir + "/jwcode_test_auto_create_dir/test.txt";
         JsonNode input = MAPPER.readTree("{\"path\":\"" + path + "\",\"content\":\"auto create parent dir\"}");
         ToolExecutionContext ctx = new ToolExecutionContext(null, Path.of(System.getProperty("user.dir")), null);
 
