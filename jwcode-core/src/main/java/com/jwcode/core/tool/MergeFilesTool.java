@@ -233,7 +233,8 @@ public class MergeFilesTool implements Tool<MergeFilesInput, MergeFilesOutput, M
                 ? context.getWorkingDirectory()
                 : Paths.get(".");
 
-            String pattern = input.sourcePattern();
+            // Windows 路径归一化：将反斜杠替换为正斜杠
+            String pattern = input.sourcePattern().replace('\\', '/');
             boolean isRecursive = pattern.contains("**");
 
             try (Stream<Path> stream = isRecursive

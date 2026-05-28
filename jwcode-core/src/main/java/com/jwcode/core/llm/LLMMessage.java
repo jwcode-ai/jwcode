@@ -21,14 +21,18 @@ public class LLMMessage {
     private final List<ToolCall> toolCalls;
     private final String toolCallId;
     private final String reasoningContent;
-    
+    private final CacheControl cacheControl;
+
     private LLMMessage(Builder builder) {
         this.role = builder.role;
         this.content = builder.content != null ? builder.content : "";
         this.toolCalls = builder.toolCalls;
         this.toolCallId = builder.toolCallId;
         this.reasoningContent = builder.reasoningContent;
+        this.cacheControl = builder.cacheControl;
     }
+
+    public CacheControl getCacheControl() { return cacheControl; }
     
     // Getters
     public Role getRole() { return role; }
@@ -87,10 +91,22 @@ public class LLMMessage {
                 .map(ToolCall::toOpenAIFormat)
                 .collect(Collectors.toList()));
         }
-        
+
+        if (cacheControl != null) {
+            map.put("cache_control", Map.of("type", cacheControl.getValue()));
+        }
+
         return map;
     }
-    
+
+    public enum CacheControl {
+        EPHEMERAL("ephemeral");
+
+        private final String value;
+        CacheControl(String value) { this.value = value; }
+        public String getValue() { return value; }
+    }
+
     /**
      * 角色枚举 - OpenAI 标准
      */
@@ -123,6 +139,7 @@ public class LLMMessage {
         private List<ToolCall> toolCalls;
         private String toolCallId;
         private String reasoningContent;
+        private CacheControl cacheControl;
         
         public Builder role(Role role) {
             this.role = role;
@@ -148,7 +165,12 @@ public class LLMMessage {
             this.reasoningContent = reasoningContent;
             return this;
         }
-        
+
+        public Builder cacheControl(CacheControl cacheControl) {
+            this.cacheControl = cacheControl;
+            return this;
+        }
+
         public LLMMessage build() {
             if (role == null) {
                 throw new IllegalArgumentException("Role is required");

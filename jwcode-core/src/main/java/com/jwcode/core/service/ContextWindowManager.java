@@ -133,6 +133,14 @@ public class ContextWindowManager {
             messages.size(), compressed.size(), estimatedTokens, newTokens
         ));
         
+        // 代际熔断: 检查压缩产物代数，保真度过低时注入警告
+        int maxGen = compressed.stream().mapToInt(Message::getCompactionGeneration).max().orElse(0);
+        if (maxGen >= 3) {
+            double fidelity = 1.0 / (1 + maxGen * 0.25);
+            compressed.add(0, Message.createSystemMessage(
+                "⚠ 上下文已高度压缩（保真度 ~" + (int)(fidelity*100)
+                + "%, 代数 G" + maxGen + "），建议 /new 开启新会话"));
+        }
         return compressed;
     }
     
@@ -344,7 +352,7 @@ public class ContextWindowManager {
             keyPoints.add("[用户任务] " + taskGoal.trim());
         }
         
-        // 其余要点：优先保留包含决策、错误、TODO 的消息，限 50 字符
+        // 其余要点：优先保留包含决策、错误、TODO 的消息，限 150 字符
         List<Message> scoredMessages = new ArrayList<>();
         for (Message msg : messages) {
             String content = extractContent(msg);
@@ -372,8 +380,8 @@ public class ContextWindowManager {
             if (taskGoal != null && content.trim().equals(taskGoal.trim())) {
                 continue;
             }
-            String point = content.length() > 50 
-                ? content.substring(0, 50) + "..." 
+            String point = content.length() > 150
+                ? content.substring(0, 150) + "..."
                 : content;
             keyPoints.add("[" + msg.getRole().name().toLowerCase() + "] " + point);
         }
@@ -600,6 +608,20 @@ public class ContextWindowManager {
         return -1;
     }
     
+    /**
+     * Zone 截断优先级: TOOL_RESULTS > CONVERSATION > MEMORY > TOOLS > SYSTEM.
+     * 压缩时优先丢弃低优先级 zone 的消息。
+     */
+    public static int zonePriority(String content) {
+        if (content == null) return 3; // CONVERSATION default
+        if (content.startsWith("[ZONE:TOOL_RESULTS")) return 1;
+        if (content.startsWith("[ZONE:CONVERSATION")) return 2;
+        if (content.startsWith("[ZONE:MEMORY")) return 3;
+        if (content.startsWith("[ZONE:TOOLS")) return 4;
+        if (content.startsWith("[ZONE:SYSTEM")) return 5;
+        return 3;
+    }
+
     // Getters
     public int getContextLimit() { return contextLimit; }
     public int getMaxMessages() { return maxMessages; }

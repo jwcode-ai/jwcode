@@ -513,13 +513,13 @@ public class TaskExecutionAgent {
     private String getSkillIdForAgent(String agentType) {
         if (agentType == null) return "default";
         switch (agentType.toLowerCase()) {
-            case "coder": return "code-generation";
-            case "debug": return "debugging";
+            case "coder": return "implement-feature";
+            case "tester": return "write-tests";
             case "reviewer": return "code-review";
-            case "test": return "test-generation";
-            case "doc": return "documentation";
-            case "explore": return "code-exploration";
-            case "architect": return "architecture-design";
+            case "debug": return "diagnose-bug";
+            case "doc": return "write-docs";
+            case "explore": return "explore-codebase";
+            case "architect": return "design-architecture";
             default: return "default";
         }
     }

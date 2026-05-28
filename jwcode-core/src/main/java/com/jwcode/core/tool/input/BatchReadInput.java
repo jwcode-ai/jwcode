@@ -1,5 +1,6 @@
 package com.jwcode.core.tool.input;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
@@ -11,6 +12,7 @@ import java.util.List;
  * 用于批量读取多个文件内容
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
+@JsonIgnoreProperties(ignoreUnknown = true)
 public record BatchReadInput(
     @JsonProperty("file_paths")
     List<String> filePaths,

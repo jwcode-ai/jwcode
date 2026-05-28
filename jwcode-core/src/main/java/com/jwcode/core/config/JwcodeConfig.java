@@ -168,7 +168,6 @@ public class JwcodeConfig {
             }
 
             String strategy = keyRotation != null ? keyRotation.getStrategy() : "round_robin";
-            long now = System.nanoTime(); // 纳秒级精度，避免同一纳秒冲突
 
             switch (strategy) {
                 case "random":
@@ -177,14 +176,14 @@ public class JwcodeConfig {
                     return getPriorityKey();
                 case "round_robin":
                 default:
-                    return getRoundRobinKey(now);
+                    return getRoundRobinKey();
             }
         }
 
         /**
          * 轮询策略：使用 AtomicInteger 保证线程安全，纳秒级精度
          */
-        private String getRoundRobinKey(long now) {
+        private String getRoundRobinKey() {
             int size = apiKeys.size();
             for (int attempt = 0; attempt < size; attempt++) {
                 int index = roundRobinCounter.getAndIncrement() % size;

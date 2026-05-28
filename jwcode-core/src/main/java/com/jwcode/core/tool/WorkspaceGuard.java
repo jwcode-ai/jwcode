@@ -98,8 +98,9 @@ public class WorkspaceGuard {
     /**
      * 校验路径是否在工作区内（带工具名，用于错误信息）。
      *
-     * <p>【TOCTOU 修复】使用 FileChannel.open + FileKey 原子方式获取真实路径，
-     * 消除 exists() 检查与 toRealPath() 调用之间的竞态窗口。</p>
+     * <p>【TOCTOU 防护】使用 toRealPath() 原子方式获取真实路径，
+     * 消除 exists() 检查与 toRealPath() 调用之间的竞态窗口。
+     * 文件不存在时回退到父目录解析。</p>
      *
      * @param targetPath 要校验的路径
      * @param toolName   工具名称（用于错误诊断）

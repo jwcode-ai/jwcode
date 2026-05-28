@@ -82,7 +82,12 @@ public enum HookEventType {
     TASK_DISPATCH(EventCategory.A2A, HookDecision.ALLOW),
 
     /** A2A 远程拦截点 */
-    A2A_REMOTE_INTERCEPT(EventCategory.A2A, HookDecision.ALLOW);
+    A2A_REMOTE_INTERCEPT(EventCategory.A2A, HookDecision.ALLOW),
+
+    // ==================== 通知事件 ====================
+
+    /** 通知时触发（权限请求、空闲提醒等） */
+    NOTIFICATION(EventCategory.SESSION, HookDecision.ALLOW);
 
     private final EventCategory category;
     private final HookDecision defaultDecision;

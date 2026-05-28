@@ -91,6 +91,12 @@ public class EnhancedOrchestratorAgent {
     // 工作目录记忆 Agent（按工作目录主动记忆项目信息）
     private MemoryAgent memoryAgent;
 
+    // GAN 迭代执行器（Generator ⇄ Evaluator）
+    private GanExecutor ganExecutor;
+
+    // 方案 B: AI 任务规划器 (LLM分析 + 智能依赖 + 真实执行)
+    private com.jwcode.core.planner.ai.AITaskPlanner aiTaskPlanner;
+
     // 当前执行上下文
     private String currentTaskId;
     private String currentTaskGoal;
@@ -189,6 +195,10 @@ public class EnhancedOrchestratorAgent {
             // 优先复用传入的 AgentRegistry，避免重复创建（减少日志刷屏和性能浪费）
             AgentRegistry registry = agentRegistry != null ? agentRegistry : AgentRegistry.createDefault();
             this.a2aFacade = new A2AFacade(registry, new A2AConfig(), llmService, toolRegistry, toolExecutor);
+            this.ganExecutor = new GanExecutor(this.a2aFacade, this.llmService);
+            // 方案 B: AI 任务规划器 — LLM分析 + 智能依赖 + A2AFacade 真实调度
+            this.aiTaskPlanner = new com.jwcode.core.planner.ai.AITaskPlanner(
+                llmService, toolRegistry, this.a2aFacade);
             logger.info("A2A Facade initialized: " + a2aFacade.getDispatcherName()
                 + " | llmService=" + (llmService != null ? "available" : "null (mock fallback)"));
             
@@ -199,12 +209,16 @@ public class EnhancedOrchestratorAgent {
                 "timestamp", java.time.Instant.now().toString()
             ));
             
-            // 初始化 Hook 系统（接线：HookRegistry → HookChain → 三大拦截点）
+            // 初始化 Hook 系统（仅首次创建时初始化，避免重复接线）
             try {
-                Path projectRoot = Path.of(System.getProperty("user.dir", "."));
-                HookSystemInitializer.initialize(
-                    projectRoot, toolExecutor, null,
-                    a2aFacade.getLocalDispatcher());
+                if (!HookSystemInitializer.isInitialized()) {
+                    Path projectRoot = Path.of(System.getProperty("user.dir", "."));
+                    HookSystemInitializer.initialize(
+                        projectRoot, toolExecutor, null,
+                        a2aFacade.getLocalDispatcher());
+                } else {
+                    logger.fine("[Orchestrator] Hook system already initialized, skipping");
+                }
             } catch (Exception hookEx) {
                 logger.warning("[Orchestrator] Hook system init skipped: " + hookEx.getMessage());
             }
@@ -279,7 +293,11 @@ public class EnhancedOrchestratorAgent {
 
         logger.info("[PlanOnly] Intent analysis: " + analysis);
 
-        // Step 2: 重置任务上下文（但不执行）
+        // Step 2: 保存当前上下文后重置（仅在非空时保存历史任务）
+        if (!this.completedSubTasks.isEmpty()) {
+            logger.info("[PlanOnly] Archiving " + this.completedSubTasks.size()
+                + " completed sub-tasks before reset");
+        }
         this.currentTaskId = UUID.randomUUID().toString().substring(0, 8);
         this.currentTaskGoal = analysis.getSummary();
         this.taskStartTime = LocalDateTime.now();
@@ -586,22 +604,40 @@ public class EnhancedOrchestratorAgent {
                     break;
 
                 case COMPLEX:
-                    sb.append("### 📋 Plan: Complex Task\n\n");
-                    sb.append("This is a complex task. Starting with exploration phase.\n\n");
+                    sb.append("### 📋 Plan: AI-Driven Complex Task (方案B)\n\n");
+                    sb.append("Using AITaskPlanner: LLM分析 + 智能依赖 + A2AFacade调度.\n\n");
 
-                    // Phase 1: 先派 Explorer 调研
+                    // 方案 B: AI任务规划器 — 分析→分解→依赖分析→执行
+                    if (aiTaskPlanner != null && llmService != null) {
+                        try {
+                            var result = aiTaskPlanner.planAndExecute(
+                                analysis.getSummary(), Map.of(), null, null).join();
+                            if (result.isSuccess()) {
+                                sb.append("  ✅ AI规划完成: ").append(result.getTotalTimeMs()).append("ms\n");
+                                if (result.getExecutionResult() != null) {
+                                    sb.append("  > 子任务数: ").append(result.getExecutionResult().getTotalSteps()).append("\n");
+                                    sb.append("  > 成功: ").append(result.getExecutionResult().getCompletedSteps()).append("\n");
+                                    sb.append("  > 失败: ").append(result.getExecutionResult().getFailedSteps()).append("\n");
+                                }
+                            } else {
+                                sb.append("  ⚠️ AI规划部分失败，降级为串行执行\n");
+                            }
+                        } catch (Exception planEx) {
+                            sb.append("  ⚠️ Plan B skipped: ").append(planEx.getMessage()).append("\n");
+                        }
+                    }
+
+                    // 降级: 方案 A 串行执行
                     sb.append("**Phase 1**: Explore codebase structure\n");
                     TaskOutput exploreOutput = executeSingleTask("Explorer", analysis);
                     sb.append(formatTaskOutput(exploreOutput));
                     contextBus.put("exploration_result", exploreOutput);
 
-                    // Phase 2: 派 Architect 设计
                     sb.append("**Phase 2**: Design architecture\n");
                     TaskOutput archOutput = executeSingleTask("Architect", analysis);
                     sb.append(formatTaskOutput(archOutput));
                     contextBus.put("architecture_result", archOutput);
 
-                    // Phase 3: 派 Coder 实现
                     sb.append("**Phase 3**: Implement in phases\n");
                     TaskOutput coderOutput = executeSingleTask("Coder", analysis);
                     sb.append(formatTaskOutput(coderOutput));
@@ -615,6 +651,11 @@ public class EnhancedOrchestratorAgent {
                     sb.append("**Phase 5**: Review and report\n");
                     TaskOutput reviewerOutput = executeSingleTask("Reviewer", analysis);
                     sb.append(formatTaskOutput(reviewerOutput));
+
+                    // 闭环2: 质量反馈 — Reviewer/Evaluator 评分低于阈值时自动注入
+                    if (coderOutput != null && reviewerOutput != null) {
+                        sb.append(evaluateAndFeedback(coderOutput, analysis));
+                    }
 
                     // Phase 6: GAN 迭代循环（Generator ⇄ Evaluator）
                     sb.append("**Phase 6**: GAN iterative refinement (Generator ⇄ Evaluator)\n");
@@ -685,83 +726,42 @@ public class EnhancedOrchestratorAgent {
      * 使用 SprintContract 定义验收标准和评分权重，
      * 通过 IterativeSprintOrchestrator 驱动最多 N 轮迭代。</p>
      */
-    private String executeGanIteration(AnalysisResult analysis, TaskOutput coderOutput) {
-        StringBuilder sb = new StringBuilder();
-
+    /** 闭环2: 质量反馈 — Evaluator 评分，低于阈值自动注入反馈 */
+    private String evaluateAndFeedback(TaskOutput coderOutput, AnalysisResult analysis) {
+        if (a2aFacade == null) return "";
         try {
-            // 创建 SprintContract
-            com.jwcode.core.model.SprintContract contract;
-            boolean isFrontend = analysis.getTechStack() != null
-                && (analysis.getTechStack().toLowerCase().contains("react")
-                    || analysis.getTechStack().toLowerCase().contains("vue")
-                    || analysis.getTechStack().toLowerCase().contains("ui")
-                    || analysis.getTechStack().toLowerCase().contains("frontend"));
-            boolean isBackend = analysis.getTechStack() != null
-                && (analysis.getTechStack().toLowerCase().contains("api")
-                    || analysis.getTechStack().toLowerCase().contains("backend")
-                    || analysis.getTechStack().toLowerCase().contains("database"));
-
-            if (isFrontend) {
-                contract = com.jwcode.core.model.SprintContract.createFrontendContract(
-                    analysis.getSummary(), currentTaskId);
-                sb.append("  > 使用前端权重配置（视觉设计权重最高: 0.35）\n");
-            } else if (isBackend) {
-                contract = com.jwcode.core.model.SprintContract.createBackendContract(
-                    analysis.getSummary(), currentTaskId);
-                sb.append("  > 使用后端权重配置（功能性权重最高: 0.35）\n");
-            } else {
-                contract = com.jwcode.core.model.SprintContract.createFullstackContract(
-                    analysis.getSummary(), currentTaskId);
-                sb.append("  > 使用全栈权重配置\n");
-            }
-
-            // 添加验收标准
-            contract.addAcceptanceCriterion("功能完整性：所有功能按规格实现");
-            contract.addAcceptanceCriterion("正确性：核心逻辑无错误");
-            contract.addAcceptanceCriterion("代码质量：符合项目编码规范");
-            contract.addAcceptanceCriterion("边界处理：空状态、错误状态、异常输入");
-
-            // 进入谈判状态
-            contract.startNegotiation();
-
-            // 模拟双方签署（在实际系统中，应由 Generator 和 Evaluator 各自确认）
-            contract.signByGenerator();
-            contract.signByEvaluator();
-
-            sb.append("  > Sprint Contract 已签署: ").append(contract.getContractId()).append("\n");
-            sb.append("  > 最大迭代轮数: ").append(contract.getMaxIterations()).append("\n\n");
-
-            // 执行迭代循环
-            AgentRegistry registry = AgentRegistry.createDefault();
-            com.jwcode.core.service.IterativeSprintOrchestrator orchestrator =
-                new com.jwcode.core.service.IterativeSprintOrchestrator(registry);
-
-            com.jwcode.core.service.IterativeSprintOrchestrator.IterationResult result =
-                orchestrator.executeSprint(contract, coderOutput.getSummary());
-
-            if (result.isSuccess()) {
-                sb.append("  ✅ GAN 迭代循环完成: ").append(result.toSummary()).append("\n");
-            } else {
-                sb.append("  ⚠️ GAN 迭代循环未完全通过: ").append(result.toSummary()).append("\n");
-                sb.append("  > 最后一次评估报告:\n");
-                if (result.getLastReport() != null) {
-                    sb.append("  > Verdict: ").append(result.getLastReport().getVerdict().getLabel()).append("\n");
-                    sb.append("  > 加权总分: ").append(String.format("%.2f",
-                        result.getLastReport().getWeightedTotalScore())).append("/10.0\n");
+            TaskOutput evalOutput = a2aFacade.submitTaskSync("evaluator",
+                com.jwcode.core.a2a.model.A2ATask.create("evaluator",
+                    "Evaluate the following output:\n" + coderOutput.getSummary(),
+                    java.util.Map.of("contractId", currentTaskId, "iteration", "1")));
+            if (evalOutput == null || !evalOutput.isSuccess()) return "";
+            // 如果有结构化评分数据，检查是否需反馈
+            Object data = evalOutput.getData();
+            if (data instanceof java.util.Map) {
+                @SuppressWarnings("unchecked")
+                var scores = (java.util.Map<String, Object>) data;
+                double total = 0; int count = 0;
+                for (Object v : scores.values()) {
+                    if (v instanceof Number) { total += ((Number) v).doubleValue(); count++; }
+                }
+                if (count > 0 && total / count < 6.0) {
+                    return "\n\n**⚠ 质量反馈**: 评分 " + String.format("%.1f", total/count)
+                        + "/10，建议改进。\n";
                 }
             }
-
-            // 记录到时间线
-            timeline.add(new TimelineEntry(
-                "GAN Iteration: " + contract.getContractId() + " (" + result.getTotalIterations() + " rounds)",
-                java.time.Duration.ZERO, "Evaluator"));
-
         } catch (Exception e) {
-            logger.warning("GAN iteration failed: " + e.getMessage());
-            sb.append("  ⚠️ GAN 迭代循环异常: ").append(e.getMessage()).append("\n");
+            logger.fine("[QualityFeedback] Evaluator unavailable: " + e.getMessage());
         }
+        return "";
+    }
 
-        return sb.toString();
+    private String executeGanIteration(AnalysisResult analysis, TaskOutput coderOutput) {
+        String result = ganExecutor.execute(analysis, coderOutput, currentTaskId);
+        // 记录到时间线
+        timeline.add(new TimelineEntry(
+            "GAN Iteration: " + currentTaskId,
+            java.time.Duration.ZERO, "Evaluator"));
+        return result;
     }
 
     /**
@@ -1056,7 +1056,7 @@ public class EnhancedOrchestratorAgent {
                 .contextJson(OBJECT_MAPPER.writeValueAsString(contextNode))
                 .resultsJson(OBJECT_MAPPER.writeValueAsString(resultsNode))
                 .busJson(contextBus.exportToJson())
-                .timelineJson("[]")
+                .timelineJson(OBJECT_MAPPER.writeValueAsString(timeline))
                 .build();
 
             checkpointManager.saveCheckpoint(checkpoint);

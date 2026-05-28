@@ -234,6 +234,70 @@ public class HookRegistry {
     }
 
     /**
+     * 加载 Claude Code 兼容的 settings.json (三级优先级).
+     * 1. ~/.jwcode/settings.json (用户级)
+     * 2. .jwcode/settings.json (项目级)
+     * 3. .jwcode/settings.local.json (本地级，最高优先级)
+     */
+    public synchronized int loadSettings() {
+        int count = 0;
+        // 按优先级从低到高加载，高优先级覆盖
+        String[] paths = {
+            System.getProperty("user.home") + "/.jwcode/hooks.json",
+            ".jwcode/hooks.json",
+            ".jwcode/hooks.local.json"
+        };
+        for (String p : paths) {
+            try {
+                Path path = Path.of(p);
+                if (!Files.exists(path)) continue;
+                String json = Files.readString(path);
+                Map<String, Object> root = MAPPER.readValue(json,
+                    new TypeReference<Map<String, Object>>() {});
+                @SuppressWarnings("unchecked")
+                Map<String, Object> hooks = (Map<String, Object>) root.getOrDefault("hooks", Map.of());
+                for (var entry : hooks.entrySet()) {
+                    String eventType = entry.getKey();
+                    @SuppressWarnings("unchecked")
+                    List<Map<String, Object>> matchers = (List<Map<String, Object>>) entry.getValue();
+                    for (var matcherGroup : matchers) {
+                        String matcher = (String) matcherGroup.getOrDefault("matcher", "*");
+                        @SuppressWarnings("unchecked")
+                        List<Map<String, Object>> hookList = (List<Map<String, Object>>) matcherGroup.getOrDefault("hooks", List.of());
+                        for (var h : hookList) {
+                            String type = (String) h.getOrDefault("type", "command");
+                            String command = (String) h.get("command");
+                            int timeout = h.containsKey("timeout") ? ((Number)h.get("timeout")).intValue() : 30;
+                            // 注册为 SHELL hook
+                            try {
+                                HookEventType et = HookEventType.valueOf(eventType.toUpperCase());
+                                HookConfig cfg = new HookConfig.Builder()
+                                    .name("settings:" + eventType + "/" + matcher)
+                                    .events(List.of(et))
+                                    .implementationType(HookImplementationType.SHELL)
+                                    .command(command)
+                                    .tools(matcher.equals("*") ? List.of() : List.of(matcher))
+                                    .timeoutMs(timeout * 1000L)
+                                    .priority(HookPriority.USER)
+                                    .enabled(true)
+                                    .build();
+                                register(new ConfiguredHookExecutor(cfg));
+                                count++;
+                            } catch (IllegalArgumentException e) {
+                                logger.warning("[HookRegistry] Unknown event in settings: " + eventType);
+                            }
+                        }
+                    }
+                }
+                logger.info("[HookRegistry] Loaded " + count + " hooks from " + p);
+            } catch (Exception e) {
+                logger.warning("[HookRegistry] Failed to load settings from " + p + ": " + e.getMessage());
+            }
+        }
+        return count;
+    }
+
+    /**
      * 解析单个 Hook 配置项。
      */
     private HookConfig parseHookConfig(Map<String, Object> entry) {

@@ -46,3 +46,4 @@ eval-results/*
 *.pyc
 logs/jwcode.log
 ts-cli/node_modules/*
+jwcode-core/.jwcode/*

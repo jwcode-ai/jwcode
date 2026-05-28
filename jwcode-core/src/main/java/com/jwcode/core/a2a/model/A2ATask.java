@@ -47,6 +47,37 @@ public class A2ATask {
 
     /** 优先级（0=最低, 10=最高） */
     private final int priority;
+    /** 约束条件 */
+    private final List<String> constraints;
+    private final List<String> successCriteria;
+    private final int timeoutSeconds;
+    private final int maxTokenBudget;
+    private final String parentSessionId;
+
+    public A2ATask(String taskId, String skillId, String description,
+                   Map<String, Object> input, TaskStatus status,
+                   TaskOutput output, String errorMessage,
+                   LocalDateTime createdAt, LocalDateTime updatedAt,
+                   List<String> tags, int priority,
+                   List<String> constraints, List<String> successCriteria,
+                   int timeoutSeconds, int maxTokenBudget, String parentSessionId) {
+        this.taskId = Objects.requireNonNull(taskId, "taskId must not be null");
+        this.skillId = Objects.requireNonNull(skillId, "skillId must not be null");
+        this.description = description;
+        this.input = input != null ? Collections.unmodifiableMap(input) : Collections.emptyMap();
+        this.status = status != null ? status : TaskStatus.PENDING;
+        this.output = output;
+        this.errorMessage = errorMessage;
+        this.createdAt = createdAt != null ? createdAt : LocalDateTime.now();
+        this.updatedAt = updatedAt != null ? updatedAt : this.createdAt;
+        this.tags = tags != null ? Collections.unmodifiableList(tags) : Collections.emptyList();
+        this.priority = priority;
+        this.constraints = constraints != null ? List.copyOf(constraints) : List.of();
+        this.successCriteria = successCriteria != null ? List.copyOf(successCriteria) : List.of();
+        this.timeoutSeconds = timeoutSeconds > 0 ? timeoutSeconds : 300;
+        this.maxTokenBudget = maxTokenBudget > 0 ? maxTokenBudget : 4000;
+        this.parentSessionId = parentSessionId;
+    }
 
     public A2ATask(String taskId, String skillId, String description,
                    Map<String, Object> input, TaskStatus status,
@@ -64,6 +95,11 @@ public class A2ATask {
         this.updatedAt = updatedAt != null ? updatedAt : this.createdAt;
         this.tags = tags != null ? Collections.unmodifiableList(tags) : Collections.emptyList();
         this.priority = priority;
+        this.constraints = List.of();
+        this.successCriteria = List.of();
+        this.timeoutSeconds = 300;
+        this.maxTokenBudget = 4000;
+        this.parentSessionId = null;
     }
 
     // ==================== 状态枚举 ====================
@@ -98,6 +134,11 @@ public class A2ATask {
     public LocalDateTime getUpdatedAt() { return updatedAt; }
     public List<String> getTags() { return tags; }
     public int getPriority() { return priority; }
+    public List<String> getConstraints() { return constraints; }
+    public List<String> getSuccessCriteria() { return successCriteria; }
+    public int getTimeoutSeconds() { return timeoutSeconds; }
+    public int getMaxTokenBudget() { return maxTokenBudget; }
+    public String getParentSessionId() { return parentSessionId; }
 
     // ==================== 状态变更 ====================
 

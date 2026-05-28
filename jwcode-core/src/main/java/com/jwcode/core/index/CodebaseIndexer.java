@@ -682,6 +682,19 @@ public class CodebaseIndexer {
             logger.info("switchWorkspace: 新工作区与当前相同，跳过");
             return;
         }
+        
+        // 防重入：如果索引正在进行中，等待完成
+        if (indexing) {
+            logger.info("switchWorkspace: 索引正在进行中，等待完成后再切换...");
+            while (indexing) {
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
 
         logger.info("switchWorkspace: " + this.workspaceRoot + " → " + newRoot);
 

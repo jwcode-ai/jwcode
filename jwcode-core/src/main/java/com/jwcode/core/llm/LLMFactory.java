@@ -19,6 +19,11 @@ public class LLMFactory {
     private JwcodeConfig config;
     private LLMService llmService;
     
+    // 缓存的重型组件（跨 LLMQueryEngine 实例共享）
+    private com.jwcode.core.agent.CompactorAgent sharedCompactorAgent;
+    private com.jwcode.core.agent.BudgetExhaustedHandler sharedBudgetHandler;
+    private ModelRouter modelRouter;
+    
     public LLMFactory() {
         this(null);
     }
@@ -29,6 +34,7 @@ public class LLMFactory {
         } else {
             loadDefaultConfig();
         }
+        this.modelRouter = new ModelRouter(this.config);
     }
     
     /**
@@ -222,12 +228,63 @@ public class LLMFactory {
     }
     
     /**
-     * 获取配置
+     * 获取或创建共享的 CompactorAgent（跨 LLMQueryEngine 实例复用）
      */
-    public JwcodeConfig getConfig() {
-        return config;
+    public synchronized com.jwcode.core.agent.CompactorAgent getSharedCompactorAgent() {
+        if (sharedCompactorAgent == null) {
+            sharedCompactorAgent = new com.jwcode.core.agent.CompactorAgent(
+                getLLMService(), new com.jwcode.core.service.SimpleCompactionStrategy(getLLMService()));
+            logger.info("[LLMFactory] Created shared CompactorAgent");
+        }
+        return sharedCompactorAgent;
     }
     
+    /**
+     * 获取或创建共享的 BudgetExhaustedHandler（跨 LLMQueryEngine 实例复用）
+     */
+    public synchronized com.jwcode.core.agent.BudgetExhaustedHandler getSharedBudgetHandler() {
+        if (sharedBudgetHandler == null) {
+            sharedBudgetHandler = com.jwcode.core.agent.BudgetExhaustedHandler.createDefault();
+            logger.info("[LLMFactory] Created shared BudgetExhaustedHandler");
+        }
+        return sharedBudgetHandler;
+    }
+    
+    /**
+     * 获取配置
+     */
+    public JwcodeConfig getConfig() { return config; }
+    public ModelRouter getModelRouter() { return modelRouter; }
+    
+    /** 全局共享实例，用于运行时模型切换 */
+    private static volatile LLMFactory globalInstance;
+
+    public static void setGlobalInstance(LLMFactory factory) { globalInstance = factory; }
+    public static LLMFactory getGlobalInstance() { return globalInstance; }
+
+    /**
+     * 运行时切换模型（无需重启 Session）。
+     * 更新默认模型并重置 LLMService，下次查询自动使用新模型。
+     */
+    public synchronized void switchModel(String modelId) {
+        if (config == null || config.getDefaultProvider() == null) {
+            logger.warning("[LLMFactory] Cannot switch model: no config loaded");
+            return;
+        }
+        // Update the first model in the default provider
+        JwcodeConfig.ProviderConfig provider = config.getDefaultProvider();
+        if (provider.getModels().isEmpty()) {
+            JwcodeConfig.ModelDefinition newModel = new JwcodeConfig.ModelDefinition();
+            newModel.setId(modelId);
+            provider.setModels(java.util.Collections.singletonList(newModel));
+        } else {
+            provider.getModels().get(0).setId(modelId);
+        }
+        this.llmService = null; // 强制下次 getLLMService() 重建
+        logger.info("[LLMFactory] Model switched to: " + modelId + " (service will be recreated on next query)");
+        setGlobalInstance(this);
+    }
+
     /**
      * 重新加载配置
      */

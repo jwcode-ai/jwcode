@@ -50,6 +50,7 @@ public class Session {
     private int compactCount;
     private ActiveTask activeTask;
     private int maxMessageHistory = 0; // 默认 0 表示不限制
+    private String currentAgentId; // 当前绑定的 Agent ID，用于子代理上下文隔离
     
     public Session(String id, String workingDirectory) {
         this.id = Preconditions.checkNotNull(id, "id cannot be null");
@@ -91,7 +92,9 @@ public class Session {
     }
     public String getModel() { return model; }
     public void setModel(String model) { this.model = model; this.updatedAt = Instant.now(); }
-    
+    public String getCurrentAgentId() { return currentAgentId; }
+    public void setCurrentAgentId(String agentId) { this.currentAgentId = agentId; }
+
     public Session addMessage(Message message) {
         Preconditions.checkNotNull(message, "message cannot be null");
         messages.add(message);

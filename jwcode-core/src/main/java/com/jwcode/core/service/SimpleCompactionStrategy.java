@@ -164,10 +164,16 @@ public class SimpleCompactionStrategy {
 
             // 4. 组装结果：保护消息 + 摘要(system) + 尾部
             List<Message> result = new ArrayList<>(preserved);
-            result.add(Message.createSystemMessage(
+            Message summaryMsg = Message.createSystemMessage(
                 "[历史对话摘要] " + summary.trim() + "\n\n[注意] 以上为此前 "
                     + head.size() + " 轮对话的压缩摘要，后续请基于摘要和最近对话继续。"
-            ));
+            );
+            // 压缩代际追踪：标记此消息为压缩产物，记录来源
+            int maxGen = head.stream().mapToInt(Message::getCompactionGeneration).max().orElse(0);
+            summaryMsg.setCompactionGeneration(maxGen + 1);
+            summaryMsg.setCompressedFromIds(head.stream().map(Message::getId).collect(
+                java.util.stream.Collectors.toSet()));
+            result.add(summaryMsg);
             result.addAll(tail);
 
             logger.info("[SimpleCompaction] 压缩完成: " + originalSize + " -> " + result.size()
@@ -396,10 +402,26 @@ public class SimpleCompactionStrategy {
         return false;
     }
 
+    // 五级分层保留策略的工具分类
+    private static final java.util.Set<String> FILE_MODIFY_TOOLS = java.util.Set.of(
+        "FileWriteTool", "FileEditTool", "EditTool", "NotebookEditTool", "MergeFilesTool");
+    private static final java.util.Set<String> READ_TOOLS = java.util.Set.of(
+        "FileReadTool", "BatchReadTool", "GlobTool", "GrepTool",
+        "WebFetchTool", "WebSearchTool", "ToolSearchTool");
+    private static final java.util.Set<String> COMMAND_TOOLS = java.util.Set.of(
+        "BashTool", "PowerShellTool", "REPLTool");
+
     /**
      * 提取用于压缩的消息内容。
-     * 过滤掉 reasoningContent、工具调用的 JSON 参数等噪声。
-     * 【修复】保留 AgentTool 的任务分配信息，避免压缩后丢失关键任务上下文。
+     *
+     * <p>五级分层保留策略：</p>
+     * <ul>
+     *   <li>Tier 1 (CRITICAL): 错误/异常 → 完整保留（最多 300 字符）</li>
+     *   <li>Tier 2 (HIGH): 文件修改 → 保留路径 + 变更摘要</li>
+     *   <li>Tier 3 (MEDIUM): 读取工具 → 保留路径 + 首尾 100 字符</li>
+     *   <li>Tier 4 (LOW): 命令执行 → 保留退出码 + 最后 200 字符</li>
+     *   <li>Tier 5 (MINIMAL): 其他 → 仅保留工具名 + success/fail</li>
+     * </ul>
      */
     private String extractCompactContent(Message msg) {
         if (isNoiseMessage(msg)) {
@@ -414,26 +436,71 @@ public class SimpleCompactionStrategy {
             if (block instanceof Message.TextContent tc) {
                 sb.append(tc.getText()).append("\n");
             } else if (block instanceof Message.ToolResultContent trc) {
-                // 【修复】保留 AgentTool 的任务分配信息，不简化为"成功/失败"
                 Object resultObj = trc.getResult();
                 String result = resultObj != null ? resultObj.toString() : "";
                 String toolName = trc.getToolName();
-                
-                // 对于 AgentTool 的任务分配，保留完整内容（包含子任务描述）
+                boolean isError = result.startsWith("Error:")
+                    || result.contains("Exception")
+                    || result.contains("失败");
+
                 if ("AgentTool".equals(toolName)) {
-                    // 截断过长的结果，但保留关键信息
                     if (result.length() > 500) {
                         result = result.substring(0, 500) + "\n...[AgentTool 结果已截断]";
                     }
                     sb.append("[AgentTool 结果: ").append(result).append("]\n");
+                } else if (isError) {
+                    // Tier 1: 错误信息完整保留
+                    sb.append("[").append(toolName).append(" ERROR: ")
+                        .append(truncate(result, 300)).append("]\n");
+                } else if (FILE_MODIFY_TOOLS.contains(toolName)) {
+                    // Tier 2: 文件修改 — 路径 + 变更摘要
+                    String paths = extractFilePaths(result);
+                    sb.append("[").append(toolName).append(": modified ")
+                        .append(paths).append("]\n");
+                } else if (READ_TOOLS.contains(toolName)) {
+                    // Tier 3: 读取工具 — 路径 + 首尾内容
+                    String trimmed = trimReadResult(result, 200);
+                    sb.append("[").append(toolName).append(": ")
+                        .append(trimmed).append("]\n");
+                } else if (COMMAND_TOOLS.contains(toolName)) {
+                    // Tier 4: 命令执行 — 退出码 + 尾部输出
+                    String exitInfo = result.contains("exit=0") ? "exit=0" : "exit!=0";
+                    String tail = result.length() > 200
+                        ? result.substring(result.length() - 200) : result;
+                    sb.append("[").append(toolName).append(" ").append(exitInfo)
+                        .append(": ").append(truncate(tail, 200)).append("]\n");
                 } else {
-                    // 其他工具结果只保留简要状态
-                    String status = result.startsWith("Error:") ? "失败" : "成功";
-                    sb.append("[工具结果 (").append(toolName).append("): ").append(status).append("]\n");
+                    // Tier 5: 其他 — 仅成功/失败
+                    sb.append("[").append(toolName).append(": success]\n");
                 }
             }
         }
         return sb.toString().trim();
+    }
+
+    /** 从工具结果中提取文件路径 */
+    private String extractFilePaths(String result) {
+        if (result == null || result.isEmpty()) return "unknown";
+        StringBuilder paths = new StringBuilder();
+        for (String line : result.split("[\\n;]")) {
+            String trimmed = line.trim();
+            if (trimmed.contains("/") || trimmed.contains("\\")
+                || trimmed.endsWith(".java") || trimmed.endsWith(".ts")
+                || trimmed.endsWith(".js") || trimmed.endsWith(".py")) {
+                if (paths.length() > 0) paths.append(", ");
+                paths.append(trimmed);
+                if (paths.length() > 200) break;
+            }
+        }
+        return paths.length() > 0 ? paths.toString() : "files";
+    }
+
+    /** 截取读取结果的首尾内容 */
+    private String trimReadResult(String result, int maxLen) {
+        if (result == null || result.isEmpty()) return "(empty)";
+        if (result.length() <= maxLen) return result;
+        return result.substring(0, maxLen / 2) + "..."
+            + result.substring(result.length() - maxLen / 2);
     }
 
     /**

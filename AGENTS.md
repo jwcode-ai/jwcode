@@ -1,11 +1,77 @@
-# JWCode 分层多Agent架构规范
+# JWCode 架构规范
 
-> 本文档定义 JWCode 项目中所有AI协作的架构规范。
+> 本文档为 JWCode 项目的 AI 协作规范和 Agent 架构定义。
 > 所有场景必须严格执行：**主Agent拆解调度，子Agent执行工作**。
+> 基于 Harness Engineering 框架 (R.E.S.T 模型) 构建。
+> 最后自动更新：2026-05-26 | 版本 1.0.0-SNAPSHOT | 5 模块 | 17 Agent | 47 Tool
 
 ---
 
-## 1. 四层架构总览
+## -1. 构建与运行
+
+```bash
+mvn compile -pl jwcode-core,jwcode-web -am -q   # 编译
+mvn test -pl jwcode-core -am                      # 测试
+./start.bat / ./start.sh                          # 一键启动
+jwcode start                                      # Python CLI 全自动
+```
+
+**前后端**: Python CLI (Rich+Textual) / React Web UI (Vite+Tailwind, :8080) / VS Code 插件 (Ctrl+Shift+J)
+
+---
+
+## 0. Harness Engineering 四层架构 (v3.1)
+
+jwcode 以 R.E.S.T 模型构建 Agent 驾驭体系：
+
+```
+L1 安全:  DockerSandbox → WorkspaceGuard → PermissionManager → HookChain → AuditLogger
+L2 成本:  ModelRouter + CostTracker + Prompt Caching + TokenBudget 分区
+L3 质量:  五级压缩保留 + AiRepair 自愈 + ZONE 注入边界 + 语义记忆 + 子代理隔离
+L4 可观测: AnalyticsObserver + /doctor + /rewind + ProjectDocGenerator
+```
+
+**六大设计原则**: 为失败而设计 | 契约优先 | 默认安全 | 决策与执行分离 | 万物皆可度量 | 数据驱动进化
+
+**禁止**: Orchestrator 直接执行工具 | 子 Agent 递归创建子 Agent | Reviewer/Explorer 修改文件 | LLM 维护跨轮次状态
+
+### 关键文件速查
+
+| 组件 | 文件 |
+|------|------|
+| LLM/Tool/Hook | `llm/LLMQueryEngine.java` `tool/ToolExecutor.java` `hook/HookChain.java` |
+| Agent 系统 | `agent/EnhancedOrchestratorAgent.java` `agent/AgentRegistry.java` |
+| 沙箱/路由 | `tool/shell/DockerSandboxExecutor.java` `llm/ModelRouter.java` |
+| 成本/诊断 | `service/CostTrackerService.java` `service/DoctorService.java` |
+| 压缩/自愈 | `service/SimpleCompactionStrategy.java` `resilience/RecoveryExecutor.java` |
+| 文档/记忆 | `service/ProjectDocGenerator.java` `agent/WorkspaceMemoryStore.java` |
+| WS/前端 | `jwcode-web/.../stream/StreamingWebSocketHandler.java` `python-cli/jwcode/main.py` |
+| CI/插件 | `.github/workflows/ci.yml` `vscode-extension/src/extension.ts` |
+| 配置 | `~/.jwcode/config.yaml` |
+
+---
+
+## 1. 部署架构 (v3.0)
+
+```
+┌──────────────────────────────────────────┐
+│  Python CLI (Rich + Textual)              │  ← jwcode start
+│  React Web UI (Vite + Tailwind)           │  ← http://localhost:8080
+├──────────────────────────────────────────┤
+│  WebSocket (8081/ws) + REST API (8080)    │  ← jwcode-web
+├──────────────────────────────────────────┤
+│  jwcode-core (LLM / Agent / Tool)         │
+│  jwcode-common (Auth / Config)            │
+│  jwcode-mcp / jwcode-parser               │
+└──────────────────────────────────────────┘
+```
+
+**启动**: `jwcode start` (Python CLI, 自动编译并启动 Java 后端)
+**Web UI**: `http://localhost:8080`
+
+---
+
+## 1. 四层 Agent 架构总览
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -603,7 +669,20 @@ Orchestrator 的拆解和调度逻辑可通过以下方式扩展：
 
 ---
 
-## 13. 相关文件
+## 13. 文档索引
+
+| 文档 | 说明 |
+|------|------|
+| `AGENTS.md` | AI 协作规范 + Agent 架构 (本文档) |
+| `README.md` | 项目概述 (自动生成) |
+| `docs/ARCHITECTURE_V2.md` | 架构演进记录 (v1→v2→v3→v3.1) |
+| `docs/JWCODE_PRODUCT_DESIGN.md` | 产品设计文档 |
+| `docs/AICL_SPEC.md` | AICL 上下文协议规范 |
+| `docs/CONFIG_GUIDE.md` | 配置指南 |
+| `docs/HOOK_SYSTEM_GUIDE.md` | Hook 生命周期拦截体系 |
+| `docs/developer-guide.md` | 开发者文档 |
+| `docs/agent-bridge-guide.md` | Agent 桥接模式指南 |
+## 14. 相关文件
 
 | 文件 | 说明 |
 |------|------|
@@ -669,3 +748,58 @@ Orchestrator 的拆解和调度逻辑可通过以下方式扩展：
 | `jwcode-web/src/stores/planStore.ts` | 前端 Plan 状态管理（含结构化任务） |
 | `jwcode-core/src/test/java/com/jwcode/core/a2a/FourLayerIntegrationTest.java` | 四层架构集成测试（25个测试用例） |
 | `.jwcode/team_members.json` | 团队配置 |
+
+---
+
+## 15. Harness Engineering（v3.0 新增 / 横向基础设施）
+
+Harness Engineering 是 Agent 的"缰绳"体系，确保 AI 从"野马"变为"千里马"。
+四层递进：L1 安全 → L2 成本 → L3 质量 → L4 可观测。
+
+### L1: 沙箱安全
+
+| 组件 | 文件 | 职责 |
+|------|------|------|
+| `DockerSandboxExecutor` | `tool/shell/DockerSandboxExecutor.java` | Docker 容器隔离执行（`--network=none --memory=512m :ro`） |
+| `WorkspaceGuard` | `tool/WorkspaceGuard.java` | 文件系统边界校验（TOCTOU 防护） |
+| `HookAuditLogger` | `hook/HookAuditLogger.java` | 操作审计日志 |
+| `PermissionManager` | `permission/PermissionManager.java` | 五级权限控制 |
+
+### L2: 成本与路由
+
+| 组件 | 文件 | 职责 |
+|------|------|------|
+| `ModelRouter` | `llm/ModelRouter.java` | 按任务特征动态选择模型（对话→轻量 / 推理→旗舰） |
+| `CostTrackerService` | `service/CostTrackerService.java` | 实时成本追踪（已接入 LLMQueryEngine） |
+| `TokenBudget` | `llm/TokenBudget.java` | Token 预算管理 |
+| `ContextWindowManager.zonePriority()` | `service/ContextWindowManager.java` | 五级 ZONE 截断优先级 |
+
+### L3: 质量与记忆
+
+| 组件 | 文件 | 职责 |
+|------|------|------|
+| `RecoveryExecutor` (AiRepair) | `resilience/RecoveryExecutor.java` | LLM 分析错误→生成修复方案→重试 |
+| `RecoveryProtocol.AiRepair` | `resilience/RecoveryProtocol.java` | 三阶段恢复协议（AutoRetry→AiRepair→HumanEscalation） |
+| `SimpleCompactionStrategy` (五级分层) | `service/SimpleCompactionStrategy.java` | 错误/文件修改/读取/命令 分层保留 |
+| `WorkspaceMemoryStore.semanticSearch()` | `agent/WorkspaceMemoryStore.java` | Embedding 语义检索 + 关键词降级 |
+| `LLMService.embed()` | `llm/LLMService.java` | 文本嵌入接口 |
+| Prompt Caching | `llm/LLMMessage.java` (CacheControl) | `cache_control: ephemeral` 减少 ~70% 重复 token |
+
+### L4: 可观测
+
+| 组件 | 文件 | 职责 |
+|------|------|------|
+| `ObservationPipeline` | `observability/ObservationPipeline.java` | 事件管道（12 种事件类型） |
+| `AnalyticsObserver` | `observability/AnalyticsObserver.java` | 聚合统计 |
+
+### 安全执行管道
+
+```
+ToolExecutor.execute()
+  → PermissionManager.isDestructive()     // 权限
+  → WorkspaceGuard.validatePath()         // 路径
+  → HookChain.execute(PRE_TOOL_USE)       // Hook
+  → DockerSandboxExecutor.execute()       // 沙箱
+  → HookChain.execute(POST_TOOL_USE)      // 审计
+  → HookAuditLogger.record()              // 日志
+```

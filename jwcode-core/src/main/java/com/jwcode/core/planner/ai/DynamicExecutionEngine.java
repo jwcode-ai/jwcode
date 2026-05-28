@@ -1,6 +1,9 @@
 package com.jwcode.core.planner.ai;
 
+import com.jwcode.core.a2a.A2AFacade;
+import com.jwcode.core.a2a.model.A2ATask;
 import com.jwcode.core.a2a.model.StepStatus;
+import com.jwcode.core.a2a.model.TaskOutput;
 import com.jwcode.core.agent.Agent;
 import com.jwcode.core.planner.AdaptiveExecutionMonitor;
 import com.jwcode.core.planner.ExecutionPlan;
@@ -37,12 +40,18 @@ public class DynamicExecutionEngine {
     private final ReplanningStrategy replanningStrategy;
     private final ExecutionTracer executionTracer;
     private final AILearningMemory learningMemory;
-    
+    private final A2AFacade a2aFacade;
+
     // 执行状态
     private final Map<String, ExecutionContext> activeExecutions;
-    
+
     public DynamicExecutionEngine(ToolRegistry toolRegistry) {
+        this(toolRegistry, null);
+    }
+
+    public DynamicExecutionEngine(ToolRegistry toolRegistry, A2AFacade a2aFacade) {
         this.toolRegistry = toolRegistry;
+        this.a2aFacade = a2aFacade;
         this.replanningStrategy = new ReplanningStrategy();
         this.executionTracer = new ExecutionTracer();
         this.learningMemory = new AILearningMemory();
@@ -176,26 +185,37 @@ public class DynamicExecutionEngine {
      */
     private StepResult executeStep(PlanStep step, ExecutionContext context) {
         long start = System.currentTimeMillis();
-        
+        String agentType = step.getAgentType() != null ? step.getAgentType() : "default";
+
         try {
-            // 模拟步骤执行
-            log.info("[DynamicExecutionEngine] 执行步骤: " + step.getStepNumber() + " - " + step.getAction());
-            
-            // 这里应该调用实际的 Agent 执行逻辑
-            // 简化处理
-            Thread.sleep(100);
-            
-            boolean success = true;
-            String output = "步骤 " + step.getStepNumber() + " 执行完成";
-            
+            log.info("[DynamicExecutionEngine] 执行步骤: {} - {} (agent={})",
+                step.getStepNumber(), step.getAction(), agentType);
+
+            // 方案 B: 真实 A2AFacade 调度
+            if (a2aFacade != null) {
+                A2ATask task = A2ATask.create(agentType,
+                    step.getAction() + "\n" + (step.getDescription() != null ? step.getDescription() : ""),
+                    step.getContext() != null ? step.getContext() : Map.of());
+                TaskOutput output = a2aFacade.submitTaskSync(agentType, task);
+                boolean success = output != null && output.isSuccess();
+                return StepResult.builder()
+                    .stepNumber(step.getStepNumber())
+                    .success(success)
+                    .output(success ? output.getSummary() : "Agent dispatch failed")
+                    .error(success ? null : (output != null ? output.getSummary() : "null output"))
+                    .executionTimeMs(System.currentTimeMillis() - start)
+                    .build();
+            }
+
+            // A2A 不可用时降级为直接执行
             return StepResult.builder()
                 .stepNumber(step.getStepNumber())
-                .success(success)
-                .output(output)
-                .error(null)
+                .success(false)
+                .output(null)
+                .error("A2AFacade not available")
                 .executionTimeMs(System.currentTimeMillis() - start)
                 .build();
-                
+
         } catch (Exception e) {
             return StepResult.builder()
                 .stepNumber(step.getStepNumber())

@@ -1,6 +1,7 @@
 package com.jwcode.core.resilience;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 import java.util.logging.Level;
@@ -102,11 +103,36 @@ public class RecoveryExecutor {
             Throwable error) {
 
         logger.info(String.format("[%s] AiRepair triggered: %s", operationName, aiRepair.errorAnalysisPrompt()));
-        // AiRepair 是 AI 驱动修复的占位符 — 实际实现需要上层 LLM 调用
-        // 目前策略：记录分析提示，然后降级到 HumanEscalation
+
+        // AI 驱动修复：如果有 LLMService 注入，调用 LLM 分析错误并尝试生成修复方案
+        if (aiRepair.llmService() != null) {
+            return attemptAiRepair(operation, aiRepair, operationName, depth, error);
+        }
+        // 无 LLM 时降级到 HumanEscalation
         return executeInternal(operation, new RecoveryProtocol.HumanEscalation(
             "Operation '" + operationName + "' failed after AutoRetry. Error: " + error.getMessage()),
             operationName, depth + 1);
+    }
+
+    private static <T> CompletableFuture<T> attemptAiRepair(
+            Supplier<CompletableFuture<T>> operation,
+            RecoveryProtocol.AiRepair aiRepair,
+            String operationName, int depth, Throwable error) {
+        String prompt = aiRepair.errorAnalysisPrompt() + "\n\nError details: " + error.getMessage();
+        return aiRepair.llmService().chat(List.of(
+            com.jwcode.core.llm.LLMMessage.user(prompt)
+        )).thenCompose(response -> {
+            String suggestion = response.getContent();
+            logger.info(String.format("[%s] AI repair suggestion: %s", operationName,
+                suggestion != null ? suggestion.substring(0, Math.min(200, suggestion.length())) : "(empty)"));
+            // 重试操作（AI 已分析并给出修复建议，上下文已更新）
+            return executeInternal(operation, new RecoveryProtocol.AutoRetry(1,
+                java.time.Duration.ofSeconds(2)),
+                operationName + "(AI-repaired)", depth + 1);
+        }).exceptionally(e -> {
+            logger.warning("[AiRepair] LLM call failed: " + e.getMessage());
+            return null; // 降级到 HumanEscalation
+        });
     }
 
     private static <T> CompletableFuture<T> handleHumanEscalation(

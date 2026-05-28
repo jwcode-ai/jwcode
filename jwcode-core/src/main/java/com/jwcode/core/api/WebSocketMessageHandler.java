@@ -116,6 +116,12 @@ public class WebSocketMessageHandler {
                 return handleHookApproval(message, true);
             case "hook_deny":
                 return handleHookApproval(message, false);
+            case "update_docs":
+                return handleUpdateDocs();
+            case "doctor":
+                return handleDoctor();
+            case "rewind":
+                return handleRewind(session);
             default:
                 logger.warning("[WSHandler] Unknown message type: " + type);
                 return CompletableFuture.completedFuture(
@@ -701,6 +707,55 @@ public class WebSocketMessageHandler {
             logger.warning("[WSHandler] Hook approval error: " + e.getMessage());
             return CompletableFuture.completedFuture("{\"type\":\"error\",\"data\":\"" + e.getMessage() + "\"}");
         }
+    }
+
+    private CompletableFuture<String> handleDoctor() {
+        return CompletableFuture.supplyAsync(() -> {
+            var results = new com.jwcode.core.service.DoctorService().runAll();
+            StringBuilder sb = new StringBuilder();
+            for (var r : results) sb.append(r.toString()).append("\n");
+            String data = escapeJson(sb.toString());
+            return "{\"type\":\"doctor_result\",\"data\":\"" + data + "\"}";
+        });
+    }
+
+    private CompletableFuture<String> handleRewind(Session session) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                var cpm = new com.jwcode.core.planner.checkpoint.CheckpointManager(
+                    java.nio.file.Path.of(System.getProperty("user.dir", ".")));
+                var checkpoints = cpm.listCheckpoints();
+                if (checkpoints.isEmpty())
+                    return "{\"type\":\"error\",\"data\":\"No checkpoints found\"}";
+                var cp = cpm.loadCheckpoint(checkpoints.get(0));
+                if (cp != null) {
+                    session.setMessages(new java.util.ArrayList<>());
+                    session.addMessage(com.jwcode.core.model.Message.createSystemMessage(
+                        "[Rewind] Restored from checkpoint: " + cp.getTaskId()));
+                    return "{\"type\":\"rewind_result\",\"data\":\"Restored checkpoint\"}";
+                }
+                return "{\"type\":\"error\",\"data\":\"Failed to load checkpoint\"}";
+            } catch (Exception e) {
+                return "{\"type\":\"error\",\"data\":\"" + e.getMessage() + "\"}";
+            }
+        });
+    }
+
+    private CompletableFuture<String> handleUpdateDocs() {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                var gen = new com.jwcode.core.service.ProjectDocGenerator(
+                    java.nio.file.Path.of(System.getProperty("user.dir", ".")));
+                var result = gen.generateAll();
+                String json = String.format(
+                    "{\"type\":\"docs_updated\",\"data\":\"%s\"}",
+                    escapeJson(result.summary));
+                logger.info("[WSHandler] Docs refreshed: " + result.summary);
+                return json;
+            } catch (Exception e) {
+                return "{\"type\":\"error\",\"data\":\"Doc update failed: " + e.getMessage() + "\"}";
+            }
+        });
     }
 
     /**

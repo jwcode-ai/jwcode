@@ -350,7 +350,8 @@ public class SessionManager {
     }
 
     /**
-     * 加载最近的会话（按文件修改时间排序，最多 MAX_SESSION_FILES 个）
+     * 索引最近的会话文件（仅记录文件元信息，不反序列化完整内容）。
+     * 实际使用时通过 loadSession() 按需加载。
      */
     private void loadAllSessions() {
         if (!Files.exists(sessionsDir)) {
@@ -370,19 +371,21 @@ public class SessionManager {
                 .limit(MAX_SESSION_FILES)
                 .toList();
             
+            // 改为懒加载：仅记录文件存在，不反序列化
+            // 实际 loadSession(id) 时从文件读取
             for (Path path : sessionFiles) {
                 String sessionId = path.getFileName().toString()
                         .replace(SESSION_EXTENSION, "");
-                try {
-                    loadSession(sessionId);
-                } catch (Exception e) {
-                    logger.error("Failed to load session: {}", sessionId, e);
-                }
+                // 在 sessions map 中放入占位标记，表示该 session 存在但未加载
+                sessions.computeIfAbsent(sessionId, k -> {
+                    logger.debug("Indexed session file (lazy): {}", sessionId);
+                    return null; // 不创建 Session 对象，按需加载
+                });
             }
-            logger.info("Loaded {} recent sessions from {} ({} total files)", 
-                sessions.size(), sessionsDir, sessionFiles.size());
+            logger.info("Indexed {} session files from {} (lazy load, {} total files)", 
+                sessionFiles.size(), sessionsDir, sessionFiles.size());
         } catch (IOException e) {
-            throw new RuntimeException("Failed to load sessions", e);
+            throw new RuntimeException("Failed to index sessions", e);
         }
     }
     

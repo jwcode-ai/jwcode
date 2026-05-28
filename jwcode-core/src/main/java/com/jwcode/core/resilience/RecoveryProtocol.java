@@ -40,16 +40,15 @@ public sealed interface RecoveryProtocol {
     /**
      * 第二阶段：AI 自主修复
      */
-    record AiRepair(String errorAnalysisPrompt) implements RecoveryProtocol {
+    record AiRepair(String errorAnalysisPrompt, com.jwcode.core.llm.LLMService llmService) implements RecoveryProtocol {
         public AiRepair {
             if (errorAnalysisPrompt == null || errorAnalysisPrompt.isBlank()) {
                 errorAnalysisPrompt = "Analyze the error and determine the best repair strategy.";
             }
         }
 
-        public AiRepair() {
-            this("Analyze the error and determine the best repair strategy.");
-        }
+        public AiRepair() { this("Analyze the error and determine the best repair strategy.", null); }
+        public AiRepair(com.jwcode.core.llm.LLMService llmService) { this("Analyze the error and determine the best repair strategy.", llmService); }
     }
 
     /**

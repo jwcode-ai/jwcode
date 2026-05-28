@@ -663,7 +663,45 @@ public class OpenAILLMService implements LLMService {
     public int getContextWindow() {
         return config.getContextWindow();
     }
-    
+
+    @Override
+    public void reconfigure(String modelId) {
+        config.setModel(modelId);
+        log.info("[OpenAI] Model reconfigured to: " + modelId);
+    }
+
+    @Override
+    public CompletableFuture<float[]> embed(String text) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                String url = config.getBaseUrl() + "/embeddings";
+                String json = mapper.writeValueAsString(Map.of(
+                    "model", "text-embedding-ada-002",
+                    "input", text
+                ));
+                java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder()
+                    .uri(java.net.URI.create(url))
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer " + getNextApiKey())
+                    .POST(java.net.http.HttpRequest.BodyPublishers.ofString(json))
+                    .timeout(java.time.Duration.ofSeconds(30))
+                    .build();
+                java.net.http.HttpResponse<String> resp = httpClient.send(req,
+                    java.net.http.HttpResponse.BodyHandlers.ofString());
+                JsonNode data = mapper.readTree(resp.body()).get("data");
+                if (data != null && data.isArray() && data.size() > 0) {
+                    JsonNode embedding = data.get(0).get("embedding");
+                    float[] vec = new float[embedding.size()];
+                    for (int i = 0; i < vec.length; i++) vec[i] = embedding.get(i).floatValue();
+                    return vec;
+                }
+            } catch (Exception e) {
+                log.warning("[OpenAI] Embed failed: " + e.getMessage());
+            }
+            return new float[0];
+        });
+    }
+
     @Override
     public void close() {
         // HTTP client doesn't need explicit close

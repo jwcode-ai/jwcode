@@ -372,16 +372,20 @@ public class LLMQueryEngine {
             
             这些规则是为了避免"幻觉"问题 - 即 AI 基于不准确的文件内容生成编辑指令。
             
-            【重要】任务结束规则：
-            
-            当任务完成时，你必须：
-            1. 在回复末尾添加 [FINISH] 标记
-            2. 简洁总结已完成的工作
-            3. 停止调用任何工具，直接返回结果
-            
-            例如："所有文件修改已完成。[FINISH]"
-            
-            不要再继续分析或提出建议，直接结束对话。
+            【‼️ 强制】任务结束规则 — 这是最重要的规则，违反将导致任务无限循环：
+
+            当你认为任务已经完成（包括回答简单问题、执行完操作、确认结果），
+            必须立即在回复的最后一行单独输出 [FINISH]。
+
+            正确示例：
+              当前工作目录是 D:\test
+              [FINISH]
+
+            错误示例（缺少 [FINISH]，将导致循环）：
+              当前工作目录是 D:\test
+              (没有 [FINISH] — 系统会继续追问！)
+
+            ⚠ 记住：无论任务大小，回答完后必须在最后一行输出 [FINISH]。不输出 [FINISH] = 任务未完成。
             
             【重要】简单任务快速路径（避免过度工程化）：
             
@@ -528,7 +532,7 @@ public class LLMQueryEngine {
     // 【优化】重复工具检测：同一工具连续调用超过此阈值触发干预
     private static final int MAX_REPEATED_TOOL_CALLS = 8;
     // 【优化】[FINISH] 提示注入间隔：每 N 轮才检查一次，避免频繁注入
-    private static final int FINISH_REMINDER_INTERVAL = 5;
+    private static final int FINISH_REMINDER_INTERVAL = 2; // 强提醒: 每 2 轮注入 [FINISH] 提示
     
     /**
      * 对话循环
@@ -537,6 +541,11 @@ public class LLMQueryEngine {
      * @param emptyResponseCount 连续空回复次数
      */
     private CompletableFuture<QueryResult> runConversationLoop(int iteration, int emptyResponseCount) {
+        // 硬上限：迭代超过 20 轮强制终止
+        if (iteration > 20) {
+            logger.warning("[LLMQueryEngine] Max iteration (20) reached, force stop");
+            return CompletableFuture.completedFuture(QueryResult.error("Max iterations exceeded"));
+        }
         // 检测会话是否被外部压缩（如 /compact 命令），如果是则重置 TokenBudget
         if (session.getCompactCount() > lastSeenCompactCount) {
             resetTokenBudget();
@@ -782,9 +791,10 @@ public class LLMQueryEngine {
             assistantMessage = Message.createAssistantMessage(content, response.getReasoningContent());
             session.addMessage(assistantMessage);
             
-            // 【修复】finishReason="stop" 只表示 OpenAI 完成了一次文本生成，不等于任务完成。
-            // 必须先检查 [FINISH] 标记，不能仅凭 finishReason 就结束对话。
-            
+            // API finish_reason="stop" + 无工具调用 → 模型认为任务完成，直接结束
+            if ("stop".equals(response.getFinishReason()) && !response.hasToolCalls()) {
+                return CompletableFuture.completedFuture(QueryResult.success(assistantMessage));
+            }
             // 检查回复内容是否包含结束标记
             if (content != null && content.contains(FINISH_MARKER)) {
                 // 【反编造】执行审计：记录本次任务的实际工具调用情况
@@ -1142,9 +1152,10 @@ public class LLMQueryEngine {
             assistantMessage = Message.createAssistantMessage(content, response.getReasoningContent());
             session.addMessage(assistantMessage);
             
-            // 【修复】finishReason="stop" 只表示 OpenAI 完成了一次文本生成，不等于任务完成。
-            // 必须先检查 [FINISH] 标记，不能仅凭 finishReason 就结束对话。
-            
+            // API finish_reason="stop" + 无工具调用 → 模型认为任务完成，直接结束
+            if ("stop".equals(response.getFinishReason()) && !response.hasToolCalls()) {
+                return CompletableFuture.completedFuture(QueryResult.success(assistantMessage));
+            }
             // 检查回复内容是否包含结束标记
             if (content != null && content.contains(FINISH_MARKER)) {
                 // 【反编造】执行审计
@@ -1896,6 +1907,8 @@ public class LLMQueryEngine {
     public LLMService getLLMService() { return llmService; }
     public ToolExecutor getToolExecutor() { return toolExecutor; }
     public EngineConfig getConfig() { return config; }
+    public TokenBudget getTokenBudget() { return tokenBudget; }
+    public String getModelName() { return llmService != null ? llmService.getModelName() : "unknown"; }
     public AgentRegistry getAgentRegistry() { return agentRegistry; }
     public void setAgentRegistry(AgentRegistry agentRegistry) { this.agentRegistry = agentRegistry; }
     

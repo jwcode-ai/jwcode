@@ -12,7 +12,6 @@ import com.jwcode.core.llm.LLMMessage;
 import com.jwcode.core.llm.LLMResponse;
 
 import java.time.Instant;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.logging.Logger;
@@ -120,7 +119,7 @@ public class IterativeSprintOrchestrator {
     }
 
     /**
-     * 执行 Generator（CoderAgent）。
+     * 执行 Generator（CoderAgent）— 真正通过 A2AFacade 或 LLMService 调度执行。
      */
     private String executeGenerator(String input, SprintContract contract, int iteration) {
         try {
@@ -142,10 +141,45 @@ public class IterativeSprintOrchestrator {
             prompt.append("迭代轮数: #").append(iteration).append("/").append(contract.getMaxIterations()).append("\n\n");
             prompt.append(input);
 
-            // 通过 A2A 协议执行
-            // 注意：实际执行由 Orchestrator 通过 A2AFacade 调度
-            // 这里返回构造好的 prompt，由上层负责执行
-            return prompt.toString();
+            String promptStr = prompt.toString();
+
+            // 通过 A2AFacade 实际调度执行
+            if (a2aFacade != null) {
+                A2ATask genTask = A2ATask.create("coder", promptStr,
+                    Map.of("contractId", contract.getContractId(),
+                           "iteration", String.valueOf(iteration)));
+                TaskOutput output = a2aFacade.submitTaskSync("coder", genTask);
+                if (output != null && output.isSuccess()) {
+                    Object data = output.getData();
+                    if (data instanceof String) {
+                        return (String) data;
+                    }
+                    return output.getSummary();
+                }
+                logger.warning("[IterativeSprint] A2A Generator 执行失败: "
+                    + (output != null ? output.getSummary() : "null output"));
+            }
+
+            // 回退：通过 LLMService 直接调用
+            if (llmService != null) {
+                try {
+                    LLMResponse llmResponse = llmService.chat(
+                        List.of(LLMMessage.builder()
+                            .role(LLMMessage.Role.USER)
+                            .content(promptStr)
+                            .build())
+                    ).join();
+                    if (llmResponse != null && llmResponse.getContent() != null) {
+                        return llmResponse.getContent();
+                    }
+                } catch (Exception e) {
+                    logger.warning("[IterativeSprint] LLM Generator 调用失败: " + e.getMessage());
+                }
+            }
+
+            // 无可用的执行方式时返回 null，让上层感知失败
+            logger.severe("[IterativeSprint] Generator 无可用的执行方式 (A2A/LLM 均不可用)");
+            return null;
         } catch (Exception e) {
             logger.severe("[IterativeSprint] Generator 执行异常: " + e.getMessage());
             return null;
@@ -213,13 +247,10 @@ public class IterativeSprintOrchestrator {
                 }
             }
 
-            // 最终回退：使用默认分数（不阻塞迭代流程）
-            logger.warning("[IterativeSprint] 无法获取真实评估，使用默认分数继续迭代");
-            Map<String, Double> defaultScores = new HashMap<>();
-            for (String dim : contract.getScoringWeights().keySet()) {
-                defaultScores.put(dim, 5.0);
-            }
-            return EvaluationReport.fromContract(contract, defaultScores, new HashMap<>(), iteration);
+            // A2A 和 LLM 均不可用 — 返回失败报告，不再静默回退到默认满分
+            logger.severe("[IterativeSprint] Evaluator 无可用的执行方式 (A2A/LLM 均不可用)");
+            return EvaluationReport.createFailureReport(contract.getContractId(),
+                "Evaluator 无可用的执行方式 (A2A/LLM 均不可用)", iteration);
         } catch (Exception e) {
             logger.severe("[IterativeSprint] Evaluator 执行异常: " + e.getMessage());
             return EvaluationReport.createFailureReport(contract.getContractId(),

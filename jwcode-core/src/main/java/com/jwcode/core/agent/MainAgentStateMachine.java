@@ -112,6 +112,9 @@ public class MainAgentStateMachine {
     // ASK 待确认状态转换（pendingTransition）
     private volatile PendingTransition pendingTransition;
 
+    /** ASK 超时时间（毫秒），逾期未确认则自动取消 */
+    private static final long ASK_TIMEOUT_MS = 120_000; // 2 分钟
+
     /**
      * 待确认的转换记录。
      */
@@ -163,19 +166,24 @@ public class MainAgentStateMachine {
 
         // ──────── TransitionGuard Hook ────────
         if (hookChain != null) {
+            // 检查 ASK 是否已过期
+            if (pendingTransition != null && pendingTransition.isExpired(ASK_TIMEOUT_MS)) {
+                logger.info("[StateMachine] ASK expired, clearing pending transition: {} -> {}",
+                    pendingTransition.from(), pendingTransition.to());
+                pendingTransition = null;
+            }
+
             HookResult guardResult = checkTransitionGuard(oldState, newState, reason);
             if (guardResult != null) {
                 if (guardResult.getDecision() == HookDecision.DENY
                     || guardResult.getDecision() == HookDecision.VOID) {
                     logger.warn("[StateMachine] TransitionGuard {}: {} -> {} blocked | reason={}",
                         guardResult.getDecision(), oldState, newState, guardResult.getReason());
-                    // 触发 STATE_ENTERED 通知（进入"被阻止"状态 = 保持原状态）
                     return oldState;
                 }
                 if (guardResult.getDecision() == HookDecision.ASK) {
                     logger.info("[StateMachine] TransitionGuard ASK: {} -> {} needs confirmation",
                         oldState, newState);
-                    // ASK: 记录 pendingTransition，转换为 WAITING_INPUT 等待用户确认
                     this.pendingTransition = new PendingTransition(
                         oldState, newState, reason, guardResult, Instant.now());
                     this.currentState = State.WAITING_INPUT;
@@ -189,6 +197,16 @@ public class MainAgentStateMachine {
                         "ASK: waiting confirmation for " + oldState + " -> " + newState,
                         Instant.now()));
                     return oldState;
+                }
+                if (guardResult.getDecision() == HookDecision.MODIFY) {
+                    logger.info("[StateMachine] TransitionGuard MODIFY: {} -> {} (proceeding with modified context)",
+                        oldState, newState);
+                    // MODIFY: 继续执行转换，但记录修改
+                }
+                if (guardResult.getDecision() == HookDecision.DEFER) {
+                    logger.info("[StateMachine] TransitionGuard DEFER: {} -> {} deferred",
+                        oldState, newState);
+                    // DEFER: 推迟但不阻止，记录推迟事件后继续
                 }
             }
         }
@@ -279,8 +297,9 @@ public class MainAgentStateMachine {
                 from.name(), to.name(), reason);
             return hookChain.execute(ctx);
         } catch (Exception e) {
-            logger.warn("[StateMachine] TransitionGuard hook error: {} (fail-open)", e.getMessage());
-            return null; // fail-open: allow transition
+            // fail-closed: hook 异常时阻止转换，避免安全策略被绕过
+            logger.warn("[StateMachine] TransitionGuard hook error: {} (fail-closed, blocking transition)", e.getMessage());
+            return HookResult.errorFailClosed("TransitionGuard", e.getMessage());
         }
     }
 

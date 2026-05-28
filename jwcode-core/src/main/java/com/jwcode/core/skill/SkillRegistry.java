@@ -26,6 +26,10 @@ public class SkillRegistry {
      * 注册技能
      */
     public void register(Skill skill) {
+        if (skills.containsKey(skill.getId())) {
+            logger.fine("[SkillRegistry] Skill already registered, skipping: " + skill.getId());
+            return;
+        }
         skills.put(skill.getId(), skill);
         skillsByCategory
             .computeIfAbsent(skill.getCategory(), k -> new ArrayList<>())

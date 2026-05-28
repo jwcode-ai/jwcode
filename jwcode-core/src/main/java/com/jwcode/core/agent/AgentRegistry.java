@@ -78,6 +78,10 @@ public class AgentRegistry {
      * 注册 Agent
      */
     public void register(Agent agent) {
+        if (agents.containsKey(agent.getId())) {
+            logger.fine("Agent already registered, skipping: " + agent.getId());
+            return;
+        }
         agents.put(agent.getId(), agent);
         logger.info("注册 Agent: " + agent.getId());
     }

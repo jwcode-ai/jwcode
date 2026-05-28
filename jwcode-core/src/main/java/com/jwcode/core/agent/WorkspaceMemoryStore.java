@@ -450,4 +450,76 @@ public class WorkspaceMemoryStore {
         flush();
         logger.fine("[WorkspaceMemoryStore] Shutdown complete");
     }
+
+    // ==================== 语义检索 ====================
+
+    private com.jwcode.core.llm.LLMService embedService;
+
+    public void setEmbedService(com.jwcode.core.llm.LLMService service) {
+        this.embedService = service;
+    }
+
+    /**
+     * 语义检索记忆 — 余弦相似度 + 关键词混合排序。
+     */
+    public List<String> semanticSearch(String query, int topK) {
+        if (embedService == null) return keywordFallback(query, topK);
+        try {
+            float[] qVec = embedService.embed(query).get(5, java.util.concurrent.TimeUnit.SECONDS);
+            if (qVec.length == 0) return keywordFallback(query, topK);
+
+            List<String> texts = collectTexts();
+            if (texts.isEmpty()) return List.of();
+
+            // 余弦排序 + 关键词加分
+            texts.sort((a, b) -> {
+                double sa = cosineScore(qVec, a) + keywordBonus(query, a);
+                double sb = cosineScore(qVec, b) + keywordBonus(query, b);
+                return Double.compare(sb, sa);
+            });
+            return texts.stream().limit(topK).toList();
+        } catch (Exception e) {
+            logger.fine("[semanticSearch] Failed: " + e.getMessage());
+            return keywordFallback(query, topK);
+        }
+    }
+
+    private List<String> collectTexts() {
+        List<String> texts = new ArrayList<>();
+        for (Map<String, Object> m : loadTaskHistory()) {
+            String s = String.valueOf(m.getOrDefault("summary", ""));
+            if (!s.isEmpty()) texts.add(s);
+        }
+        for (Map.Entry<String, Object> e : loadInsights().entrySet()) {
+            String s = String.valueOf(e.getValue());
+            if (!s.isEmpty()) texts.add(s);
+        }
+        return texts;
+    }
+
+    private double cosineScore(float[] qVec, String text) {
+        try {
+            float[] tVec = embedService.embed(text).get(5, java.util.concurrent.TimeUnit.SECONDS);
+            if (tVec.length == 0) return 0;
+            double dot = 0, nq = 0, nt = 0;
+            int len = Math.min(qVec.length, tVec.length);
+            for (int i = 0; i < len; i++) { dot += qVec[i]*tVec[i]; nq += qVec[i]*qVec[i]; nt += tVec[i]*tVec[i]; }
+            return dot / (Math.sqrt(nq) * Math.sqrt(nt) + 1e-9);
+        } catch (Exception e) { return 0; }
+    }
+
+    private static double keywordBonus(String query, String text) {
+        double score = 0;
+        String tl = text.toLowerCase();
+        for (String word : query.toLowerCase().split("\\s+")) {
+            if (tl.contains(word)) score += 0.3;
+        }
+        return score;
+    }
+
+    private List<String> keywordFallback(String query, int topK) {
+        return collectTexts().stream()
+            .filter(t -> query.isBlank() || t.toLowerCase().contains(query.toLowerCase()))
+            .limit(topK).toList();
+    }
 }

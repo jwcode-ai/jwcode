@@ -39,6 +39,8 @@ public class HookSystemInitializer {
     private static final ObjectMapper MAPPER = new ObjectMapper()
         .enable(SerializationFeature.INDENT_OUTPUT);
 
+    private static volatile boolean initialized = false;
+
     private static final String HOOKS_DIR = ".jwcode";
     private static final String HOOKS_FILE = ".jwcode/hooks.json";
 
@@ -70,7 +72,9 @@ public class HookSystemInitializer {
                         return HookResult.deny("BashSafetyHook",
                             "Dangerous command pattern detected: " + truncate(toolInput, 80));
                     }
-                    return HookResult.allow("BashSafetyHook");
+                    // Claude Code 风格: 所有 shell 命令需审批
+                    return HookResult.ask("BashSafetyHook",
+                        truncate(toolInput, 100), "审批 shell 命令执行");
                 } catch (Exception e) {
                     return HookResult.allow("BashSafetyHook", "Hook error, fail-open");
                 }
@@ -86,7 +90,7 @@ public class HookSystemInitializer {
         }
     }
 
-    /** FileWriteAuditHook — 纯 Java 实现，记录文件写入操作 */
+    /** FileWriteApprovalHook — Claude Code 风格: 文件修改前审批 */
     private static class FileWriteAuditExecutor implements HookExecutor {
         private static final Set<String> TARGET_TOOLS = Set.of("FileWriteTool", "FileEditTool");
 
@@ -96,21 +100,16 @@ public class HookSystemInitializer {
                 try {
                     if (context.getToolName() == null
                         || !TARGET_TOOLS.contains(context.getToolName())) {
-                        return HookResult.allow("FileWriteAuditHook");
+                        return HookResult.allow("FileWriteApprovalHook");
                     }
                     String fp = extractFilePath(context);
-                    if (fp != null && !fp.isEmpty()) {
-                        Path logFile = Path.of(HOOKS_DIR, "hook-audit.log");
-                        Files.createDirectories(logFile.getParent());
-                        String line = Instant.now() + " | FILE_WRITE | " + fp + "\n";
-                        Files.writeString(logFile, line,
-                            java.nio.file.StandardOpenOption.CREATE,
-                            java.nio.file.StandardOpenOption.APPEND);
-                    }
+                    String tool = context.getToolName();
+                    return HookResult.ask("FileWriteApprovalHook",
+                        fp != null ? fp : "(unknown file)",
+                        "审批文件修改: " + tool);
                 } catch (Exception e) {
-                    logger.fine("[Hook] FileWriteAudit failed: " + e.getMessage());
+                    return HookResult.allow("FileWriteApprovalHook", "Hook error, fail-open");
                 }
-                return HookResult.allow("FileWriteAuditHook");
             });
         }
         private String extractFilePath(HookContext ctx) {
@@ -136,7 +135,7 @@ public class HookSystemInitializer {
         @Override public boolean isFailOpen() { return true; }
         @Override public long getTimeoutMs() { return 3000; }
         @Override public boolean supportsEvent(HookEventType eventType) {
-            return eventType == HookEventType.POST_TOOL_USE;
+            return eventType == HookEventType.PRE_TOOL_USE;
         }
     }
 
@@ -215,16 +214,17 @@ public class HookSystemInitializer {
         String status = "OK";
 
         try {
+            // 0. 按需初始化：无 hooks.json 配置时跳过（降低空转开销）
+            Path hooksFile = projectRoot.resolve(HOOKS_FILE);
+            boolean hasConfig = Files.exists(hooksFile) && Files.size(hooksFile) > 50;
+            if (!hasConfig) {
+                logger.fine("[HookInit] No hooks config found, skipping initialization");
+                return new HookInitResult(0, "SKIPPED (no config)", System.currentTimeMillis() - startTime);
+            }
+
             // 1. 确保 .jwcode 目录存在
             Path hooksDir = projectRoot.resolve(HOOKS_DIR);
             Files.createDirectories(hooksDir);
-
-            // 2. 生成配置文件模板（如不存在）
-            Path hooksFile = projectRoot.resolve(HOOKS_FILE);
-            if (!Files.exists(hooksFile)) {
-                Files.writeString(hooksFile, HOOKS_JSON_TEMPLATE);
-                logger.info("[HookInit] Generated hooks config: " + hooksFile.toAbsolutePath());
-            }
 
             // 3. 创建 HookRegistry 并加载配置
             HookRegistry registry = new HookRegistry(hooksFile);
@@ -273,8 +273,16 @@ public class HookSystemInitializer {
 
         long duration = System.currentTimeMillis() - startTime;
         HookInitResult result = new HookInitResult(hookCount, status, duration);
+        initialized = result.isSuccess();
         logger.info("[HookInit] Done: " + result);
         return result;
+    }
+
+    /**
+     * 检查 Hook 系统是否已初始化。
+     */
+    public static boolean isInitialized() {
+        return initialized;
     }
 
     /**

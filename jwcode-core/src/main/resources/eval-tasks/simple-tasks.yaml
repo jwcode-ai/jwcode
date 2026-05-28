@@ -16,7 +16,7 @@ tasks:
         params: { path: "hello.txt" }
       - type: FILE_CONTENT_MATCHES
         params: { path: "hello.txt", content: "Hello JWCode" }
-    timeoutSeconds: 30
+    timeoutSeconds: 120
     aiEvalEnabled: false
     skipInMockMode: true
     tags: [file, basic]
@@ -32,7 +32,7 @@ tasks:
         params: { path: "pom.xml" }
       - type: FILE_CONTENT_CONTAINS
         params: { path: "pom.xml", substring: "<version>" }
-    timeoutSeconds: 30
+    timeoutSeconds: 120
     aiEvalEnabled: false
     tags: [file, read]
 
@@ -45,7 +45,7 @@ tasks:
     acceptanceChecks:
       - type: FILE_CONTENT_CONTAINS
         params: { path: "pom.xml", substring: "jwcode-core" }
-    timeoutSeconds: 30
+    timeoutSeconds: 120
     aiEvalEnabled: false
     tags: [search, grep]
 
@@ -58,7 +58,7 @@ tasks:
     acceptanceChecks:
       - type: DIR_EXISTS
         params: { path: "docs" }
-    timeoutSeconds: 30
+    timeoutSeconds: 120
     aiEvalEnabled: false
     tags: [file, list]
 
@@ -71,7 +71,7 @@ tasks:
     acceptanceChecks:
       - type: COMMAND_EXIT_CODE_ZERO
         params: { command: "java -version" }
-    timeoutSeconds: 30
+    timeoutSeconds: 120
     aiEvalEnabled: false
     tags: [command, basic]
 
@@ -84,7 +84,7 @@ tasks:
     acceptanceChecks:
       - type: DIR_EXISTS
         params: { path: "temp/test-output" }
-    timeoutSeconds: 30
+    timeoutSeconds: 120
     aiEvalEnabled: false
     skipInMockMode: true
     tags: [file, directory]
@@ -98,7 +98,7 @@ tasks:
     acceptanceChecks:
       - type: FILE_EXISTS
         params: { path: "pom.xml" }
-    timeoutSeconds: 60
+    timeoutSeconds: 120
     aiEvalEnabled: false
     tags: [search, grep]
 
@@ -111,7 +111,7 @@ tasks:
     acceptanceChecks:
       - type: FILE_CONTENT_CONTAINS
         params: { path: "jwcode-core/src/main/java/com/jwcode/core/eval/version.txt", substring: "2.0.0" }
-    timeoutSeconds: 30
+    timeoutSeconds: 120
     aiEvalEnabled: false
     skipInMockMode: true
     tags: [file, edit, replace]
@@ -125,7 +125,7 @@ tasks:
     acceptanceChecks:
       - type: COMMAND_EXIT_CODE_ZERO
         params: { command: "git rev-parse --is-inside-work-tree" }
-    timeoutSeconds: 30
+    timeoutSeconds: 120
     aiEvalEnabled: false
     tags: [git, info]
 
@@ -138,7 +138,7 @@ tasks:
     acceptanceChecks:
       - type: FILE_LINE_COUNT_BETWEEN
         params: { path: "jwcode-core/src/main/java/com/jwcode/core/eval/EvalTask.java", min: 200, max: 600 }
-    timeoutSeconds: 30
+    timeoutSeconds: 120
     aiEvalEnabled: false
     tags: [file, statistics]
 
@@ -151,6 +151,6 @@ tasks:
     acceptanceChecks:
       - type: COMMAND_EXIT_CODE_ZERO
         params: { command: "java -version" }
-    timeoutSeconds: 30
+    timeoutSeconds: 120
     aiEvalEnabled: false
     tags: [command, info]

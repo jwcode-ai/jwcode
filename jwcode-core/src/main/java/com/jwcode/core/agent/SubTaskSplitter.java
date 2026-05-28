@@ -339,7 +339,13 @@ public class SubTaskSplitter {
      */
     public void cleanupSession(String sessionId) {
         for (Map.Entry<String, List<String>> entry : activeSubSessions.entrySet()) {
-            entry.getValue().remove(sessionId);
+            // 使用迭代器安全删除，避免 ConcurrentModificationException
+            java.util.Iterator<String> iter = entry.getValue().iterator();
+            while (iter.hasNext()) {
+                if (sessionId.equals(iter.next())) {
+                    iter.remove();
+                }
+            }
         }
     }
 

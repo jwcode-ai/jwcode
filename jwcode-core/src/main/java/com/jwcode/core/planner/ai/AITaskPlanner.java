@@ -27,9 +27,14 @@ public class AITaskPlanner {
     private final AILearningMemory learningMemory;
     
     public AITaskPlanner(LLMService llmService, ToolRegistry toolRegistry) {
+        this(llmService, toolRegistry, null);
+    }
+
+    public AITaskPlanner(LLMService llmService, ToolRegistry toolRegistry,
+                         com.jwcode.core.a2a.A2AFacade a2aFacade) {
         this.aiPlanner = new AIPlanner(llmService);
         this.dependencyAnalyzer = new SmartDependencyAnalyzer();
-        this.executionEngine = new DynamicExecutionEngine(toolRegistry);
+        this.executionEngine = new DynamicExecutionEngine(toolRegistry, a2aFacade);
         this.executionTracer = new ExecutionTracer();
         this.learningMemory = new AILearningMemory();
     }

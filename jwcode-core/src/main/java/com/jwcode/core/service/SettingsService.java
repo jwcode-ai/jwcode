@@ -34,8 +34,8 @@ public class SettingsService {
         userSettings.put("autoUpdate", true);
         userSettings.put("permissionMode", "default");
         
-        // 默认项目设置
-        projectSettings.put("model", null);
+        // 默认项目设置 (ConcurrentHashMap 不接受 null 值)
+        projectSettings.put("model", "");
         projectSettings.put("mcpServers", java.util.Collections.emptyList());
     }
     
@@ -177,6 +177,33 @@ public class SettingsService {
                 }
             }
             projectSettings.putAll(projectMap);
+        }
+    }
+
+    // ── 持久化 ──
+
+    private static final java.nio.file.Path SETTINGS_FILE =
+        java.nio.file.Path.of(System.getProperty("user.home"), ".jwcode", "settings.json");
+    private static final com.fasterxml.jackson.databind.ObjectMapper MAPPER = new com.fasterxml.jackson.databind.ObjectMapper();
+
+    public void save() {
+        try {
+            java.nio.file.Files.createDirectories(SETTINGS_FILE.getParent());
+            MAPPER.writeValue(SETTINGS_FILE.toFile(), exportSettings());
+        } catch (java.io.IOException e) {
+            System.err.println("[SettingsService] Save failed: " + e.getMessage());
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    public void load() {
+        try {
+            if (java.nio.file.Files.exists(SETTINGS_FILE)) {
+                Map<String, Object> data = MAPPER.readValue(SETTINGS_FILE.toFile(), Map.class);
+                importSettings(data);
+            }
+        } catch (java.io.IOException e) {
+            System.err.println("[SettingsService] Load failed: " + e.getMessage());
         }
     }
 }

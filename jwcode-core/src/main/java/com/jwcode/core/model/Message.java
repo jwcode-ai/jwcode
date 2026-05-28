@@ -23,7 +23,10 @@ public abstract class Message {
     private final Instant timestamp;
     private final List<ToolCallInfo> toolCalls; // 保留 tool_calls 信息用于 API 请求
     private final String reasoningContent; // 保留 reasoning_content 用于 thinking 模式
-    
+    // 压缩代际追踪
+    private int compactionGeneration = 0;
+    private java.util.Set<String> compressedFromIds;
+
     protected Message(String id, Role role, List<ContentBlock> content) {
         this(id, role, content, null, null);
     }
@@ -48,7 +51,11 @@ public abstract class Message {
     public List<ToolCallInfo> getToolCalls() { return toolCalls; }
     public boolean hasToolCalls() { return toolCalls != null && !toolCalls.isEmpty(); }
     public String getReasoningContent() { return reasoningContent; }
-    
+    public int getCompactionGeneration() { return compactionGeneration; }
+    public void setCompactionGeneration(int gen) { this.compactionGeneration = gen; }
+    public java.util.Set<String> getCompressedFromIds() { return compressedFromIds; }
+    public void setCompressedFromIds(java.util.Set<String> ids) { this.compressedFromIds = ids; }
+
     /**
      * 获取消息的文本内容
      * 如果消息包含多个 TextContent，将它们连接起来

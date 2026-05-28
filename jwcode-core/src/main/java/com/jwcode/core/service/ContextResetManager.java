@@ -183,7 +183,7 @@ public class ContextResetManager {
         Path filePath = handoffBasePath.resolve(fileName);
 
         if (!Files.exists(filePath)) {
-            throw new IOException("交接文档不存在: " + filePath);
+            throw new IOException("交接文档不存在: " + fileName);
         }
 
         HandoffArtifact artifact = objectMapper.readValue(filePath.toFile(), HandoffArtifact.class);

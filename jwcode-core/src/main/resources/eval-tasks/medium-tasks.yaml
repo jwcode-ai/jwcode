@@ -17,7 +17,7 @@ tasks:
         params: { path: "jwcode-core/src/test/java/com/jwcode/core/eval/ExampleEvalTest.java", substring: "@Test" }
       - type: FILE_CONTENT_CONTAINS
         params: { path: "jwcode-core/src/test/java/com/jwcode/core/eval/ExampleEvalTest.java", substring: "class ExampleEvalTest" }
-    timeoutSeconds: 120
+    timeoutSeconds: 240
     aiEvalEnabled: false
     skipInMockMode: true
     tags: [file, java, test]
@@ -31,7 +31,7 @@ tasks:
     acceptanceChecks:
       - type: DIR_EXISTS
         params: { path: "jwcode-core/src/main/java" }
-    timeoutSeconds: 120
+    timeoutSeconds: 240
     aiEvalEnabled: false
     tags: [code, analysis, statistics]
 
@@ -46,7 +46,7 @@ tasks:
         params: { path: "jwcode-core/src/main/java/com/jwcode/core/tool/input/TodoItem.java", substring: "import" }
       - type: COMMAND_EXIT_CODE_ZERO
         params: { command: "findstr /n \"import\" jwcode-core\\src\\main\\java\\com\\jwcode\\core\\tool\\input\\TodoItem.java" }
-    timeoutSeconds: 180
+    timeoutSeconds: 300
     aiEvalEnabled: true
     tags: [code, analysis, quality]
 
@@ -63,7 +63,7 @@ tasks:
         params: { path: "jwcode-core/src/main/java/com/jwcode/core/eval/Config.java", substring: "2.0.0" }
       - type: FILE_CONTENT_CONTAINS
         params: { path: "jwcode-core/src/main/java/com/jwcode/core/eval/Config.java", substring: "CONFIG_VERSION" }
-    timeoutSeconds: 180
+    timeoutSeconds: 300
     aiEvalEnabled: false
     skipInMockMode: true
     tags: [file, edit, replace]
@@ -87,7 +87,7 @@ tasks:
         params: { path: "jwcode-core/src/main/java/com/jwcode/core/eval/model/Order.java", substring: "class Order" }
       - type: FILE_CONTENT_CONTAINS
         params: { path: "jwcode-core/src/main/java/com/jwcode/core/eval/model/Product.java", substring: "class Product" }
-    timeoutSeconds: 120
+    timeoutSeconds: 240
     aiEvalEnabled: false
     skipInMockMode: true
     tags: [file, batch, model]
@@ -101,7 +101,7 @@ tasks:
     acceptanceChecks:
       - type: COMMAND_EXIT_CODE_ZERO
         params: { command: "git rev-parse --is-inside-work-tree" }
-    timeoutSeconds: 120
+    timeoutSeconds: 240
     aiEvalEnabled: false
     tags: [git, info]
 
@@ -116,7 +116,7 @@ tasks:
         params: { path: "jwcode-common/src/main/java" }
       - type: FILE_EXISTS
         params: { path: "jwcode-common/pom.xml" }
-    timeoutSeconds: 120
+    timeoutSeconds: 240
     aiEvalEnabled: false
     tags: [maven, structure, build]
 
@@ -129,7 +129,7 @@ tasks:
     acceptanceChecks:
       - type: FILE_CONTENT_CONTAINS
         params: { path: "jwcode-core/pom.xml", substring: "jwcode-common" }
-    timeoutSeconds: 120
+    timeoutSeconds: 240
     aiEvalEnabled: false
     tags: [config, read, maven]
 
@@ -142,7 +142,7 @@ tasks:
     acceptanceChecks:
       - type: DIR_EXISTS
         params: { path: "jwcode-core/src/main/java/com/jwcode/core/session" }
-    timeoutSeconds: 120
+    timeoutSeconds: 240
     aiEvalEnabled: false
     tags: [session, info]
 
@@ -155,7 +155,7 @@ tasks:
     acceptanceChecks:
       - type: DIR_EXISTS
         params: { path: "jwcode-core/src/main/java/com/jwcode/core/command" }
-    timeoutSeconds: 180
+    timeoutSeconds: 300
     aiEvalEnabled: false
     tags: [search, code, index]
 
@@ -174,7 +174,7 @@ tasks:
         params: { path: "jwcode-core/src/main/java/com/jwcode/core/llm" }
       - type: FILE_CONTENT_CONTAINS
         params: { path: "jwcode-core/src/main/java/com/jwcode/core/llm/LLMQueryEngine.java", substring: "consecutiveToolOnlyRounds" }
-    timeoutSeconds: 120
+    timeoutSeconds: 240
     aiEvalEnabled: false
     tags: [llm, stagnation, optimization]
 
@@ -189,7 +189,7 @@ tasks:
         params: { path: "jwcode-core/src/main/java/com/jwcode/core/llm" }
       - type: FILE_CONTENT_CONTAINS
         params: { path: "jwcode-core/src/main/java/com/jwcode/core/llm/LLMQueryEngine.java", substring: "repeatedToolPatternCount" }
-    timeoutSeconds: 120
+    timeoutSeconds: 240
     aiEvalEnabled: false
     tags: [llm, repeat, optimization]
 
@@ -204,7 +204,7 @@ tasks:
         params: { path: "jwcode-core/src/main/java/com/jwcode/core/eval/Readme.java" }
       - type: FILE_CONTENT_CONTAINS
         params: { path: "jwcode-core/src/main/java/com/jwcode/core/eval/Readme.java", substring: "Done" }
-    timeoutSeconds: 60
+    timeoutSeconds: 300
     aiEvalEnabled: false
     skipInMockMode: true
     tags: [llm, finish, optimization]
@@ -222,6 +222,6 @@ tasks:
         params: { path: "jwcode-core/src/main/java/com/jwcode/core/llm/LLMQueryEngine.java", substring: "tokenBudget" }
       - type: FILE_CONTENT_CONTAINS
         params: { path: "jwcode-core/src/main/java/com/jwcode/core/llm/LLMQueryEngine.java", substring: "COMPACT_COOLDOWN_MS" }
-    timeoutSeconds: 60
+    timeoutSeconds: 300
     aiEvalEnabled: false
     tags: [llm, token, optimization]

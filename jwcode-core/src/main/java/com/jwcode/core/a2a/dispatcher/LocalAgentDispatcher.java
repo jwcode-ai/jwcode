@@ -434,7 +434,8 @@ public class LocalAgentDispatcher implements AgentDispatcher {
         // 3. 从池中借取 LLMQueryEngine（复用，避免每次 new 的 GC 压力）
         ToolExecutor executor = this.toolExecutor != null
             ? this.toolExecutor
-            : new ToolExecutor(toolRegistry != null ? toolRegistry : ToolRegistry.createDefault());
+            : new ToolExecutor(toolRegistry != null ? toolRegistry : ToolRegistry.createDefault(),
+                null, null, hookChain);
 
         String poolKey = "subtask-" + task.getTaskId() + "-" + agentName;
         LLMQueryEngine engine = enginePool.borrow(
@@ -442,8 +443,8 @@ public class LocalAgentDispatcher implements AgentDispatcher {
             toolRegistry != null ? toolRegistry : ToolRegistry.createDefault(),
             agentRegistry);
 
-        // 切换到子Agent（让工具过滤生效）
-        agentRegistry.switchTo(agentId);
+        // 绑定子Agent到session（上下文隔离：避免全局 switchTo 竞态）
+        subSession.setCurrentAgentId(agentId);
 
         // 4. 执行查询（异步非阻塞：orTimeout 替代 get 阻塞）
         TaskOutput output;
@@ -473,16 +474,14 @@ public class LocalAgentDispatcher implements AgentDispatcher {
             } else {
                 String errorMsg = result != null ? result.getErrorMessage() : "Unknown error";
                 logger.warning("LocalDispatcher: sub-agent task failed: " + errorMsg);
-                output = TaskOutput.success("Task failed: " + errorMsg);
+                output = TaskOutput.failure("Task failed: " + errorMsg);
             }
         } catch (Exception e) {
             logger.warning("LocalDispatcher: sub-agent task exception: " + e.getMessage());
-            output = TaskOutput.success("Task execution error: " + e.getMessage());
+            output = TaskOutput.failure("Task execution error: " + e.getMessage());
         } finally {
             // ──────── Hook: SUBAGENT_STOP ────────
             triggerSubagentHook(HookEventType.SUBAGENT_STOP, agentName, task);
-            // 切回 Orchestrator
-            agentRegistry.switchTo("orchestrator");
             // 归还引擎到池（子任务 session 通常是一次性的，完成后清理）
             enginePool.evict(poolKey);
         }
@@ -509,16 +508,12 @@ public class LocalAgentDispatcher implements AgentDispatcher {
     private void triggerSubagentHook(HookEventType eventType, String agentName, A2ATask task) {
         if (hookChain == null) return;
         try {
-            HookContext ctx = HookContext.forSubagent(
-                null, "Orchestrator", agentName, eventType);
-            if (task != null) {
-                ctx = new HookContext.Builder(eventType)
-                    .sessionId(null)
-                    .agentName("Orchestrator")
-                    .targetAgentName(agentName)
-                    .taskId(task.getTaskId())
-                    .build();
-            }
+            HookContext ctx = new HookContext.Builder(eventType)
+                .sessionId(null)
+                .agentName("Orchestrator")
+                .targetAgentName(agentName)
+                .taskId(task != null ? task.getTaskId() : null)
+                .build();
             hookChain.execute(ctx);
         } catch (Exception e) {
             logger.fine("[LocalDispatcher] Subagent hook error (ignored): " + e.getMessage());

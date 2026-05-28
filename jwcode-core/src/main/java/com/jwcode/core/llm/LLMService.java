@@ -66,6 +66,20 @@ public interface LLMService {
     }
     
     /**
+     * 运行时切换模型（无需重启 Session，保留连接池和 API key）。
+     */
+    default void reconfigure(String modelId) {}
+
+    /**
+     * 文本嵌入 — 用于语义记忆检索。
+     * 默认抛出 UnsupportedOperationException，子类可覆盖。
+     */
+    default CompletableFuture<float[]> embed(String text) {
+        return CompletableFuture.failedFuture(
+            new UnsupportedOperationException("Embeddings not supported by this service"));
+    }
+
+    /**
      * 关闭服务
      */
     void close();

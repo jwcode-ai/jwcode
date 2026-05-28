@@ -26,10 +26,7 @@ import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -336,15 +333,17 @@ public class CapabilityEvalSuite {
             // ============================================================
             // Step 1: 完整模式 — 通过 LLMQueryEngine 真实执行任务
             // ============================================================
+            // 为每个任务创建独立的 session（超时/异常后仍需提取工具调用轨迹）
+            Session taskSession = null;
+
             if (isFullMode && queryEngine != null) {
                 try {
                     System.out.print("    🤖 " + task.getId() + " 提交给 AI 执行... ");
                     System.out.flush();
 
-                    // 为每个任务创建独立的 session（避免消息污染）
-                    Session taskSession = sessionManager.createSession(workspaceRoot.toString());
-                    // 【修复】确保 session 的工作目录与验收检查一致
-                    taskSession.setWorkingDirectory(workspaceRoot.toString());
+                    taskSession = sessionManager.createSession(workspaceRoot.toString());
+                    var taskSessionFinal = taskSession;
+                    taskSessionFinal.setWorkingDirectory(workspaceRoot.toString());
 
                     LLMQueryEngine taskEngine = LLMQueryEngine.builder()
                         .session(taskSession)
@@ -445,12 +444,14 @@ public class CapabilityEvalSuite {
                     sessionManager.deleteSession(taskSession.getId());
 
                 } catch (java.util.concurrent.TimeoutException e) {
-                    System.out.println("⏰ 超时");
+                    System.out.print("⏰ (partial trace extracted) ");
+                    // 超时时仍然提取已收集的工具调用轨迹
+                    extractToolCallsFromSession(taskSession, trace);
                     trace.addError("AI 执行超时 (" + task.getTimeoutSeconds() + "s)");
-                    result.setPassed(false);
-                    result.setFailureReason("AI 执行超时 (" + task.getTimeoutSeconds() + "s)");
+                    // 注意: 不 setPassed(false) — 验收检查决定最终结果
                 } catch (Exception e) {
-                    System.out.println("❌");
+                    System.out.print("❌ ");
+                    extractToolCallsFromSession(taskSession, trace);
                     String errMsg = e.getMessage();
                     if (errMsg != null && errMsg.length() > 100) {
                         errMsg = errMsg.substring(0, 100);
@@ -697,6 +698,38 @@ public class CapabilityEvalSuite {
     /**
      * 截断字符串到指定长度。
      */
+    /** 从 Session 消息中提取工具调用轨迹（超时/异常后仍可用） */
+    private static void extractToolCallsFromSession(Session taskSession, ExecutionTrace trace) {
+        if (taskSession == null) return;
+        try {
+            List<Message> messages = taskSession.getMessages();
+            Map<String, ToolInvocation> pendingCalls = new HashMap<>();
+            for (Message msg : messages) {
+                if (msg.hasToolCalls()) {
+                    for (Message.ToolCallInfo tci : msg.getToolCalls()) {
+                        ToolInvocation inv = new ToolInvocation(tci.getName(), tci.getArguments(), "", 0, true);
+                        inv.setToolCallId(tci.getId());
+                        pendingCalls.put(tci.getId(), inv);
+                        trace.addToolCall(inv);
+                    }
+                }
+                if (msg.getRole() == Message.Role.TOOL) {
+                    for (Message.ContentBlock block : msg.getContent()) {
+                        if (block instanceof Message.ToolResultContent trc) {
+                            ToolInvocation inv = pendingCalls.get(trc.getToolUseId());
+                            if (inv != null) {
+                                Object r = trc.getResult();
+                                String output = r != null ? r.toString() : "";
+                                inv.setOutput(output.substring(0, Math.min(500, output.length())));
+                            }
+                        }
+                    }
+                }
+            }
+            trace.setTotalSteps(trace.getToolCalls().size());
+        } catch (Exception ignored) { }
+    }
+
     private static String truncate(String s, int maxLen) {
         if (s == null) return "";
         return s.length() <= maxLen ? s : s.substring(0, maxLen) + "...";

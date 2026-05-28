@@ -1,5 +1,6 @@
 package com.jwcode.core.tool.input;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
@@ -9,6 +10,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * 用于文件搜索和匹配
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
+@JsonIgnoreProperties(ignoreUnknown = true)
 public record GlobInput(
     @JsonProperty("pattern")
     String pattern,

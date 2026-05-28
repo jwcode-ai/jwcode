@@ -836,8 +836,9 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
             StringBuilder stdoutBuilder, 
             StringBuilder stderrBuilder) {
         
-        // Windows 上使用系统默认编码（如 GBK），避免 UTF-8 解码失败导致乱码
-        Charset outputCharset = isWindows() ? Charset.defaultCharset() : StandardCharsets.UTF_8;
+        // buildCommand() 在 Windows 上已添加 chcp 65001 切换到 UTF-8 代码页
+        // 因此 Windows 上统一使用 UTF-8 解码输出
+        Charset outputCharset = isWindows() ? StandardCharsets.UTF_8 : StandardCharsets.UTF_8;
         
         return CompletableFuture.runAsync(() -> {
             try (BufferedReader reader = new BufferedReader(

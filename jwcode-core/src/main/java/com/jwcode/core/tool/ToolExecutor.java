@@ -24,7 +24,9 @@ import java.util.logging.Logger;
 public class ToolExecutor {
     
     private static final Logger logger = Logger.getLogger(ToolExecutor.class.getName());
-    
+    private static final com.fasterxml.jackson.databind.ObjectMapper SHARED_MAPPER =
+        new com.fasterxml.jackson.databind.ObjectMapper();
+
     private final ToolRegistry toolRegistry;
     private final PermissionChecker permissionChecker;
     private final ToolExecutionListener executionListener;
@@ -78,7 +80,14 @@ public class ToolExecutor {
     public HookChain getHookChain() {
         return hookChain;
     }
-    
+
+    /**
+     * 获取工具注册表。
+     */
+    public ToolRegistry getToolRegistry() {
+        return toolRegistry;
+    }
+
     /**
      * 获取可用工具列表
      */
@@ -189,7 +198,7 @@ public class ToolExecutor {
         // ──────── Hook: PRE_TOOL_USE ────────
         if (hookChain != null) {
             try {
-                JsonNode inputJson = new com.fasterxml.jackson.databind.ObjectMapper()
+                JsonNode inputJson = SHARED_MAPPER
                     .valueToTree(input);
                 HookContext hookCtx = HookContext.forPreToolUse(
                     null, null, toolName, inputJson, context);
@@ -205,9 +214,9 @@ public class ToolExecutor {
                     && hookResult.getModifiedInput() != null) {
                     I modifiedInput = tool.parseInput(hookResult.getModifiedInput());
                     logger.fine("[Hook] PRE_TOOL_USE MODIFY: " + toolName);
-                    // 使用修改后的输入重新执行（hookChain置null防止递归）
+                    // 使用修改后的输入重新执行（保留 hookChain 确保安全策略一致）
                     ToolExecutor inner = new ToolExecutor(
-                        toolRegistry, permissionChecker, executionListener, null);
+                        toolRegistry, permissionChecker, executionListener, hookChain);
                     return inner.execute(tool, modifiedInput, context, onProgress);
                 }
                 if (hookResult.getDecision() == HookDecision.ASK) {
@@ -242,6 +251,11 @@ public class ToolExecutor {
             }
         }
         
+        // 闭环3: 写操作前自动保存检查点
+        if (tool.isDestructive(input)) {
+            saveWriteCheckpoint(toolName, context);
+        }
+
         // 执行工具
         CompletableFuture<ToolResult<O>> future = tool.call(input, context, onProgress);
         
@@ -278,7 +292,7 @@ public class ToolExecutor {
                 JsonNode resultJson = null;
                 if (result != null && result.getData() != null) {
                     try {
-                        resultJson = new com.fasterxml.jackson.databind.ObjectMapper()
+                        resultJson = SHARED_MAPPER
                             .valueToTree(result.getData());
                     } catch (Exception ignored) {}
                 }
@@ -374,6 +388,29 @@ public class ToolExecutor {
     /**
      * 截断日志字符串以避免过长
      */
+    /** 闭环3: 写操作前自动保存检查点，失败可回退 */
+    private void saveWriteCheckpoint(String toolName, ToolExecutionContext context) {
+        try {
+            String dir = System.getProperty("user.dir", ".");
+            var cpm = new com.jwcode.core.planner.checkpoint.CheckpointManager(
+                java.nio.file.Path.of(dir));
+            // 使用当前 Session ID 和工具名作为任务 ID
+            String taskId = (context != null && context.getSession() != null
+                ? context.getSession().getId() : "auto") + "-" + toolName;
+            var cp = com.jwcode.core.planner.checkpoint.CheckpointManager.Checkpoint.builder()
+                .taskId(taskId)
+                .contextJson("{\"tool\":\"" + toolName + "\"}")
+                .resultsJson("{}")
+                .busJson("{}")
+                .timelineJson("[]")
+                .build();
+            cpm.saveCheckpoint(cp);
+            logger.fine("[AutoCheckpoint] Saved before " + toolName);
+        } catch (Exception e) {
+            logger.fine("[AutoCheckpoint] Failed: " + e.getMessage());
+        }
+    }
+
     private String truncateForLog(String str, int maxLength) {
         if (str == null) return "null";
         if (str.length() <= maxLength) return str;

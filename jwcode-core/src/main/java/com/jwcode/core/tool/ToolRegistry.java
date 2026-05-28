@@ -34,7 +34,16 @@ public class ToolRegistry {
      * 工具列表（保持注册顺序）
      */
     private final List<Tool<?, ?, ?>> tools;
-    
+
+    /** Schema 版本号：每次 register/unregister 时递增，用于 Prompt Caching 失效检测 */
+    private final java.util.concurrent.atomic.AtomicInteger schemaVersion = new java.util.concurrent.atomic.AtomicInteger(0);
+
+    /**
+     * 获取当前 schema 版本号。
+     * 当工具注册表发生变化时版本号递增，用于 Prompt Caching 缓存失效。
+     */
+    public int getSchemaVersion() { return schemaVersion.get(); }
+
     /**
      * 构造函数
      */
@@ -61,7 +70,8 @@ public class ToolRegistry {
         
         toolsByName.put(name, tool);
         tools.add(tool);
-        
+        schemaVersion.incrementAndGet();
+
         return this;
     }
     
@@ -213,6 +223,7 @@ public class ToolRegistry {
         Tool<?, ?, ?> tool = toolsByName.remove(name);
         if (tool != null) {
             tools.remove(tool);
+            schemaVersion.incrementAndGet();
         }
         return tool;
     }
@@ -272,7 +283,6 @@ public class ToolRegistry {
         registry.register(new PatternTool());
         registry.register(new NotebookEditTool());
         registry.register(new SleepTool());
-        registry.register(new RemoteTriggerTool());
         registry.register(new ScheduleCronTool());
         registry.register(new TeamCreateTool());
         registry.register(new TeamDeleteTool());
@@ -284,12 +294,9 @@ public class ToolRegistry {
         registry.register(new TaskListTool());
         registry.register(new PowerShellTool());
         registry.register(new SmartAnalyzeTool(new com.jwcode.core.code.analysis.TreeSitterCodeSemanticAnalyzer()));
-        registry.register(new MultiPlanTool());
         registry.register(new EnterWorktreeTool());
         registry.register(new ExitWorktreeTool());
         registry.register(new WorktreeListTool());
-        registry.register(new SyntheticOutputTool());
-        registry.register(new McpAuthTool());
         
         // 注意：SemanticSearchTool 需要 CodebaseIndexer 实例，
         // 无法在此处注册。请使用 registerSemanticSearch() 方法。

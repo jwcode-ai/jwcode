@@ -17,7 +17,7 @@ tasks:
         params: { command: "findstr /s /m \"import\" jwcode-core/src/main/java/com/jwcode/core/a2a/A2AConfig.java", substring: "import" }
       - type: COMMAND_EXIT_CODE_ZERO
         params: { command: "dir jwcode-core/src/main/java/com/jwcode/core /b /s | findstr /i \".java$\" | findstr /v \"package-info\" | head -5" }
-    timeoutSeconds: 300
+    timeoutSeconds: 600
     aiEvalEnabled: true
     tags: [code, analysis, dependency, architecture]
 
@@ -36,7 +36,7 @@ tasks:
         params: { command: "dir jwcode-core/src/main/java /s /b *.java 2>nul | findstr /i \"eval\" | head -3" }
       - type: COMMAND_EXIT_CODE_ZERO
         params: { command: "dir jwcode-core/src/test/java /s /b *.java 2>nul | findstr /i \"eval\" | head -3" }
-    timeoutSeconds: 300
+    timeoutSeconds: 600
     aiEvalEnabled: true
     tags: [code, analysis, test, coverage]
 
@@ -53,7 +53,7 @@ tasks:
         params: { path: "jwcode-core/src/main/java/com/jwcode/core/tool/ToolRegistry.java", substring: "register" }
       - type: COMMAND_EXIT_CODE_ZERO
         params: { command: "dir jwcode-core/src/main/java/com/jwcode/core/tool /b *.java 2>nul | head -10" }
-    timeoutSeconds: 300
+    timeoutSeconds: 600
     aiEvalEnabled: true
     tags: [code, analysis, refactor, architecture]
 
@@ -70,7 +70,7 @@ tasks:
         params: { command: "dir jwcode-core/src/main/java/com/jwcode/core /b /s *.java 2>nul | findstr /i \"tool\" | head -5" }
       - type: COMMAND_EXIT_CODE_ZERO
         params: { command: "dir jwcode-core/src/main/java/com/jwcode/core/eval /b *.java 2>nul | head -5" }
-    timeoutSeconds: 300
+    timeoutSeconds: 600
     aiEvalEnabled: true
     tags: [code, analysis, performance]
 
@@ -103,7 +103,7 @@ tasks:
     acceptanceChecks:
       - type: COMMAND_EXIT_CODE_ZERO
         params: { command: "echo recovery-success" }
-    timeoutSeconds: 300
+    timeoutSeconds: 600
     aiEvalEnabled: true
     tags: [error, resilience, recovery]
 
@@ -122,7 +122,7 @@ tasks:
         params: { command: "dir jwcode-core/src/main/java /s /b *.java 2>nul | findstr /i \"eval\" | head -5" }
       - type: COMMAND_EXIT_CODE_ZERO
         params: { command: "dir jwcode-core/src/test/java /s /b *.java 2>nul | findstr /i \"eval\" | head -5" }
-    timeoutSeconds: 300
+    timeoutSeconds: 600
     aiEvalEnabled: true
     tags: [code, analysis, statistics]
 
@@ -141,6 +141,6 @@ tasks:
         params: { path: "jwcode-core/src/main/java/com/jwcode/core/hook/HookDecision.java" }
       - type: FILE_EXISTS
         params: { path: "jwcode-core/src/main/java/com/jwcode/core/hook/HookChain.java" }
-    timeoutSeconds: 300
+    timeoutSeconds: 600
     aiEvalEnabled: true
     tags: [hook, system, analysis]

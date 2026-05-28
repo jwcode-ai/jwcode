@@ -138,6 +138,27 @@ public class PlanModeManager {
     }
     
     /**
+     * 残留状态检测：如果状态文件超过 5 分钟且模式为 PLAN，自动重置为 NORMAL。
+     * 防止上次会话残留的 Plan Mode 影响本次启动。
+     */
+    private boolean isStalePlanMode() {
+        if (currentMode != Mode.PLAN) return false;
+        try {
+            if (Files.exists(stateFilePath)) {
+                long lastModified = Files.getLastModifiedTime(stateFilePath).toMillis();
+                long age = System.currentTimeMillis() - lastModified;
+                if (age > 300_000) { // 5分钟
+                    logger.warning("Plan mode state stale (" + (age / 1000) + "s old), resetting to NORMAL");
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            logger.fine("Cannot check state file age: " + e.getMessage());
+        }
+        return false;
+    }
+    
+    /**
      * 获取单例实例
      */
     public static PlanModeManager getInstance() {
@@ -386,6 +407,11 @@ public class PlanModeManager {
                     if (end > start + 1) {
                         String modeStr = content.substring(start + 1, end);
                         currentMode = Mode.fromString(modeStr);
+                        // 残留检测：超过5分钟的PLAN状态自动重置
+                        if (isStalePlanMode()) {
+                            currentMode = Mode.NORMAL;
+                            saveMode();
+                        }
                         logger.info("Loaded mode: " + currentMode);
                     }
                 }

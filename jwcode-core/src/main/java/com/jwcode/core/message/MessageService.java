@@ -169,8 +169,8 @@ public class MessageService {
      * 配置 SMTP（用于邮件发送）
      */
     public void configureSmtp(String host, int port, String username, String password, boolean useTls) {
-        EmailMessageSender emailSender = new EmailMessageSender(host, port, username, password, useTls);
-        registerSender(Channel.EMAIL, emailSender);
+        // EmailMessageSender was removed — javax.mail dependency not available
+        // registerSender(Channel.EMAIL, new ConsoleMessageSender()); // fallback to console
     }
     
     /**

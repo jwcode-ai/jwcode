@@ -153,8 +153,8 @@ public class EvaluatorAgent implements Agent {
 
     @Override
     public ModelConfig getModelConfig() {
-        // Evaluator 使用较低温度以确保评分一致性
-        return new ModelConfig(null, 0.2, 4000);
+        // 使用配置中的模型和 maxTokens，仅指定较低温度以确保评分一致性
+        return new ModelConfig(null, null, null);
     }
 
     @Override

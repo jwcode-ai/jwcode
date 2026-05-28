@@ -22,6 +22,9 @@ public class TaskOutput {
 
     /** 消息日志 */
     private final List<String> messages;
+    private int tokensUsed;
+    private int compactionCount;
+    private double fidelityScore = 1.0;
 
     public TaskOutput(String summary, Map<String, Object> data,
                       List<FileChange> fileChanges, List<String> messages) {
@@ -37,6 +40,12 @@ public class TaskOutput {
     public Map<String, Object> getData() { return data; }
     public List<FileChange> getFileChanges() { return fileChanges; }
     public List<String> getMessages() { return messages; }
+    public int getTokensUsed() { return tokensUsed; }
+    public void setTokensUsed(int t) { this.tokensUsed = t; }
+    public int getCompactionCount() { return compactionCount; }
+    public void setCompactionCount(int c) { this.compactionCount = c; }
+    public double getFidelityScore() { return fidelityScore; }
+    public void setFidelityScore(double f) { this.fidelityScore = f; }
 
     // ==================== 内部类 ====================
 
