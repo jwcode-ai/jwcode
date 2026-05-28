@@ -209,14 +209,44 @@ export function useSlashCommands(options: UseSlashCommandsOptions) {
       },
     },
     {
+      id: 'doctor',
+      name: 'doctor',
+      description: '系统自诊断 (Java/Maven/Config/API Key/Network/Docker/Disk)',
+      icon: '🩺',
+      local: true,
+      action: () => { wsService.send({ type: 'doctor' as any }); return { success: true, message: '诊断已运行' }; },
+    },
+    {
+      id: 'rewind',
+      name: 'rewind',
+      description: '回退到最近检查点',
+      icon: '⏪',
+      local: true,
+      action: () => { wsService.send({ type: 'rewind' as any }); return { success: true, message: '回退请求已发送' }; },
+    },
+    {
+      id: 'update-docs',
+      name: 'update-docs',
+      description: '自动分析项目并更新文档 (README/AGENTS/ARCHITECTURE)',
+      icon: '📝',
+      local: true,
+      action: () => { wsService.send({ type: 'update_docs' as any }); return { success: true, message: '文档更新中...' }; },
+    },
+    {
+      id: 'compact',
+      name: 'compact',
+      description: '压缩当前会话上下文',
+      icon: '🗜️',
+      local: true,
+      action: () => { wsService.send({ type: 'compact' as any }); return { success: true, message: '压缩请求已发送' }; },
+    },
+    {
       id: 'help',
       name: 'help',
       description: '显示所有快捷命令',
       icon: '❓',
       local: true,
-      action: () => {
-        return { success: true, message: '' };
-      },
+      action: () => { return { success: true, message: '' }; },
     },
   ], [setActiveTab, createNewSession, clearMessages, setTheme, toggleTerminal, setLogs, setUnreadLogs]);
 

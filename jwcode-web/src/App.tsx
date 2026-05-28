@@ -13,6 +13,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { api } from './services/api';
 
 // 懒加载非首屏组件
+import { StatusLine } from './components/Chat/StatusLine';
 const ModelsView = lazy(() => import('./components/Models/ModelsView').then(m => ({ default: m.ModelsView })));
 const ToolsView = lazy(() => import('./components/Tools/ToolsView').then(m => ({ default: m.ToolsView })));
 const SkillsView = lazy(() => import('./components/Skills/SkillsView').then(m => ({ default: m.SkillsView })));
@@ -728,6 +729,9 @@ function App() {
             </div>
           </div>
         )}
+
+        {/* Status line: 实时显示模型/Token/预算/生成状态 */}
+        <StatusLine />
 
         {/* Main Content Area */}
         <div className="flex-1 flex overflow-hidden min-h-0">

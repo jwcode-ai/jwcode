@@ -63,6 +63,16 @@ public class WebServer {
      * 启动服务器
      */
     public void start() throws IOException {
+        // 初始化安全沙箱 — Docker 容器隔离，不可用时降级 WorkspaceGuard
+        try {
+            com.jwcode.core.tool.BashTool.setBackgroundExecutor(
+                new com.jwcode.core.tool.shell.DockerSandboxExecutor(
+                    java.nio.file.Path.of(System.getProperty("user.dir", "."))));
+            System.out.println("[WebServer] Docker sandbox initialized");
+        } catch (Exception e) {
+            System.err.println("[WebServer] Sandbox init failed (non-fatal): " + e.getMessage());
+        }
+
         // 启动 HTTP 服务器
         server = HttpServer.create(new InetSocketAddress(port), 0);
         
@@ -80,6 +90,7 @@ public class WebServer {
         server.createContext("/api/tasks", new TaskHandler(TaskStore.getInstance()));
         server.createContext("/api/files", new FilesHandler());
         server.createContext("/api/system/status", new SystemStatusHandler());
+        server.createContext("/api/checkpoints", new CheckpointsHandler());
         server.createContext("/assets/", new StaticAssetHandler());
         
         // 使用 ThreadPoolExecutor 替代 newFixedThreadPool，支持有界队列和拒绝策略

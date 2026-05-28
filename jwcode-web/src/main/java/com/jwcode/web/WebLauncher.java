@@ -1,5 +1,6 @@
 package com.jwcode.web;
 
+import com.jwcode.core.tool.ToolRegistry;
 import java.util.Scanner;
 
 /**
@@ -8,36 +9,48 @@ import java.util.Scanner;
 public class WebLauncher {
     
     public static void main(String[] args) {
-        int port = 8081;
+        int httpPort = 8080;
+        int wsPort = 8081;
         if (args.length > 0) {
             try {
-                port = Integer.parseInt(args[0]);
+                httpPort = Integer.parseInt(args[0]);
+                wsPort = httpPort + 1;
             } catch (NumberFormatException e) {
-                System.err.println("无效的端口号，使用默认端口 8080");
+                System.err.println("无效的端口号，使用默认端口");
             }
         }
-        
+        if (args.length > 1) {
+            try {
+                wsPort = Integer.parseInt(args[1]);
+            } catch (NumberFormatException e) {
+                System.err.println("无效的 WebSocket 端口号");
+            }
+        }
+
         try {
-            WebServer server = new WebServer(port);
+            WebServer server = new WebServer(httpPort, wsPort, ToolRegistry.createDefault());
             server.start();
-            
+
             System.out.println("\n═══════════════════════════════════════════════════");
-            System.out.println("  🌐 JwCode Web 已启动");
+            System.out.println("  JWCode Backend Ready");
             System.out.println("═══════════════════════════════════════════════════");
-            System.out.println("  访问地址: http://localhost:" + port);
-            System.out.println("  按 Enter 键停止服务器");
+            System.out.println("  HTTP API:   http://localhost:" + httpPort);
+            System.out.println("  WebSocket:  ws://localhost:" + wsPort + "/ws");
+            System.out.println("  Web UI:     http://localhost:" + httpPort);
             System.out.println("═══════════════════════════════════════════════════\n");
-            
-            // 等待用户按 Enter
-            Scanner scanner = new Scanner(System.in);
-            scanner.nextLine();
-            
-            System.out.println("\n正在关闭服务器...");
-            server.stop();
-            System.out.println("服务器已关闭");
-            
+
+            // 添加 shutdown hook 处理 SIGINT/SIGTERM
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                System.out.println("\nShutting down...");
+                server.stop();
+                System.out.println("Server stopped.");
+            }));
+
+            // 保持主线程存活，由 shutdown hook 处理退出
+            Thread.currentThread().join();
+
         } catch (Exception e) {
-            System.err.println("启动失败: " + e.getMessage());
+            System.err.println("Startup failed: " + e.getMessage());
             e.printStackTrace();
         }
     }

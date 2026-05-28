@@ -12,9 +12,11 @@ interface TokenState {
   currentUsage: TokenUsage;
   maxContextTokens: number;
   showTokenInfo: boolean;
+  model: string;
   history: { timestamp: number; usage: TokenUsage }[];
 
   updateUsage: (usage: Partial<TokenUsage>) => void;
+  setModel: (model: string) => void;
   setMaxContextTokens: (max: number) => void;
   setShowTokenInfo: (show: boolean) => void;
   addToHistory: (usage: TokenUsage) => void;
@@ -42,13 +44,15 @@ export const useTokenStore = create<TokenState>((set, get) => ({
     totalTokens: 0,
     estimatedCost: 0,
   },
-  maxContextTokens: 128000, // Default for most modern models
+  maxContextTokens: 128000,
   showTokenInfo: false,
+  model: '',
   history: [],
 
   updateUsage: (usage) => set((state) => ({
     currentUsage: { ...state.currentUsage, ...usage },
   })),
+  setModel: (model) => set({ model }),
 
   setMaxContextTokens: (max) => set({ maxContextTokens: max }),
 

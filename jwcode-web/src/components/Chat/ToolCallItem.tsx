@@ -1,16 +1,27 @@
 import { memo, useState } from 'react';
 import { Plus, Minus } from 'lucide-react';
 import { ToolCall } from '../../types';
+import { DiffPreview } from './DiffPreview';
 
 interface ToolCallItemProps {
   toolCall: ToolCall;
   defaultCollapsed?: boolean;
 }
 
+const FILE_MODIFY_TOOLS = ['FileEditTool', 'FileWriteTool', 'EditTool', 'NotebookEditTool'];
+
+function extractResultText(result: unknown): string {
+  if (typeof result === 'string') return result;
+  if (result && typeof result === 'object') return JSON.stringify(result, null, 2);
+  return String(result ?? '');
+}
+
 export const ToolCallItem = memo(function ToolCallItem({ toolCall, defaultCollapsed = false }: ToolCallItemProps) {
   const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
   const isRunning = toolCall.status === 'running';
   const hasResult = toolCall.result !== undefined && toolCall.result !== null;
+  const isFileModify = FILE_MODIFY_TOOLS.includes(toolCall.name);
+  const resultText = hasResult ? extractResultText(toolCall.result) : '';
 
   return (
     <div className="bg-dark-bg border border-dark-border rounded-lg overflow-hidden">
@@ -43,9 +54,16 @@ export const ToolCallItem = memo(function ToolCallItem({ toolCall, defaultCollap
           {hasResult && (
             <>
               <div className="text-xs text-dark-muted mb-1 mt-2">结果</div>
-              <pre className="text-xs font-mono bg-dark-bg p-2 rounded overflow-x-auto text-accent-green">
-                {typeof toolCall.result === 'object' ? JSON.stringify(toolCall.result, null, 2) : String(toolCall.result)}
-              </pre>
+              {isFileModify ? (
+                <DiffPreview
+                  filePath={typeof toolCall.args === 'object' && toolCall.args ? (toolCall.args as any).filePath || (toolCall.args as any).path : undefined}
+                  content={resultText}
+                />
+              ) : (
+                <pre className="text-xs font-mono bg-dark-bg p-2 rounded overflow-x-auto text-accent-green">
+                  {resultText}
+                </pre>
+              )}
             </>
           )}
         </div>

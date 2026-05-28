@@ -573,6 +573,24 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
         chatStore.getState().resumeGeneration(sessionId);
         break;
 
+      case 'token_update':
+        try {
+          const tokenData = typeof rawData === 'string' ? JSON.parse(rawData) : (rawData || {});
+          if (tokenData.totalTokens > 0) {
+            useTokenStore.getState().updateUsage({
+              promptTokens: tokenData.promptTokens || 0,
+              completionTokens: tokenData.completionTokens || 0,
+              totalTokens: tokenData.totalTokens || 0,
+            });
+          }
+          if (tokenData.model) {
+            useTokenStore.getState().setModel(tokenData.model);
+          }
+        } catch (e) {
+          // ignore parse errors
+        }
+        break;
+
       case 'error':
         chatStore.getState().endGeneration(sessionId);
         recalcTokenUsage(sessionId);

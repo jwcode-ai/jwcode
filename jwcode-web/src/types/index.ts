@@ -248,7 +248,9 @@ export type WSMessageType =
   | 'hook_ask'
   | 'hook_allow'
   | 'hook_deny'
-  | 'hook_response_ack';
+  | 'hook_response_ack'
+  // Token 用量
+  | 'token_update';
 
 
 export interface WSMessage {

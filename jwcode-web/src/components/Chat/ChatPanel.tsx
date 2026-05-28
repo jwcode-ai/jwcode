@@ -42,13 +42,13 @@ export const ChatPanel = memo(function ChatPanel({
   const setMode = usePlanStore((s) => s.setMode);
   const showConfirmButton = usePlanStore((s) => s.showConfirmButton);
   const planConfirmed = usePlanStore((s) => s.planConfirmed);
-  const thinkingStatus = usePlanStore((s) => s.getThinkingStatus(sessionId));
 
   // Plan 模式下有待确认的计划时，禁用输入
   const isPlanWaitingConfirm = mode === 'plan' && showConfirmButton && !planConfirmed;
 
   // textarea ref，用于发送后重置高度
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const isComposingRef = useRef(false);
 
   // 智能自动滚动：新消息时自动滚到底部，用户手动滚动时暂停
   const { containerRef: scrollContainerRef } = useAutoScroll([messages, isGenerating]);
@@ -124,7 +124,7 @@ export const ChatPanel = memo(function ChatPanel({
       return;
     }
 
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !isComposingRef.current) {
       e.preventDefault();
       handleSend();
     }
@@ -188,36 +188,44 @@ export const ChatPanel = memo(function ChatPanel({
           </div>
         ) : (
           /* 消息列表：有消息时用 p-4 space-y-2 布局 */
-          <div className="p-4 space-y-2">
+          <div className="p-4 space-y-4">
             {messages.map(message => (
               <MessageBubble key={message.id} message={message} sessionId={sessionId} />
             ))}
             {isGenerating && (
-              <div className="flex items-center gap-3 text-dark-muted">
-                <div className="flex gap-1">
-                  <span className="w-2 h-2 bg-accent-blue rounded-full animate-bounce" />
-                  <span className="w-2 h-2 bg-accent-blue rounded-full animate-bounce" style={{ animationDelay: '0.1s' }} />
-                  <span className="w-2 h-2 bg-accent-blue rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
-                </div>
-                <span className="text-sm">AI 正在思考...</span>
+              <div className="flex items-center gap-2 text-xs text-dark-muted py-1">
+                <span className="text-accent-blue animate-spin-frame text-sm">◐</span>
+                <span>Thinking...</span>
               </div>
             )}
           </div>
         )}
       </div>
 
-      {/* 每个会话独立的上下文管理器 - Token 监控与压缩状态 */}
-      <div className="shrink-0 border-t border-dark-border">
+      {/* 紧凑工具栏: Context + Plan/Act + 任务看板切换 */}
+      <div className="shrink-0 border-t border-dark-border bg-dark-surface h-9 flex items-center px-3 gap-2">
         <ContextManager />
-      </div>
-
-      {/* 每个会话独立的任务看板 - 放在消息区域和输入区域之间 */}
-      <div className="shrink-0">
+        <div className="w-px h-4 bg-dark-border mx-1" />
+        <button
+          onClick={() => setMode('plan')}
+          className={`flex items-center gap-1 px-2 py-0.5 text-[11px] rounded transition-all ${
+            mode === 'plan' ? 'bg-accent-blue/10 text-accent-blue' : 'text-dark-muted hover:text-dark-text'
+          }`}
+          title="Plan 模式"
+        ><ListChecks size={12} /> Plan</button>
+        <button
+          onClick={() => setMode('act')}
+          className={`flex items-center gap-1 px-2 py-0.5 text-[11px] rounded transition-all ${
+            mode === 'act' ? 'bg-accent-green/10 text-accent-green' : 'text-dark-muted hover:text-dark-text'
+          }`}
+          title="Act 模式"
+        ><Zap size={12} /> Act</button>
+        <div className="flex-1" />
         <SessionTaskBoard sessionId={sessionId} />
       </div>
 
-      {/* Input Area - shrink-0 防止被压缩，固定在底部 */}
-      <div className="p-3 sm:p-4 border-t border-dark-border bg-dark-surface relative shrink-0">
+      {/* Input Area */}
+      <div className="px-3 pb-3 pt-2 border-t border-dark-border bg-dark-surface relative shrink-0">
 
         <SlashCommandMenu
           isOpen={isOpen}
@@ -229,57 +237,13 @@ export const ChatPanel = memo(function ChatPanel({
           containerRef={containerRef}
         />
         <div className="flex gap-2 items-end">
-          {/* Plan/Act 模式切换按钮组 */}
-          <div className="flex flex-col gap-1 shrink-0">
-            <div className="flex bg-dark-bg rounded-lg p-0.5 border border-dark-border">
-              <button
-                onClick={() => setMode('plan')}
-                className={`flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-md transition-all ${
-                  mode === 'plan'
-                    ? 'bg-accent-blue text-white shadow-sm'
-                    : 'text-dark-muted hover:text-dark-text'
-                }`}
-                title="Plan 模式：AI 先分析并制定任务计划"
-              >
-                <ListChecks size={14} />
-                <span className="hidden sm:inline">Plan</span>
-              </button>
-              <button
-                onClick={() => setMode('act')}
-                className={`flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-md transition-all ${
-                  mode === 'act'
-                    ? 'bg-accent-green text-white shadow-sm'
-                    : 'text-dark-muted hover:text-dark-text'
-                }`}
-                title="Act 模式：AI 直接执行任务"
-              >
-                <Zap size={14} />
-                <span className="hidden sm:inline">Act</span>
-              </button>
-            </div>
-            {mode === 'plan' && (
-              <span className="text-[10px] text-accent-blue text-center">
-                {isPlanWaitingConfirm ? '⏳ 待确认' : isGenerating ? '🔄 规划中...' : '📋 计划模式'}
-              </span>
-            )}
-          </div>
 
           <textarea
             ref={textareaRef}
             value={input}
             onChange={handleChange}
             onKeyDown={handleKeyDown}
-            placeholder={
-              isPlanWaitingConfirm
-                ? '⏳ 请先确认或取消当前计划...'
-                : isPaused
-                  ? '已暂停，点击恢复继续...'
-                  : isGenerating
-                    ? 'AI 正在生成中...'
-                    : mode === 'plan'
-                      ? '描述需求，AI 将先制定计划再执行...'
-                      : '输入指令，AI 将直接执行... (Enter 发送, Shift+Enter 换行, / 快捷命令)'
-            }
+            placeholder=""
             className={`flex-1 bg-dark-bg border rounded-lg px-3 sm:px-4 py-2.5 sm:py-3 text-dark-text placeholder-dark-muted resize-none focus:outline-none text-sm min-h-[40px] max-h-[40vh] transition-colors ${
               mode === 'plan'
                 ? 'border-accent-blue/50 focus:border-accent-blue'
@@ -287,7 +251,16 @@ export const ChatPanel = memo(function ChatPanel({
             }`}
             rows={1}
             disabled={isGenerating || isPlanWaitingConfirm}
+            onCompositionStart={() => { isComposingRef.current = true; }}
+            onCompositionEnd={(e) => {
+              isComposingRef.current = false;
+              // 组合输入结束后再调整高度
+              const target = e.currentTarget;
+              target.style.height = 'auto';
+              target.style.height = Math.min(target.scrollHeight, window.innerHeight * 0.4) + 'px';
+            }}
             onInput={(e) => {
+              if (isComposingRef.current) return;
               const target = e.currentTarget;
               target.style.height = 'auto';
               target.style.height = Math.min(target.scrollHeight, window.innerHeight * 0.4) + 'px';
@@ -351,29 +324,6 @@ export const ChatPanel = memo(function ChatPanel({
               {mode === 'plan' ? <ListChecks size={16} /> : <Zap size={16} />}
               <span className="hidden sm:inline">{mode === 'plan' ? '生成计划' : '执行'}</span>
             </button>
-          )}
-        </div>
-        <div className="mt-2 text-xs text-dark-muted text-center flex items-center justify-center gap-3 flex-wrap">
-          {mode === 'plan' ? (
-            <>
-              <span className="text-accent-blue">📋 Plan 模式：AI 将先分析需求再制定计划，确认后执行</span>
-              {thinkingStatus && (
-                <span className="text-accent-blue/70">{thinkingStatus}</span>
-              )}
-            </>
-          ) : (
-            <>
-              <span>
-                <kbd className="px-1.5 py-0.5 bg-dark-bg rounded border border-dark-border">Ctrl</kbd>
-                {' + '}
-                <kbd className="px-1.5 py-0.5 bg-dark-bg rounded border border-dark-border">Enter</kbd>
-                {' 快速发送'}
-              </span>
-              <span>
-                <kbd className="px-1.5 py-0.5 bg-dark-bg rounded border border-dark-border">/</kbd>
-                {' 快捷命令'}
-              </span>
-            </>
           )}
         </div>
       </div>

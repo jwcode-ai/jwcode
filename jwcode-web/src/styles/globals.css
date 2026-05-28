@@ -13,6 +13,7 @@
   --color-accent-green: #238636;
   --color-accent-red: #f85149;
   --color-accent-yellow: #d29922;
+  --color-accent-purple: #a855f7;
 }
 
 .light {
@@ -320,7 +321,7 @@ pre[class*="language-"] {
 
 .token.function,
 .token.class-name {
-  @apply text-purple-400;
+  color: var(--color-accent-purple);
 }
 
 .token.regex,

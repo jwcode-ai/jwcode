@@ -40,3 +40,9 @@ jwcode-ui/target/*
 jwcode-repl/target/jwcode-repl-1.0.0-SNAPSHOT.jar
 jwcode-repl/target/*
 jwcode-web/node/node_modules/*
+jwcode-cli/.jwcode/*
+jwcode-core/eval-results/*
+eval-results/*
+*.pyc
+logs/jwcode.log
+ts-cli/node_modules/*

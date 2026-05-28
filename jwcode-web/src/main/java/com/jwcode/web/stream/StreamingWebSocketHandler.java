@@ -3,6 +3,9 @@ package com.jwcode.web.stream;
 import com.jwcode.common.config.ConfigLoader;
 import com.jwcode.core.agent.AgentRegistry;
 import com.jwcode.core.agent.EnhancedOrchestratorAgent;
+import com.jwcode.core.hook.HookChain;
+import com.jwcode.core.hook.HookContext;
+import com.jwcode.core.hook.HookEventType;
 import com.jwcode.core.config.JwcodeConfig;
 import com.jwcode.core.config.YamlConfigLoader;
 import com.jwcode.core.llm.*;
@@ -86,6 +89,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     private final Map<String, Session> sessions;
     private final ToolRegistry toolRegistry;
     private CodebaseIndexer codebaseIndexer;
+    private volatile com.jwcode.core.hook.HookChain hookChain;
     private final Map<WebSocket, String> connectionSessions;
     private final Map<String, WebSocket> activeSessionConnections; // sessionId -> 当前活跃连接
     private final Map<WebSocket, Consumer<LogEntry>> logListeners;
@@ -125,6 +129,10 @@ public class StreamingWebSocketHandler extends WebSocketServer {
      */
     public void setCodebaseIndexer(CodebaseIndexer indexer) {
         this.codebaseIndexer = indexer;
+    }
+
+    public void setHookChain(com.jwcode.core.hook.HookChain hookChain) {
+        this.hookChain = hookChain;
     }
     
     // 查询线程池：核心 4 线程，最大 16 线程，60 秒回收
@@ -181,7 +189,16 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         
         // 从配置读取有效 token
         loadConfig();
-        
+
+        // 初始化 Hook 审批系统 — Bash/FileWrite 操作需要用户确认
+        try {
+            var registry = new com.jwcode.core.hook.HookRegistry();
+            var logger = new com.jwcode.core.hook.HookAuditLogger();
+            this.hookChain = new com.jwcode.core.hook.HookChain(registry, logger);
+        } catch (Exception e) {
+            System.err.println("[WS] Hook init failed: " + e.getMessage());
+        }
+
         // 启动心跳检测（ScheduledExecutorService 替代手工线程）
         heartbeatScheduler.scheduleWithFixedDelay(
             this::checkHeartbeat, PING_INTERVAL_MS, PING_INTERVAL_MS, TimeUnit.MILLISECONDS);
@@ -492,7 +509,20 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     
     @Override
     public void onClose(WebSocket conn, int code, String reason, boolean remote) {
-        logger.warning("连接关闭: code=" + code + ", reason=" + reason + ", remote=" + remote);
+        if (code == 1006) {
+            // 1006 表示异常断开（网络层问题），记录更多上下文便于定位
+            String sessionId = connectionSessions.get(conn);
+            Long lastPong = lastPongTime.get(conn);
+            Long lastActivity = lastActivityTime.get(conn);
+            long now = System.currentTimeMillis();
+            logger.warning("WebSocket 异常断开(code=1006)" 
+                + ", sessionId=" + sessionId
+                + ", lastPong=" + (lastPong != null ? ((now - lastPong) / 1000) + "s ago" : "N/A")
+                + ", lastActivity=" + (lastActivity != null ? ((now - lastActivity) / 1000) + "s ago" : "N/A")
+                + ", remote=" + remote);
+        } else {
+            logger.warning("连接关闭: code=" + code + ", reason=" + reason + ", remote=" + remote);
+        }
         
         // 清理监听器
         Consumer<LogEntry> listener = logListeners.remove(conn);
@@ -539,6 +569,11 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                 return;
             }
             
+            // UserPromptSubmit Hook — 用户提交提示时触发
+            if ("chat".equals(clientMsg.type) || "plan".equals(clientMsg.type)) {
+                triggerLifecycleHook(HookEventType.USER_PROMPT_SUBMIT, conn, clientMsg);
+            }
+
             switch (clientMsg.type) {
                 case "chat":
                     logger.info("处理 chat 消息");
@@ -598,6 +633,30 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                 case "plan_mode_change":
                     logger.info("收到 plan_mode_change 消息, sessionId=" + clientMsg.sessionId);
                     handlePlanModeChange(conn, clientMsg);
+                    break;
+                case "init":
+                    handleInit(conn, clientMsg);
+                    break;
+                case "effort":
+                    handleEffort(conn, clientMsg);
+                    break;
+                case "branch":
+                    handleBranch(conn, clientMsg);
+                    break;
+                case "mcp":
+                    handleMcpCommand(conn, clientMsg);
+                    break;
+                case "skills":
+                    handleSkillsCommand(conn, clientMsg);
+                    break;
+                case "agents":
+                    handleAgentsCommand(conn, clientMsg);
+                    break;
+                case "config":
+                    handleConfigCommand(conn, clientMsg);
+                    break;
+                case "plugin":
+                    handlePluginCommand(conn, clientMsg);
                     break;
                 default:
                     logger.warning("未知消息类型: " + clientMsg.type);
@@ -1196,7 +1255,8 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                 LLMService llmService = llmFactory.getLLMService();
                 
                 // 创建 ToolExecutor（使用已有的 toolRegistry）
-                ToolExecutor toolExecutor = new ToolExecutor(this.toolRegistry);
+                ToolExecutor toolExecutor = new ToolExecutor(this.toolRegistry,
+                    null, null, this.hookChain);
                 
                 // 发送 plan_thinking 状态
                 sendMessage(querySessionId, MessageType.PLAN_THINKING, escapeJson("正在分析需求..."));
@@ -1423,6 +1483,12 @@ public class StreamingWebSocketHandler extends WebSocketServer {
      */
     private String executePlanTool(ToolExecutor toolExecutor, String toolName, String args, String toolCallId) {
         try {
+            // Windows 路径转义清洗：修复 LLM 生成的 JSON 中无效转义序列（如 \_、\t 等）
+            if (System.getProperty("os.name").toLowerCase().contains("win")) {
+                args = args.replaceAll("\\\\_", "_")
+                           .replaceAll("\\\\t([^\\\"\\\\])", "t$1")  // 非转义意义的 \t
+                           .replaceAll("\\\\n([^\\\"\\\\])", "n$1"); // 非转义意义的 \n
+            }
             com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
             com.fasterxml.jackson.databind.JsonNode argsNode = mapper.readTree(args);
             
@@ -1606,6 +1672,8 @@ public class StreamingWebSocketHandler extends WebSocketServer {
 
                         // ★ 发送 COMPLETE 标记，结束该 assistant 消息
                         sendMessage(finalSessionId, MessageType.COMPLETE, null);
+                        // 发送实时 Token 用量
+                        sendTokenUpdate(finalSessionId, engine);
 
                         if (result != null && result.isSuccess()) {
                             String resultContent = result.getMessage() != null
@@ -2143,7 +2211,214 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             sendMessage(conn, MessageType.ERROR, "切换工作目录失败: " + e.getMessage());
         }
     }
+    /**
+     * Handle /init command — analyze project and generate JWCODE.md
+     */
+    private void handleInit(WebSocket conn, ClientMessage msg) {
+        String sessionId = getOrGenerateSessionId(conn, msg);
+        Session session = sessions.get(sessionId);
+        if (session == null) {
+            session = createNewSession(sessionId, msg.model);
+        }
+        String initPrompt = "[System /init] Analyze the current project structure, tech stack, build system, " +
+            "coding conventions, and key files. Generate a JWCODE.md file in the project root containing:\n" +
+            "1. Project overview and tech stack\n" +
+            "2. Build and run commands\n" +
+            "3. Directory structure and key paths\n" +
+            "4. Coding conventions and standards\n" +
+            "5. Architecture design highlights\n" +
+            "Use Read, Glob, Grep tools to fully understand the project before generating the file.";
+        msg.message = initPrompt;
+        handleChatMessage(conn, msg);
+    }
+
+    /**
+     * Handle /effort command — set task effort level
+     */
+    private void handleEffort(WebSocket conn, ClientMessage msg) {
+        try {
+            String dataStr = msg.data;
+            String level = "medium";
+            if (dataStr != null && !dataStr.isEmpty()) {
+                // Simple key:value or plain string
+                String raw = dataStr.trim();
+                if (raw.contains(":")) {
+                    String[] parts = raw.split(":", 2);
+                    if (parts.length > 1) level = parts[1].trim().replaceAll("[\"{}]", "").trim();
+                } else {
+                    level = raw.replaceAll("[\"{}]", "").trim();
+                }
+            }
+            level = level.toLowerCase().trim();
+            if (!level.equals("low") && !level.equals("medium") && !level.equals("high")) {
+                sendMessage(conn, MessageType.ERROR, "effort must be low, medium, or high, got: " + level);
+                return;
+            }
+            String sessionId = getOrGenerateSessionId(conn, msg);
+            Session session = sessions.get(sessionId);
+            if (session != null) {
+                session.setMetadata("effort", level);
+            }
+            sendMessage(conn, MessageType.NOTIFICATION, "Effort level set to: " + level);
+            logger.info("Session " + sessionId + " effort set to: " + level);
+        } catch (Exception e) {
+            logger.warning("handleEffort error: " + e.getMessage());
+            sendMessage(conn, MessageType.ERROR, "Failed to set effort: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Handle /branch command — create named branch session
+     */
+    private void handleBranch(WebSocket conn, ClientMessage msg) {
+        try {
+            String dataStr = msg.data;
+            String branchName = "branch";
+            if (dataStr != null && !dataStr.isEmpty()) {
+                String raw = dataStr.trim();
+                if (raw.contains(":")) {
+                    String[] parts = raw.split(":", 2);
+                    if (parts.length > 1) branchName = parts[1].trim().replaceAll("[\"{}]", "").trim();
+                } else {
+                    branchName = raw.replaceAll("[\"{}]", "").trim();
+                }
+            }
+            String newSessionId = "session_" + branchName + "_" + System.currentTimeMillis();
+            Session newSession = createNewSession(newSessionId, msg.model);
+            sessions.put(newSessionId, newSession);
+            connectionSessions.put(conn, newSessionId);
+            activeSessionConnections.put(newSessionId, conn);
+            String oldSessionId = connectionSessions.get(conn);
+            if (oldSessionId != null) {
+                Session oldSession = sessions.get(oldSessionId);
+                if (oldSession != null) {
+                    for (com.jwcode.core.model.Message m : oldSession.getMessages()) {
+                        newSession.addMessage(m);
+                    }
+                }
+            }
+            String resp = String.format("{\"sessionId\":\"%s\",\"branchName\":\"%s\"}",
+                escapeJson(newSessionId), escapeJson(branchName));
+            sendMessage(conn, MessageType.SESSION_CREATED, resp);
+            logger.info("Created branch session: " + newSessionId);
+        } catch (Exception e) {
+            logger.warning("handleBranch error: " + e.getMessage());
+            sendMessage(conn, MessageType.ERROR, "Failed to create branch: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Handle /mcp command — MCP server status
+     */
+    private void handleMcpCommand(WebSocket conn, ClientMessage msg) {
+        try {
+            com.jwcode.core.mcp.McpConnectionManager mcpManager = new com.jwcode.core.mcp.McpConnectionManager();
+            var statuses = mcpManager.getAllConnectionStatuses();
+            StringBuilder sb = new StringBuilder();
+            sb.append("MCP Server Status:\n");
+            for (var entry : statuses.entrySet()) {
+                sb.append("  ").append(entry.getKey()).append(": ").append(entry.getValue()).append("\n");
+            }
+            if (statuses.isEmpty()) {
+                sb.append("  (no MCP servers configured)\n");
+            }
+            sendMessage(conn, MessageType.NOTIFICATION, sb.toString());
+        } catch (Exception e) {
+            logger.warning("handleMcpCommand error: " + e.getMessage());
+            sendMessage(conn, MessageType.ERROR, "MCP operation failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Handle /skills command — list available Skills
+     */
+    private void handleSkillsCommand(WebSocket conn, ClientMessage msg) {
+        try {
+            com.jwcode.core.skill.SkillRegistry registry = new com.jwcode.core.skill.SkillRegistry();
+            var skills = registry.getAll();
+            StringBuilder sb = new StringBuilder();
+            sb.append("Available Skills (").append(skills.size()).append("):\n");
+            for (var skill : skills) {
+                sb.append("  ").append(skill.getId())
+                  .append(" - ").append(skill.getDescription()).append("\n");
+            }
+            sendMessage(conn, MessageType.NOTIFICATION, sb.toString());
+        } catch (Exception e) {
+            logger.warning("handleSkillsCommand error: " + e.getMessage());
+            sendMessage(conn, MessageType.ERROR, "Failed to get skills: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Handle /agents command — list available Agents
+     */
+    private void handleAgentsCommand(WebSocket conn, ClientMessage msg) {
+        try {
+            // AgentRegistry requires ToolRegistry — use ToolRegistry.getInstance() or new
+            com.jwcode.core.agent.AgentRegistry registry = new com.jwcode.core.agent.AgentRegistry(toolRegistry);
+            var agents = registry.getAll();
+            StringBuilder sb = new StringBuilder();
+            sb.append("Available Agents (").append(agents.size()).append("):\n");
+            for (var agent : agents) {
+                sb.append("  ").append(agent.getName())
+                  .append(" - ").append(agent.getDescription()).append("\n");
+            }
+            sendMessage(conn, MessageType.NOTIFICATION, sb.toString());
+        } catch (Exception e) {
+            logger.warning("handleAgentsCommand error: " + e.getMessage());
+            sendMessage(conn, MessageType.ERROR, "Failed to get agents: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Handle /config command — manage configuration via YamlConfigLoader
+     */
+    private void handleConfigCommand(WebSocket conn, ClientMessage msg) {
+        try {
+            String dataStr = msg.data;
+            if (dataStr == null || dataStr.isEmpty()) {
+                // List known config items
+                var config = com.jwcode.core.config.YamlConfigLoader.getInstance().getConfig();
+                StringBuilder sb = new StringBuilder();
+                sb.append("Current Config:\n");
+                sb.append("  model: ").append(config.getDefaultModel()).append("\n");
+                sb.append("  working dir: ").append(this.defaultWorkingDirectory).append("\n");
+                sb.append("  use /config get <key> or /config set <key> <value>\n");
+                sendMessage(conn, MessageType.NOTIFICATION, sb.toString());
+                return;
+            }
+            sendMessage(conn, MessageType.NOTIFICATION,
+                "Config: " + dataStr + " — use /config alone to list, or /config set <key> <value>");
+        } catch (Exception e) {
+            logger.warning("handleConfigCommand error: " + e.getMessage());
+            sendMessage(conn, MessageType.ERROR, "Config operation failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Handle /plugin command — plugin management (placeholder)
+     */
+    private void handlePluginCommand(WebSocket conn, ClientMessage msg) {
+        sendMessage(conn, MessageType.NOTIFICATION,
+            "Plugin management: use /plugin <install|list|remove>. Plugin system is under development.");
+    }
+
     
+    /**
+    /**
+     * Get or generate a session ID for the connection.
+     */
+    private String getOrGenerateSessionId(WebSocket conn, ClientMessage msg) {
+        String sessionId = msg.sessionId;
+        if (sessionId == null || sessionId.isEmpty()) {
+            sessionId = connectionSessions.get(conn);
+        }
+        if (sessionId == null || sessionId.isEmpty()) {
+            sessionId = "session-" + System.currentTimeMillis();
+        }
+        return sessionId;
+    }
+
     /**
      * 创建新会话（包含系统提示词）
      */
@@ -2232,7 +2507,39 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             }
         }
     }
-    
+
+    /**
+     * 发送实时 Token 用量更新到前端。
+     */
+    /** 触发生命周期 Hook (UserPromptSubmit, SessionStart, etc.) */
+    private void triggerLifecycleHook(HookEventType eventType, WebSocket conn, ClientMessage msg) {
+        if (hookChain == null) return;
+        try {
+            HookContext ctx = new HookContext.Builder(eventType)
+                .sessionId(msg.sessionId)
+                .build();
+            hookChain.execute(ctx);
+        } catch (Exception e) {
+            logger.fine("[Hook] Lifecycle hook error: " + e.getMessage());
+        }
+    }
+
+    private void sendTokenUpdate(String sessionId, LLMQueryEngine engine) {
+        if (engine == null || sessionId == null) return;
+        try {
+            TokenBudget budget = engine.getTokenBudget();
+            if (budget == null) return;
+            String model = escapeJson(engine.getModelName());
+            String json = String.format(
+                "{\"promptTokens\":%d,\"completionTokens\":%d,\"totalTokens\":%d,\"usageRatio\":%.3f,\"model\":\"%s\"}",
+                budget.getUsedPromptTokens(), budget.getUsedCompletionTokens(),
+                budget.getUsedTotal(), budget.usageRatio(), model);
+            sendMessage(sessionId, MessageType.TOKEN_UPDATE, json);
+        } catch (Exception e) {
+            logger.fine("Token update failed: " + e.getMessage());
+        }
+    }
+
     /**
      * 判断消息类型是否需要在连接断开时暂存
      * 只暂存对前端状态至关重要的消息：CONTENT（AI 回复）、COMPLETE（完成信号）、
@@ -2875,7 +3182,8 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         WORKSPACE_CHANGED,  // 工作目录已切换
         // 生成控制消息
         GENERATION_PAUSED,  // 生成已暂停
-        GENERATION_RESUMED  // 生成已恢复
+        GENERATION_RESUMED, // 生成已恢复
+        TOKEN_UPDATE        // Token 用量更新（实时）
     }
     
     /**
