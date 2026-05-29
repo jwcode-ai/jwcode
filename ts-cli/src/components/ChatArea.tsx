@@ -40,14 +40,14 @@ export function ChatArea({ messages, currentMessage, scrollOffset, terminalRows,
       {isScrolledUp && (
         <Box>
           <Text color="yellow" dimColor>
-            ▲ 上方 {hiddenAbove} 条消息 (↑/PgUp 上翻, PgDn 下翻, End 到底部)
+            ▲ [{start + 1}-{end}/{total}] 上翻中 (PgUp/PgDn 翻页, Home 开头, End 最新)
           </Text>
         </Box>
       )}
       {!isScrolledUp && total > maxVisible && (
         <Box>
           <Text color="grey" dimColor>
-            ... {total - maxVisible} 条更早的消息 (↑/PgUp 查看)
+            [{start + 1}-{end}/{total}] ↑/PgUp 查看更早消息
           </Text>
         </Box>
       )}

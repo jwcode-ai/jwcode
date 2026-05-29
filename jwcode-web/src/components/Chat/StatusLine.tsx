@@ -2,12 +2,21 @@ import { memo, useEffect, useRef, useState } from 'react';
 import { useTokenStore } from '../../stores/tokenStore';
 import { useChatStore } from '../../stores/chatStore';
 import { useSessionStore } from '../../stores/sessionStore';
+import { usePlanStore } from '../../stores/planStore';
+import { useHookApprovalStore } from '../../stores/useHookApprovalStore';
+
 export const StatusLine = memo(function StatusLine() {
   const { currentUsage, maxContextTokens, model } = useTokenStore();
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const isGenerating = useChatStore((s) => activeSessionId ? s.isGenerating(activeSessionId) : false);
   const [elapsed, setElapsed] = useState(0);
   const startRef = useRef<number>(0);
+
+  // Plan/Act mode
+  const planMode = usePlanStore((s) => s.mode);
+  const { toggleMode, enterPlanMode } = usePlanStore();
+  const autoMode = useHookApprovalStore((s) => s.autoMode);
+  const setAutoMode = useHookApprovalStore((s) => s.setAutoMode);
 
   useEffect(() => {
     if (isGenerating && !startRef.current) startRef.current = Date.now();
@@ -33,9 +42,56 @@ export const StatusLine = memo(function StatusLine() {
     ? 'bg-gradient-to-r from-accent-green via-accent-yellow to-accent-yellow'
     : 'bg-gradient-to-r from-accent-cyan via-accent-blue to-accent-purple';
 
+  const handlePlanToggle = () => {
+    if (planMode !== 'plan' && activeSessionId) {
+      enterPlanMode(activeSessionId, '');
+    } else {
+      toggleMode();
+    }
+  };
+
   return (
-    <div className="h-7 bg-dark-surface border-t border-dark-border flex items-center px-3 gap-4 shrink-0 select-none text-xs">
+    <div className="h-7 bg-dark-surface border-t border-dark-border flex items-center px-3 gap-3 shrink-0 select-none text-xs">
       <span className="text-accent-orange font-bold">jwcode</span>
+
+      {/* Plan/Act toggle */}
+      <div className="flex items-center gap-0.5 bg-dark-bg rounded-md p-0.5 border border-dark-border">
+        <button
+          onClick={handlePlanToggle}
+          className={`px-2 py-0.5 rounded text-xs font-medium transition-all ${
+            planMode === 'plan'
+              ? 'bg-accent-cyan text-dark-bg shadow-sm'
+              : 'text-dark-muted hover:text-dark-text'
+          }`}
+          title="规划模式：先分析规划再执行 (Tab)"
+        >
+          ◉ Plan
+        </button>
+        <button
+          onClick={handlePlanToggle}
+          className={`px-2 py-0.5 rounded text-xs font-medium transition-all ${
+            planMode !== 'plan'
+              ? 'bg-accent-green text-dark-bg shadow-sm'
+              : 'text-dark-muted hover:text-dark-text'
+          }`}
+          title="执行模式：直接执行 (Tab)"
+        >
+          ○ Act
+        </button>
+      </div>
+
+      {/* Auto mode toggle */}
+      <button
+        onClick={() => setAutoMode(!autoMode)}
+        className={`px-2 py-0.5 rounded text-xs font-medium transition-all border ${
+          autoMode
+            ? 'bg-accent-purple/20 text-accent-purple border-accent-purple/30'
+            : 'text-dark-muted border-dark-border hover:text-dark-text'
+        }`}
+        title="自动模式：自动批准工具调用"
+      >
+        {autoMode ? '⚡ Auto' : '○ Auto'}
+      </button>
 
       <span className="text-dark-muted">
         <span className="text-dark-text">model:</span>

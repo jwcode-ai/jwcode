@@ -46,8 +46,8 @@ export function CommandPalette({ filter, onSelect }: Props) {
     if (key.upArrow) { setSelected(prev => Math.max(prev - 1, 0)); return; }
     if (key.pageDown) { setSelected(prev => Math.min(prev + maxShow, visible.length - 1)); return; }
     if (key.pageUp) { setSelected(prev => Math.max(prev - maxShow, 0)); return; }
-    if (key.home) { setSelected(0); return; }
-    if (key.end) { setSelected(visible.length - 1); return; }
+    if ((key as any).home) { setSelected(0); return; }
+    if ((key as any).end) { setSelected(visible.length - 1); return; }
     if (key.return) {
       if (visible.length > 0 && selected >= 0 && selected < visible.length) {
         onSelect(visible[selected].cmd);

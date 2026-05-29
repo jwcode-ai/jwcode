@@ -26,6 +26,8 @@ const SettingsPanel = lazy(() => import('./components/Settings/SettingsPanel').t
 const LogsPanel = lazy(() => import('./components/Logs/LogsPanel').then(m => ({ default: m.LogsPanel })));
 const PlanPanel = lazy(() => import('./components/Plan/PlanPanel').then(m => ({ default: m.PlanPanel })));
 const HookApprovalModal = lazy(() => import('./components/Hook/HookApprovalModal').then(m => ({ default: m.HookApprovalModal })));
+import { ToastContainer } from './components/Toast/ToastContainer';
+import { toast } from './stores/toastStore';
 
 // 懒加载组件的加载占位
 const PanelFallback = () => (
@@ -61,6 +63,7 @@ function App() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [hookModalOpen, setHookModalOpen] = useState(false);
   const [isTaskListOpen, setIsTaskListOpen] = useState(true);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(true);
 
   const { toggleTerminal } = useTerminalStore();
   const { theme, setTheme, workspaceDir, setWorkspaceDir } = useSettingsStore();
@@ -151,6 +154,30 @@ function App() {
     }
   }, [theme]);
 
+  // 自定义主题颜色：注入 CSS 变量
+  const { customTheme, customThemeEnabled } = useSettingsStore();
+  useEffect(() => {
+    const root = document.documentElement;
+    if (customThemeEnabled) {
+      root.style.setProperty('--color-bg', customTheme.bg);
+      root.style.setProperty('--color-surface', customTheme.surface);
+      root.style.setProperty('--color-border', customTheme.border);
+      root.style.setProperty('--color-text', customTheme.text);
+      root.style.setProperty('--color-muted', customTheme.muted);
+      root.style.setProperty('--color-accent-blue', customTheme.accentBlue);
+      root.style.setProperty('--color-accent-green', customTheme.accentGreen);
+      root.style.setProperty('--color-accent-red', customTheme.accentRed);
+      root.style.setProperty('--color-accent-yellow', customTheme.accentYellow);
+      root.style.setProperty('--color-accent-purple', customTheme.accentPurple);
+    } else {
+      // Remove overrides to fall back to default CSS variables
+      const vars = ['--color-bg', '--color-surface', '--color-border', '--color-text',
+        '--color-muted', '--color-accent-blue', '--color-accent-green', '--color-accent-red',
+        '--color-accent-yellow', '--color-accent-purple'];
+      vars.forEach(v => root.style.removeProperty(v));
+    }
+  }, [customTheme, customThemeEnabled]);
+
   // WebSocket connection
   useWebSocket({ activeTab, setLogs, setUnreadLogs });
 
@@ -168,10 +195,16 @@ function App() {
 
   // WebSocket connection status
   useEffect(() => {
-    const unsubOpen = wsService.onOpen(() => setIsConnected(true));
-    const unsubClose = wsService.onClose(() => setIsConnected(false));
+    const unsubOpen = wsService.onOpen(() => {
+      setIsConnected(true);
+      toast.success('后端已连接');
+    });
+    const unsubClose = wsService.onClose(() => {
+      if (isConnected) toast.warning('后端连接断开，正在重连...');
+      setIsConnected(false);
+    });
     return () => { unsubOpen(); unsubClose(); };
-  }, []);
+  }, [isConnected]);
 
   // 初始化默认会话 Tab（如果没有）
   useEffect(() => {
@@ -737,7 +770,9 @@ function App() {
         <div className="flex-1 flex overflow-hidden min-h-0">
           <div className="flex-1 flex flex-col min-w-0 min-h-0">
             <Suspense fallback={<PanelFallback />}>
-              {renderTabContent(activeTab)}
+              <ErrorBoundary>
+                {renderTabContent(activeTab)}
+              </ErrorBoundary>
             </Suspense>
           </div>
 
@@ -765,13 +800,7 @@ function App() {
             <div className="shrink-0 border-b border-dark-border">
               <div
                 className="flex items-center justify-between px-4 py-2 cursor-pointer hover:bg-dark-hover transition-colors"
-                onClick={() => startTransition(() => {
-                  const panel = document.getElementById('session-history-panel');
-                  if (panel) {
-                    const isOpen = !panel.classList.contains('hidden');
-                    panel.classList.toggle('hidden', isOpen);
-                  }
-                })}
+                onClick={() => setIsHistoryOpen(!isHistoryOpen)}
               >
                 <h3 className="text-xs font-semibold flex items-center gap-1.5 text-dark-text">
                   <MessageSquare size={14} className="text-accent-blue" />
@@ -779,6 +808,7 @@ function App() {
                   <span className="text-[10px] font-normal text-dark-muted">({historySessions.length})</span>
                 </h3>
                 <div className="flex items-center gap-2">
+                  {isHistoryOpen ? <ChevronUp size={14} className="text-dark-muted" /> : <ChevronDown size={14} className="text-dark-muted" />}
                   {historySessions.length > 0 && (
                     <button
                       onClick={(e) => {
@@ -793,7 +823,7 @@ function App() {
                   )}
                 </div>
               </div>
-              <div id="session-history-panel" className={historySessions.length > 0 ? '' : 'hidden'}>
+              {isHistoryOpen && historySessions.length > 0 && (
                 <div className="max-h-[160px] overflow-y-auto custom-scrollbar">
                   <div className="px-3 pb-2 space-y-0.5">
                     {historySessions.map((h) => (
@@ -825,8 +855,8 @@ function App() {
                     ))}
                   </div>
                 </div>
-              </div>
-              {historySessions.length === 0 && (
+              )}
+              {isHistoryOpen && historySessions.length === 0 && (
                 <div className="px-4 pb-3 text-[11px] text-dark-muted">
                   暂无历史会话
                 </div>
@@ -896,6 +926,9 @@ function App() {
           onClose={() => setHookModalOpen(false)}
         />
       </Suspense>
+
+      {/* Toast notifications */}
+      <ToastContainer />
     </ErrorBoundary>
   );
 }

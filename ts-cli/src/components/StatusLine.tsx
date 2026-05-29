@@ -1,6 +1,3 @@
-/**
- * StatusLine — top bar showing model, token usage, plan indicator.
- */
 import { Box, Text } from 'ink';
 import { useAppState } from '../hooks/useAppState.js';
 
@@ -12,25 +9,40 @@ function formatTokens(n: number): string {
 
 export function StatusLine() {
   const state = useAppState();
-  const { usage, modelName, planMode, autoMode, connected, statusText } = state;
+  const { usage, modelName, planMode, autoMode, connected, statusText, messages } = state;
+  const msgCount = messages.length;
 
   const pct = Math.min(100, Math.round(usage.usageRatio * 100));
   const filled = Math.round(pct / 10);
   const bar = '='.repeat(filled) + '-'.repeat(10 - filled);
   const model = modelName || (connected ? 'ready' : 'connecting...');
-  const plan = planMode ? ' [PLAN]' : '';
-  const auto = autoMode ? ' [AUTO]' : '';
+
+  const modeLabel = planMode ? ' Plan ' : ' Act ';
+  const modeColor = planMode ? 'cyan' : 'green';
+
+  const connIcon = connected ? '●' : '○';
+  const connColor = connected ? 'green' : 'red';
+
   const isError = statusText.startsWith('Error:');
 
   return (
     <Box flexDirection="column" width="100%" paddingRight={1}>
       <Box height={1}>
         <Text bold color="cyan">jwcode</Text>
-        <Text color="yellow">{plan}</Text>
-        <Text color="magenta">{auto}</Text>
-        <Text>   </Text>
+        <Text>  </Text>
+        <Text backgroundColor={modeColor} color="black"> {modeLabel} </Text>
+        <Text>  </Text>
+        {autoMode && (
+          <>
+            <Text backgroundColor="magenta" color="black"> AUTO </Text>
+            <Text>  </Text>
+          </>
+        )}
+        <Text color={connColor}>{connIcon} </Text>
         <Text color="green">{model}</Text>
-        <Text>   tokens: </Text>
+        <Text>  </Text>
+        <Text dimColor>{msgCount}msgs</Text>
+        <Text>  t: </Text>
         <Text color="yellow">{formatTokens(usage.totalTokens)}</Text>
         <Text>  </Text>
         <Text color={pct > 90 ? 'red' : 'white'}>{bar} {pct}%</Text>

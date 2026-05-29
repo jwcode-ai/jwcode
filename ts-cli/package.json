@@ -8,6 +8,8 @@
     "jwcode": "./dist/main.js"
   },
   "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
     "build": "node build.mjs",
     "go": "node build.mjs && node dist/cli.js run",
     "start": "node build.mjs && node dist/cli.js start"
@@ -22,6 +24,7 @@
     "@types/react": "^18.3.12",
     "@types/ws": "^8.5.13",
     "esbuild": "^0.28.0",
-    "typescript": "^5.6.3"
+    "typescript": "^5.6.3",
+    "vitest": "^4.1.7"
   }
 }

@@ -4,6 +4,7 @@ export declare class JwCodeClient {
     private ws;
     private handlers;
     private _running;
+    private _reconnecting;
     private pingTimer;
     private reconnectDelay;
     private reconnectTimer;
@@ -18,7 +19,7 @@ export declare class JwCodeClient {
     private _startReadLoop;
     private _startHeartbeat;
     private _stopHeartbeat;
-    private _scheduleReconnect;
+    private _startReconnect;
     private dispatch;
     send(msgType: string, message?: string, data?: Record<string, unknown>): void;
     chat(content: string, planMode?: boolean): void;
@@ -33,6 +34,14 @@ export declare class JwCodeClient {
     switchModel(model: string): void;
     approveHook(approvalId: string): void;
     denyHook(approvalId: string): void;
+    init(): void;
+    effort(level: string): void;
+    branch(name: string): void;
+    mcp(action: string): void;
+    skills(): void;
+    agents(): void;
+    config(action: string): void;
+    plugin(action: string): void;
     close(): Promise<void>;
 }
 export {};

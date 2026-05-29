@@ -1,14 +1,16 @@
-import { memo, useRef } from 'react';
-import { useAutoScroll } from '../../hooks/useAutoScroll';
+import { memo, useRef, useCallback, useState, useMemo } from 'react';
+import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
 import { MessageSquare, ListChecks, Zap, Square, Pause, Play } from 'lucide-react';
-import { Message, TabId, LogEntry } from '../../types';
+import { Message, TabId, LogEntry, FileNode } from '../../types';
 import { MessageBubble } from './MessageBubble';
 import { SlashCommandMenu } from '../SlashCommandMenu';
+import { FileMentionMenu } from './FileMentionMenu';
 import { useSlashCommands, SlashCommand } from '../../hooks/useSlashCommands';
+import { useInputHistory, addToHistory } from '../../hooks/useInputHistory';
 import { usePlanStore } from '../../stores/planStore';
+import { api } from '../../services/api';
 import { ContextManager } from './ContextManager';
 import { SessionTaskBoard } from './SessionTaskBoard';
-
 
 interface ChatPanelProps {
   messages: Message[];
@@ -21,8 +23,7 @@ interface ChatPanelProps {
   input: string;
   setInput: (input: string) => void;
   compact?: boolean;
-  sessionId: string; // 用于 SessionTaskBoard
-  // 独立 slash commands 所需的回调
+  sessionId: string;
   activeTab: TabId;
   setActiveTab: (tab: TabId) => void;
   createNewSession: () => void;
@@ -33,95 +34,176 @@ interface ChatPanelProps {
   setUnreadLogs: React.Dispatch<React.SetStateAction<number>>;
 }
 
+// Rough token estimation: CJK chars ~1.5 tokens, words ~1.3 tokens
+function estimateTokens(text: string): number {
+  const cjk = (text.match(/[一-鿿㐀-䶿]/g) || []).length;
+  const rest = text.replace(/[一-鿿㐀-䶿]/g, '');
+  const words = rest.trim() ? rest.split(/\s+/).length : 0;
+  return Math.ceil(cjk * 1.5 + words * 1.3);
+}
+
+async function searchFiles(query: string): Promise<FileNode[]> {
+  if (!query) return [];
+  try {
+    const result = await api.files.list('.');
+    if (!result.success || !result.data) return [];
+    // Flatten and fuzzy filter
+    const flat: FileNode[] = [];
+    const walk = (nodes: FileNode[]) => {
+      for (const n of nodes) {
+        flat.push(n);
+        if (n.children) walk(n.children);
+      }
+    };
+    walk(result.data);
+    const q = query.toLowerCase();
+    return flat.filter(f => f.name.toLowerCase().includes(q)).slice(0, 15);
+  } catch { return []; }
+}
+
 export const ChatPanel = memo(function ChatPanel({
   messages, isGenerating, isPaused, onSend, onStop, onPause, onResume, input, setInput, sessionId,
   setActiveTab, createNewSession, clearMessages, setTheme, toggleTerminal, setLogs, setUnreadLogs,
 }: ChatPanelProps) {
 
   const mode = usePlanStore((s) => s.mode);
-  const setMode = usePlanStore((s) => s.setMode);
   const showConfirmButton = usePlanStore((s) => s.showConfirmButton);
   const planConfirmed = usePlanStore((s) => s.planConfirmed);
-
-  // Plan 模式下有待确认的计划时，禁用输入
   const isPlanWaitingConfirm = mode === 'plan' && showConfirmButton && !planConfirmed;
 
-  // textarea ref，用于发送后重置高度
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const isComposingRef = useRef(false);
+  const virtuosoRef = useRef<VirtuosoHandle>(null);
 
-  // 智能自动滚动：新消息时自动滚到底部，用户手动滚动时暂停
-  const { containerRef: scrollContainerRef } = useAutoScroll([messages, isGenerating]);
+  // Input history
+  const { navigate, reset: resetHistory } = useInputHistory(sessionId);
 
-  // 每个 ChatPanel 独立创建 slashCommands 实例，互不干扰
-  const slashCommands = useSlashCommands({
-    setActiveTab,
-    createNewSession,
-    clearMessages,
-    setTheme,
-    toggleTerminal,
-    setLogs,
-    setUnreadLogs,
-  });
+  // @ file mention state
+  const [showFileMenu, setShowFileMenu] = useState(false);
+  const [fileMenuFiles, setFileMenuFiles] = useState<FileNode[]>([]);
+  const [fileMenuIndex, setFileMenuIndex] = useState(0);
+  const [fileSearchQuery, setFileSearchQuery] = useState('');
+  const fileSearchRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const {
-    isOpen,
-    setFilter,
-    selectedIndex,
-    setSelectedIndex,
-    filteredCommands,
-    closeMenu,
-    selectNext,
-    selectPrev,
-    executeCommand,
-    containerRef,
-  } = slashCommands;
+  // Slash commands
+  const slashCommands = useSlashCommands({ setActiveTab, createNewSession, clearMessages, setTheme, toggleTerminal, setLogs, setUnreadLogs });
+  const { isOpen, setFilter, selectedIndex, setSelectedIndex, filteredCommands, closeMenu, selectNext, selectPrev, executeCommand, containerRef } = slashCommands;
 
+  // Token estimate
+  const tokenEstimate = useMemo(() => estimateTokens(input), [input]);
+
+  const resetTextarea = () => {
+    if (textareaRef.current) textareaRef.current.style.height = 'auto';
+  };
 
   const handleSend = () => {
     if (input.trim()) {
+      addToHistory(input);
+      resetHistory();
       onSend(input);
       setInput('');
-      // 发送后重置 textarea 高度
-      if (textareaRef.current) {
-        textareaRef.current.style.height = 'auto';
-      }
+      resetTextarea();
+      closeFileMention();
     }
   };
 
+  const closeFileMention = () => {
+    setShowFileMenu(false);
+    setFileSearchQuery('');
+    setFileMenuFiles([]);
+    setFileMenuIndex(0);
+    if (fileSearchRef.current) clearTimeout(fileSearchRef.current);
+  };
+
+  const handleAtSearch = useCallback(async (query: string) => {
+    setFileSearchQuery(query);
+    const files = await searchFiles(query);
+    setFileMenuFiles(files);
+    setFileMenuIndex(0);
+    setShowFileMenu(true);
+  }, []);
+
+  // Detect @ trigger position in textarea
+  const checkAtTrigger = useCallback((value: string, cursorPos: number) => {
+    // Find the last @ before cursor that isn't preceded by a word char (not in an email etc)
+    const beforeCursor = value.slice(0, cursorPos);
+    const atIdx = beforeCursor.lastIndexOf('@');
+    if (atIdx === -1) { closeFileMention(); return; }
+    // Ensure @ isn't part of a word (e.g. email)
+    if (atIdx > 0 && /\w/.test(beforeCursor[atIdx - 1]!)) { closeFileMention(); return; }
+    // Get text after @ up to cursor
+    const query = beforeCursor.slice(atIdx + 1);
+    // Only trigger if query is alphanumeric (or empty)
+    if (query && !/^[\w.\-/]*$/.test(query)) { closeFileMention(); return; }
+
+    if (fileSearchRef.current) clearTimeout(fileSearchRef.current);
+    fileSearchRef.current = setTimeout(() => handleAtSearch(query), 150);
+  }, [handleAtSearch]);
+
+  const handleFileSelect = useCallback((file: FileNode) => {
+    if (!textareaRef.current) return;
+    const ta = textareaRef.current;
+    const cursorPos = ta.selectionStart;
+    const value = input;
+    const beforeCursor = value.slice(0, cursorPos);
+    const atIdx = beforeCursor.lastIndexOf('@');
+    if (atIdx === -1) return;
+
+    const afterCursor = value.slice(cursorPos);
+    const newValue = value.slice(0, atIdx) + file.path + afterCursor;
+    setInput(newValue);
+    closeFileMention();
+
+    // Restore cursor after inserted path
+    const newPos = atIdx + file.path.length;
+    setTimeout(() => {
+      ta.focus();
+      ta.setSelectionRange(newPos, newPos);
+    }, 0);
+  }, [input, setInput]);
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    // Handle slash command menu navigation
+    // File mention menu
+    if (showFileMenu) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setFileMenuIndex(i => Math.min(i + 1, fileMenuFiles.length - 1)); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); setFileMenuIndex(i => Math.max(i - 1, 0)); return; }
+      if (e.key === 'Enter') { e.preventDefault(); if (fileMenuFiles[fileMenuIndex]) handleFileSelect(fileMenuFiles[fileMenuIndex]!); return; }
+      if (e.key === 'Escape') { e.preventDefault(); closeFileMention(); return; }
+      return;
+    }
+
+    // Slash command menu
     if (isOpen) {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        selectNext();
-        return;
-      }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        selectPrev();
-        return;
-      }
+      if (e.key === 'ArrowDown') { e.preventDefault(); selectNext(); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); selectPrev(); return; }
       if (e.key === 'Enter') {
         e.preventDefault();
         const cmd = filteredCommands[selectedIndex];
-        if (cmd) {
-          const args = input.slice(input.indexOf(cmd.name) + cmd.name.length + 1).trim();
-          executeCommand(cmd, args);
-          setInput('');
-          // /help 命令：重新打开菜单显示全部命令
-          if (cmd.id === 'help') {
-            setTimeout(() => slashCommands.openMenu(), 0);
-          }
-        }
+        if (cmd) { executeCommand(cmd, input.slice(input.indexOf(cmd.name) + cmd.name.length + 1).trim()); setInput(''); if (cmd.id === 'help') setTimeout(() => slashCommands.openMenu(), 0); }
         return;
       }
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        closeMenu();
-        return;
-      }
+      if (e.key === 'Escape') { e.preventDefault(); closeMenu(); return; }
       return;
+    }
+
+    // Input history: ArrowUp when at start or empty
+    if (e.key === 'ArrowUp' && !isComposingRef.current) {
+      const ta = textareaRef.current;
+      if (ta && ta.selectionStart === 0) {
+        e.preventDefault();
+        const result = navigate('up', input);
+        if (result !== null) { setInput(result); resetTextarea(); }
+        return;
+      }
+    }
+    if (e.key === 'ArrowDown' && !isComposingRef.current) {
+      const ta = textareaRef.current;
+      if (ta && ta.selectionStart === input.length) {
+        e.preventDefault();
+        const result = navigate('down', input);
+        if (result !== null) { setInput(result); resetTextarea(); }
+        return;
+      }
     }
 
     if (e.key === 'Enter' && !e.shiftKey && !isComposingRef.current) {
@@ -134,21 +216,22 @@ export const ChatPanel = memo(function ChatPanel({
     const value = e.target.value;
     setInput(value);
 
-    // Detect slash command trigger
-    if (value === '/') {
-      slashCommands.openMenu();
-      return;
+    // Reset history navigation on manual input
+    resetHistory();
+
+    // @ file mention detection
+    if (!isComposingRef.current) {
+      checkAtTrigger(value, e.target.selectionStart);
     }
 
-    if (value.startsWith('/')) {
+    // Slash command detection
+    if (value === '/') { slashCommands.openMenu(); return; }
+    if (value.startsWith('/') && !isOpen) {
       const query = value.slice(1);
-      const spaceIndex = query.indexOf(' ');
-      const commandPart = spaceIndex >= 0 ? query.slice(0, spaceIndex) : query;
-      setFilter(commandPart);
-      if (!isOpen) {
-        slashCommands.openMenu();
-      }
-    } else if (isOpen) {
+      const spaceIdx = query.indexOf(' ');
+      setFilter(spaceIdx >= 0 ? query.slice(0, spaceIdx) : query);
+      slashCommands.openMenu();
+    } else if (!value.startsWith('/') && isOpen) {
       closeMenu();
     }
   };
@@ -157,170 +240,116 @@ export const ChatPanel = memo(function ChatPanel({
     const args = input.slice(input.indexOf(cmd.name) + cmd.name.length + 1).trim();
     executeCommand(cmd, args);
     setInput('');
-    // /help 命令：重新打开菜单显示全部命令
-    if (cmd.id === 'help') {
-      setTimeout(() => slashCommands.openMenu(), 0);
-    }
+    if (cmd.id === 'help') setTimeout(() => slashCommands.openMenu(), 0);
   };
+
+  const renderMessage = useCallback((_index: number, message: Message) => (
+    <div className="px-4 py-2"><MessageBubble message={message} sessionId={sessionId} /></div>
+  ), [sessionId]);
+
+  const GeneratingFooter = useCallback(() => {
+    if (!isGenerating) return null;
+    return <div className="flex items-center gap-2 text-xs text-dark-muted py-2 px-4"><span className="text-accent-blue animate-spin-frame text-sm">◐</span><span>Thinking...</span></div>;
+  }, [isGenerating]);
+
+  const EmptyPlaceholder = useCallback(() => (
+    <div className="flex-1 flex items-center justify-center p-4">
+      <div className="text-center max-w-md px-4">
+        <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-accent-blue/10 flex items-center justify-center">
+          <MessageSquare size={32} className="text-accent-blue" />
+        </div>
+        <h2 className="text-xl font-semibold mb-2">欢迎使用 JwCode</h2>
+        <p className="text-dark-muted text-sm">我可以帮你编写代码、分析项目、自动化任务。试试发送一条消息吧！</p>
+        <div className="mt-6 flex flex-wrap justify-center gap-2">
+          <span className="text-xs px-3 py-1.5 bg-dark-surface rounded-full text-dark-muted">💡 代码编写</span>
+          <span className="text-xs px-3 py-1.5 bg-dark-surface rounded-full text-dark-muted">🔍 代码分析</span>
+          <span className="text-xs px-3 py-1.5 bg-dark-surface rounded-full text-dark-muted">⚡ 自动化任务</span>
+        </div>
+        <div className="mt-4 text-xs text-dark-muted space-y-1">
+          <div>输入 <kbd className="px-1 py-0.5 bg-dark-bg rounded border border-dark-border">/</kbd> 查看快捷命令</div>
+          <div>输入 <kbd className="px-1 py-0.5 bg-dark-bg rounded border border-dark-border">@</kbd> 引用文件</div>
+        </div>
+      </div>
+    </div>
+  ), []);
+
+  const tokenWarn = tokenEstimate > 8000;
+  const charCount = input.length;
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden min-h-0">
-      {/* 消息区域：占满剩余空间，内容少时也能撑开 */}
-      <div ref={scrollContainerRef} className="flex-1 overflow-auto min-h-0 flex flex-col">
-        {messages.length === 0 ? (
-          /* 欢迎页：flex-1 确保撑满 flex 容器 */
-          <div className="flex-1 flex items-center justify-center p-4">
-            <div className="text-center max-w-md px-4">
-              <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-accent-blue/10 flex items-center justify-center">
-                <MessageSquare size={32} className="text-accent-blue" />
-              </div>
-              <h2 className="text-xl font-semibold mb-2">欢迎使用 JwCode</h2>
-              <p className="text-dark-muted text-sm">我可以帮你编写代码、分析项目、自动化任务。试试发送一条消息吧！</p>
-              <div className="mt-6 flex flex-wrap justify-center gap-2">
-                <span className="text-xs px-3 py-1.5 bg-dark-surface rounded-full text-dark-muted">💡 代码编写</span>
-                <span className="text-xs px-3 py-1.5 bg-dark-surface rounded-full text-dark-muted">🔍 代码分析</span>
-                <span className="text-xs px-3 py-1.5 bg-dark-surface rounded-full text-dark-muted">⚡ 自动化任务</span>
-              </div>
-              <div className="mt-4 text-xs text-dark-muted">
-                输入 <kbd className="px-1 py-0.5 bg-dark-bg rounded border border-dark-border">/</kbd> 查看快捷命令
-              </div>
-            </div>
-          </div>
-        ) : (
-          /* 消息列表：有消息时用 p-4 space-y-2 布局 */
-          <div className="p-4 space-y-4">
-            {messages.map(message => (
-              <MessageBubble key={message.id} message={message} sessionId={sessionId} />
-            ))}
-            {isGenerating && (
-              <div className="flex items-center gap-2 text-xs text-dark-muted py-1">
-                <span className="text-accent-blue animate-spin-frame text-sm">◐</span>
-                <span>Thinking...</span>
-              </div>
-            )}
-          </div>
-        )}
+      {/* Messages */}
+      <div className="flex-1 min-h-0">
+        <Virtuoso ref={virtuosoRef} data={messages} itemContent={renderMessage} followOutput="smooth"
+          components={{ Footer: GeneratingFooter, EmptyPlaceholder }} style={{ height: '100%' }} />
       </div>
 
-      {/* 紧凑工具栏: Context + Plan/Act + 任务看板切换 */}
+      {/* Toolbar */}
       <div className="shrink-0 border-t border-dark-border bg-dark-surface h-9 flex items-center px-3 gap-2">
         <ContextManager />
-        <div className="w-px h-4 bg-dark-border mx-1" />
-        <button
-          onClick={() => setMode('plan')}
-          className={`flex items-center gap-1 px-2 py-0.5 text-[11px] rounded transition-all ${
-            mode === 'plan' ? 'bg-accent-blue/10 text-accent-blue' : 'text-dark-muted hover:text-dark-text'
-          }`}
-          title="Plan 模式"
-        ><ListChecks size={12} /> Plan</button>
-        <button
-          onClick={() => setMode('act')}
-          className={`flex items-center gap-1 px-2 py-0.5 text-[11px] rounded transition-all ${
-            mode === 'act' ? 'bg-accent-green/10 text-accent-green' : 'text-dark-muted hover:text-dark-text'
-          }`}
-          title="Act 模式"
-        ><Zap size={12} /> Act</button>
         <div className="flex-1" />
         <SessionTaskBoard sessionId={sessionId} />
       </div>
 
       {/* Input Area */}
       <div className="px-3 pb-3 pt-2 border-t border-dark-border bg-dark-surface relative shrink-0">
+        {/* Slash command menu */}
+        <SlashCommandMenu isOpen={isOpen} commands={filteredCommands} selectedIndex={selectedIndex} filter={slashCommands.filter}
+          onSelect={handleSelectCommand} onHover={setSelectedIndex} containerRef={containerRef} />
 
-        <SlashCommandMenu
-          isOpen={isOpen}
-          commands={filteredCommands}
-          selectedIndex={selectedIndex}
-          filter={slashCommands.filter}
-          onSelect={handleSelectCommand}
-          onHover={setSelectedIndex}
-          containerRef={containerRef}
-        />
+        {/* @ file mention menu */}
+        <FileMentionMenu isOpen={showFileMenu} files={fileMenuFiles} selectedIndex={fileMenuIndex} query={fileSearchQuery}
+          onSelect={handleFileSelect} onHover={setFileMenuIndex} />
+
         <div className="flex gap-2 items-end">
+          <div className="flex-1 flex flex-col gap-1">
+            <textarea
+              ref={textareaRef} value={input} onChange={handleChange} onKeyDown={handleKeyDown}
+              placeholder="输入消息... Shift+Enter 换行，/ 命令，@ 引用文件，↑ 历史"
+              className={`flex-1 bg-dark-bg border rounded-lg px-3 sm:px-4 py-2.5 sm:py-3 text-dark-text placeholder-dark-muted resize-none focus:outline-none text-sm min-h-[40px] max-h-[40vh] transition-colors ${mode === 'plan' ? 'border-accent-blue/50 focus:border-accent-blue' : 'border-dark-border focus:border-accent-green'}`}
+              rows={1} disabled={isGenerating || isPlanWaitingConfirm}
+              onCompositionStart={() => { isComposingRef.current = true; }}
+              onCompositionEnd={(e) => {
+                isComposingRef.current = false;
+                const t = e.currentTarget;
+                t.style.height = 'auto';
+                t.style.height = Math.min(t.scrollHeight, window.innerHeight * 0.4) + 'px';
+              }}
+              onInput={(e) => {
+                if (isComposingRef.current) return;
+                const t = e.currentTarget;
+                t.style.height = 'auto';
+                t.style.height = Math.min(t.scrollHeight, window.innerHeight * 0.4) + 'px';
+              }}
+            />
+            {/* Input info row */}
+            <div className="flex items-center gap-3 px-1">
+              <span className={`text-[10px] ${tokenWarn ? 'text-accent-red' : 'text-dark-muted'}`}>
+                {charCount > 0 && <>{charCount} 字符 · ~{tokenEstimate} tokens</>}
+              </span>
+              {tokenWarn && <span className="text-[10px] text-accent-red font-medium">接近上限</span>}
+              <span className="text-[10px] text-dark-muted opacity-60">Shift+Enter 换行</span>
+            </div>
+          </div>
 
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={handleChange}
-            onKeyDown={handleKeyDown}
-            placeholder=""
-            className={`flex-1 bg-dark-bg border rounded-lg px-3 sm:px-4 py-2.5 sm:py-3 text-dark-text placeholder-dark-muted resize-none focus:outline-none text-sm min-h-[40px] max-h-[40vh] transition-colors ${
-              mode === 'plan'
-                ? 'border-accent-blue/50 focus:border-accent-blue'
-                : 'border-dark-border focus:border-accent-green'
-            }`}
-            rows={1}
-            disabled={isGenerating || isPlanWaitingConfirm}
-            onCompositionStart={() => { isComposingRef.current = true; }}
-            onCompositionEnd={(e) => {
-              isComposingRef.current = false;
-              // 组合输入结束后再调整高度
-              const target = e.currentTarget;
-              target.style.height = 'auto';
-              target.style.height = Math.min(target.scrollHeight, window.innerHeight * 0.4) + 'px';
-            }}
-            onInput={(e) => {
-              if (isComposingRef.current) return;
-              const target = e.currentTarget;
-              target.style.height = 'auto';
-              target.style.height = Math.min(target.scrollHeight, window.innerHeight * 0.4) + 'px';
-            }}
-          />
-          {/* 按钮区域：根据状态显示不同按钮 */}
+          {/* Send/Pause/Resume buttons */}
           {isGenerating ? (
             <div className="flex gap-1.5 shrink-0">
               {isPaused ? (
                 <>
-                  {/* 暂停中：恢复 + 终止 */}
-                  <button
-                    onClick={onResume}
-                    className="px-3 py-3 bg-accent-green text-white rounded-lg hover:opacity-90 transition-all flex items-center gap-1.5"
-                    title="恢复生成"
-                  >
-                    <Play size={16} />
-                    <span className="hidden sm:inline">恢复</span>
-                  </button>
-                  <button
-                    onClick={onStop}
-                    className="px-3 py-3 bg-accent-red text-white rounded-lg hover:opacity-90 transition-all flex items-center gap-1.5"
-                    title="终止生成"
-                  >
-                    <Square size={16} />
-                    <span className="hidden sm:inline">终止</span>
-                  </button>
+                  <button onClick={onResume} className="px-3 py-3 bg-accent-green text-white rounded-lg hover:opacity-90 transition-all flex items-center gap-1.5" title="恢复生成"><Play size={16} /><span className="hidden sm:inline">恢复</span></button>
+                  <button onClick={onStop} className="px-3 py-3 bg-accent-red text-white rounded-lg hover:opacity-90 transition-all flex items-center gap-1.5" title="终止生成"><Square size={16} /><span className="hidden sm:inline">终止</span></button>
                 </>
               ) : (
                 <>
-                  {/* 生成中：暂停 + 终止 */}
-                  <button
-                    onClick={onPause}
-                    className="px-3 py-3 bg-accent-yellow text-white rounded-lg hover:opacity-90 transition-all flex items-center gap-1.5"
-                    title="暂停生成"
-                  >
-                    <Pause size={16} />
-                    <span className="hidden sm:inline">暂停</span>
-                  </button>
-                  <button
-                    onClick={onStop}
-                    className="px-3 py-3 bg-accent-red text-white rounded-lg hover:opacity-90 transition-all flex items-center gap-1.5"
-                    title="终止生成"
-                  >
-                    <Square size={16} />
-                    <span className="hidden sm:inline">终止</span>
-                  </button>
+                  <button onClick={onPause} className="px-3 py-3 bg-accent-yellow text-white rounded-lg hover:opacity-90 transition-all flex items-center gap-1.5" title="暂停生成"><Pause size={16} /><span className="hidden sm:inline">暂停</span></button>
+                  <button onClick={onStop} className="px-3 py-3 bg-accent-red text-white rounded-lg hover:opacity-90 transition-all flex items-center gap-1.5" title="终止生成"><Square size={16} /><span className="hidden sm:inline">终止</span></button>
                 </>
               )}
             </div>
           ) : (
-            <button
-              onClick={handleSend}
-              disabled={!input.trim() || isPlanWaitingConfirm}
-              className={`px-4 py-3 text-white rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2 ${
-                mode === 'plan'
-                  ? 'bg-accent-blue'
-                  : 'bg-accent-green'
-              }`}
-            >
+            <button onClick={handleSend} disabled={!input.trim() || isPlanWaitingConfirm}
+              className={`px-4 py-3 text-white rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2 ${mode === 'plan' ? 'bg-accent-blue' : 'bg-accent-green'}`}>
               {mode === 'plan' ? <ListChecks size={16} /> : <Zap size={16} />}
               <span className="hidden sm:inline">{mode === 'plan' ? '生成计划' : '执行'}</span>
             </button>

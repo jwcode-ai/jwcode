@@ -1,7 +1,21 @@
-import { memo } from 'react';
-import { Settings } from 'lucide-react';
+import { memo, useState } from 'react';
+import { Settings, Palette } from 'lucide-react';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { FeatureToggle } from './FeatureToggle';
+import { CustomThemeColors } from '../../types';
+
+const COLOR_LABELS: { key: keyof CustomThemeColors; label: string }[] = [
+  { key: 'bg', label: '背景色' },
+  { key: 'surface', label: '面板色' },
+  { key: 'border', label: '边框色' },
+  { key: 'text', label: '文字色' },
+  { key: 'muted', label: '次要文字' },
+  { key: 'accentBlue', label: '强调蓝' },
+  { key: 'accentGreen', label: '强调绿' },
+  { key: 'accentRed', label: '强调红' },
+  { key: 'accentYellow', label: '强调黄' },
+  { key: 'accentPurple', label: '强调紫' },
+];
 
 export const SettingsPanel = memo(function SettingsPanel() {
   const {
@@ -10,8 +24,11 @@ export const SettingsPanel = memo(function SettingsPanel() {
     yolo, setYoloEnabled,
     autoSwarm, setAutoSwarmEnabled,
     autoAI, setAutoAIEnabled,
-    compression, setCompressionEnabled
+    compression, setCompressionEnabled,
+    customTheme, customThemeEnabled,
+    setCustomTheme, setCustomThemeEnabled, resetCustomTheme,
   } = useSettingsStore();
+  const [showCustomTheme, setShowCustomTheme] = useState(customThemeEnabled);
 
   return (
     <div className="flex-1 overflow-y-auto p-4">
@@ -40,6 +57,58 @@ export const SettingsPanel = memo(function SettingsPanel() {
                 {t === 'dark' ? '🌙 深色' : t === 'light' ? '☀️ 浅色' : '🔄 自动'}
               </button>
             ))}
+          </div>
+
+          {/* Custom Theme Toggle */}
+          <div className="mt-4 pt-4 border-t border-dark-border">
+            <button
+              onClick={() => {
+                const next = !showCustomTheme;
+                setShowCustomTheme(next);
+                setCustomThemeEnabled(next);
+              }}
+              className="flex items-center gap-2 text-sm text-dark-muted hover:text-dark-text transition-colors"
+            >
+              <Palette size={14} />
+              <span>自定义配色</span>
+              <span className={`w-8 h-4 rounded-full transition-colors ${showCustomTheme ? 'bg-accent-blue' : 'bg-dark-border'}`}>
+                <span className={`block w-3 h-3 rounded-full bg-white transition-transform mt-0.5 ${showCustomTheme ? 'ml-4' : 'ml-0.5'}`} />
+              </span>
+            </button>
+
+            {showCustomTheme && (
+              <div className="mt-3 space-y-2">
+                <div className="grid grid-cols-2 gap-2">
+                  {COLOR_LABELS.map(({ key, label }) => (
+                    <div key={key} className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={customTheme[key]}
+                        onChange={(e) => setCustomTheme({ [key]: e.target.value })}
+                        className="w-7 h-7 rounded border border-dark-border cursor-pointer bg-transparent p-0"
+                      />
+                      <span className="text-xs text-dark-muted flex-1">{label}</span>
+                      <input
+                        type="text"
+                        value={customTheme[key]}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (/^#[0-9a-fA-F]{0,6}$/.test(v)) setCustomTheme({ [key]: v });
+                        }}
+                        className="w-20 bg-dark-bg border border-dark-border rounded px-1.5 py-0.5 text-xs text-dark-text font-mono"
+                        maxLength={7}
+                      />
+                    </div>
+                  ))}
+                </div>
+                <button
+                  onClick={resetCustomTheme}
+                  className="text-xs text-dark-muted hover:text-accent-red transition-colors"
+                >
+                  重置为默认配色
+                </button>
+              </div>
+            )}
           </div>
         </div>
 

@@ -1,3 +1,4 @@
+export declare function saveToHistory(text: string): void;
 interface Props {
     value: string;
     onChange: (value: string) => void;

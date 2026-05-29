@@ -1,18 +1,14 @@
 /**
  * WebSocket client — matches python-cli/jwcode/client.py protocol with Java backend.
- *
- * Protocol flow:
- *   1. Connect ws://localhost:{wsPort}/ws
- *   2. Receive auth_required → send {type: "auth", token: "default-token"}
- *   3. Receive auth_success → POST /api/sessions to create session
- *   4. Start read loop, dispatch 25+ event types to registered handlers
  */
 import WebSocket from 'ws';
 const PING_INTERVAL = 30000;
+const MAX_RECONNECT_DELAY = 30000;
 export class JwCodeClient {
     ws = null;
     handlers = new Map();
     _running = false;
+    _reconnecting = false;
     pingTimer = null;
     reconnectDelay = 1000;
     reconnectTimer = null;
@@ -33,7 +29,6 @@ export class JwCodeClient {
     }
     async connect() {
         this._running = true;
-        this.reconnectDelay = 1000;
         return new Promise((resolve, reject) => {
             try {
                 this.ws = new WebSocket(this.wsUrl);
@@ -42,9 +37,6 @@ export class JwCodeClient {
                 reject(e);
                 return;
             }
-            this.ws.on('open', () => {
-                // Wait for auth flow on message
-            });
             this.ws.on('message', (raw) => {
                 let data;
                 try {
@@ -53,7 +45,6 @@ export class JwCodeClient {
                 catch {
                     return;
                 }
-                // Auth flow
                 if (data.type === 'auth_required') {
                     this.ws.send(JSON.stringify({ type: 'auth', token: this.token }));
                     return;
@@ -63,6 +54,8 @@ export class JwCodeClient {
                         this.sessionId = sid;
                         this._startHeartbeat();
                         this._startReadLoop();
+                        this._reconnecting = false;
+                        this.reconnectDelay = 1000;
                         resolve(sid);
                     }).catch(reject);
                     return;
@@ -73,6 +66,7 @@ export class JwCodeClient {
                 }
             });
             this.ws.on('error', (err) => {
+                // If we haven't authenticated yet, reject so the initial connect / reconnect catch handles it
                 if (!this.sessionId)
                     reject(err);
                 else
@@ -80,8 +74,8 @@ export class JwCodeClient {
             });
             this.ws.on('close', () => {
                 this._stopHeartbeat();
-                if (this._running) {
-                    this._scheduleReconnect();
+                if (this._running && !this._reconnecting) {
+                    this._startReconnect();
                 }
             });
         });
@@ -97,8 +91,7 @@ export class JwCodeClient {
     _startReadLoop() {
         if (!this.ws)
             return;
-        const ws = this.ws;
-        ws.on('message', (raw) => {
+        this.ws.on('message', (raw) => {
             let data;
             try {
                 data = JSON.parse(raw.toString());
@@ -106,10 +99,8 @@ export class JwCodeClient {
             catch {
                 return;
             }
-            // Skip auth messages (handled in connect)
             if (data.type === 'auth_required' || data.type === 'auth_success' || data.type === 'auth_failed')
                 return;
-            console.log(`[ws] recv: ${data.type}`);
             this.dispatch(data);
         });
     }
@@ -127,20 +118,27 @@ export class JwCodeClient {
             this.pingTimer = null;
         }
     }
-    _scheduleReconnect() {
-        if (!this._running)
+    _startReconnect() {
+        if (!this._running || this._reconnecting)
             return;
-        console.log(`[ws] Reconnecting in ${this.reconnectDelay / 1000}s...`);
-        this.dispatch({ type: 'notification', data: 'Connection lost, reconnecting...' });
+        this._reconnecting = true;
+        // Clear any stale timer
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
         this.reconnectTimer = setTimeout(async () => {
             try {
+                console.log(`[ws] Reconnecting...`);
+                this.dispatch({ type: 'notification', data: 'Reconnecting...' });
                 await this.connect();
-                this.reconnectDelay = 1000;
+                this._reconnecting = false;
                 this.dispatch({ type: 'notification', data: 'Reconnected.' });
             }
             catch {
-                this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000);
-                this._scheduleReconnect();
+                this.reconnectDelay = Math.min(this.reconnectDelay * 2, MAX_RECONNECT_DELAY);
+                this._reconnecting = false; // allow next schedule
+                this._startReconnect();
             }
         }, this.reconnectDelay);
     }
@@ -162,25 +160,19 @@ export class JwCodeClient {
             console.warn(`[ws] Not connected, dropping: ${msgType}`);
             return;
         }
-        const payload = {
-            type: msgType,
-            sessionId: this.sessionId,
-        };
+        const payload = { type: msgType, sessionId: this.sessionId };
         if (message !== undefined)
             payload.message = message;
         if (data)
             payload.data = JSON.stringify(data);
         try {
             this.ws.send(JSON.stringify(payload));
-            console.log(`[ws] sent: ${msgType}`);
         }
         catch (e) {
             console.error(`[ws] send error [${msgType}]:`, e);
         }
     }
-    chat(content, planMode = false) {
-        this.send(planMode ? 'plan' : 'chat', content);
-    }
+    chat(content, planMode = false) { this.send(planMode ? 'plan' : 'chat', content); }
     stop() { this.send('stop'); }
     pause() { this.send('pause'); }
     resume() { this.send('resume'); }
@@ -190,14 +182,19 @@ export class JwCodeClient {
     rewind() { this.send('rewind'); }
     compact() { this.send('compact'); }
     switchModel(model) { this.send('model_change', undefined, { model }); }
-    approveHook(approvalId) {
-        this.send('hook_allow', undefined, { approvalId });
-    }
-    denyHook(approvalId) {
-        this.send('hook_deny', undefined, { approvalId });
-    }
+    approveHook(approvalId) { this.send('hook_allow', undefined, { approvalId }); }
+    denyHook(approvalId) { this.send('hook_deny', undefined, { approvalId }); }
+    init() { this.send('init'); }
+    effort(level) { this.send('effort', undefined, { level }); }
+    branch(name) { this.send('branch', undefined, { name }); }
+    mcp(action) { this.send('mcp', undefined, { action }); }
+    skills() { this.send('skills'); }
+    agents() { this.send('agents'); }
+    config(action) { this.send('config', undefined, { action }); }
+    plugin(action) { this.send('plugin', undefined, { action }); }
     async close() {
         this._running = false;
+        this._reconnecting = false;
         this._stopHeartbeat();
         if (this.reconnectTimer) {
             clearTimeout(this.reconnectTimer);

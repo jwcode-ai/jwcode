@@ -33,6 +33,17 @@ function printUsage(): void {
   console.log('  --build, -B               Force rebuild backend');
   console.log('  --backend, -b <url>       Backend URL (run mode)');
   console.log('  --ws <url>                WebSocket URL (run mode)');
+  console.log('');
+  console.log('Environment:');
+  console.log('  JWCODE_THEME=dark|light   Color theme (default: dark)');
+  console.log('');
+  console.log('Keyboard shortcuts (in TUI):');
+  console.log('  /             Open command palette');
+  console.log('  Tab           Toggle Plan/Act mode');
+  console.log('  Up/Down       Browse input history (last 30)');
+  console.log('  PgUp/PgDn     Scroll message history');
+  console.log('  Home/End      Jump to oldest/newest message');
+  console.log('  Esc           Close palette / deny approval');
 }
 
 function parseArgs(): Record<string, string | boolean> {

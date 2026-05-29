@@ -4,7 +4,7 @@
  */
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Box, Text, useInput, useApp, useStdout } from 'ink';
-import { TextInput } from './components/TextInput.js';
+import { TextInput, saveToHistory } from './components/TextInput.js';
 import { JwCodeClient } from './client.js';
 import { StatusLine } from './components/StatusLine.js';
 import { ChatArea } from './components/ChatArea.js';
@@ -161,6 +161,7 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
 
     // Normal chat — don't send unmatched / commands as chat
     if (text.startsWith('/') && !(cmd && cmd in SLASH_COMMANDS)) return;
+    saveToHistory(text);
     const msg = createMessage('user', text);
     updateAppState(prev => ({ ...prev, messages: [...prev.messages, msg] }));
     clientRef.current!.chat(text, state.planMode);
@@ -208,7 +209,7 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
     const INTERVAL = 150; // ms between renders during streaming
     let pendingContent = '';
     let pendingThinking = '';
-    let pendingToolCalls: Array<(msg: import('../protocol.js').Message) => void> = [];
+    let pendingToolCalls: Array<(msg: Message) => void> = [];
     let batchTimer: ReturnType<typeof setTimeout> | null = null;
     let batchChanged = false;
 
@@ -264,13 +265,13 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
 
     client.on('tool_call', (m: WSMessage) => {
       const d = parseData(m) as unknown as ToolCall;
-      pendingToolCalls.push((msg) => {
+      pendingToolCalls.push((msg: Message) => {
         let existingIdx = d.id
-          ? msg.toolCalls.findIndex(t => t.id === d.id)
+          ? msg.toolCalls.findIndex((t: ToolCall) => t.id === d.id)
           : -1;
         if (existingIdx < 0 && d.name) {
           existingIdx = msg.toolCalls.findIndex(
-            t => t.name === d.name && t.status === 'running'
+            (t: ToolCall) => t.name === d.name && t.status === 'running'
           );
         }
         if (existingIdx >= 0) {
@@ -367,17 +368,54 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
     });
 
     client.on('plan_start', () => {
-      updateAppState(prev => ({ ...prev, planWaiting: false }));
+      flushNow();
+      const msg = createMessage('assistant');
+      updateAppState(prev => ({
+        ...prev,
+        planWaiting: false,
+        currentMessage: msg,
+        messages: [...prev.messages, msg],
+        scrollOffset: prev.scrollOffset > 0 ? prev.scrollOffset + 1 : 0,
+      }));
+    });
+
+    client.on('plan_thinking', (m: WSMessage) => {
+      const text = typeof m.data === 'string' ? m.data : (m.data ? String(m.data) : '');
+      updateAppState(prev => {
+        if (!prev.currentMessage) return prev;
+        prev.currentMessage.thinking += text + '\n';
+        return { ...prev };
+      });
+    });
+
+    client.on('plan_tasks', () => {
+      updateAppState(prev => {
+        if (!prev.currentMessage) return prev;
+        prev.currentMessage.content += '\n📋 任务清单已生成\n';
+        return { ...prev };
+      });
     });
 
     client.on('plan_complete', (m: WSMessage) => {
-      const d = parseData(m);
-      const status = d.status as string;
-      if (status === 'waiting_confirm') {
-        updateAppState(prev => ({ ...prev, planWaiting: true }));
-      } else {
-        updateAppState(prev => ({ ...prev, planWaiting: false }));
-      }
+      flushNow();
+      // status is at WS message root level, not inside data
+      const status = (m as any).status as string | undefined;
+      const planText = typeof m.data === 'string' ? m.data : '';
+      updateAppState(prev => {
+        const msgs = [...prev.messages];
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          if (msgs[i].type === 'assistant' && !msgs[i].content) {
+            msgs[i] = { ...msgs[i], content: planText || 'Plan complete.' };
+            break;
+          }
+        }
+        return {
+          ...prev,
+          currentMessage: null,
+          messages: msgs,
+          planWaiting: status === 'waiting_confirm',
+        };
+      });
     });
 
     client.on('notification', (m: WSMessage) => {
@@ -412,8 +450,8 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
         setHelpScroll(prev => Math.max(0, prev - (key.pageDown ? helpMax : 1)));
         return;
       }
-      if (key.home) { setHelpScroll(helpLines.length - 1); return; }
-      if (key.end) { setHelpScroll(0); return; }
+      if ((key as any).home) { setHelpScroll(helpLines.length - 1); return; }
+      if ((key as any).end) { setHelpScroll(0); return; }
     }
     // Scroll: arrow keys = fine, page keys = coarse
     if (key.pageUp) {
@@ -444,17 +482,17 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
       }));
       return;
     }
-    if (key.home) {
+    if ((key as any).home || ((key as any).home && key.ctrl)) {
       updateAppState(prev => ({ ...prev, scrollOffset: prev.messages.length }));
       return;
     }
-    if (key.end) {
+    if ((key as any).end || ((key as any).end && key.ctrl)) {
       updateAppState(prev => ({ ...prev, scrollOffset: 0 }));
       return;
     }
     // Tab: toggle plan/act mode
     if (key.tab) {
-      updateAppState(prev => ({ ...prev, planMode: !prev.planMode }));
+      updateAppState(prev => ({ ...prev, planMode: !prev.planMode, planWaiting: false }));
       return;
     }
   });

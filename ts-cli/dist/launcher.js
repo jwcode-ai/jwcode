@@ -1,8 +1,7 @@
 /**
- * Java backend launcher — matches python-cli/jwcode/launcher.py behavior.
- * Finds Maven, builds (optional), and starts the Java WebServer as a child process.
+ * Java backend launcher.
  */
-import { spawn, execSync } from 'node:child_process';
+import { spawn, spawnSync, execSync } from 'node:child_process';
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
@@ -10,7 +9,6 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 export function findProjectRoot() {
-    // Start from ts-cli/src, go up to find jwcode-parent/pom.xml
     let dir = join(__dirname, '..', '..');
     while (dir !== dirname(dir)) {
         if (existsSync(join(dir, 'jwcode-parent', 'pom.xml')))
@@ -20,7 +18,6 @@ export function findProjectRoot() {
     return process.cwd();
 }
 export function findMvn() {
-    // Check PATH
     const paths = process.env.PATH?.split(';') || [];
     for (const dir of paths) {
         for (const name of ['mvn.cmd', 'mvn.bat', 'mvn']) {
@@ -29,12 +26,9 @@ export function findMvn() {
                 return full;
         }
     }
-    // Scan Program Files
-    const scanRoots = ['C:\\Program Files', homedir()];
-    for (const root of scanRoots) {
+    for (const root of ['C:\\Program Files', homedir()]) {
         try {
-            const entries = readdirSync(root, { withFileTypes: true });
-            for (const entry of entries) {
+            for (const entry of readdirSync(root, { withFileTypes: true })) {
                 if (entry.isDirectory() && entry.name.startsWith('apache-maven')) {
                     const mvn = join(root, entry.name, 'bin', 'mvn.cmd');
                     if (existsSync(mvn))
@@ -42,7 +36,7 @@ export function findMvn() {
                 }
             }
         }
-        catch { /* skip inaccessible dirs */ }
+        catch { }
     }
     return 'mvn';
 }
@@ -63,15 +57,21 @@ export function jarExists(projectRoot) {
 }
 export function buildBackend(projectRoot) {
     const mvn = findMvn();
-    console.log(`[launcher] Building Java backend (${mvn} package -pl jwcode-web -am -q -DskipTests)...`);
+    const cmd = `"${mvn}" package -pl jwcode-web -am -q -DskipTests`;
+    console.log(`[launcher] Building: ${cmd}`);
     try {
-        const cmd = `"${mvn}" package -pl jwcode-web -am -q -DskipTests`;
-        execSync(`cmd.exe /d /s /c ${cmd}`, { cwd: projectRoot, stdio: 'pipe' });
+        const result = spawnSync(cmd, [], {
+            cwd: projectRoot,
+            stdio: 'pipe',
+            shell: true,
+            windowsHide: true,
+        });
+        if (result.status !== 0) {
+            throw new Error(result.stderr.toString() || result.stdout.toString());
+        }
     }
     catch (e) {
-        const err = e;
-        console.error('[launcher] Build failed:');
-        console.error(err.stderr?.toString() || err.stdout?.toString() || String(e));
+        console.error('[launcher] Build failed:', String(e));
         process.exit(1);
     }
     if (!jarExists(projectRoot)) {
@@ -79,53 +79,84 @@ export function buildBackend(projectRoot) {
         process.exit(1);
     }
 }
-export function waitForBackend(port, timeout = 30) {
+export function killPort(port) {
+    try {
+        if (process.platform === 'win32') {
+            const out = execSync(`netstat -ano | findstr :${port} | findstr LISTENING`, { encoding: 'utf-8' });
+            for (const line of out.trim().split('\n')) {
+                const pid = line.trim().split(/\s+/).pop();
+                if (pid) {
+                    try {
+                        execSync(`taskkill /F /PID ${pid}`, { stdio: 'ignore' });
+                        console.log(`[launcher] Killed process on port ${port} (PID ${pid})`);
+                    }
+                    catch { }
+                }
+            }
+        }
+        else {
+            execSync(`lsof -ti:${port} | xargs kill -9 2>/dev/null`, { stdio: 'ignore' });
+        }
+    }
+    catch {
+        // Nothing listening on that port — good
+    }
+}
+export function waitForBackend(port, timeout = 60) {
     const start = Date.now();
-    const urls = [
-        `http://localhost:${port}/api/system/status`,
-        `http://localhost:${port}/`,
-    ];
+    const url = `http://localhost:${port}/api/system/status`;
     return new Promise((resolve) => {
         function check() {
             if (Date.now() - start > timeout * 1000) {
-                console.log(`[launcher] WARNING: Backend not responding after ${timeout}s, continuing...`);
-                resolve();
+                console.log(`[launcher] WARNING: Backend not responding after ${timeout}s`);
+                resolve(); // Don't reject, let the TUI show the error
                 return;
             }
-            const url = urls[0];
-            fetch(url, { signal: AbortSignal.timeout(1000) })
-                .then(() => {
-                console.log(`[launcher] Backend ready on port ${port}`);
-                resolve();
-            })
-                .catch(() => {
-                // Try alternate URL
-                fetch(urls[1], { signal: AbortSignal.timeout(1000) })
-                    .then(() => {
+            fetch(url, { signal: AbortSignal.timeout(2000) })
+                .then(async (r) => {
+                const text = await r.text();
+                // Backend returns {"status":"running",...}
+                if (r.status === 200 && (text.includes('running') || text.includes('status'))) {
                     console.log(`[launcher] Backend ready on port ${port}`);
                     resolve();
-                })
-                    .catch(() => setTimeout(check, 1000));
-            });
+                }
+                else {
+                    setTimeout(check, 1000);
+                }
+            })
+                .catch(() => setTimeout(check, 1000));
         }
         check();
     });
 }
 export function startBackend(projectRoot, port, wsPort) {
     const mvn = findMvn();
+    console.log(`[launcher] Starting backend: ${mvn} exec:java ...`);
+    // Kill any stale process on the port first
+    killPort(port);
+    killPort(wsPort);
     const cmd = `"${mvn}" exec:java -pl jwcode-web -Dexec.mainClass=com.jwcode.web.WebLauncher "-Dexec.args=${port} ${wsPort}" -q`;
-    console.log(`[launcher] Starting backend: ${cmd}`);
-    const isWin = process.platform === 'win32';
-    const proc = spawn('cmd.exe', ['/d', '/s', '/c', cmd], {
+    const proc = spawn(cmd, [], {
         cwd: projectRoot,
         env: { ...process.env, JWCODE_WS_PORT: String(wsPort) },
-        stdio: ['ignore', 'ignore', 'pipe'],
+        stdio: ['ignore', 'pipe', 'pipe'],
+        shell: true,
+        windowsHide: true,
     });
+    // Suppress all output — backend readiness is detected via HTTP health check.
+    // stdout must be consumed to prevent the pipe from blocking the process.
+    proc.stdout?.on('data', () => { });
     proc.stderr?.on('data', (data) => {
-        // Suppress Maven/Java noise, only show errors
-        const msg = data.toString().trim();
-        if (msg && !msg.startsWith('[INFO]') && !msg.startsWith('[')) {
-            console.error(`[backend] ${msg}`);
+        const msg = data.toString('utf-8').trim();
+        if (!msg)
+            return;
+        if (msg.includes('Address already in use') || msg.includes('BindException')) {
+            console.error(`[backend] ERROR: Port ${port} is in use.`);
+        }
+    });
+    proc.on('exit', (code) => {
+        if (code !== 0 && code !== null) {
+            console.error(`[launcher] Backend process exited with code ${code}`);
         }
     });
     return proc;
@@ -134,18 +165,32 @@ export function cleanupBackend(proc) {
     if (!proc)
         return;
     console.log('\n[jwcode] Shutting down...');
-    try {
-        process.kill(-proc.pid, 'SIGTERM');
-    }
-    catch { /* fall through */ }
-    proc.kill('SIGTERM');
-    setTimeout(() => {
-        if (proc && !proc.killed) {
-            try {
-                process.kill(-proc.pid, 'SIGKILL');
-            }
-            catch { /* ignore */ }
-            proc.kill('SIGKILL');
+    if (process.platform === 'win32') {
+        // Windows: use taskkill /T to kill the entire process tree (cmd.exe → java)
+        try {
+            execSync(`taskkill /F /T /PID ${proc.pid}`, { stdio: 'ignore' });
         }
-    }, 5000);
+        catch {
+            try {
+                proc.kill();
+            }
+            catch { }
+        }
+    }
+    else {
+        try {
+            process.kill(-proc.pid, 'SIGTERM');
+        }
+        catch { }
+        proc.kill('SIGTERM');
+        setTimeout(() => {
+            if (proc && !proc.killed) {
+                try {
+                    process.kill(-proc.pid, 'SIGKILL');
+                }
+                catch { }
+                proc.kill('SIGKILL');
+            }
+        }, 5000);
+    }
 }

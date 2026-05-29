@@ -1,3 +1,4 @@
+/// <reference types="vitest" />
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { inspectorServer } from '@react-dev-inspector/vite-plugin'
@@ -34,7 +35,7 @@ export default defineConfig({
           'react-vendor': ['react', 'react-dom'],
           'state': ['zustand'],
           'markdown': ['react-markdown', 'prismjs'],
-          'terminal': ['xterm', 'xterm-addon-fit'],
+          'terminal': ['xterm', 'xterm-addon-fit', 'xterm-addon-attach'],
           'icons': ['lucide-react'],
           'panels': ['react-resizable-panels'],
         },
@@ -43,5 +44,10 @@ export default defineConfig({
     chunkSizeWarningLimit: 600,
     // 生产环境不生成 sourcemap，避免暴露源码
     sourcemap: false,
+  },
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: [],
   },
 })

@@ -8,6 +8,8 @@ import com.jwcode.core.index.IndexConfig;
 import com.jwcode.core.task.TaskStore;
 import com.jwcode.core.tool.ToolRegistry;
 import com.jwcode.web.stream.StreamingWebSocketHandler;
+import com.jwcode.web.terminal.TerminalHandler;
+import com.jwcode.web.terminal.TerminalSession;
 import com.sun.net.httpserver.HttpServer;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpExchange;
@@ -34,6 +36,7 @@ public class WebServer {
     
     private HttpServer server;
     private StreamingWebSocketHandler webSocketHandler;
+    private TerminalHandler terminalHandler;
     private final int port;
     private final int wsPort;
     private final WebSessionManager sessionManager;
@@ -92,6 +95,25 @@ public class WebServer {
         server.createContext("/api/system/status", new SystemStatusHandler());
         server.createContext("/api/checkpoints", new CheckpointsHandler());
         server.createContext("/assets/", new StaticAssetHandler());
+
+        // Terminal — ttyd sidecar for web-based terminal access
+        {
+            String tsCliPath = java.nio.file.Paths.get(
+                System.getProperty("user.dir"), "ts-cli", "dist", "cli.js"
+            ).toAbsolutePath().normalize().toString();
+
+            String ttydPath = TerminalSession.findTtyd();
+            if (ttydPath == null) {
+                logger.warning("ttyd not found in PATH — terminal tab will be unavailable");
+                System.out.println("  ⚠ ttyd not found: install from https://github.com/tsl0922/ttyd/releases");
+            } else {
+                System.out.println("  ✓ ttyd found: " + ttydPath);
+                System.out.println("  ✓ ts-cli path: " + tsCliPath);
+            }
+
+            terminalHandler = new TerminalHandler(ttydPath, tsCliPath);
+            server.createContext("/api/terminal", terminalHandler);
+        }
         
         // 使用 ThreadPoolExecutor 替代 newFixedThreadPool，支持有界队列和拒绝策略
         server.setExecutor(new ThreadPoolExecutor(
@@ -133,6 +155,9 @@ public class WebServer {
         }
         if (webSocketHandler != null) {
             webSocketHandler.shutdown();
+        }
+        if (terminalHandler != null) {
+            terminalHandler.shutdown();
         }
         if (server != null) {
             server.stop(0);

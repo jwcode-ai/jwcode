@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
                              http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
@@ -22,18 +22,35 @@
             <artifactId>jwcode-core</artifactId>
             <version>${project.version}</version>
         </dependency>
-        
+
         <!-- JSON processing -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
         </dependency>
-        
+
         <!-- WebSocket -->
         <dependency>
             <groupId>org.java-websocket</groupId>
             <artifactId>Java-WebSocket</artifactId>
             <version>1.5.6</version>
+        </dependency>
+
+        <!-- Test -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-junit-jupiter</artifactId>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 
@@ -43,7 +60,7 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
             </plugin>
-            
+
             <!-- Frontend Maven Plugin: install Node/npm and build React app -->
             <plugin>
                 <groupId>com.github.eirslett</groupId>
@@ -56,9 +73,7 @@
                 <executions>
                     <execution>
                         <id>install-node-and-npm</id>
-                        <goals>
-                            <goal>install-node-and-npm</goal>
-                        </goals>
+                        <goals><goal>install-node-and-npm</goal></goals>
                         <configuration>
                             <nodeVersion>v20.11.0</nodeVersion>
                             <npmVersion>10.2.4</npmVersion>
@@ -66,27 +81,24 @@
                     </execution>
                     <execution>
                         <id>npm install</id>
-                        <goals>
-                            <goal>npm</goal>
-                        </goals>
+                        <goals><goal>npm</goal></goals>
                         <phase>generate-resources</phase>
-                        <configuration>
-                            <arguments>install</arguments>
-                        </configuration>
+                        <configuration><arguments>install</arguments></configuration>
                     </execution>
                     <execution>
                         <id>npm run build</id>
-                        <goals>
-                            <goal>npm</goal>
-                        </goals>
+                        <goals><goal>npm</goal></goals>
                         <phase>compile</phase>
-                        <configuration>
-                            <arguments>run build</arguments>
-                        </configuration>
+                        <configuration><arguments>run build</arguments></configuration>
                     </execution>
                 </executions>
             </plugin>
-            
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+            </plugin>
+
             <!-- Copy built frontend dist into classpath -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -95,17 +107,13 @@
                     <execution>
                         <id>copy-frontend-dist</id>
                         <phase>prepare-package</phase>
-                        <goals>
-                            <goal>copy-resources</goal>
-                        </goals>
+                        <goals><goal>copy-resources</goal></goals>
                         <configuration>
                             <outputDirectory>${project.build.outputDirectory}/web</outputDirectory>
                             <resources>
                                 <resource>
                                     <directory>${project.basedir}/dist</directory>
-                                    <includes>
-                                        <include>**/*</include>
-                                    </includes>
+                                    <includes><include>**/*</include></includes>
                                 </resource>
                             </resources>
                         </configuration>

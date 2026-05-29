@@ -1,7 +1,7 @@
 # JWCode
 
 > Java AI Coding Tool — v1.0.0-SNAPSHOT | 0 模块 | 0 Agent | 0 Tool
-> 最后自动生成: 2026-05-28
+> 最后自动生成: 2026-05-29
 
 ## 快速开始
 

@@ -7,28 +7,133 @@ import { render } from "ink";
 import { createElement } from "react";
 
 // src/App.tsx
-import { useState as useState4, useEffect as useEffect3, useRef, useCallback as useCallback2 } from "react";
-import { Box as Box6, Text as Text6, useInput as useInput4, useApp, useStdout } from "ink";
+import { useState as useState5, useEffect as useEffect3, useRef as useRef2, useCallback as useCallback3 } from "react";
+import { Box as Box6, Text as Text6, useInput as useInput4, useApp, useStdout as useStdout2 } from "ink";
 
 // src/components/TextInput.tsx
+import { useRef, useCallback } from "react";
 import { Box, Text, useInput } from "ink";
 import { jsx, jsxs } from "react/jsx-runtime";
+function estimateTokens(text) {
+  let cjk = 0;
+  let other = 0;
+  for (const ch of text) {
+    if (/[一-鿿㐀-䶿豈-﫿　-〿＀-￯]/.test(ch)) {
+      cjk++;
+    } else {
+      other++;
+    }
+  }
+  return Math.ceil(cjk / 1.5 + other / 4);
+}
+__name(estimateTokens, "estimateTokens");
+var MAX_HISTORY = 30;
+var HISTORY_KEY = "jwcode-tscli-history";
+function loadHistory() {
+  try {
+    const raw = process.env.JWCODE_HISTORY || (typeof sessionStorage !== "undefined" ? sessionStorage.getItem(HISTORY_KEY) : null);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+__name(loadHistory, "loadHistory");
+function saveHistory(entries) {
+  try {
+    if (typeof sessionStorage !== "undefined") {
+      sessionStorage.setItem(HISTORY_KEY, JSON.stringify(entries));
+    }
+  } catch {
+  }
+}
+__name(saveHistory, "saveHistory");
+function saveToHistory(text) {
+  const trimmed = text.trim();
+  if (!trimmed) return;
+  const history = loadHistory().filter((h) => h !== trimmed);
+  history.unshift(trimmed);
+  saveHistory(history.slice(0, MAX_HISTORY));
+}
+__name(saveToHistory, "saveToHistory");
 function TextInput({ value, onChange, onSubmit, placeholder, disabled }) {
+  const historyRef = useRef(loadHistory());
+  const histIdxRef = useRef(-1);
+  const draftRef = useRef("");
+  const navigateHistory = useCallback((dir) => {
+    const history = historyRef.current;
+    if (history.length === 0) return null;
+    if (histIdxRef.current === -1) {
+      draftRef.current = value;
+      if (dir === "up") {
+        histIdxRef.current = 0;
+        return history[0];
+      }
+      return null;
+    }
+    if (dir === "up") {
+      const next = Math.min(histIdxRef.current + 1, history.length - 1);
+      histIdxRef.current = next;
+      return history[next];
+    } else {
+      const next = histIdxRef.current - 1;
+      if (next < 0) {
+        histIdxRef.current = -1;
+        return draftRef.current;
+      }
+      histIdxRef.current = next;
+      return history[next];
+    }
+  }, [value]);
+  const resetHistory = useCallback(() => {
+    histIdxRef.current = -1;
+    draftRef.current = "";
+  }, []);
   useInput((input, key) => {
     if (disabled) return;
     if (key.return) {
       onSubmit(value);
-    } else if (key.backspace || key.delete) {
+      resetHistory();
+      return;
+    }
+    if (key.upArrow) {
+      const hist = navigateHistory("up");
+      if (hist !== null) onChange(hist);
+      return;
+    }
+    if (key.downArrow) {
+      const hist = navigateHistory("down");
+      if (hist !== null) onChange(hist);
+      return;
+    }
+    if (histIdxRef.current !== -1 && input) {
+      resetHistory();
+    }
+    if (key.backspace || key.delete) {
       onChange(value.slice(0, -1));
+      resetHistory();
     } else if (input && !key.ctrl && !key.meta && !key.tab && !key.escape) {
       onChange(value + input);
     }
   });
   const display = value || "";
   const showPlaceholder = !display && placeholder;
-  return /* @__PURE__ */ jsxs(Box, { children: [
-    display ? /* @__PURE__ */ jsx(Text, { children: display }) : /* @__PURE__ */ jsx(Text, { dimColor: true, children: placeholder }),
-    /* @__PURE__ */ jsx(Text, { dimColor: true, children: "\u258A" })
+  const tokenEstimate = display ? estimateTokens(display) : 0;
+  const charCount = display.length;
+  return /* @__PURE__ */ jsxs(Box, { flexDirection: "column", children: [
+    /* @__PURE__ */ jsxs(Box, { children: [
+      display ? /* @__PURE__ */ jsx(Text, { children: display }) : /* @__PURE__ */ jsx(Text, { dimColor: true, children: placeholder }),
+      /* @__PURE__ */ jsx(Text, { dimColor: true, children: "\u258A" })
+    ] }),
+    charCount > 0 && /* @__PURE__ */ jsxs(Box, { children: [
+      /* @__PURE__ */ jsxs(Text, { dimColor: true, children: [
+        "  ",
+        charCount,
+        " \u5B57\u7B26 \u2248 ",
+        tokenEstimate,
+        " tokens"
+      ] }),
+      tokenEstimate > 1e5 && /* @__PURE__ */ jsx(Text, { color: "red", children: "  \u26A0 \u63A5\u8FD1\u4E0A\u4E0B\u6587\u4E0A\u9650" })
+    ] })
   ] });
 }
 __name(TextInput, "TextInput");
@@ -270,7 +375,7 @@ var JwCodeClient = class {
 import { Box as Box2, Text as Text2 } from "ink";
 
 // src/hooks/useAppState.ts
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState as useState2, useCallback as useCallback2 } from "react";
 
 // src/store.ts
 function createStore(initialState2, onChange) {
@@ -315,7 +420,7 @@ function getStore() {
 __name(getStore, "getStore");
 function useAppState() {
   const store = getStore();
-  const [state, setState] = useState(store.getState());
+  const [state, setState] = useState2(store.getState());
   useEffect(() => {
     return store.subscribe(() => setState(store.getState()));
   }, []);
@@ -328,7 +433,7 @@ function updateAppState(updater) {
 __name(updateAppState, "updateAppState");
 
 // src/components/StatusLine.tsx
-import { jsx as jsx2, jsxs as jsxs2 } from "react/jsx-runtime";
+import { Fragment, jsx as jsx2, jsxs as jsxs2 } from "react/jsx-runtime";
 function formatTokens(n) {
   if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
   if (n >= 1e3) return `${Math.round(n / 1e3)}K`;
@@ -337,22 +442,42 @@ function formatTokens(n) {
 __name(formatTokens, "formatTokens");
 function StatusLine() {
   const state = useAppState();
-  const { usage, modelName, planMode, autoMode, connected, statusText } = state;
+  const { usage, modelName, planMode, autoMode, connected, statusText, messages } = state;
+  const msgCount = messages.length;
   const pct = Math.min(100, Math.round(usage.usageRatio * 100));
   const filled = Math.round(pct / 10);
   const bar = "=".repeat(filled) + "-".repeat(10 - filled);
   const model = modelName || (connected ? "ready" : "connecting...");
-  const plan = planMode ? " [PLAN]" : "";
-  const auto = autoMode ? " [AUTO]" : "";
+  const modeLabel = planMode ? " Plan " : " Act ";
+  const modeColor = planMode ? "cyan" : "green";
+  const connIcon = connected ? "\u25CF" : "\u25CB";
+  const connColor = connected ? "green" : "red";
   const isError = statusText.startsWith("Error:");
   return /* @__PURE__ */ jsxs2(Box2, { flexDirection: "column", width: "100%", paddingRight: 1, children: [
     /* @__PURE__ */ jsxs2(Box2, { height: 1, children: [
       /* @__PURE__ */ jsx2(Text2, { bold: true, color: "cyan", children: "jwcode" }),
-      /* @__PURE__ */ jsx2(Text2, { color: "yellow", children: plan }),
-      /* @__PURE__ */ jsx2(Text2, { color: "magenta", children: auto }),
-      /* @__PURE__ */ jsx2(Text2, { children: "   " }),
+      /* @__PURE__ */ jsx2(Text2, { children: "  " }),
+      /* @__PURE__ */ jsxs2(Text2, { backgroundColor: modeColor, color: "black", children: [
+        " ",
+        modeLabel,
+        " "
+      ] }),
+      /* @__PURE__ */ jsx2(Text2, { children: "  " }),
+      autoMode && /* @__PURE__ */ jsxs2(Fragment, { children: [
+        /* @__PURE__ */ jsx2(Text2, { backgroundColor: "magenta", color: "black", children: " AUTO " }),
+        /* @__PURE__ */ jsx2(Text2, { children: "  " })
+      ] }),
+      /* @__PURE__ */ jsxs2(Text2, { color: connColor, children: [
+        connIcon,
+        " "
+      ] }),
       /* @__PURE__ */ jsx2(Text2, { color: "green", children: model }),
-      /* @__PURE__ */ jsx2(Text2, { children: "   tokens: " }),
+      /* @__PURE__ */ jsx2(Text2, { children: "  " }),
+      /* @__PURE__ */ jsxs2(Text2, { dimColor: true, children: [
+        msgCount,
+        "msgs"
+      ] }),
+      /* @__PURE__ */ jsx2(Text2, { children: "  t: " }),
       /* @__PURE__ */ jsx2(Text2, { color: "yellow", children: formatTokens(usage.totalTokens) }),
       /* @__PURE__ */ jsx2(Text2, { children: "  " }),
       /* @__PURE__ */ jsxs2(Text2, { color: pct > 90 ? "red" : "white", children: [
@@ -385,14 +510,22 @@ function ChatArea({ messages, currentMessage, scrollOffset, terminalRows, reserv
   const hiddenBelow = clampedOffset;
   return /* @__PURE__ */ jsxs3(Box3, { flexDirection: "column", width: "100%", children: [
     isScrolledUp && /* @__PURE__ */ jsx3(Box3, { children: /* @__PURE__ */ jsxs3(Text3, { color: "yellow", dimColor: true, children: [
-      "\u25B2 \u4E0A\u65B9 ",
-      hiddenAbove,
-      " \u6761\u6D88\u606F (\u2191/PgUp \u4E0A\u7FFB, PgDn \u4E0B\u7FFB, End \u5230\u5E95\u90E8)"
+      "\u25B2 [",
+      start + 1,
+      "-",
+      end,
+      "/",
+      total,
+      "] \u4E0A\u7FFB\u4E2D (PgUp/PgDn \u7FFB\u9875, Home \u5F00\u5934, End \u6700\u65B0)"
     ] }) }),
     !isScrolledUp && total > maxVisible && /* @__PURE__ */ jsx3(Box3, { children: /* @__PURE__ */ jsxs3(Text3, { color: "grey", dimColor: true, children: [
-      "... ",
-      total - maxVisible,
-      " \u6761\u66F4\u65E9\u7684\u6D88\u606F (\u2191/PgUp \u67E5\u770B)"
+      "[",
+      start + 1,
+      "-",
+      end,
+      "/",
+      total,
+      "] \u2191/PgUp \u67E5\u770B\u66F4\u65E9\u6D88\u606F"
     ] }) }),
     visibleMessages.map((msg) => /* @__PURE__ */ jsxs3(Box3, { flexDirection: "column", marginBottom: 1, children: [
       msg.type === "user" && /* @__PURE__ */ jsxs3(Box3, { flexDirection: "column", children: [
@@ -484,8 +617,8 @@ function truncate(s, max) {
 __name(truncate, "truncate");
 
 // src/components/CommandPalette.tsx
-import { useState as useState2, useMemo, useEffect as useEffect2 } from "react";
-import { Box as Box4, Text as Text4, useInput as useInput2 } from "ink";
+import { useState as useState3, useMemo, useEffect as useEffect2 } from "react";
+import { Box as Box4, Text as Text4, useInput as useInput2, useStdout } from "ink";
 
 // src/commands/index.ts
 var LOCAL_COMMANDS = [
@@ -573,14 +706,25 @@ var HELP_TEXT = `
 \u2551  /config <\u64CD> \u7BA1\u7406\u914D\u7F6E (get/set/list)     \u2551
 \u2551  /plugin <\u64CD> \u63D2\u4EF6\u7BA1\u7406                    \u2551
 \u2560\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2563
+\u2551  \u5FEB\u6377\u952E:                                  \u2551
+\u2551  \u2191\u2193           \u6D4F\u89C8\u8F93\u5165\u5386\u53F2 (\u6700\u8FD130\u6761)     \u2551
+\u2551  PgUp/PgDn    \u7FFB\u9875\u6D4F\u89C8\u6D88\u606F                \u2551
+\u2551  Home/End     \u8DF3\u5230\u6700\u65E9/\u6700\u65B0\u6D88\u606F           \u2551
+\u2551  Tab          \u5207\u6362 Plan/Act \u6A21\u5F0F          \u2551
+\u2551  /            \u6253\u5F00\u547D\u4EE4\u9762\u677F (\u53EF\u7FFB\u9875)        \u2551
+\u2551  Esc          \u5173\u95ED\u9762\u677F/\u53D6\u6D88\u5BA1\u6279            \u2551
+\u2560\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2563
 \u2551  \u666E\u901A\u8F93\u5165\u5373\u53D1\u9001\u804A\u5929\u6D88\u606F                   \u2551
-\u2551  \u8F93\u5165 / \u5F39\u51FA\u547D\u4EE4\u9762\u677F                      \u2551
+\u2551  \u8F93\u5165\u6846\u663E\u793A\u5B57\u7B26\u6570+token\u4F30\u7B97               \u2551
 \u255A\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255D`;
 
 // src/components/CommandPalette.tsx
 import { jsx as jsx4, jsxs as jsxs4 } from "react/jsx-runtime";
 function CommandPalette({ filter, onSelect }) {
-  const [selected, setSelected] = useState2(0);
+  const [selected, setSelected] = useState3(0);
+  const [scrollOffset, setScrollOffset] = useState3(0);
+  const { stdout } = useStdout();
+  const terminalRows = stdout?.rows || 24;
   const visible = useMemo(() => {
     const f = filter.replace(/^\//, "").toLowerCase();
     if (!f) return ALL_COMMANDS;
@@ -590,7 +734,17 @@ function CommandPalette({ filter, onSelect }) {
   }, [filter]);
   useEffect2(() => {
     setSelected(0);
+    setScrollOffset(0);
   }, [filter]);
+  const maxShow = Math.max(5, terminalRows - 13);
+  useEffect2(() => {
+    setScrollOffset((prev) => {
+      if (selected < prev) return selected;
+      if (selected >= prev + maxShow) return selected - maxShow + 1;
+      return prev;
+    });
+  }, [selected, maxShow]);
+  const sliced = visible.slice(scrollOffset, scrollOffset + maxShow);
   useInput2((_input, key) => {
     if (key.escape) {
       onSelect(null);
@@ -604,47 +758,67 @@ function CommandPalette({ filter, onSelect }) {
       setSelected((prev) => Math.max(prev - 1, 0));
       return;
     }
+    if (key.pageDown) {
+      setSelected((prev) => Math.min(prev + maxShow, visible.length - 1));
+      return;
+    }
+    if (key.pageUp) {
+      setSelected((prev) => Math.max(prev - maxShow, 0));
+      return;
+    }
+    if (key.home) {
+      setSelected(0);
+      return;
+    }
+    if (key.end) {
+      setSelected(visible.length - 1);
+      return;
+    }
     if (key.return) {
       if (visible.length > 0 && selected >= 0 && selected < visible.length) {
         onSelect(visible[selected].cmd);
       }
     }
   });
-  const maxShow = 12;
-  const sliced = visible.slice(0, maxShow);
   return /* @__PURE__ */ jsxs4(Box4, { flexDirection: "column", borderStyle: "single", borderColor: "cyan", paddingX: 1, width: 52, children: [
     /* @__PURE__ */ jsxs4(Box4, { children: [
       /* @__PURE__ */ jsx4(Text4, { bold: true, color: "cyan", children: "\u547D\u4EE4\u5217\u8868" }),
-      /* @__PURE__ */ jsx4(Text4, { dimColor: true, children: "  \u2191\u2193\u9009\u62E9 / \u56DE\u8F66\u786E\u8BA4 / Esc\u53D6\u6D88" })
+      /* @__PURE__ */ jsx4(Text4, { dimColor: true, children: "  \u2191\u2193\u9009\u62E9 / PgUp/PgDn\u7FFB\u9875 / \u56DE\u8F66\u786E\u8BA4 / Esc\u53D6\u6D88" })
     ] }),
-    sliced.map((cmd, i) => /* @__PURE__ */ jsxs4(Box4, { paddingLeft: 1, children: [
-      /* @__PURE__ */ jsx4(Text4, { color: i === selected ? "cyan" : void 0, bold: i === selected, children: i === selected ? "> " : "  " }),
-      /* @__PURE__ */ jsx4(Text4, { color: "green", children: cmd.cmd }),
-      /* @__PURE__ */ jsxs4(Text4, { dimColor: true, children: [
-        "  ",
-        cmd.desc
-      ] }),
-      /* @__PURE__ */ jsxs4(Text4, { color: cmd.via === "ws" ? "yellow" : "blue", dimColor: i !== selected, children: [
-        "(",
-        cmd.via === "ws" ? "\u540E\u7AEF" : "\u672C\u5730",
-        ")"
-      ] })
-    ] }, cmd.cmd)),
+    sliced.map((cmd, i) => {
+      const idx = scrollOffset + i;
+      return /* @__PURE__ */ jsxs4(Box4, { paddingLeft: 1, children: [
+        /* @__PURE__ */ jsx4(Text4, { color: idx === selected ? "cyan" : void 0, bold: idx === selected, children: idx === selected ? "> " : "  " }),
+        /* @__PURE__ */ jsx4(Text4, { color: "green", children: cmd.cmd }),
+        /* @__PURE__ */ jsxs4(Text4, { dimColor: true, children: [
+          "  ",
+          cmd.desc
+        ] }),
+        /* @__PURE__ */ jsxs4(Text4, { color: cmd.via === "ws" ? "yellow" : "blue", dimColor: idx !== selected, children: [
+          "(",
+          cmd.via === "ws" ? "\u540E\u7AEF" : "\u672C\u5730",
+          ")"
+        ] })
+      ] }, cmd.cmd);
+    }),
     visible.length > maxShow && /* @__PURE__ */ jsx4(Box4, { children: /* @__PURE__ */ jsxs4(Text4, { dimColor: true, children: [
-      "  ... \u8FD8\u6709 ",
-      visible.length - maxShow,
-      " \u6761\u547D\u4EE4"
+      "  ",
+      scrollOffset + 1,
+      "-",
+      Math.min(scrollOffset + maxShow, visible.length),
+      " / ",
+      visible.length
     ] }) })
   ] });
 }
 __name(CommandPalette, "CommandPalette");
 
 // src/components/ApprovalModal.tsx
-import { useState as useState3 } from "react";
+import { useState as useState4 } from "react";
 import { Box as Box5, Text as Text5, useInput as useInput3 } from "ink";
 import { jsx as jsx5, jsxs as jsxs5 } from "react/jsx-runtime";
 function ApprovalModal({ toolName, payload, onAllow, onDeny }) {
-  const [selected, setSelected] = useState3(0);
+  const [selected, setSelected] = useState4(0);
   useInput3((_input, key) => {
     if (key.escape || key.tab) {
       onDeny();
@@ -755,14 +929,15 @@ function cleanArgs(raw) {
 }
 __name(cleanArgs, "cleanArgs");
 function App({ backendUrl, wsUrl, onExit }) {
-  const [input, setInput] = useState4("");
-  const [showPalette, setShowPalette] = useState4(false);
-  const [showHelp, setShowHelp] = useState4(false);
-  const [showApproval, setShowApproval] = useState4(null);
+  const [input, setInput] = useState5("");
+  const [showPalette, setShowPalette] = useState5(false);
+  const [showHelp, setShowHelp] = useState5(false);
+  const [helpScroll, setHelpScroll] = useState5(0);
+  const [showApproval, setShowApproval] = useState5(null);
   const { exit } = useApp();
   const state = useAppState();
-  const clientRef = useRef(null);
-  const { stdout } = useStdout();
+  const clientRef = useRef2(null);
+  const { stdout } = useStdout2();
   const terminalRows = stdout?.rows || 24;
   const terminalCols = stdout?.columns || 80;
   const reservedRows = 8;
@@ -787,7 +962,7 @@ function App({ backendUrl, wsUrl, onExit }) {
       client.close();
     };
   }, [backendUrl, wsUrl]);
-  const executeCommand = useCallback2((value) => {
+  const executeCommand = useCallback3((value) => {
     const text = value.trim();
     if (!text || !clientRef.current) return;
     setInput("");
@@ -800,6 +975,7 @@ function App({ backendUrl, wsUrl, onExit }) {
       const def = SLASH_COMMANDS[cmd];
       if (def === null) {
         setShowHelp(true);
+        setHelpScroll(0);
         return;
       }
       const { action, needsArg } = def;
@@ -883,15 +1059,16 @@ function App({ backendUrl, wsUrl, onExit }) {
       return;
     }
     if (text.startsWith("/") && !(cmd && cmd in SLASH_COMMANDS)) return;
+    saveToHistory(text);
     const msg = createMessage("user", text);
     updateAppState((prev) => ({ ...prev, messages: [...prev.messages, msg] }));
     clientRef.current.chat(text, state.planMode);
   }, [onExit, state.planMode]);
-  const handleSubmit = useCallback2((value) => {
+  const handleSubmit = useCallback3((value) => {
     if (showPalette) return;
     executeCommand(value);
   }, [executeCommand, showPalette]);
-  const handleChange = useCallback2((value) => {
+  const handleChange = useCallback3((value) => {
     setInput(value);
     if (value.startsWith("/")) {
       setShowPalette(true);
@@ -899,7 +1076,7 @@ function App({ backendUrl, wsUrl, onExit }) {
       setShowPalette(false);
     }
   }, []);
-  const handlePaletteSelect = useCallback2((cmd) => {
+  const handlePaletteSelect = useCallback3((cmd) => {
     if (cmd) {
       executeCommand(cmd);
     } else {
@@ -907,11 +1084,11 @@ function App({ backendUrl, wsUrl, onExit }) {
       setInput("");
     }
   }, [executeCommand]);
-  const handleApprovalAllow = useCallback2((approvalId) => {
+  const handleApprovalAllow = useCallback3((approvalId) => {
     clientRef.current?.approveHook(approvalId);
     setShowApproval(null);
   }, []);
-  const handleApprovalDeny = useCallback2((approvalId) => {
+  const handleApprovalDeny = useCallback3((approvalId) => {
     clientRef.current?.denyHook(approvalId);
     setShowApproval(null);
   }, []);
@@ -1069,16 +1246,50 @@ function App({ backendUrl, wsUrl, onExit }) {
       });
     });
     client.on("plan_start", () => {
-      updateAppState((prev) => ({ ...prev, planWaiting: false }));
+      flushNow();
+      const msg = createMessage("assistant");
+      updateAppState((prev) => ({
+        ...prev,
+        planWaiting: false,
+        currentMessage: msg,
+        messages: [...prev.messages, msg],
+        scrollOffset: prev.scrollOffset > 0 ? prev.scrollOffset + 1 : 0
+      }));
+    });
+    client.on("plan_thinking", (m) => {
+      const text = typeof m.data === "string" ? m.data : m.data ? String(m.data) : "";
+      updateAppState((prev) => {
+        if (!prev.currentMessage) return prev;
+        prev.currentMessage.thinking += text + "\n";
+        return { ...prev };
+      });
+    });
+    client.on("plan_tasks", () => {
+      updateAppState((prev) => {
+        if (!prev.currentMessage) return prev;
+        prev.currentMessage.content += "\n\u{1F4CB} \u4EFB\u52A1\u6E05\u5355\u5DF2\u751F\u6210\n";
+        return { ...prev };
+      });
     });
     client.on("plan_complete", (m) => {
-      const d = parseData(m);
-      const status = d.status;
-      if (status === "waiting_confirm") {
-        updateAppState((prev) => ({ ...prev, planWaiting: true }));
-      } else {
-        updateAppState((prev) => ({ ...prev, planWaiting: false }));
-      }
+      flushNow();
+      const status = m.status;
+      const planText = typeof m.data === "string" ? m.data : "";
+      updateAppState((prev) => {
+        const msgs = [...prev.messages];
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          if (msgs[i].type === "assistant" && !msgs[i].content) {
+            msgs[i] = { ...msgs[i], content: planText || "Plan complete." };
+            break;
+          }
+        }
+        return {
+          ...prev,
+          currentMessage: null,
+          messages: msgs,
+          planWaiting: status === "waiting_confirm"
+        };
+      });
     });
     client.on("notification", (m) => {
       const text = String(m.data || "");
@@ -1094,6 +1305,30 @@ function App({ backendUrl, wsUrl, onExit }) {
     if (key.escape && showApproval) {
       handleApprovalDeny(showApproval.approvalId);
       return;
+    }
+    if (key.escape && showHelp) {
+      setShowHelp(false);
+      return;
+    }
+    if (showHelp) {
+      const helpLines = HELP_TEXT.split("\n");
+      const helpMax = Math.max(5, terminalRows - 12);
+      if (key.pageUp || key.upArrow) {
+        setHelpScroll((prev) => Math.min(prev + (key.pageUp ? helpMax : 1), helpLines.length - 1));
+        return;
+      }
+      if (key.pageDown || key.downArrow) {
+        setHelpScroll((prev) => Math.max(0, prev - (key.pageDown ? helpMax : 1)));
+        return;
+      }
+      if (key.home) {
+        setHelpScroll(helpLines.length - 1);
+        return;
+      }
+      if (key.end) {
+        setHelpScroll(0);
+        return;
+      }
     }
     if (key.pageUp) {
       updateAppState((prev) => ({
@@ -1123,16 +1358,16 @@ function App({ backendUrl, wsUrl, onExit }) {
       }));
       return;
     }
-    if (key.home) {
+    if (key.home || key.home && key.ctrl) {
       updateAppState((prev) => ({ ...prev, scrollOffset: prev.messages.length }));
       return;
     }
-    if (key.end) {
+    if (key.end || key.end && key.ctrl) {
       updateAppState((prev) => ({ ...prev, scrollOffset: 0 }));
       return;
     }
     if (key.tab) {
-      updateAppState((prev) => ({ ...prev, planMode: !prev.planMode }));
+      updateAppState((prev) => ({ ...prev, planMode: !prev.planMode, planWaiting: false }));
       return;
     }
   });
@@ -1181,7 +1416,25 @@ function App({ backendUrl, wsUrl, onExit }) {
     ] }),
     state.planWaiting && /* @__PURE__ */ jsx6(Box6, { children: /* @__PURE__ */ jsx6(Text6, { color: "yellow", bold: true, children: "Plan ready \u2014 /confirm to execute, /cancel to discard." }) }),
     showPalette && /* @__PURE__ */ jsx6(CommandPalette, { filter: input, onSelect: handlePaletteSelect }),
-    showHelp && /* @__PURE__ */ jsx6(Box6, { flexDirection: "column", borderStyle: "single", borderColor: "cyan", paddingX: 1, children: HELP_TEXT.split("\n").map((line, i) => /* @__PURE__ */ jsx6(Text6, { color: "cyan", children: line }, i)) }),
+    showHelp && (() => {
+      const helpLines = HELP_TEXT.split("\n");
+      const helpMax = Math.max(5, terminalRows - 12);
+      const helpEnd = Math.max(0, helpLines.length - helpScroll);
+      const helpStart = Math.max(0, helpEnd - helpMax);
+      const visibleHelp = helpLines.slice(helpStart, helpEnd);
+      return /* @__PURE__ */ jsxs6(Box6, { flexDirection: "column", borderStyle: "single", borderColor: "cyan", paddingX: 1, children: [
+        helpLines.length > helpMax && /* @__PURE__ */ jsx6(Box6, { children: /* @__PURE__ */ jsxs6(Text6, { dimColor: true, children: [
+          "  ",
+          helpStart + 1,
+          "-",
+          helpEnd,
+          " / ",
+          helpLines.length,
+          "  PgUp/PgDn\u7FFB\u9875 / Esc\u5173\u95ED"
+        ] }) }),
+        visibleHelp.map((line, i) => /* @__PURE__ */ jsx6(Text6, { color: "cyan", children: line }, i))
+      ] });
+    })(),
     showApproval && /* @__PURE__ */ jsx6(
       ApprovalModal,
       {
@@ -1196,7 +1449,7 @@ function App({ backendUrl, wsUrl, onExit }) {
 __name(App, "App");
 
 // src/launcher.ts
-import { exec, execSync } from "node:child_process";
+import { spawn, spawnSync, execSync } from "node:child_process";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
@@ -1250,11 +1503,17 @@ function buildBackend(projectRoot) {
   const cmd = `"${mvn}" package -pl jwcode-web -am -q -DskipTests`;
   console.log(`[launcher] Building: ${cmd}`);
   try {
-    execSync(cmd, { cwd: projectRoot, stdio: "pipe" });
+    const result = spawnSync(cmd, [], {
+      cwd: projectRoot,
+      stdio: "pipe",
+      shell: true,
+      windowsHide: true
+    });
+    if (result.status !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString());
+    }
   } catch (e) {
-    const err = e;
-    console.error("[launcher] Build failed:");
-    console.error(err.stderr?.toString() || err.stdout?.toString() || String(e));
+    console.error("[launcher] Build failed:", String(e));
     process.exit(1);
   }
   if (!jarExists(projectRoot)) {
@@ -1266,13 +1525,12 @@ __name(buildBackend, "buildBackend");
 function killPort(port) {
   try {
     if (process.platform === "win32") {
-      execSync(`netstat -ano | findstr :${port} | findstr LISTENING`, { stdio: "pipe" });
       const out = execSync(`netstat -ano | findstr :${port} | findstr LISTENING`, { encoding: "utf-8" });
       for (const line of out.trim().split("\n")) {
         const pid = line.trim().split(/\s+/).pop();
         if (pid) {
           try {
-            process.kill(parseInt(pid), "SIGTERM");
+            execSync(`taskkill /F /PID ${pid}`, { stdio: "ignore" });
             console.log(`[launcher] Killed process on port ${port} (PID ${pid})`);
           } catch {
           }
@@ -1288,7 +1546,7 @@ __name(killPort, "killPort");
 function waitForBackend(port, timeout = 60) {
   const start = Date.now();
   const url = `http://localhost:${port}/api/system/status`;
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     function check() {
       if (Date.now() - start > timeout * 1e3) {
         console.log(`[launcher] WARNING: Backend not responding after ${timeout}s`);
@@ -1310,48 +1568,31 @@ function waitForBackend(port, timeout = 60) {
   });
 }
 __name(waitForBackend, "waitForBackend");
-function toUtf8(data) {
-  try {
-    const s = data.toString("utf-8");
-    if (s.includes("\uFFFD")) throw new Error("replacement chars");
-    return s;
-  } catch {
-    return data.toString("latin1");
-  }
-}
-__name(toUtf8, "toUtf8");
 function startBackend(projectRoot, port, wsPort) {
   const mvn = findMvn();
-  const cmd = `"${mvn}" exec:java -pl jwcode-web -Dexec.mainClass=com.jwcode.web.WebLauncher "-Dexec.args=${port} ${wsPort}" -q`;
   console.log(`[launcher] Starting backend: ${mvn} exec:java ...`);
   killPort(port);
   killPort(wsPort);
-  const proc = exec(cmd, {
+  const cmd = `"${mvn}" exec:java -pl jwcode-web -Dexec.mainClass=com.jwcode.web.WebLauncher "-Dexec.args=${port} ${wsPort}" -q`;
+  const proc = spawn(cmd, [], {
     cwd: projectRoot,
     env: { ...process.env, JWCODE_WS_PORT: String(wsPort) },
-    encoding: "buffer"
-    // Get raw Buffer for manual decoding
-  });
-  let started = false;
-  let bindError = false;
-  proc.stderr?.on("data", (data) => {
-    const msg = toUtf8(data).trim();
-    if (!msg) return;
-    if (msg.includes("Address already in use") || msg.includes("BindException")) {
-      bindError = true;
-      console.error(`[backend] ERROR: Port ${port} is in use.`);
-    }
+    stdio: ["ignore", "pipe", "pipe"],
+    shell: true,
+    windowsHide: true
   });
   proc.stdout?.on("data", () => {
   });
+  proc.stderr?.on("data", (data) => {
+    const msg = data.toString("utf-8").trim();
+    if (!msg) return;
+    if (msg.includes("Address already in use") || msg.includes("BindException")) {
+      console.error(`[backend] ERROR: Port ${port} is in use.`);
+    }
+  });
   proc.on("exit", (code) => {
-    if (!started && code !== 0 && code !== null) {
+    if (code !== 0 && code !== null) {
       console.error(`[launcher] Backend process exited with code ${code}`);
-      if (bindError) {
-        console.error("[launcher] Port conflict detected. Trying to kill stale process and retry...");
-        killPort(port);
-        killPort(wsPort);
-      }
     }
   });
   return proc;
@@ -1360,20 +1601,31 @@ __name(startBackend, "startBackend");
 function cleanupBackend(proc) {
   if (!proc) return;
   console.log("\n[jwcode] Shutting down...");
-  try {
-    process.kill(-proc.pid, "SIGTERM");
-  } catch {
-  }
-  proc.kill("SIGTERM");
-  setTimeout(() => {
-    if (proc && !proc.killed) {
+  if (process.platform === "win32") {
+    try {
+      execSync(`taskkill /F /T /PID ${proc.pid}`, { stdio: "ignore" });
+    } catch {
       try {
-        process.kill(-proc.pid, "SIGKILL");
+        proc.kill();
       } catch {
       }
-      proc.kill("SIGKILL");
     }
-  }, 5e3);
+  } else {
+    try {
+      process.kill(-proc.pid, "SIGTERM");
+    } catch {
+    }
+    proc.kill("SIGTERM");
+    setTimeout(() => {
+      if (proc && !proc.killed) {
+        try {
+          process.kill(-proc.pid, "SIGKILL");
+        } catch {
+        }
+        proc.kill("SIGKILL");
+      }
+    }, 5e3);
+  }
 }
 __name(cleanupBackend, "cleanupBackend");
 
@@ -1444,6 +1696,17 @@ function printUsage() {
   console.log("  --build, -B               Force rebuild backend");
   console.log("  --backend, -b <url>       Backend URL (run mode)");
   console.log("  --ws <url>                WebSocket URL (run mode)");
+  console.log("");
+  console.log("Environment:");
+  console.log("  JWCODE_THEME=dark|light   Color theme (default: dark)");
+  console.log("");
+  console.log("Keyboard shortcuts (in TUI):");
+  console.log("  /             Open command palette");
+  console.log("  Tab           Toggle Plan/Act mode");
+  console.log("  Up/Down       Browse input history (last 30)");
+  console.log("  PgUp/PgDn     Scroll message history");
+  console.log("  Home/End      Jump to oldest/newest message");
+  console.log("  Esc           Close palette / deny approval");
 }
 __name(printUsage, "printUsage");
 function parseArgs() {

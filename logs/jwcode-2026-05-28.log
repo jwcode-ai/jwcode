@@ -1,0 +1,300 @@
+2026-05-28 11:30:26.900 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskStore - Loaded 44 tasks from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\tasks.json
+2026-05-28 11:30:26.912 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-28 11:30:27.813 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-28 11:30:27.826 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)
+2026-05-28 11:30:27.828 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\config.yaml (defaultProvider=null)
+2026-05-28 11:34:37.117 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskStore - Loaded 44 tasks from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\tasks.json
+2026-05-28 11:34:37.123 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-28 11:35:19.711 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 11:35:19.750 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 11:35:19.760 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 11:35:19.761 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 11:35:25.115 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 11:35:25.120 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 11:35:25.121 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 11:35:25.122 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 11:50:01.212 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskStore - Loaded 44 tasks from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\tasks.json
+2026-05-28 11:50:01.217 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-28 11:50:03.654 [ws-query-3] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 11:50:03.658 [ws-query-3] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 11:50:03.658 [ws-query-3] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 11:50:03.659 [ws-query-3] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 13:30:31.281 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskStore - Loaded 44 tasks from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\tasks.json
+2026-05-28 13:30:31.290 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-28 13:33:33.762 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskStore - Loaded 44 tasks from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\tasks.json
+2026-05-28 13:33:33.768 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-28 13:33:34.429 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-28 13:33:34.444 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)
+2026-05-28 13:33:34.446 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\config.yaml (defaultProvider=null)
+2026-05-28 13:40:44.468 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskStore - Loaded 44 tasks from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\tasks.json
+2026-05-28 13:40:44.477 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-28 13:40:45.769 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-28 13:40:45.786 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)
+2026-05-28 13:40:45.788 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\config.yaml (defaultProvider=null)
+2026-05-28 13:40:54.491 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 13:40:54.525 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 13:40:54.536 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 13:40:54.538 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 13:41:11.146 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 13:41:11.150 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 13:41:11.151 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 13:41:11.152 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 13:41:51.904 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 13:41:51.908 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 13:41:51.910 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 13:41:51.910 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 13:43:29.336 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskStore - Loaded 44 tasks from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\tasks.json
+2026-05-28 13:43:29.341 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-28 13:43:30.239 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-28 13:43:30.253 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)
+2026-05-28 13:43:30.254 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\config.yaml (defaultProvider=null)
+2026-05-28 13:43:45.825 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 13:43:45.866 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 13:43:45.880 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 13:43:45.881 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 13:57:20.030 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskStore - Loaded 44 tasks from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\tasks.json
+2026-05-28 13:57:20.039 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-28 13:57:20.785 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-28 13:57:20.799 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)
+2026-05-28 13:57:20.801 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\config.yaml (defaultProvider=null)
+2026-05-28 13:58:28.500 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 13:58:28.524 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 13:58:28.531 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 13:58:28.531 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 13:59:15.337 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 13:59:15.342 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 13:59:15.343 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 13:59:15.343 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 13:59:38.782 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 13:59:38.786 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 13:59:38.786 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 13:59:38.786 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:08:21.701 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskStore - Loaded 44 tasks from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\tasks.json
+2026-05-28 14:08:21.709 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-28 14:08:22.429 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-28 14:08:22.441 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)
+2026-05-28 14:08:22.444 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\config.yaml (defaultProvider=null)
+2026-05-28 14:09:43.702 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:09:43.742 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:09:43.750 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:09:43.751 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:11:28.113 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:11:28.117 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:11:28.118 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:11:28.118 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:21:53.060 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskStore - Loaded 44 tasks from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\tasks.json
+2026-05-28 14:21:53.074 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-28 14:21:54.838 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-28 14:21:54.852 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)
+2026-05-28 14:21:54.855 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\config.yaml (defaultProvider=null)
+2026-05-28 14:22:18.297 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:22:18.338 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:22:18.347 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:22:18.348 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:22:38.842 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:22:38.847 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:22:38.848 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:22:38.848 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:22:55.390 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:22:55.401 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:22:55.402 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:22:55.403 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:34:05.537 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskStore - Loaded 44 tasks from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\tasks.json
+2026-05-28 14:34:05.541 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-28 14:34:06.311 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-28 14:34:06.326 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)
+2026-05-28 14:34:06.328 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\config.yaml (defaultProvider=null)
+2026-05-28 14:34:26.504 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:34:26.535 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:34:26.541 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:34:26.541 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:35:09.979 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:35:09.982 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:35:09.984 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:35:09.984 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:36:39.409 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:36:39.412 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:36:39.412 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:36:39.413 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:42:34.236 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskStore - Loaded 44 tasks from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\tasks.json
+2026-05-28 14:42:34.241 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-28 14:42:34.911 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-28 14:42:34.928 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)
+2026-05-28 14:42:34.931 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\config.yaml (defaultProvider=null)
+2026-05-28 14:42:41.182 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:42:41.219 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:42:41.229 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:42:41.230 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:42:58.243 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:42:58.246 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:42:58.247 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:42:58.247 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:44:59.293 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:44:59.297 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:44:59.297 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 14:44:59.298 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 15:28:56.037 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskStore - Loaded 44 tasks from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\tasks.json
+2026-05-28 15:28:56.042 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-28 15:28:56.989 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-28 15:28:57.003 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)
+2026-05-28 15:28:57.004 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\config.yaml (defaultProvider=null)
+2026-05-28 15:29:36.580 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskStore - Loaded 44 tasks from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\tasks.json
+2026-05-28 15:29:36.589 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-28 15:29:37.444 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-28 15:29:37.462 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)
+2026-05-28 15:29:37.465 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\config.yaml (defaultProvider=null)
+2026-05-28 15:41:35.326 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskStore - Loaded 44 tasks from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\tasks.json
+2026-05-28 15:41:35.334 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-28 15:41:36.242 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-28 15:41:36.256 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)
+2026-05-28 15:41:36.258 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\config.yaml (defaultProvider=null)
+2026-05-28 15:42:48.904 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskStore - Loaded 44 tasks from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\tasks.json
+2026-05-28 15:42:48.908 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-28 15:42:49.643 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-28 15:42:49.658 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)
+2026-05-28 15:42:49.662 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\config.yaml (defaultProvider=null)
+2026-05-28 15:43:04.561 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 15:43:04.597 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 15:43:04.610 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 15:43:04.611 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 15:43:20.603 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 15:43:20.606 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 15:43:20.607 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 15:43:20.608 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 15:49:41.765 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskStore - Loaded 44 tasks from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\tasks.json
+2026-05-28 15:49:41.771 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-28 15:49:42.513 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-28 15:49:42.528 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)
+2026-05-28 15:49:42.530 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\config.yaml (defaultProvider=null)
+2026-05-28 15:51:14.434 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 15:51:14.481 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 15:51:14.501 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 15:51:14.503 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 15:51:28.490 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 15:51:28.495 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 15:51:28.496 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 15:51:28.496 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 15:52:14.911 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 15:52:14.915 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 15:52:14.915 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 15:52:14.915 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 15:52:22.963 [ws-query-3] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 15:52:22.966 [ws-query-3] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 15:52:22.967 [ws-query-3] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 15:52:22.968 [ws-query-3] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 15:52:34.591 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 15:52:34.595 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 15:52:34.596 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 15:52:34.597 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:04:16.806 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskStore - Loaded 44 tasks from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\tasks.json
+2026-05-28 16:04:16.814 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-28 16:04:18.604 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-28 16:04:18.785 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)
+2026-05-28 16:04:18.788 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\config.yaml (defaultProvider=null)
+2026-05-28 16:05:22.139 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:05:22.163 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:05:22.168 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:05:22.169 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:05:30.317 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:05:30.318 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:05:30.320 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:05:30.320 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:06:05.154 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:06:05.157 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:06:05.157 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:06:05.158 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:07:51.091 [ws-query-3] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:07:51.093 [ws-query-3] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:07:51.094 [ws-query-3] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:07:51.094 [ws-query-3] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:09:34.148 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:09:34.152 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:09:34.153 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:09:34.153 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:11:12.828 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:11:12.830 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:11:12.830 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:11:12.830 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:11:19.113 [ForkJoinPool.commonPool-worker-9] INFO  com.jwcode.core.tool.TaskCreateTool - Task created: 7ff37d3c-ac67-4def-a630-38bccc8f0162 - 自我能力测试
+2026-05-28 16:11:20.899 [ForkJoinPool.commonPool-worker-6] INFO  com.jwcode.core.tool.TaskUpdateTool - Task updated: 7ff37d3c-ac67-4def-a630-38bccc8f0162 - fields: [status (PENDING -> RUNNING), progress (0%)]
+2026-05-28 16:12:02.284 [ForkJoinPool.commonPool-worker-7] INFO  com.jwcode.core.session.Session - AgentTool: 创建 Agent - id=2d59430d, name=test-agent, role=测试助手
+2026-05-28 16:12:19.689 [AgentExecutor-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:12:19.690 [AgentExecutor-1] INFO  c.j.core.task.TaskLifecycleManager - [TaskLifecycle] 启动新任务: [系统提示]
+# Test Agent — Testing Expert
+
+You are a te
+2026-05-28 16:12:19.691 [AgentExecutor-1] INFO  com.jwcode.core.session.Session - [Session] 上下文已重置，保留 system prompt，消息数=0
+2026-05-28 16:12:19.691 [AgentExecutor-1] INFO  c.j.core.task.TaskLifecycleManager - [TaskLifecycle] Session 上下文已重置
+2026-05-28 16:12:19.693 [ForkJoinPool.commonPool-worker-7] INFO  com.jwcode.core.session.Session - AgentTool: 分配任务并提交执行 - agentId=2d59430d, taskId=b8fbdc60-2d4e-4086-90c3-01315ba2379c, task=请输出 "Hello from Agent! 代理测试成功!"
+2026-05-28 16:12:19.695 [ForkJoinPool.commonPool-worker-7] INFO  c.jwcode.core.planner.ai.AIPlanner - [AIPlanner] 开始 AI 任务分析: [系统提示]
+# Test Agent — Testing Expert
+
+You are a te...
+2026-05-28 16:12:20.921 [AgentExecutor-1] INFO  c.jwcode.core.agent.SharedContextBus - [SharedContextBus] 中间成果 | taskId=b8fbdc60-2d4e-4086-90c3-01315ba2379c | length=35
+2026-05-28 16:12:22.434 [ForkJoinPool.commonPool-worker-1] WARN  com.jwcode.core.tool.TaskOutputTool - Task not found: b8fbdc60-2d4e-4086-90c3-01315ba2379c
+2026-05-28 16:12:32.613 [ForkJoinPool.commonPool-worker-7] INFO  c.jwcode.core.planner.ai.AIPlanner - [AIPlanner] 分析完成: 复杂度=1/10, 预估子任务=1
+2026-05-28 16:12:32.614 [ForkJoinPool.commonPool-worker-9] INFO  c.jwcode.core.planner.ai.AIPlanner - [AIPlanner] 开始动态任务分解
+2026-05-28 16:12:37.489 [ForkJoinPool.commonPool-worker-9] INFO  c.jwcode.core.planner.ai.AIPlanner - [AIPlanner] 分解完成: 1 个子任务
+2026-05-28 16:12:37.495 [ForkJoinPool.commonPool-worker-9] INFO  c.j.core.task.TaskLifecycleManager - [TaskLifecycle] 规划完成: 1 步
+2026-05-28 16:12:52.576 [ForkJoinPool.commonPool-worker-9] INFO  com.jwcode.core.tool.TaskUpdateTool - Task updated: 7ff37d3c-ac67-4def-a630-38bccc8f0162 - fields: [status (RUNNING -> COMPLETED), progress (100%), output]
+2026-05-28 16:28:27.899 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskStore - Loaded 45 tasks from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\tasks.json
+2026-05-28 16:28:27.907 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-28 16:28:29.584 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-28 16:28:29.596 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)
+2026-05-28 16:28:29.598 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\config.yaml (defaultProvider=null)
+2026-05-28 16:54:12.833 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskStore - Loaded 45 tasks from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\tasks.json
+2026-05-28 16:54:12.838 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-28 16:54:13.900 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-28 16:54:13.911 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)
+2026-05-28 16:54:13.913 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\config.yaml (defaultProvider=null)
+2026-05-28 16:54:19.963 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:54:20.003 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:54:20.013 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:54:20.015 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:55:03.329 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:55:03.335 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:55:03.335 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:55:03.335 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 16:57:05.151 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskStore - Loaded 45 tasks from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\tasks.json
+2026-05-28 16:57:05.158 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-28 16:57:06.314 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-28 16:57:06.356 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)
+2026-05-28 16:57:06.359 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\config.yaml (defaultProvider=null)
+2026-05-28 17:01:56.918 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskStore - Loaded 45 tasks from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\tasks.json
+2026-05-28 17:01:56.924 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-28 17:01:57.615 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-28 17:01:57.630 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)
+2026-05-28 17:01:57.634 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\config.yaml (defaultProvider=null)
+2026-05-28 17:02:07.717 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 17:02:07.752 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 17:02:07.759 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 17:02:07.760 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 17:04:23.397 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskStore - Loaded 45 tasks from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\tasks.json
+2026-05-28 17:04:23.401 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-28 17:04:24.140 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-28 17:04:24.154 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)
+2026-05-28 17:04:24.156 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\config.yaml (defaultProvider=null)
+2026-05-28 17:05:01.782 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 17:05:01.815 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 17:05:01.823 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 17:05:01.824 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-28 17:09:19.185 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskStore - Loaded 45 tasks from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\tasks.json
+2026-05-28 17:09:19.191 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-28 17:09:19.896 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-28 17:09:19.906 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)
+2026-05-28 17:09:19.908 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\config.yaml (defaultProvider=null)
+2026-05-28 17:12:34.793 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskStore - Loaded 45 tasks from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\tasks.json
+2026-05-28 17:12:34.798 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-28 17:12:35.458 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-28 17:12:35.469 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)
+2026-05-28 17:12:35.471 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\config.yaml (defaultProvider=null)
+2026-05-28 17:14:53.635 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskStore - Loaded 45 tasks from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\tasks.json
+2026-05-28 17:14:53.642 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-28 17:14:54.398 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-28 17:14:54.413 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)
+2026-05-28 17:14:54.416 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\config.yaml (defaultProvider=null)
+2026-05-28 17:19:19.830 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskStore - Loaded 45 tasks from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\tasks.json
+2026-05-28 17:19:19.844 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-28 17:19:21.112 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-28 17:19:21.144 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)
+2026-05-28 17:19:21.150 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\Desktop\jwcode\.jwcode\config.yaml (defaultProvider=null)

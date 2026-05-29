@@ -1,10 +1,13 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { Settings, AdvancedSettings } from '../types';
+import { Settings, AdvancedSettings, CustomThemeColors, DEFAULT_DARK_THEME } from '../types';
 
 interface SettingsState extends Settings, AdvancedSettings {
   // 工作目录
   workspaceDir: string;
+  // 自定义主题颜色
+  customTheme: CustomThemeColors;
+  customThemeEnabled: boolean;
 
   // Actions
   setTheme: (theme: 'dark' | 'light' | 'auto') => void;
@@ -19,6 +22,9 @@ interface SettingsState extends Settings, AdvancedSettings {
   setCompressionMaxMessages: (value: number) => void;
   setCompressionTokenThreshold: (value: number) => void;
   setWorkspaceDir: (dir: string) => void;
+  setCustomTheme: (colors: Partial<CustomThemeColors>) => void;
+  setCustomThemeEnabled: (enabled: boolean) => void;
+  resetCustomTheme: () => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -38,6 +44,8 @@ export const useSettingsStore = create<SettingsState>()(
         tokenThreshold: 4000,
       },
       workspaceDir: 'c:\\Users\\HUAWEI\\Desktop\\jwcode',
+      customTheme: DEFAULT_DARK_THEME,
+      customThemeEnabled: false,
 
       setTheme: (theme) => set({ theme }),
       setLanguage: (language) => set({ language }),
@@ -47,6 +55,9 @@ export const useSettingsStore = create<SettingsState>()(
       setYoloEnabled: (enabled) => set({ yolo: { enabled } }),
       setAutoSwarmEnabled: (enabled) => set({ autoSwarm: { enabled } }),
       setAutoAIEnabled: (enabled) => set({ autoAI: { enabled } }),
+      setCustomTheme: (colors) => set((state) => ({ customTheme: { ...state.customTheme, ...colors } })),
+      setCustomThemeEnabled: (enabled) => set({ customThemeEnabled: enabled }),
+      resetCustomTheme: () => set({ customTheme: DEFAULT_DARK_THEME }),
       setCompressionEnabled: (enabled) =>
         set((state) => ({
           compression: { ...state.compression, enabled },

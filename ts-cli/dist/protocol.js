@@ -17,20 +17,6 @@ export const EVENT_TYPES = [
     'hook_ask',
     'doctor_result',
 ];
-export const SLASH_COMMANDS = {
-    '/help': null,
-    '/plan': 'plan_mode',
-    '/doctor': 'doctor',
-    '/rewind': 'rewind',
-    '/update-docs': 'update_docs',
-    '/docs': 'update_docs',
-    '/model': 'model_change',
-    '/compact': 'compact',
-    '/exit': '__exit__',
-    '/quit': '__exit__',
-    '/confirm': '__confirm_plan',
-    '/cancel': '__cancel_plan',
-};
 export function parseData(m) {
     if (typeof m.data === 'string') {
         try {

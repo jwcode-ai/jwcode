@@ -1,23 +1,47 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 /**
- * ApprovalModal — hook approval dialog (allow/deny tool execution).
- * Mirrors python-cli/jwcode/widgets/approval.py.
+ * ApprovalModal — permission prompt in Claude Code style.
+ * Arrow keys to select, Enter to confirm, Esc to cancel.
  */
+import { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 export function ApprovalModal({ toolName, payload, onAllow, onDeny }) {
+    const [selected, setSelected] = useState(0); // 0=allow, 1=deny
     useInput((_input, key) => {
-        if (key.escape) {
+        if (key.escape || key.tab) {
             onDeny();
+            return;
         }
-        else if (_input === 'y' || _input === 'Y') {
+        if (key.upArrow || key.downArrow) {
+            setSelected(prev => prev === 0 ? 1 : 0);
+            return;
+        }
+        if (key.return) {
+            if (selected === 0)
+                onAllow();
+            else
+                onDeny();
+            return;
+        }
+        if (_input === '1') {
             onAllow();
+            return;
         }
-        else if (_input === 'n' || _input === 'N') {
+        if (_input === '2') {
             onDeny();
+            return;
+        }
+        if (_input === 'y' || _input === 'Y') {
+            onAllow();
+            return;
+        }
+        if (_input === 'n' || _input === 'N') {
+            onDeny();
+            return;
         }
     });
-    return (_jsxs(Box, { flexDirection: "column", borderStyle: "double", borderColor: "yellow", paddingX: 2, paddingY: 1, width: 56, alignSelf: "center", marginTop: 1, children: [_jsx(Text, { bold: true, color: "yellow", children: "Hook Approval Required" }), _jsxs(Box, { marginY: 1, children: [_jsx(Text, { children: "Tool: " }), _jsx(Text, { bold: true, color: "cyan", children: toolName })] }), _jsx(Box, { borderStyle: "single", borderColor: "grey", paddingX: 1, marginBottom: 1, children: _jsx(Text, { dimColor: true, children: trunc(payload, 300) }) }), _jsxs(Box, { children: [_jsx(Text, { children: "[" }), _jsx(Text, { color: "green", bold: true, children: "Y" }), _jsx(Text, { children: "] Allow  [" }), _jsx(Text, { color: "red", bold: true, children: "N" }), _jsx(Text, { children: "] Deny  [" }), _jsx(Text, { dimColor: true, children: "Esc" }), _jsx(Text, { children: "] Cancel" })] })] }));
-}
-function trunc(s, max) {
-    return s.length <= max ? s : s.slice(0, max) + '...';
+    const desc = payload
+        ? (payload.length > 200 ? payload.slice(0, 200) + '...' : payload)
+        : '';
+    return (_jsxs(Box, { flexDirection: "column", borderStyle: "round", borderColor: "yellow", paddingX: 2, paddingY: 1, marginTop: 1, children: [_jsx(Box, { marginBottom: 1, children: _jsx(Text, { bold: true, children: "Do you want to proceed?" }) }), _jsxs(Box, { flexDirection: "column", marginLeft: 2, marginBottom: 1, children: [_jsx(Box, { children: _jsxs(Text, { color: selected === 0 ? 'green' : undefined, children: [selected === 0 ? ' ❯' : '  ', " 1. Allow"] }) }), _jsx(Box, { children: _jsxs(Text, { color: selected === 1 ? 'red' : undefined, children: [selected === 1 ? ' ❯' : '  ', " 2. Deny"] }) })] }), _jsxs(Box, { marginBottom: 1, children: [_jsx(Text, { dimColor: true, children: "Tool: " }), _jsx(Text, { color: "cyan", children: toolName }), desc ? _jsxs(Text, { dimColor: true, children: ["  ", desc] }) : null] }), _jsxs(Box, { children: [_jsx(Text, { dimColor: true, children: " Esc to cancel \u00B7 " }), _jsx(Text, { dimColor: true, children: "\u2191\u2193 to select \u00B7 " }), _jsx(Text, { dimColor: true, children: "Enter to confirm" })] })] }));
 }

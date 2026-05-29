@@ -11,7 +11,6 @@ class WebSocketService {
   private closeHandlers: Set<ConnectionHandler> = new Set();
   private errorHandlers: Set<ConnectionHandler> = new Set();
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
   private isManualClose = false;
   private authenticated = false;
   private sessionId: string | null = null; // 当前会话ID，用于重连恢复
@@ -66,7 +65,7 @@ class WebSocketService {
       this.stopHeartbeat();
       this.closeHandlers.forEach((handler) => handler());
       
-      if (!this.isManualClose && this.reconnectAttempts < this.maxReconnectAttempts) {
+      if (!this.isManualClose) {
         this.scheduleReconnect();
       }
     };
@@ -137,7 +136,7 @@ class WebSocketService {
   private scheduleReconnect(): void {
     this.reconnectAttempts++;
     const delay = Math.min(3000 * Math.pow(2, this.reconnectAttempts), 30000);
-    console.log(`Reconnecting... Attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts}, delay=${delay}ms`);
+    console.log(`Reconnecting... Attempt ${this.reconnectAttempts}, delay=${delay}ms`);
     setTimeout(() => this.connect(), delay);
   }
 

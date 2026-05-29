@@ -4,12 +4,12 @@
 
 set "ROOT=%~dp0"
 
-:: Ensure built
-if not exist "%ROOT%dist\main.js" (
-    echo [jwcode] First run: compiling...
+:: Ensure built (esbuild produces dist/cli.js)
+if not exist "%ROOT%dist\cli.js" (
+    echo [jwcode] First run: building...
     cd /d "%ROOT%"
-    call npx tsc 2>nul
+    node build.mjs
 )
 
 :: Run
-node "%ROOT%dist\main.js" %*
+node "%ROOT%dist\cli.js" %*

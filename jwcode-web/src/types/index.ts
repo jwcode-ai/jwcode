@@ -185,6 +185,45 @@ export interface AdvancedSettings {
   };
 }
 
+export interface CustomThemeColors {
+  bg: string;
+  surface: string;
+  border: string;
+  text: string;
+  muted: string;
+  accentBlue: string;
+  accentGreen: string;
+  accentRed: string;
+  accentYellow: string;
+  accentPurple: string;
+}
+
+export const DEFAULT_DARK_THEME: CustomThemeColors = {
+  bg: '#0d1117',
+  surface: '#161b22',
+  border: '#30363d',
+  text: '#c9d1d9',
+  muted: '#8b949e',
+  accentBlue: '#58a6ff',
+  accentGreen: '#238636',
+  accentRed: '#f85149',
+  accentYellow: '#d29922',
+  accentPurple: '#a855f7',
+};
+
+export const DEFAULT_LIGHT_THEME: CustomThemeColors = {
+  bg: '#ffffff',
+  surface: '#f6f8fa',
+  border: '#d0d7de',
+  text: '#24292f',
+  muted: '#57606a',
+  accentBlue: '#0969da',
+  accentGreen: '#1a7f37',
+  accentRed: '#cf222e',
+  accentYellow: '#9a6700',
+  accentPurple: '#8250df',
+};
+
 // WebSocket message types
 export type WSMessageType = 
   | 'connected'
@@ -435,4 +474,18 @@ export interface MessageQueueItem {
   id: string;
   content: string;
   timestamp: number;
+}
+
+// Terminal types
+export interface TerminalStartResponse {
+  ttydPort: number;
+  wsUrl: string;
+}
+
+export interface TerminalStatusResponse {
+  running: boolean;
+  ttydAvailable?: boolean;
+  port?: number;
+  uptime?: number;
+  workspaceDir?: string;
 }

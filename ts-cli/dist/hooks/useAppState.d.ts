@@ -5,7 +5,9 @@ export interface AppState {
     currentMessage: Message | null;
     usage: TokenUsage;
     planMode: boolean;
+    autoMode: boolean;
     planWaiting: boolean;
+    scrollOffset: number;
     modelName: string;
     connected: boolean;
     statusText: string;
