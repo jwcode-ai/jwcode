@@ -61,6 +61,7 @@ export const ChatPanel = memo(function ChatPanel({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const isComposingRef = useRef(false);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const lastEscRef = useRef(0);
 
   // Input history
   const { navigate, reset: resetHistory } = useInputHistory(sessionId);
@@ -171,6 +172,20 @@ export const ChatPanel = memo(function ChatPanel({
         return;
       }
       if (e.key === 'Escape') { e.preventDefault(); closeMenu(); return; }
+      return;
+    }
+
+    // ESC pause/stop generation — single pauses, double within 500ms stops
+    if (e.key === 'Escape' && isGenerating) {
+      e.preventDefault();
+      const now = Date.now();
+      const prev = lastEscRef.current;
+      lastEscRef.current = now;
+      if (prev > 0 && (now - prev) < 500) {
+        onStop();
+      } else {
+        onPause();
+      }
       return;
     }
 

@@ -30,8 +30,8 @@ echo   Done.
 
 :: 3. Compile backend
 echo [3/4] Compiling backend...
-cd /d "%ROOT%jwcode-parent"
-call mvn compile -pl ../jwcode-core,../jwcode-web -am -q
+cd /d "%ROOT%"
+call mvn compile -pl jwcode-core,jwcode-web -am -q
 if errorlevel 1 (
     echo   ERROR: Backend compile failed!
     pause

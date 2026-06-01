@@ -40,14 +40,16 @@ public class HookApprovalManager {
         public final String askPayload;
         public final long createdAt;
         public final CompletableFuture<Boolean> future;
+        public final String sessionId;
 
         ApprovalRequest(String id, String toolName, String askPayload,
-                        CompletableFuture<Boolean> future) {
+                        CompletableFuture<Boolean> future, String sessionId) {
             this.id = id;
             this.toolName = toolName;
             this.askPayload = askPayload;
             this.createdAt = System.currentTimeMillis();
             this.future = future;
+            this.sessionId = sessionId;
         }
     }
 
@@ -90,9 +92,16 @@ public class HookApprovalManager {
      * @return true=允许, false=拒绝
      */
     public CompletableFuture<Boolean> requestApproval(String toolName, String askPayload, long timeoutMs) {
+        return requestApproval(toolName, askPayload, timeoutMs, null);
+    }
+
+    /**
+     * 发起审批请求（带 sessionId 关联，用于连接断开时批量清理）。
+     */
+    public CompletableFuture<Boolean> requestApproval(String toolName, String askPayload, long timeoutMs, String sessionId) {
         String id = UUID.randomUUID().toString().substring(0, 8);
         CompletableFuture<Boolean> future = new CompletableFuture<>();
-        ApprovalRequest request = new ApprovalRequest(id, toolName, askPayload, future);
+        ApprovalRequest request = new ApprovalRequest(id, toolName, askPayload, future, sessionId);
 
         long effectiveTimeout = timeoutMs > 0 ? timeoutMs : defaultTimeoutMs;
 
@@ -105,7 +114,8 @@ public class HookApprovalManager {
             });
 
         pendingApprovals.put(id, request);
-        logger.info("[HookApproval] Pending: " + id + " | " + toolName);
+        logger.info("[HookApproval] Pending: " + id + " | " + toolName
+            + (sessionId != null ? " | session=" + sessionId : ""));
 
         // 通过 WebSocket 通知前端
         if (wsBroadcaster != null) {
@@ -142,6 +152,27 @@ public class HookApprovalManager {
             request.future.complete(false);
         } else {
             logger.fine("[HookApproval] Unknown approval ID: " + approvalId);
+        }
+    }
+
+    /**
+     * 拒绝某个 session 的所有待审批请求（连接断开时调用）。
+     */
+    public void denyAllForSession(String sessionId) {
+        if (sessionId == null) return;
+        int count = 0;
+        for (var entry : pendingApprovals.entrySet()) {
+            ApprovalRequest request = entry.getValue();
+            if (sessionId.equals(request.sessionId)) {
+                pendingApprovals.remove(entry.getKey());
+                request.future.complete(false);
+                count++;
+                logger.info("[HookApproval] Auto-deny on disconnect: " + entry.getKey()
+                    + " (" + request.toolName + ") session=" + sessionId);
+            }
+        }
+        if (count > 0) {
+            logger.info("[HookApproval] Denied " + count + " pending approvals for session=" + sessionId);
         }
     }
 

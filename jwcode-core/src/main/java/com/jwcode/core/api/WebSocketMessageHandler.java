@@ -19,6 +19,7 @@ import com.jwcode.core.tool.ToolExecutor;
 import com.jwcode.core.tool.ToolRegistry;import com.jwcode.core.task.Task;
 import com.jwcode.core.task.TaskStatus;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -674,11 +675,13 @@ public class WebSocketMessageHandler {
     private void setupHookApprovalBroadcaster() {
         HookApprovalManager.getInstance().setWebSocketBroadcaster(request -> {
             try {
+                Map<String, Object> dataMap = new LinkedHashMap<>();
+                dataMap.put("approvalId", request.id);
+                dataMap.put("toolName", request.toolName);
+                dataMap.put("askPayload", request.askPayload != null ? request.askPayload : "");
                 Map<String, Object> msg = Map.of(
                     "type", "hook_ask",
-                    "approvalId", request.id,
-                    "toolName", request.toolName,
-                    "askPayload", request.askPayload != null ? request.askPayload : ""
+                    "data", MAPPER.writeValueAsString(dataMap)
                 );
                 broadcastToSession(null, msg);
             } catch (Exception e) {

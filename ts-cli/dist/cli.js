@@ -7,7 +7,7 @@ import { render } from "ink";
 import { createElement } from "react";
 
 // src/App.tsx
-import { useState as useState5, useEffect as useEffect3, useRef as useRef2, useCallback as useCallback3 } from "react";
+import { useState as useState6, useEffect as useEffect4, useRef as useRef4, useCallback as useCallback2 } from "react";
 import { Box as Box6, Text as Text6, useInput as useInput4, useApp, useStdout as useStdout2 } from "ink";
 
 // src/components/TextInput.tsx
@@ -372,10 +372,11 @@ var JwCodeClient = class {
 };
 
 // src/components/StatusLine.tsx
+import { memo, useState as useState2, useEffect } from "react";
 import { Box as Box2, Text as Text2 } from "ink";
 
 // src/hooks/useAppState.ts
-import { useEffect, useState as useState2, useCallback as useCallback2 } from "react";
+import { useSyncExternalStore, useRef as useRef2 } from "react";
 
 // src/store.ts
 function createStore(initialState2, onChange) {
@@ -410,7 +411,9 @@ var initialState = {
   scrollOffset: 0,
   modelName: "",
   connected: false,
-  statusText: "connecting..."
+  statusText: "connecting...",
+  tokenRate: 0,
+  toolCallsExpanded: false
 };
 var _store = null;
 function getStore() {
@@ -418,15 +421,65 @@ function getStore() {
   return _store;
 }
 __name(getStore, "getStore");
-function useAppState() {
-  const store = getStore();
-  const [state, setState] = useState2(store.getState());
-  useEffect(() => {
-    return store.subscribe(() => setState(store.getState()));
-  }, []);
-  return state;
+var selCurrentMessage = /* @__PURE__ */ __name((s) => s.currentMessage, "selCurrentMessage");
+var selPlanMode = /* @__PURE__ */ __name((s) => s.planMode, "selPlanMode");
+var selPlanWaiting = /* @__PURE__ */ __name((s) => s.planWaiting, "selPlanWaiting");
+var selConnected = /* @__PURE__ */ __name((s) => s.connected, "selConnected");
+var selIsGenerating = /* @__PURE__ */ __name((s) => s.currentMessage !== null, "selIsGenerating");
+var selToolCallsExpanded = /* @__PURE__ */ __name((s) => s.toolCallsExpanded, "selToolCallsExpanded");
+var selChatArea = /* @__PURE__ */ __name((s) => ({
+  messages: s.messages,
+  currentMessage: s.currentMessage,
+  scrollOffset: s.scrollOffset
+}), "selChatArea");
+var selStatusLine = /* @__PURE__ */ __name((s) => ({
+  usage: s.usage,
+  modelName: s.modelName,
+  planMode: s.planMode,
+  autoMode: s.autoMode,
+  connected: s.connected,
+  statusText: s.statusText,
+  messagesLen: s.messages.length,
+  tokenRate: s.tokenRate
+}), "selStatusLine");
+function shallowEqual(a, b) {
+  if (Object.is(a, b)) return true;
+  if (a === null || b === null) return false;
+  if (typeof a !== "object" || typeof b !== "object") return false;
+  const keysA = Object.keys(a);
+  const keysB = Object.keys(b);
+  if (keysA.length !== keysB.length) return false;
+  return keysA.every(
+    (k) => Object.is(
+      a[k],
+      b[k]
+    )
+  );
 }
-__name(useAppState, "useAppState");
+__name(shallowEqual, "shallowEqual");
+function useAppSlice(selector) {
+  const store = getStore();
+  const cacheRef = useRef2(null);
+  const getSnapshot = /* @__PURE__ */ __name(() => {
+    const next = selector(store.getState());
+    const cached = cacheRef.current;
+    if (cached !== null && shallowEqual(next, cached.value)) {
+      return cached.value;
+    }
+    cacheRef.current = { value: next };
+    return next;
+  }, "getSnapshot");
+  return useSyncExternalStore(store.subscribe, getSnapshot, getSnapshot);
+}
+__name(useAppSlice, "useAppSlice");
+var useAppCurrentMessage = /* @__PURE__ */ __name(() => useAppSlice(selCurrentMessage), "useAppCurrentMessage");
+var useAppPlanMode = /* @__PURE__ */ __name(() => useAppSlice(selPlanMode), "useAppPlanMode");
+var useAppPlanWaiting = /* @__PURE__ */ __name(() => useAppSlice(selPlanWaiting), "useAppPlanWaiting");
+var useAppConnected = /* @__PURE__ */ __name(() => useAppSlice(selConnected), "useAppConnected");
+var useAppIsGenerating = /* @__PURE__ */ __name(() => useAppSlice(selIsGenerating), "useAppIsGenerating");
+var useAppChatArea = /* @__PURE__ */ __name(() => useAppSlice(selChatArea), "useAppChatArea");
+var useAppStatusLine = /* @__PURE__ */ __name(() => useAppSlice(selStatusLine), "useAppStatusLine");
+var useAppToolCallsExpanded = /* @__PURE__ */ __name(() => useAppSlice(selToolCallsExpanded), "useAppToolCallsExpanded");
 function updateAppState(updater) {
   getStore().setState(updater);
 }
@@ -440,19 +493,58 @@ function formatTokens(n) {
   return String(n);
 }
 __name(formatTokens, "formatTokens");
-function StatusLine() {
-  const state = useAppState();
-  const { usage, modelName, planMode, autoMode, connected, statusText, messages } = state;
-  const msgCount = messages.length;
+function formatRate(rate) {
+  if (rate <= 0) return "";
+  if (rate >= 100) return `${Math.round(rate)}t/s`;
+  if (rate >= 10) return `${rate.toFixed(1)}t/s`;
+  return `${rate.toFixed(1)}t/s`;
+}
+__name(formatRate, "formatRate");
+function formatElapsed(sec) {
+  if (sec <= 0) return "";
+  if (sec >= 60) {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}m${s}s`;
+  }
+  return `${sec}s`;
+}
+__name(formatElapsed, "formatElapsed");
+var StatusLine = memo(/* @__PURE__ */ __name(function StatusLine2() {
+  const {
+    usage,
+    modelName,
+    planMode,
+    autoMode,
+    connected,
+    statusText,
+    messagesLen,
+    tokenRate
+  } = useAppStatusLine();
+  const msgCount = messagesLen;
+  const isGenerating = useAppIsGenerating();
+  const currentMessage = useAppCurrentMessage();
+  const [now, setNow] = useState2(Date.now());
+  useEffect(() => {
+    if (!currentMessage) return;
+    const timer = setInterval(() => setNow(Date.now()), 1e3);
+    return () => clearInterval(timer);
+  }, [currentMessage?.id]);
+  const generationElapsed = currentMessage ? Math.floor((now - (currentMessage.timestamp || Date.now())) / 1e3) : 0;
   const pct = Math.min(100, Math.round(usage.usageRatio * 100));
   const filled = Math.round(pct / 10);
-  const bar = "=".repeat(filled) + "-".repeat(10 - filled);
+  const bar = "\u2588".repeat(filled) + "\u2591".repeat(10 - filled);
   const model = modelName || (connected ? "ready" : "connecting...");
   const modeLabel = planMode ? " Plan " : " Act ";
   const modeColor = planMode ? "cyan" : "green";
   const connIcon = connected ? "\u25CF" : "\u25CB";
   const connColor = connected ? "green" : "red";
   const isError = statusText.startsWith("Error:");
+  const barColor = pct > 90 ? "red" : pct > 70 ? "yellow" : "white";
+  const rateStr = formatRate(tokenRate);
+  const elapsedStr = formatElapsed(generationElapsed);
+  const p = usage.promptTokens;
+  const c = usage.completionTokens;
   return /* @__PURE__ */ jsxs2(Box2, { flexDirection: "column", width: "100%", paddingRight: 1, children: [
     /* @__PURE__ */ jsxs2(Box2, { height: 1, children: [
       /* @__PURE__ */ jsx2(Text2, { bold: true, color: "cyan", children: "jwcode" }),
@@ -477,55 +569,120 @@ function StatusLine() {
         msgCount,
         "msgs"
       ] }),
-      /* @__PURE__ */ jsx2(Text2, { children: "  t: " }),
-      /* @__PURE__ */ jsx2(Text2, { color: "yellow", children: formatTokens(usage.totalTokens) }),
+      p > 0 || c > 0 ? /* @__PURE__ */ jsxs2(Fragment, { children: [
+        /* @__PURE__ */ jsx2(Text2, { children: "  " }),
+        /* @__PURE__ */ jsx2(Text2, { color: "blue", children: formatTokens(p) }),
+        /* @__PURE__ */ jsx2(Text2, { dimColor: true, children: "+" }),
+        /* @__PURE__ */ jsx2(Text2, { color: "green", children: formatTokens(c) }),
+        /* @__PURE__ */ jsx2(Text2, { dimColor: true, children: "=" }),
+        /* @__PURE__ */ jsx2(Text2, { color: "yellow", children: formatTokens(usage.totalTokens) })
+      ] }) : /* @__PURE__ */ jsxs2(Fragment, { children: [
+        /* @__PURE__ */ jsx2(Text2, { children: "  t:" }),
+        /* @__PURE__ */ jsx2(Text2, { color: "yellow", children: formatTokens(usage.totalTokens) })
+      ] }),
       /* @__PURE__ */ jsx2(Text2, { children: "  " }),
-      /* @__PURE__ */ jsxs2(Text2, { color: pct > 90 ? "red" : "white", children: [
+      /* @__PURE__ */ jsxs2(Text2, { color: barColor, children: [
         bar,
         " ",
         pct,
         "%"
+      ] }),
+      isGenerating && rateStr && /* @__PURE__ */ jsxs2(Fragment, { children: [
+        /* @__PURE__ */ jsx2(Text2, { children: "  " }),
+        /* @__PURE__ */ jsx2(Text2, { color: "magenta", children: rateStr })
+      ] }),
+      isGenerating && elapsedStr && /* @__PURE__ */ jsxs2(Fragment, { children: [
+        /* @__PURE__ */ jsx2(Text2, { children: "  " }),
+        /* @__PURE__ */ jsx2(Text2, { color: "cyan", children: elapsedStr })
       ] })
     ] }),
     statusText && statusText !== "connecting..." && /* @__PURE__ */ jsx2(Box2, { height: 1, children: /* @__PURE__ */ jsx2(Text2, { color: isError ? "red" : "grey", dimColor: !isError, children: statusText.slice(0, 100) }) })
   ] });
-}
-__name(StatusLine, "StatusLine");
+}, "StatusLine"));
 
 // src/components/ChatArea.tsx
 import { Box as Box3, Text as Text3 } from "ink";
-import { jsx as jsx3, jsxs as jsxs3 } from "react/jsx-runtime";
+import { useState as useState3, useMemo, memo as memo2 } from "react";
+import { Fragment as Fragment2, jsx as jsx3, jsxs as jsxs3 } from "react/jsx-runtime";
 var SEP = "\u2500".repeat(60);
-function ChatArea({ messages, currentMessage, scrollOffset, terminalRows, reservedRows }) {
-  const allMessages = currentMessage ? [...messages.filter((m) => m.id !== currentMessage.id)] : messages;
-  const availableRows = Math.max(10, terminalRows - reservedRows);
-  const maxVisible = Math.max(5, Math.floor(availableRows / 4));
-  const total = allMessages.length;
-  const clampedOffset = Math.min(scrollOffset, total - 1);
-  const end = total - clampedOffset;
-  const start = Math.max(0, end - maxVisible);
-  const visibleMessages = allMessages.slice(start, end);
-  const isScrolledUp = clampedOffset > 0;
-  const hiddenAbove = start;
-  const hiddenBelow = clampedOffset;
+var MAX_THINKING = 200;
+function formatDuration(sec) {
+  if (sec <= 0) return "";
+  if (sec >= 60) {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}m${s}s`;
+  }
+  return `${sec}s`;
+}
+__name(formatDuration, "formatDuration");
+function shouldStartCollapsed(toolCalls, index) {
+  const tc = toolCalls[index];
+  if (!tc) return true;
+  if (tc.status === "running") return false;
+  let lastFinishedIdx = -1;
+  for (let i = toolCalls.length - 1; i >= 0; i--) {
+    if (toolCalls[i].status === "complete" || toolCalls[i].status === "error") {
+      lastFinishedIdx = i;
+      break;
+    }
+  }
+  return index !== lastFinishedIdx;
+}
+__name(shouldStartCollapsed, "shouldStartCollapsed");
+var ChatArea = memo2(/* @__PURE__ */ __name(function ChatArea2({ messages, currentMessage, scrollOffset, terminalRows, reservedRows, terminalCols, toolCallsExpanded }) {
+  const [expandedTools, setExpandedTools] = useState3(/* @__PURE__ */ new Set());
+  const [expandedMessages, setExpandedMessages] = useState3(/* @__PURE__ */ new Set());
+  const allMessages = useMemo(
+    () => currentMessage ? messages.filter((m) => m.id !== currentMessage.id) : messages,
+    [messages, currentMessage?.id]
+  );
+  const { maxVisible, total, start, end, visibleMessages, isScrolledUp, scrollPercent } = useMemo(() => {
+    const availableRows = Math.max(10, terminalRows - reservedRows);
+    const linesPerMessage = availableRows > 60 ? 3 : availableRows > 30 ? 4 : 5;
+    const maxVisible2 = Math.max(5, Math.floor(availableRows / linesPerMessage));
+    const total2 = allMessages.length;
+    const clampedOffset = Math.min(scrollOffset, Math.max(0, total2 - 1));
+    const end2 = total2 - clampedOffset;
+    const start2 = Math.max(0, end2 - maxVisible2);
+    return {
+      maxVisible: maxVisible2,
+      total: total2,
+      start: start2,
+      end: end2,
+      visibleMessages: allMessages.slice(start2, end2),
+      isScrolledUp: clampedOffset > 0,
+      scrollPercent: total2 > 0 ? Math.round((total2 - end2) / total2 * 100) : 0
+    };
+  }, [allMessages, scrollOffset, terminalRows, reservedRows]);
+  const toggleExpandTool = /* @__PURE__ */ __name((id) => {
+    setExpandedTools((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, "toggleExpandTool");
+  const toggleExpandMessage = /* @__PURE__ */ __name((id) => {
+    setExpandedMessages((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, "toggleExpandMessage");
   return /* @__PURE__ */ jsxs3(Box3, { flexDirection: "column", width: "100%", children: [
-    isScrolledUp && /* @__PURE__ */ jsx3(Box3, { children: /* @__PURE__ */ jsxs3(Text3, { color: "yellow", dimColor: true, children: [
-      "\u25B2 [",
-      start + 1,
-      "-",
-      end,
-      "/",
-      total,
-      "] \u4E0A\u7FFB\u4E2D (PgUp/PgDn \u7FFB\u9875, Home \u5F00\u5934, End \u6700\u65B0)"
-    ] }) }),
-    !isScrolledUp && total > maxVisible && /* @__PURE__ */ jsx3(Box3, { children: /* @__PURE__ */ jsxs3(Text3, { color: "grey", dimColor: true, children: [
+    total > 0 && /* @__PURE__ */ jsx3(Box3, { children: /* @__PURE__ */ jsxs3(Text3, { color: "grey", dimColor: true, children: [
       "[",
       start + 1,
       "-",
       end,
       "/",
       total,
-      "] \u2191/PgUp \u67E5\u770B\u66F4\u65E9\u6D88\u606F"
+      "] ",
+      scrollPercent,
+      "%",
+      isScrolledUp ? " \u25B2 PgUp/PgDn\xB7Home\xB7End" : " \u2191/PgUp for older"
     ] }) }),
     visibleMessages.map((msg) => /* @__PURE__ */ jsxs3(Box3, { flexDirection: "column", marginBottom: 1, children: [
       msg.type === "user" && /* @__PURE__ */ jsxs3(Box3, { flexDirection: "column", children: [
@@ -538,8 +695,32 @@ function ChatArea({ messages, currentMessage, scrollOffset, terminalRows, reserv
       msg.type === "assistant" && /* @__PURE__ */ jsxs3(Box3, { flexDirection: "column", children: [
         /* @__PURE__ */ jsx3(Text3, { children: " " }),
         msg.steps.map((step, i) => /* @__PURE__ */ jsx3(StepDisplay, { step }, step.id || i)),
-        msg.thinking && /* @__PURE__ */ jsx3(Text3, { dimColor: true, italic: true, children: truncate(msg.thinking, 200) }),
-        msg.toolCalls.map((tc, i) => /* @__PURE__ */ jsx3(ToolCallDisplay, { tc }, tc.id || i)),
+        msg.thinking && /* @__PURE__ */ jsxs3(Box3, { flexDirection: "column", children: [
+          /* @__PURE__ */ jsx3(Text3, { dimColor: true, italic: true, children: expandedMessages.has(msg.id) ? msg.thinking : truncate(msg.thinking, MAX_THINKING) }),
+          msg.thinking.length > MAX_THINKING && /* @__PURE__ */ jsxs3(Text3, { color: "blue", dimColor: true, children: [
+            "[",
+            msg.thinking.length - MAX_THINKING,
+            " more chars]",
+            /* @__PURE__ */ jsxs3(Text3, { color: "cyan", dimColor: true, children: [
+              " ",
+              "[\u2193 to expand]"
+            ] })
+          ] })
+        ] }),
+        msg.toolCalls.map((tc, i) => {
+          const key = tc.id || `${msg.id}-${i}`;
+          const startCollapsed = shouldStartCollapsed(msg.toolCalls, i);
+          const isExpanded = expandedTools.has(key);
+          return /* @__PURE__ */ jsx3(
+            ToolCallDisplay,
+            {
+              tc,
+              collapsed: toolCallsExpanded ? false : isExpanded ? false : startCollapsed,
+              onToggle: () => toggleExpandTool(key)
+            },
+            key
+          );
+        }),
         msg.content && /* @__PURE__ */ jsx3(Text3, { children: msg.content }),
         /* @__PURE__ */ jsx3(Text3, { dimColor: true, children: SEP })
       ] }),
@@ -549,22 +730,41 @@ function ChatArea({ messages, currentMessage, scrollOffset, terminalRows, reserv
       ] }) })
     ] }, msg.id)),
     currentMessage && /* @__PURE__ */ jsxs3(Box3, { flexDirection: "column", children: [
-      currentMessage.thinking && /* @__PURE__ */ jsx3(Text3, { dimColor: true, italic: true, children: truncate(currentMessage.thinking, 200) }),
-      currentMessage.toolCalls.map((tc, i) => /* @__PURE__ */ jsx3(ToolCallDisplay, { tc }, tc.id || i)),
+      currentMessage.thinking && /* @__PURE__ */ jsx3(Text3, { dimColor: true, italic: true, children: truncate(currentMessage.thinking, MAX_THINKING) }),
+      currentMessage.toolCalls.map((tc, i) => {
+        const key = tc.id || `${currentMessage.id}-${i}`;
+        const startCollapsed = shouldStartCollapsed(currentMessage.toolCalls, i);
+        const isExpanded = expandedTools.has(key);
+        return /* @__PURE__ */ jsx3(
+          ToolCallDisplay,
+          {
+            tc,
+            collapsed: toolCallsExpanded ? false : isExpanded ? false : startCollapsed,
+            onToggle: () => toggleExpandTool(key)
+          },
+          key
+        );
+      }),
       currentMessage.content && /* @__PURE__ */ jsx3(Text3, { children: currentMessage.content })
     ] }, currentMessage.id)
   ] });
-}
-__name(ChatArea, "ChatArea");
+}, "ChatArea"));
 function StepDisplay({ step }) {
-  const icon = step.status === "success" ? "\u2713" : step.status === "error" ? "\u2717" : "\u25B6";
-  const color = step.status === "success" ? "green" : step.status === "error" ? "red" : "cyan";
+  const icon = step.status === "success" ? "\u2713" : step.status === "error" ? "\u2717" : step.status === "running" ? "\u27F3" : "\u25B6";
+  const color = step.status === "success" ? "green" : step.status === "error" ? "red" : step.status === "running" ? "cyan" : "cyan";
+  const durStr = step.duration ? formatDuration(step.duration) : step.status === "running" && step.timestamp ? formatDuration(Math.floor((Date.now() - step.timestamp) / 1e3)) : "";
   return /* @__PURE__ */ jsxs3(Box3, { flexDirection: "column", children: [
-    /* @__PURE__ */ jsxs3(Text3, { color, children: [
-      "  ",
-      icon,
-      " ",
-      step.title
+    /* @__PURE__ */ jsxs3(Box3, { children: [
+      /* @__PURE__ */ jsxs3(Text3, { color, children: [
+        "  ",
+        icon,
+        " "
+      ] }),
+      /* @__PURE__ */ jsx3(Text3, { bold: true, color, children: step.title }),
+      durStr && /* @__PURE__ */ jsxs3(Fragment2, { children: [
+        /* @__PURE__ */ jsx3(Text3, { dimColor: true, children: "  " }),
+        /* @__PURE__ */ jsx3(Text3, { color: "grey", dimColor: true, children: durStr })
+      ] })
     ] }),
     step.thought && /* @__PURE__ */ jsxs3(Text3, { color: "blue", dimColor: true, children: [
       "    ",
@@ -581,10 +781,10 @@ function StepDisplay({ step }) {
   ] });
 }
 __name(StepDisplay, "StepDisplay");
-function ToolCallDisplay({ tc }) {
-  const argsStr = tc.args ? truncate(formatJson(tc.args), 200) : "";
-  const statusIcon = tc.status === "complete" ? "\u2713" : tc.status === "running" ? "\u25F7" : "\u2717";
+function ToolCallDisplay({ tc, collapsed, onToggle }) {
+  const statusIcon = tc.status === "complete" ? "\u2713" : tc.status === "running" ? "\u27F3" : "\u2717";
   const statusColor = tc.status === "complete" ? "green" : tc.status === "running" ? "yellow" : "red";
+  const durStr = tc.duration ? formatDuration(tc.duration) : tc.status === "running" && tc.timestamp ? formatDuration(Math.floor((Date.now() - tc.timestamp) / 1e3)) : "";
   return /* @__PURE__ */ jsxs3(Box3, { flexDirection: "column", paddingLeft: 1, children: [
     /* @__PURE__ */ jsxs3(Box3, { children: [
       /* @__PURE__ */ jsxs3(Text3, { color: statusColor, children: [
@@ -593,12 +793,19 @@ function ToolCallDisplay({ tc }) {
         " "
       ] }),
       /* @__PURE__ */ jsx3(Text3, { bold: true, color: "magenta", children: tc.name }),
-      argsStr && /* @__PURE__ */ jsxs3(Text3, { dimColor: true, children: [
-        "  ",
-        argsStr
+      durStr && /* @__PURE__ */ jsxs3(Fragment2, { children: [
+        /* @__PURE__ */ jsx3(Text3, { dimColor: true, children: "  " }),
+        /* @__PURE__ */ jsx3(Text3, { color: "grey", dimColor: true, children: durStr })
+      ] }),
+      /* @__PURE__ */ jsx3(Text3, { dimColor: true, children: "  " }),
+      /* @__PURE__ */ jsxs3(Text3, { color: "blue", dimColor: true, children: [
+        "[",
+        collapsed ? "+" : "-",
+        "]"
       ] })
     ] }),
-    tc.result && /* @__PURE__ */ jsx3(Box3, { paddingLeft: 4, children: /* @__PURE__ */ jsx3(Text3, { color: "green", dimColor: true, children: truncate(tc.result, 200) }) })
+    !collapsed && tc.args && /* @__PURE__ */ jsx3(Box3, { paddingLeft: 4, children: /* @__PURE__ */ jsx3(Text3, { dimColor: true, children: truncate(formatJson(tc.args), 200) }) }),
+    tc.result && /* @__PURE__ */ jsx3(Box3, { paddingLeft: 4, flexDirection: "column", children: /* @__PURE__ */ jsx3(Text3, { color: tc.status === "error" ? "red" : "green", dimColor: true, children: tc.result }) })
   ] });
 }
 __name(ToolCallDisplay, "ToolCallDisplay");
@@ -617,7 +824,7 @@ function truncate(s, max) {
 __name(truncate, "truncate");
 
 // src/components/CommandPalette.tsx
-import { useState as useState3, useMemo, useEffect as useEffect2 } from "react";
+import { useState as useState4, useMemo as useMemo2, useEffect as useEffect2 } from "react";
 import { Box as Box4, Text as Text4, useInput as useInput2, useStdout } from "ink";
 
 // src/commands/index.ts
@@ -721,11 +928,11 @@ var HELP_TEXT = `
 // src/components/CommandPalette.tsx
 import { jsx as jsx4, jsxs as jsxs4 } from "react/jsx-runtime";
 function CommandPalette({ filter, onSelect }) {
-  const [selected, setSelected] = useState3(0);
-  const [scrollOffset, setScrollOffset] = useState3(0);
+  const [selected, setSelected] = useState4(0);
+  const [scrollOffset, setScrollOffset] = useState4(0);
   const { stdout } = useStdout();
   const terminalRows = stdout?.rows || 24;
-  const visible = useMemo(() => {
+  const visible = useMemo2(() => {
     const f = filter.replace(/^\//, "").toLowerCase();
     if (!f) return ALL_COMMANDS;
     return ALL_COMMANDS.filter(
@@ -814,13 +1021,92 @@ function CommandPalette({ filter, onSelect }) {
 __name(CommandPalette, "CommandPalette");
 
 // src/components/ApprovalModal.tsx
-import { useState as useState4 } from "react";
+import { useState as useState5, useEffect as useEffect3, useRef as useRef3 } from "react";
 import { Box as Box5, Text as Text5, useInput as useInput3 } from "ink";
 import { jsx as jsx5, jsxs as jsxs5 } from "react/jsx-runtime";
+var COUNTDOWN_S = 15;
+function classifyRisk(toolName, payload) {
+  const name = toolName.toLowerCase();
+  if (/\b(rm|del|delete|drop|truncate|format|mkfs)\b/.test(name)) {
+    return { level: "CRITICAL", reason: "Destructive \u2014 may delete data" };
+  }
+  if (/\b(bash|shell|exec|cmd|powershell|terminal)\b/.test(name)) {
+    if (/\b(rm\s+-rf|sudo|chmod\s+777|curl.*\|\s*(ba)?sh|wget.*-O|>\/dev\/|mkfs)\b/i.test(payload)) {
+      return { level: "CRITICAL", reason: "High-risk command \u2014 system-level operation" };
+    }
+    return { level: "HIGH", reason: "Shell command execution" };
+  }
+  if (/\b(write|edit|save|upload|deploy|publish)\b/i.test(name)) {
+    return { level: "HIGH", reason: "File write operation" };
+  }
+  if (/\b(install|uninstall|npm|pip|cargo|gem|apt|brew)\b/i.test(name)) {
+    return { level: "HIGH", reason: "Package manager operation" };
+  }
+  if (/\b(git)\b/.test(name) && /\b(push|force|hard\s*reset|rebase)\b/i.test(payload)) {
+    return { level: "HIGH", reason: "Git destructive operation" };
+  }
+  if (/\b(http|fetch|curl|wget|api|request|download)\b/i.test(name)) {
+    return { level: "MEDIUM", reason: "Network request" };
+  }
+  if (/\b(read|open|list|ls|dir|cat|view|search|find|grep|glob)\b/i.test(name)) {
+    return { level: "LOW", reason: "Read-only operation" };
+  }
+  return { level: "MEDIUM", reason: "Tool invocation" };
+}
+__name(classifyRisk, "classifyRisk");
+var RISK_COLOR = {
+  CRITICAL: "red",
+  HIGH: "yellow",
+  MEDIUM: "yellow",
+  LOW: "cyan"
+};
+var RISK_ICON = {
+  CRITICAL: "\u26D4",
+  HIGH: "\u26A0\uFE0F",
+  MEDIUM: "\u26A1",
+  LOW: "\u{1F4CB}"
+};
+function extractPreview(toolName, payload) {
+  if (/\b(bash|shell|exec|cmd|powershell|terminal)\b/i.test(toolName)) {
+    return payload.slice(0, 200);
+  }
+  if (/\b(write|edit|save|create)\b/i.test(toolName)) {
+    const match = payload.match(/(?:file_path|path|file)["\s:=]+([^\s",}]+)/i);
+    if (match) return `File: ${match[1]}
+${payload.slice(0, 160)}`;
+  }
+  return payload.length > 200 ? payload.slice(0, 200) + "..." : payload;
+}
+__name(extractPreview, "extractPreview");
 function ApprovalModal({ toolName, payload, onAllow, onDeny }) {
-  const [selected, setSelected] = useState4(0);
+  const [selected, setSelected] = useState5(0);
+  const [countdown, setCountdown] = useState5(COUNTDOWN_S);
+  const countdownRef = useRef3(null);
+  const { level, reason } = classifyRisk(toolName, payload);
+  const riskColor = RISK_COLOR[level];
+  const riskIcon = RISK_ICON[level];
+  const preview = extractPreview(toolName, payload);
+  useEffect3(() => {
+    setCountdown(COUNTDOWN_S);
+    countdownRef.current = setInterval(() => {
+      setCountdown((prev) => {
+        if (prev <= 1) {
+          if (countdownRef.current) clearInterval(countdownRef.current);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1e3);
+    return () => {
+      if (countdownRef.current) clearInterval(countdownRef.current);
+    };
+  }, [toolName, payload]);
+  useEffect3(() => {
+    if (countdown === 0) onAllow();
+  }, [countdown]);
+  const countdownUrgent = countdown <= 5;
   useInput3((_input, key) => {
-    if (key.escape || key.tab) {
+    if (key.escape) {
       onDeny();
       return;
     }
@@ -850,32 +1136,55 @@ function ApprovalModal({ toolName, payload, onAllow, onDeny }) {
       return;
     }
   });
-  const desc = payload ? payload.length > 200 ? payload.slice(0, 200) + "..." : payload : "";
-  return /* @__PURE__ */ jsxs5(Box5, { flexDirection: "column", borderStyle: "round", borderColor: "yellow", paddingX: 2, paddingY: 1, marginTop: 1, children: [
-    /* @__PURE__ */ jsx5(Box5, { marginBottom: 1, children: /* @__PURE__ */ jsx5(Text5, { bold: true, children: "Do you want to proceed?" }) }),
+  const borderColor = level === "CRITICAL" ? "red" : level === "HIGH" ? "yellow" : "yellow";
+  return /* @__PURE__ */ jsxs5(Box5, { flexDirection: "column", borderStyle: "round", borderColor, paddingX: 2, paddingY: 1, marginTop: 1, children: [
+    /* @__PURE__ */ jsxs5(Box5, { marginBottom: 1, children: [
+      /* @__PURE__ */ jsxs5(Text5, { color: riskColor, children: [
+        riskIcon,
+        " "
+      ] }),
+      /* @__PURE__ */ jsx5(Text5, { bold: true, color: riskColor, children: level }),
+      /* @__PURE__ */ jsxs5(Text5, { dimColor: true, children: [
+        " \u2014 ",
+        reason
+      ] })
+    ] }),
+    /* @__PURE__ */ jsxs5(Box5, { marginBottom: 1, children: [
+      /* @__PURE__ */ jsx5(Text5, { dimColor: true, children: "Tool: " }),
+      /* @__PURE__ */ jsx5(Text5, { color: "cyan", bold: true, children: toolName })
+    ] }),
+    preview ? /* @__PURE__ */ jsxs5(Box5, { flexDirection: "column", marginBottom: 1, paddingX: 1, children: [
+      /* @__PURE__ */ jsx5(Box5, { children: /* @__PURE__ */ jsx5(Text5, { dimColor: true, children: "\u250C\u2500 preview \u2500".slice(0, preview.length > 0 ? 12 : 0) }) }),
+      /* @__PURE__ */ jsxs5(Box5, { children: [
+        /* @__PURE__ */ jsx5(Text5, { dimColor: true, children: "\u2502 " }),
+        /* @__PURE__ */ jsx5(Text5, { children: preview })
+      ] }),
+      /* @__PURE__ */ jsx5(Box5, { children: /* @__PURE__ */ jsx5(Text5, { dimColor: true, children: "\u2514" + "\u2500".repeat(Math.min(10, preview.length)) }) })
+    ] }) : null,
+    level === "CRITICAL" && /* @__PURE__ */ jsx5(Box5, { marginBottom: 1, children: /* @__PURE__ */ jsx5(Text5, { color: "red", bold: true, children: "\u26A0 This may cause irreversible changes \u2014 verify carefully" }) }),
     /* @__PURE__ */ jsxs5(Box5, { flexDirection: "column", marginLeft: 2, marginBottom: 1, children: [
-      /* @__PURE__ */ jsx5(Box5, { children: /* @__PURE__ */ jsxs5(Text5, { color: selected === 0 ? "green" : void 0, children: [
+      /* @__PURE__ */ jsx5(Box5, { children: /* @__PURE__ */ jsxs5(Text5, { color: selected === 0 ? "green" : void 0, bold: selected === 0, children: [
         selected === 0 ? " \u276F" : "  ",
         " 1. Allow"
       ] }) }),
-      /* @__PURE__ */ jsx5(Box5, { children: /* @__PURE__ */ jsxs5(Text5, { color: selected === 1 ? "red" : void 0, children: [
+      /* @__PURE__ */ jsx5(Box5, { children: /* @__PURE__ */ jsxs5(Text5, { color: selected === 1 ? "red" : void 0, bold: selected === 1, children: [
         selected === 1 ? " \u276F" : "  ",
         " 2. Deny"
       ] }) })
     ] }),
     /* @__PURE__ */ jsxs5(Box5, { marginBottom: 1, children: [
-      /* @__PURE__ */ jsx5(Text5, { dimColor: true, children: "Tool: " }),
-      /* @__PURE__ */ jsx5(Text5, { color: "cyan", children: toolName }),
-      desc ? /* @__PURE__ */ jsxs5(Text5, { dimColor: true, children: [
-        "  ",
-        desc
-      ] }) : null
+      /* @__PURE__ */ jsx5(Text5, { dimColor: true, children: "Auto-approve in: " }),
+      /* @__PURE__ */ jsxs5(Text5, { color: countdownUrgent ? "red" : "green", bold: countdownUrgent, children: [
+        countdown,
+        "s"
+      ] }),
+      /* @__PURE__ */ jsx5(Text5, { children: "  " }),
+      /* @__PURE__ */ jsxs5(Text5, { color: countdownUrgent ? "red" : "green", children: [
+        "\u2588".repeat(Math.ceil(countdown / COUNTDOWN_S * 10)),
+        "\u2591".repeat(10 - Math.ceil(countdown / COUNTDOWN_S * 10))
+      ] })
     ] }),
-    /* @__PURE__ */ jsxs5(Box5, { children: [
-      /* @__PURE__ */ jsx5(Text5, { dimColor: true, children: " Esc to cancel \xB7 " }),
-      /* @__PURE__ */ jsx5(Text5, { dimColor: true, children: "\u2191\u2193 to select \xB7 " }),
-      /* @__PURE__ */ jsx5(Text5, { dimColor: true, children: "Enter to confirm" })
-    ] })
+    /* @__PURE__ */ jsx5(Box5, { children: /* @__PURE__ */ jsx5(Text5, { dimColor: true, children: "1/2/y/n to decide \xB7 \u2191\u2193 to select \xB7 Enter to confirm \xB7 Esc to deny" }) })
   ] });
 }
 __name(ApprovalModal, "ApprovalModal");
@@ -929,20 +1238,31 @@ function cleanArgs(raw) {
 }
 __name(cleanArgs, "cleanArgs");
 function App({ backendUrl, wsUrl, onExit }) {
-  const [input, setInput] = useState5("");
-  const [showPalette, setShowPalette] = useState5(false);
-  const [showHelp, setShowHelp] = useState5(false);
-  const [helpScroll, setHelpScroll] = useState5(0);
-  const [showApproval, setShowApproval] = useState5(null);
+  const [input, setInput] = useState6("");
+  const [showPalette, setShowPalette] = useState6(false);
+  const [showHelp, setShowHelp] = useState6(false);
+  const [helpScroll, setHelpScroll] = useState6(0);
+  const [showApproval, setShowApproval] = useState6(null);
   const { exit } = useApp();
-  const state = useAppState();
-  const clientRef = useRef2(null);
+  const connected = useAppConnected();
+  const planMode = useAppPlanMode();
+  const planWaiting = useAppPlanWaiting();
+  const currentMessage = useAppCurrentMessage();
+  const isGenerating = useAppIsGenerating();
+  const chatAreaProps = useAppChatArea();
+  const toolCallsExpanded = useAppToolCallsExpanded();
+  const clientRef = useRef4(null);
+  const lastEscRef = useRef4(0);
+  const currentMessageRef = useRef4(currentMessage);
+  currentMessageRef.current = currentMessage;
+  const planModeRef = useRef4(planMode);
+  planModeRef.current = planMode;
   const { stdout } = useStdout2();
   const terminalRows = stdout?.rows || 24;
   const terminalCols = stdout?.columns || 80;
-  const reservedRows = 8;
+  const reservedRows = 6;
   const hline = "\u2500".repeat(terminalCols);
-  useEffect3(() => {
+  useEffect4(() => {
     const client = new JwCodeClient(backendUrl, wsUrl);
     clientRef.current = client;
     wireHandlers(client);
@@ -962,7 +1282,7 @@ function App({ backendUrl, wsUrl, onExit }) {
       client.close();
     };
   }, [backendUrl, wsUrl]);
-  const executeCommand = useCallback3((value) => {
+  const executeCommand = useCallback2((value) => {
     const text = value.trim();
     if (!text || !clientRef.current) return;
     setInput("");
@@ -1001,7 +1321,11 @@ function App({ backendUrl, wsUrl, onExit }) {
           updateAppState((prev) => ({ ...prev, autoMode: !prev.autoMode }));
           return;
         case "clear":
-          updateAppState((prev) => ({ ...prev, messages: [], currentMessage: null }));
+          updateAppState((prev) => ({
+            ...prev,
+            messages: [],
+            currentMessage: null
+          }));
           return;
         case "model_change":
           if (needsArg && cmdArg) client?.switchModel(cmdArg);
@@ -1062,13 +1386,13 @@ function App({ backendUrl, wsUrl, onExit }) {
     saveToHistory(text);
     const msg = createMessage("user", text);
     updateAppState((prev) => ({ ...prev, messages: [...prev.messages, msg] }));
-    clientRef.current.chat(text, state.planMode);
-  }, [onExit, state.planMode]);
-  const handleSubmit = useCallback3((value) => {
+    clientRef.current.chat(text, planModeRef.current);
+  }, [onExit]);
+  const handleSubmit = useCallback2((value) => {
     if (showPalette) return;
     executeCommand(value);
   }, [executeCommand, showPalette]);
-  const handleChange = useCallback3((value) => {
+  const handleChange = useCallback2((value) => {
     setInput(value);
     if (value.startsWith("/")) {
       setShowPalette(true);
@@ -1076,7 +1400,7 @@ function App({ backendUrl, wsUrl, onExit }) {
       setShowPalette(false);
     }
   }, []);
-  const handlePaletteSelect = useCallback3((cmd) => {
+  const handlePaletteSelect = useCallback2((cmd) => {
     if (cmd) {
       executeCommand(cmd);
     } else {
@@ -1084,53 +1408,85 @@ function App({ backendUrl, wsUrl, onExit }) {
       setInput("");
     }
   }, [executeCommand]);
-  const handleApprovalAllow = useCallback3((approvalId) => {
+  const handleApprovalAllow = useCallback2((approvalId) => {
     clientRef.current?.approveHook(approvalId);
     setShowApproval(null);
   }, []);
-  const handleApprovalDeny = useCallback3((approvalId) => {
+  const handleApprovalDeny = useCallback2((approvalId) => {
     clientRef.current?.denyHook(approvalId);
     setShowApproval(null);
   }, []);
   function wireHandlers(client) {
-    const INTERVAL = 150;
-    let pendingContent = "";
-    let pendingThinking = "";
-    let pendingToolCalls = [];
-    let batchTimer = null;
-    let batchChanged = false;
-    function applyBatch() {
-      batchTimer = null;
-      if (!batchChanged) return;
-      batchChanged = false;
-      const c = pendingContent;
-      pendingContent = "";
-      const t = pendingThinking;
-      pendingThinking = "";
-      const tcfns = pendingToolCalls;
-      pendingToolCalls = [];
+    let _pendingContent = "";
+    let _pendingThinking = "";
+    let _pendingToolFns = [];
+    let _flushScheduled = false;
+    function doStreamFlush() {
+      _flushScheduled = false;
+      const c = _pendingContent;
+      _pendingContent = "";
+      const t = _pendingThinking;
+      _pendingThinking = "";
+      const fns = _pendingToolFns;
+      _pendingToolFns = [];
+      if (!c && !t && fns.length === 0) return;
       updateAppState((prev) => {
         if (!prev.currentMessage) return prev;
-        if (c) prev.currentMessage.content += c;
-        if (t) prev.currentMessage.thinking += t;
-        for (const fn of tcfns) fn(prev.currentMessage);
-        return { ...prev };
+        let msg = prev.currentMessage;
+        if (c) msg = { ...msg, content: msg.content + c };
+        if (t) msg = { ...msg, thinking: msg.thinking + t };
+        for (const fn of fns) msg = fn(msg);
+        return { ...prev, currentMessage: msg };
       });
     }
-    __name(applyBatch, "applyBatch");
-    function scheduleBatch() {
-      batchChanged = true;
-      if (!batchTimer) batchTimer = setTimeout(applyBatch, INTERVAL);
+    __name(doStreamFlush, "doStreamFlush");
+    function scheduleStreamFlush() {
+      if (_flushScheduled) return;
+      _flushScheduled = true;
+      queueMicrotask(doStreamFlush);
+      setTimeout(() => {
+        if (_flushScheduled) doStreamFlush();
+      }, 16);
     }
-    __name(scheduleBatch, "scheduleBatch");
+    __name(scheduleStreamFlush, "scheduleStreamFlush");
     function flushNow() {
-      if (batchTimer) {
-        clearTimeout(batchTimer);
-        batchTimer = null;
-      }
-      applyBatch();
+      doStreamFlush();
     }
     __name(flushNow, "flushNow");
+    let _lastTotal = 0;
+    let _lastTotalTs = 0;
+    let _firstTokenUpdate = true;
+    let _pendingToken = null;
+    let _tokenScheduled = false;
+    function flushToken() {
+      _tokenScheduled = false;
+      const d = _pendingToken;
+      if (!d) return;
+      _pendingToken = null;
+      const promptTokens = Number(d.promptTokens) || 0;
+      const completionTokens = Number(d.completionTokens) || 0;
+      const totalTokens = Number(d.totalTokens) || 0;
+      const usageRatio = Number(d.usageRatio) || 0;
+      if (totalTokens <= 0) return;
+      const now = Date.now();
+      let tokenRate = 0;
+      if (_lastTotalTs > 0 && _lastTotal > 0 && now > _lastTotalTs && totalTokens > _lastTotal) {
+        const deltaTokens = totalTokens - _lastTotal;
+        const deltaSec = (now - _lastTotalTs) / 1e3;
+        const instantRate = deltaTokens / deltaSec;
+        const prevRate = getStore().getState().tokenRate;
+        tokenRate = prevRate > 0 ? prevRate * 0.6 + instantRate * 0.4 : instantRate;
+      }
+      _lastTotal = totalTokens;
+      _lastTotalTs = now;
+      updateAppState((prev) => ({
+        ...prev,
+        usage: { promptTokens, completionTokens, totalTokens, usageRatio },
+        modelName: d.model || prev.modelName,
+        tokenRate
+      }));
+    }
+    __name(flushToken, "flushToken");
     client.on("start", () => {
       flushNow();
       const msg = createMessage("assistant");
@@ -1143,60 +1499,73 @@ function App({ backendUrl, wsUrl, onExit }) {
     });
     client.on("content", (m) => {
       const text = typeof m.data === "string" ? m.data : m.data ? String(m.data) : "";
-      pendingContent += text;
-      scheduleBatch();
+      _pendingContent += text;
+      scheduleStreamFlush();
     });
     client.on("thinking", (m) => {
-      pendingThinking += typeof m.data === "string" ? m.data : "";
-      scheduleBatch();
+      _pendingThinking += typeof m.data === "string" ? m.data : "";
+      scheduleStreamFlush();
     });
     client.on("tool_call", (m) => {
       const d = parseData(m);
-      pendingToolCalls.push((msg) => {
+      _pendingToolFns.push((msg) => {
         let existingIdx = d.id ? msg.toolCalls.findIndex((t) => t.id === d.id) : -1;
         if (existingIdx < 0 && d.name) {
           existingIdx = msg.toolCalls.findIndex(
             (t) => t.name === d.name && t.status === "running"
           );
         }
+        const tcs = [...msg.toolCalls];
         if (existingIdx >= 0) {
-          const existing = { ...msg.toolCalls[existingIdx] };
+          const existing = { ...tcs[existingIdx] };
           if (d.args) existing.args = cleanArgs(d.args);
           if (d.complete) existing.status = "complete";
           if (d.result) existing.result = d.result;
-          msg.toolCalls = [...msg.toolCalls];
-          msg.toolCalls[existingIdx] = existing;
+          tcs[existingIdx] = existing;
         } else {
-          const updated = [...msg.toolCalls];
-          updated.push({
+          tcs.push({
             id: d.id || (d.name ? `${d.name}-${Date.now()}` : ""),
             name: d.name || "",
             args: d.args ? cleanArgs(d.args) : void 0,
             status: d.complete ? "complete" : "running",
-            complete: !!d.complete
+            complete: !!d.complete,
+            timestamp: Date.now()
           });
-          msg.toolCalls = updated;
         }
+        return { ...msg, toolCalls: tcs };
       });
-      scheduleBatch();
+      scheduleStreamFlush();
     });
     client.on("tool_result", (m) => {
       const d = parseData(m);
-      pendingToolCalls.push((msg) => {
+      _pendingToolFns.push((msg) => {
         const tcs = [...msg.toolCalls];
         for (let i = tcs.length - 1; i >= 0; i--) {
           if (tcs[i].name === d.toolName && !tcs[i].result) {
-            tcs[i] = { ...tcs[i], result: d.result || "", status: "complete" };
+            const tc = tcs[i];
+            const duration = tc.timestamp ? Math.floor((Date.now() - tc.timestamp) / 1e3) : void 0;
+            tcs[i] = { ...tc, result: d.result || "", status: "complete", duration };
             break;
           }
         }
-        msg.toolCalls = tcs;
+        return { ...msg, toolCalls: tcs };
       });
-      scheduleBatch();
+      scheduleStreamFlush();
     });
     client.on("complete", () => {
       flushNow();
-      updateAppState((prev) => ({ ...prev, currentMessage: null }));
+      updateAppState((prev) => {
+        if (!prev.currentMessage) return prev;
+        const msgs = [...prev.messages];
+        const cm = prev.currentMessage;
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          if (msgs[i].type === "assistant" && msgs[i].id === cm.id) {
+            msgs[i] = cm;
+            break;
+          }
+        }
+        return { ...prev, currentMessage: null, messages: msgs };
+      });
     });
     client.on("error", (m) => {
       const text = String(m.data || "Error");
@@ -1205,7 +1574,6 @@ function App({ backendUrl, wsUrl, onExit }) {
         statusText: `Error: ${text.slice(0, 120)}`
       }));
     });
-    let firstTokenUpdate = true;
     client.on("token_update", (m) => {
       let d = {};
       if (typeof m.data === "string") {
@@ -1216,21 +1584,38 @@ function App({ backendUrl, wsUrl, onExit }) {
       } else if (m.data && typeof m.data === "object") {
         d = m.data;
       }
-      if (firstTokenUpdate) {
-        firstTokenUpdate = false;
+      if (_firstTokenUpdate) {
+        _firstTokenUpdate = false;
         console.log("[token_update] raw data type:", typeof m.data, "| parsed keys:", Object.keys(d).join(","));
       }
-      const promptTokens = Number(d.promptTokens) || 0;
-      const completionTokens = Number(d.completionTokens) || 0;
       const totalTokens = Number(d.totalTokens) || 0;
-      const usageRatio = Number(d.usageRatio) || 0;
       if (totalTokens > 0) {
-        updateAppState((prev) => ({
-          ...prev,
-          usage: { promptTokens, completionTokens, totalTokens, usageRatio },
-          modelName: d.model || prev.modelName
-        }));
+        _pendingToken = d;
+        if (!_tokenScheduled) {
+          _tokenScheduled = true;
+          setTimeout(flushToken, 100);
+        }
       }
+    });
+    client.on("context_compressed", (m) => {
+      let d = {};
+      if (typeof m.data === "string") {
+        try {
+          d = JSON.parse(m.data);
+        } catch {
+        }
+      } else if (m.data && typeof m.data === "object") {
+        d = m.data;
+      }
+      const orig = Number(d.originalCount) || 0;
+      const comp = Number(d.compressedCount) || 0;
+      const saved = Number(d.tokensSaved) || 0;
+      const tokensStr = saved >= 1e3 ? `${(saved / 1e3).toFixed(1)}K` : String(saved);
+      updateAppState((prev) => ({
+        ...prev,
+        statusText: `\u4E0A\u4E0B\u6587\u538B\u7F29: ${orig}\u2192${comp} \u6761\u6D88\u606F, \u91CA\u653E ${tokensStr} tokens`,
+        usage: { ...prev.usage, usageRatio: Math.max(0, prev.usage.usageRatio - 0.15) }
+      }));
     });
     client.on("hook_ask", (m) => {
       const d = parseData(m);
@@ -1258,28 +1643,24 @@ function App({ backendUrl, wsUrl, onExit }) {
     });
     client.on("plan_thinking", (m) => {
       const text = typeof m.data === "string" ? m.data : m.data ? String(m.data) : "";
-      updateAppState((prev) => {
-        if (!prev.currentMessage) return prev;
-        prev.currentMessage.thinking += text + "\n";
-        return { ...prev };
-      });
+      _pendingThinking += text + "\n";
+      scheduleStreamFlush();
     });
     client.on("plan_tasks", () => {
-      updateAppState((prev) => {
-        if (!prev.currentMessage) return prev;
-        prev.currentMessage.content += "\n\u{1F4CB} \u4EFB\u52A1\u6E05\u5355\u5DF2\u751F\u6210\n";
-        return { ...prev };
-      });
+      _pendingContent += "\n\u{1F4CB} \u4EFB\u52A1\u6E05\u5355\u5DF2\u751F\u6210\n";
+      scheduleStreamFlush();
     });
     client.on("plan_complete", (m) => {
       flushNow();
       const status = m.status;
       const planText = typeof m.data === "string" ? m.data : "";
       updateAppState((prev) => {
+        if (!prev.currentMessage) return prev;
         const msgs = [...prev.messages];
+        const cm = prev.currentMessage;
         for (let i = msgs.length - 1; i >= 0; i--) {
-          if (msgs[i].type === "assistant" && !msgs[i].content) {
-            msgs[i] = { ...msgs[i], content: planText || "Plan complete." };
+          if (msgs[i].type === "assistant" && msgs[i].id === cm.id) {
+            msgs[i] = { ...cm, content: planText || "Plan complete." };
             break;
           }
         }
@@ -1302,13 +1683,28 @@ function App({ backendUrl, wsUrl, onExit }) {
   }
   __name(wireHandlers, "wireHandlers");
   useInput4((input2, key) => {
-    if (key.escape && showApproval) {
-      handleApprovalDeny(showApproval.approvalId);
-      return;
-    }
-    if (key.escape && showHelp) {
-      setShowHelp(false);
-      return;
+    if (key.escape) {
+      if (showApproval) {
+        handleApprovalDeny(showApproval.approvalId);
+        return;
+      }
+      if (showHelp) {
+        setShowHelp(false);
+        return;
+      }
+      if (isGenerating) {
+        const now = Date.now();
+        const prev = lastEscRef.current;
+        lastEscRef.current = now;
+        if (prev > 0 && now - prev < 500) {
+          clientRef.current?.stop();
+          updateAppState((prev2) => ({ ...prev2, statusText: "\u23F9 \u5DF2\u7EC8\u6B62 (ESC\xD72)" }));
+        } else {
+          clientRef.current?.pause();
+          updateAppState((prev2) => ({ ...prev2, statusText: "\u23F8 \u5DF2\u6682\u505C \u2014 \u518D\u6309 ESC \u7EC8\u6B62" }));
+        }
+        return;
+      }
     }
     if (showHelp) {
       const helpLines = HELP_TEXT.split("\n");
@@ -1329,6 +1725,13 @@ function App({ backendUrl, wsUrl, onExit }) {
         setHelpScroll(0);
         return;
       }
+    }
+    if (key.ctrl && input2 === "e") {
+      updateAppState((prev) => ({
+        ...prev,
+        toolCallsExpanded: !prev.toolCallsExpanded
+      }));
+      return;
     }
     if (key.pageUp) {
       updateAppState((prev) => ({
@@ -1359,11 +1762,17 @@ function App({ backendUrl, wsUrl, onExit }) {
       return;
     }
     if (key.home || key.home && key.ctrl) {
-      updateAppState((prev) => ({ ...prev, scrollOffset: prev.messages.length }));
+      updateAppState((prev) => ({
+        ...prev,
+        scrollOffset: prev.messages.length
+      }));
       return;
     }
     if (key.end || key.end && key.ctrl) {
-      updateAppState((prev) => ({ ...prev, scrollOffset: 0 }));
+      updateAppState((prev) => ({
+        ...prev,
+        scrollOffset: 0
+      }));
       return;
     }
     if (key.tab) {
@@ -1373,9 +1782,8 @@ function App({ backendUrl, wsUrl, onExit }) {
   });
   const placeholder = "";
   return /* @__PURE__ */ jsxs6(Box6, { flexDirection: "column", width: "100%", height: "100%", children: [
-    /* @__PURE__ */ jsx6(StatusLine, {}),
-    /* @__PURE__ */ jsx6(Box6, { flexGrow: 1, flexDirection: "column", children: /* @__PURE__ */ jsx6(ChatArea, { messages: state.messages, currentMessage: state.currentMessage, scrollOffset: state.scrollOffset, terminalRows, reservedRows }) }),
-    /* @__PURE__ */ jsxs6(Box6, { flexDirection: "row", borderStyle: "single", borderColor: state.connected ? "cyan" : "red", paddingLeft: 1, children: [
+    /* @__PURE__ */ jsx6(Box6, { flexGrow: 1, flexDirection: "column", children: /* @__PURE__ */ jsx6(ChatArea, { messages: chatAreaProps.messages, currentMessage: chatAreaProps.currentMessage, scrollOffset: chatAreaProps.scrollOffset, terminalRows, reservedRows, terminalCols, toolCallsExpanded }) }),
+    /* @__PURE__ */ jsxs6(Box6, { flexDirection: "row", borderStyle: "single", borderColor: connected ? "cyan" : "red", paddingLeft: 1, children: [
       /* @__PURE__ */ jsx6(Text6, { color: "green", bold: true, children: "> " }),
       /* @__PURE__ */ jsx6(Box6, { flexGrow: 1, children: /* @__PURE__ */ jsx6(
         TextInput,
@@ -1392,29 +1800,29 @@ function App({ backendUrl, wsUrl, onExit }) {
       /* @__PURE__ */ jsx6(
         Text6,
         {
-          color: state.planMode ? "cyan" : "grey",
-          bold: state.planMode,
-          dimColor: !state.planMode,
-          children: state.planMode ? "\u25C9 Plan" : "\u25CB Plan"
+          color: planMode ? "cyan" : "grey",
+          bold: planMode,
+          dimColor: !planMode,
+          children: planMode ? "\u25C9 Plan" : "\u25CB Plan"
         }
       ),
       /* @__PURE__ */ jsx6(Text6, { children: "  " }),
       /* @__PURE__ */ jsx6(
         Text6,
         {
-          color: !state.planMode ? "green" : "grey",
-          bold: !state.planMode,
-          dimColor: state.planMode,
-          children: !state.planMode ? "\u25C9 Act" : "\u25CB Act"
+          color: !planMode ? "green" : "grey",
+          bold: !planMode,
+          dimColor: planMode,
+          children: !planMode ? "\u25C9 Act" : "\u25CB Act"
         }
       ),
       /* @__PURE__ */ jsx6(Text6, { dimColor: true, children: "  Tab \u5207\u6362" })
     ] }),
-    !state.connected && /* @__PURE__ */ jsxs6(Box6, { children: [
+    !connected && /* @__PURE__ */ jsxs6(Box6, { children: [
       /* @__PURE__ */ jsx6(Text6, { color: "red", children: "\u540E\u7AEF\u672A\u8FDE\u63A5 \u2014 WebSocket \u91CD\u8BD5\u4E2D\u3002\u5982\u540E\u7AEF\u672A\u542F\u52A8\u8BF7\u7528 " }),
       /* @__PURE__ */ jsx6(Text6, { color: "yellow", bold: true, children: "npm start" })
     ] }),
-    state.planWaiting && /* @__PURE__ */ jsx6(Box6, { children: /* @__PURE__ */ jsx6(Text6, { color: "yellow", bold: true, children: "Plan ready \u2014 /confirm to execute, /cancel to discard." }) }),
+    planWaiting && /* @__PURE__ */ jsx6(Box6, { children: /* @__PURE__ */ jsx6(Text6, { color: "yellow", bold: true, children: "Plan ready \u2014 /confirm to execute, /cancel to discard." }) }),
     showPalette && /* @__PURE__ */ jsx6(CommandPalette, { filter: input, onSelect: handlePaletteSelect }),
     showHelp && (() => {
       const helpLines = HELP_TEXT.split("\n");
@@ -1443,7 +1851,8 @@ function App({ backendUrl, wsUrl, onExit }) {
         onAllow: () => handleApprovalAllow(showApproval.approvalId),
         onDeny: () => handleApprovalDeny(showApproval.approvalId)
       }
-    )
+    ),
+    /* @__PURE__ */ jsx6(StatusLine, {})
   ] });
 }
 __name(App, "App");
@@ -1459,7 +1868,7 @@ var __dirname = dirname(__filename);
 function findProjectRoot() {
   let dir = join(__dirname, "..", "..");
   while (dir !== dirname(dir)) {
-    if (existsSync(join(dir, "jwcode-parent", "pom.xml"))) return dir;
+    if (existsSync(join(dir, "pom.xml"))) return dir;
     dir = dirname(dir);
   }
   return process.cwd();
@@ -1807,7 +2216,7 @@ async function main() {
     return;
   }
   const args = parseArgs();
-  const cmd = args._cmd || "start";
+  const cmd = args._cmd || "run";
   switch (cmd) {
     case "start":
       await cmdStart(args);

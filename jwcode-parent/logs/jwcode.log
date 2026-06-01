@@ -1,3 +1,0 @@
-2026-06-01 09:11:34.753 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
-2026-06-01 09:11:35.862 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
-2026-06-01 09:11:35.879 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)

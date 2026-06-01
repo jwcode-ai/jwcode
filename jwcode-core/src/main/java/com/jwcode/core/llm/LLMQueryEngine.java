@@ -86,6 +86,10 @@ public class LLMQueryEngine {
     private java.util.List<String> lastToolNames = new java.util.ArrayList<>();
     // 【优化】重复工具检测计数器
     private int repeatedToolPatternCount = 0;
+    // 【修复】纯思考无行动检测：连续仅有 reasoning 但无文本/无工具调用的轮数
+    private int consecutiveThinkingOnlyRounds = 0;
+    // 【修复】连续失败工具轮数检测：连续 N 轮工具调用全部失败则强制终止
+    private int consecutiveFailedToolRounds = 0;
     private static final ObjectMapper MAPPER = new ObjectMapper()
             .registerModule(new JavaTimeModule());
     
@@ -522,6 +526,8 @@ public class LLMQueryEngine {
      */
     private void resetStagnationDetectors() {
         this.consecutiveToolOnlyRounds = 0;
+        this.consecutiveThinkingOnlyRounds = 0;
+        this.consecutiveFailedToolRounds = 0;
         this.lastToolNames = new java.util.ArrayList<>();
         this.repeatedToolPatternCount = 0;
         this.fabricationCheckInjected = false;
@@ -543,7 +549,11 @@ public class LLMQueryEngine {
     // 空回复时的引导提示
     private static final String EMPTY_RESPONSE_PROMPT = "你上一条回复为空。请继续完成当前任务，如果已完成请添加 [FINISH] 标记。";
     // 【优化】无进展检测：连续 N 轮仅工具调用无文本回复则强制终止
-    private static final int MAX_CONSECUTIVE_TOOL_ONLY_ROUNDS = Integer.MAX_VALUE;
+    private static final int MAX_CONSECUTIVE_TOOL_ONLY_ROUNDS = 30;
+    // 【修复】纯思考无行动检测：连续 N 轮仅有 reasoning 但无文本/无工具调用则强制终止
+    private static final int MAX_CONSECUTIVE_THINKING_ONLY_ROUNDS = 10;
+    // 【修复】连续失败工具轮数检测：连续 N 轮工具调用全部失败则强制终止
+    private static final int MAX_CONSECUTIVE_FAILED_TOOL_ROUNDS = 5;
     // 【优化】重复工具检测：同一工具连续调用超过此阈值触发干预
     private static final int MAX_REPEATED_TOOL_CALLS = 8;
     // 【优化】[FINISH] 提示注入间隔：每 N 轮才检查一次，避免频繁注入
@@ -683,7 +693,27 @@ public class LLMQueryEngine {
                 QueryResult.error("任务停滞：连续" + consecutiveToolOnlyRounds + "轮工具调用无进展，已自动终止")
             );
         }
-        
+
+        // 【修复】纯思考无行动检测：连续多轮仅有 reasoning 无文本无工具调用时强制终止
+        if (consecutiveThinkingOnlyRounds >= MAX_CONSECUTIVE_THINKING_ONLY_ROUNDS) {
+            logger.warning("[LLMQueryEngine] Thinking-only stagnation: " + consecutiveThinkingOnlyRounds
+                + " consecutive rounds with only reasoning, no action");
+            triggerStepComplete("LLM查询", "模型持续思考但无行动，已自动终止");
+            return CompletableFuture.completedFuture(
+                QueryResult.error("模型持续思考但无行动，已自动终止")
+            );
+        }
+
+        // 【修复】连续失败工具检测：连续 N 轮工具调用全部失败时强制终止
+        if (consecutiveFailedToolRounds >= MAX_CONSECUTIVE_FAILED_TOOL_ROUNDS) {
+            logger.warning("[LLMQueryEngine] Consecutive failed tool rounds: " + consecutiveFailedToolRounds
+                + " (limit=" + MAX_CONSECUTIVE_FAILED_TOOL_ROUNDS + "), force terminating");
+            triggerStepComplete("LLM查询", "连续" + consecutiveFailedToolRounds + "轮工具调用全部失败，已自动终止");
+            return CompletableFuture.completedFuture(
+                QueryResult.error("连续" + consecutiveFailedToolRounds + "轮工具调用全部失败，已自动终止。请检查工具配置或网络连接后重试。")
+            );
+        }
+
         // 已移除累计超时检查，由 HTTP 层超时控制（OpenAILLMService 中的 timeoutSeconds）
         // 单次 LLM 请求的超时由 HTTP 客户端处理，不受工具执行时间影响
         
@@ -859,16 +889,20 @@ public class LLMQueryEngine {
                 );
             }
             
-            // 检查是否为空回复（reasoningContent 非空时视为有效思考，不算空回复）
+            // 检查是否为空回复
+            // 【修复】纯思考（仅有 reasoning，无文本内容、无工具调用）不算有效进展，
+            // 连续纯思考达到阈值必须强制终止，否则会导致无限循环
             String reasoning = response.getReasoningContent();
             boolean hasReasoning = reasoning != null && !reasoning.trim().isEmpty();
             boolean isEmptyContent = content == null || content.trim().isEmpty();
-            
+            boolean isThinkingOnly = isEmptyContent && hasReasoning; // 仅有思考，无行动
+
             if (isEmptyContent && !hasReasoning) {
+                // 完全空回复（无思考、无内容）
                 emptyResponseCount++;
                 int maxEmpty = config.getMaxEmptyResponses();
                 logger.warning("[LLMQueryEngine] 空回复 (第 " + emptyResponseCount + "/" + maxEmpty + " 次)");
-                
+
                 if (emptyResponseCount >= maxEmpty) {
                     logger.warning("[LLMQueryEngine] 空回复次数已达上限，强制结束对话");
                     triggerStepComplete("LLM查询", "空回复过多，已自动结束");
@@ -876,13 +910,35 @@ public class LLMQueryEngine {
                         QueryResult.error("对话无响应，已自动结束")
                     );
                 }
-                
-                // 第一次/第二次空回复时，主动引导模型继续，而不是静默等待
+
                 session.addMessage(Message.createSystemMessage(EMPTY_RESPONSE_PROMPT));
+            } else if (isThinkingOnly) {
+                // 【修复】纯思考无行动：不为有效进展，递增计数器且不重置空回复计数
+                consecutiveThinkingOnlyRounds++;
+                logger.warning("[LLMQueryEngine] 纯思考无行动 (第 " + consecutiveThinkingOnlyRounds
+                    + "/" + MAX_CONSECUTIVE_THINKING_ONLY_ROUNDS + " 轮)，iteration=" + iteration);
+
+                if (consecutiveThinkingOnlyRounds >= MAX_CONSECUTIVE_THINKING_ONLY_ROUNDS) {
+                    logger.warning("[LLMQueryEngine] 纯思考轮数已达上限，强制结束对话");
+                    triggerStepComplete("LLM查询", "模型持续思考但无行动，已自动终止");
+                    return CompletableFuture.completedFuture(
+                        QueryResult.error("模型持续思考但无行动，已自动终止")
+                    );
+                }
+
+                // 注入更明确的引导提示
+                if (consecutiveThinkingOnlyRounds % 3 == 0) {
+                    session.addMessage(Message.createSystemMessage(
+                        "【系统提示】你已连续 " + consecutiveThinkingOnlyRounds + " 轮仅有内部思考而无实际输出。"
+                        + "请立即做出决定：执行工具操作，或输出文本回复，或在文本末尾添加 [FINISH] 结束对话。"
+                        + "不要只思考不行动。"
+                    ));
+                }
             } else {
-                // 有有效内容或仅有思考内容，重置空回复计数
+                // 有有效文本内容，重置所有停滞计数器
                 emptyResponseCount = 0;
-                
+                consecutiveThinkingOnlyRounds = 0;
+
                 // 【优化】降低 [FINISH] 提醒注入频率：每 FINISH_REMINDER_INTERVAL 轮才注入一次
                 if (iteration % FINISH_REMINDER_INTERVAL == 0 && !hasRecentSystemPrompt("[FINISH]")) {
                     session.addMessage(Message.createSystemMessage(
@@ -890,7 +946,7 @@ public class LLMQueryEngine {
                     ));
                 }
             }
-            
+
             // 没有 finishReason，继续对话循环
             return runConversationLoop(iteration + 1, emptyResponseCount);
         }
@@ -1043,7 +1099,33 @@ public class LLMQueryEngine {
                 QueryResult.error("任务停滞：连续" + consecutiveToolOnlyRounds + "轮工具调用无进展，已自动终止")
             );
         }
-        
+
+        // 【修复】纯思考无行动检测：连续多轮仅有 reasoning 无文本无工具调用时强制终止
+        if (consecutiveThinkingOnlyRounds >= MAX_CONSECUTIVE_THINKING_ONLY_ROUNDS) {
+            logger.warning("[LLMQueryEngine] Thinking-only stagnation: " + consecutiveThinkingOnlyRounds
+                + " consecutive rounds with only reasoning, no action");
+            triggerStepComplete("LLM查询", "模型持续思考但无行动，已自动终止");
+            if (contentConsumer != null) {
+                contentConsumer.accept("\n\n---\n⚠️ **模型持续思考但无行动，已自动终止。**\n\n[FINISH]");
+            }
+            return CompletableFuture.completedFuture(
+                QueryResult.error("模型持续思考但无行动，已自动终止")
+            );
+        }
+
+        // 【修复】连续失败工具检测：连续 N 轮工具调用全部失败时强制终止
+        if (consecutiveFailedToolRounds >= MAX_CONSECUTIVE_FAILED_TOOL_ROUNDS) {
+            logger.warning("[LLMQueryEngine] Consecutive failed tool rounds: " + consecutiveFailedToolRounds
+                + " (limit=" + MAX_CONSECUTIVE_FAILED_TOOL_ROUNDS + "), force terminating");
+            triggerStepComplete("LLM查询", "连续" + consecutiveFailedToolRounds + "轮工具调用全部失败，已自动终止");
+            if (contentConsumer != null) {
+                contentConsumer.accept("\n\n---\n⚠️ **连续" + consecutiveFailedToolRounds + "轮工具调用全部失败，已自动终止。**\n\n请检查工具配置或网络连接后重试。\n\n[FINISH]");
+            }
+            return CompletableFuture.completedFuture(
+                QueryResult.error("连续" + consecutiveFailedToolRounds + "轮工具调用全部失败，已自动终止。请检查工具配置或网络连接后重试。")
+            );
+        }
+
         // 【Phase 5】注入当前 Agent 的系统提示词（仅首次迭代，避免重复）
         if (iteration == 0) {
             injectAgentSystemPrompt();
@@ -1246,16 +1328,18 @@ public class LLMQueryEngine {
                 );
             }
             
-            // 检查是否为空回复（reasoningContent 非空时视为有效思考，不算空回复）
+            // 检查是否为空回复
+            // 【修复】纯思考（仅有 reasoning，无文本内容、无工具调用）不算有效进展
             String reasoning = response.getReasoningContent();
             boolean hasReasoning = reasoning != null && !reasoning.trim().isEmpty();
             boolean isEmptyContent = content == null || content.trim().isEmpty();
-            
+            boolean isThinkingOnly = isEmptyContent && hasReasoning;
+
             if (isEmptyContent && !hasReasoning) {
                 emptyResponseCount++;
                 int maxEmpty = config.getMaxEmptyResponses();
                 logger.warning("[LLMQueryEngine] 空回复 (第 " + emptyResponseCount + "/" + maxEmpty + " 次)");
-                
+
                 if (emptyResponseCount >= maxEmpty) {
                     logger.warning("[LLMQueryEngine] 空回复次数已达上限，强制结束对话");
                     triggerStepComplete("LLM查询", "空回复过多，已自动结束");
@@ -1263,21 +1347,43 @@ public class LLMQueryEngine {
                         QueryResult.error("对话无响应，已自动结束")
                     );
                 }
-                
-                // 第一次/第二次空回复时，主动引导模型继续，而不是静默等待
+
                 session.addMessage(Message.createSystemMessage(EMPTY_RESPONSE_PROMPT));
+            } else if (isThinkingOnly) {
+                // 【修复】纯思考无行动：不为有效进展，递增计数器
+                consecutiveThinkingOnlyRounds++;
+                logger.warning("[LLMQueryEngine] 纯思考无行动 (第 " + consecutiveThinkingOnlyRounds
+                    + "/" + MAX_CONSECUTIVE_THINKING_ONLY_ROUNDS + " 轮)，iteration=" + iteration);
+
+                if (consecutiveThinkingOnlyRounds >= MAX_CONSECUTIVE_THINKING_ONLY_ROUNDS) {
+                    logger.warning("[LLMQueryEngine] 纯思考轮数已达上限，强制结束对话");
+                    triggerStepComplete("LLM查询", "模型持续思考但无行动，已自动终止");
+                    if (contentConsumer != null) {
+                        contentConsumer.accept("\n\n---\n⚠️ **模型持续思考但无行动，已自动终止。**\n\n[FINISH]");
+                    }
+                    return CompletableFuture.completedFuture(
+                        QueryResult.error("模型持续思考但无行动，已自动终止")
+                    );
+                }
+
+                if (consecutiveThinkingOnlyRounds % 3 == 0) {
+                    session.addMessage(Message.createSystemMessage(
+                        "【系统提示】你已连续 " + consecutiveThinkingOnlyRounds + " 轮仅有内部思考而无实际输出。"
+                        + "请立即做出决定：执行工具操作，或输出文本回复，或在文本末尾添加 [FINISH] 结束对话。"
+                    ));
+                }
             } else {
-                // 有有效内容或仅有思考内容，重置空回复计数
+                // 有有效文本内容，重置所有停滞计数器
                 emptyResponseCount = 0;
-                
-                // 【优化】降低 [FINISH] 提醒注入频率：每 FINISH_REMINDER_INTERVAL 轮才注入一次
+                consecutiveThinkingOnlyRounds = 0;
+
                 if (iteration % FINISH_REMINDER_INTERVAL == 0 && !hasRecentSystemPrompt("[FINISH]")) {
                     session.addMessage(Message.createSystemMessage(
                         "提示：如果任务已完成，请在回复末尾添加 [FINISH] 标记以结束对话。例如：\"任务已完成。\\n\\n[FINISH]\""
                     ));
                 }
             }
-            
+
             // 没有 finishReason，继续流式对话循环
             return runStreamConversationLoop(iteration + 1, emptyResponseCount, contentConsumer, thinkingConsumer, toolCallConsumer);
         }
@@ -1334,6 +1440,7 @@ public class LLMQueryEngine {
                 int resultIndex = 1;
                 boolean hasAskUserQuestion = false;
                 boolean hasError = false;
+                boolean allFailed = true; // 【修复】追踪是否所有工具都失败
                 for (CompletableFuture<ToolExecutionResult> future : futures) {
                     try {
                         ToolExecutionResult result = future.get();
@@ -1362,6 +1469,8 @@ public class LLMQueryEngine {
                         }
                         if (!success) {
                             hasError = true;
+                        } else {
+                            allFailed = false; // 至少有一个工具成功
                         }
                         
                     } catch (Exception e) {
@@ -1384,6 +1493,15 @@ public class LLMQueryEngine {
                     resultIndex++;
                 }
                 
+                // 【修复】更新连续失败工具轮数计数器
+                if (allFailed && !futures.isEmpty()) {
+                    consecutiveFailedToolRounds++;
+                    logger.warning("[LLMQueryEngine] All tools failed in this round (consecutiveFailedToolRounds="
+                        + consecutiveFailedToolRounds + "/" + MAX_CONSECUTIVE_FAILED_TOOL_ROUNDS + ")");
+                } else if (!allFailed) {
+                    consecutiveFailedToolRounds = 0; // 有工具成功，重置计数器
+                }
+
                 // 【任务生命周期】根据工具结果更新任务状态
                 if (hasAskUserQuestion) {
                     // AskUserQuestion 的结果作为等待的问题描述
@@ -1404,7 +1522,10 @@ public class LLMQueryEngine {
                 
                 // 触发事件：继续分析
                 pipeline.publish(new ObservationEvent.Thinking("分析", "工具执行完成，继续分析结果..."));
-                
+
+                // 【修复】工具执行 = 真实进展，重置纯思考计数器
+                consecutiveThinkingOnlyRounds = 0;
+
                 // 继续对话循环（重置空回复计数，因为工具执行可能有有效输出）
                 return loopContinuation.apply(nextIteration, 0);
             });

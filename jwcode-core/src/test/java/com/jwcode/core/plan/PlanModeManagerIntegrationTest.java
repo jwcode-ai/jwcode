@@ -96,16 +96,16 @@ class PlanModeManagerIntegrationTest {
 
     @Test
     @Order(4)
-    @DisplayName("PLAN → NORMAL: 退出 Plan 模式")
+    @DisplayName("PLAN → ACT: 退出 Plan 模式自动进入 Act 模式")
     void testExitPlanMode() {
         manager.enterPlanMode("进入 PLAN");
         assertEquals(PlanModeManager.Mode.PLAN, manager.getCurrentMode());
 
-        boolean result = manager.exitPlanMode("退出到 NORMAL");
+        boolean result = manager.exitPlanMode("退出到 ACT");
         assertTrue(result);
-        assertEquals(PlanModeManager.Mode.NORMAL, manager.getCurrentMode());
+        assertEquals(PlanModeManager.Mode.ACT, manager.getCurrentMode());
         assertFalse(manager.isPlanMode());
-        assertFalse(manager.isActMode());
+        assertTrue(manager.isActMode());
     }
 
     @Test
@@ -139,10 +139,7 @@ class PlanModeManagerIntegrationTest {
         manager.enterPlanMode("进入 PLAN");
         assertEquals(PlanModeManager.Mode.PLAN, manager.getCurrentMode());
 
-        manager.exitPlanMode("完成 PLAN");
-        assertEquals(PlanModeManager.Mode.NORMAL, manager.getCurrentMode());
-
-        manager.enterActMode();
+        manager.exitPlanMode("完成 PLAN → 自动进入 ACT");
         assertEquals(PlanModeManager.Mode.ACT, manager.getCurrentMode());
 
         manager.exitActMode();
@@ -233,6 +230,8 @@ class PlanModeManagerIntegrationTest {
             manager.enterPlanMode("快速切换 " + i);
             assertEquals(PlanModeManager.Mode.PLAN, manager.getCurrentMode());
             manager.exitPlanMode("快速切换 " + i);
+            assertEquals(PlanModeManager.Mode.ACT, manager.getCurrentMode());
+            manager.exitActMode();
             assertEquals(PlanModeManager.Mode.NORMAL, manager.getCurrentMode());
         }
         // 最终状态应为 NORMAL

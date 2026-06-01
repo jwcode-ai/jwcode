@@ -1,5 +1,6 @@
+import { memo, useState, useEffect } from 'react';
 import { Box, Text } from 'ink';
-import { useAppState } from '../hooks/useAppState.js';
+import { useAppStatusLine, useAppIsGenerating, useAppCurrentMessage } from '../hooks/useAppState.js';
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -24,11 +25,23 @@ function formatElapsed(sec: number): string {
   return `${sec}s`;
 }
 
-export function StatusLine() {
-  const state = useAppState();
-  const { usage, modelName, planMode, autoMode, connected, statusText, messages,
-          generationElapsed, tokenRate } = state;
-  const msgCount = messages.length;
+export const StatusLine = memo(function StatusLine() {
+  const { usage, modelName, planMode, autoMode, connected, statusText, messagesLen,
+          tokenRate } = useAppStatusLine();
+  const msgCount = messagesLen;
+
+  // Local elapsed timer — avoids global state updates every second
+  const isGenerating = useAppIsGenerating();
+  const currentMessage = useAppCurrentMessage();
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!currentMessage) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [currentMessage?.id]);
+  const generationElapsed = currentMessage
+    ? Math.floor((now - (currentMessage.timestamp || Date.now())) / 1000)
+    : 0;
 
   const pct = Math.min(100, Math.round(usage.usageRatio * 100));
   const filled = Math.round(pct / 10);
@@ -42,7 +55,6 @@ export function StatusLine() {
   const connColor = connected ? 'green' : 'red';
 
   const isError = statusText.startsWith('Error:');
-  const isGenerating = !!state.currentMessage;
   const barColor = pct > 90 ? 'red' : pct > 70 ? 'yellow' : 'white';
   const rateStr = formatRate(tokenRate);
   const elapsedStr = formatElapsed(generationElapsed);
@@ -113,4 +125,4 @@ export function StatusLine() {
       )}
     </Box>
   );
-}
+});

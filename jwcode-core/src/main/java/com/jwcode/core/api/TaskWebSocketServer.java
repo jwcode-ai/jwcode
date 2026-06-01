@@ -200,7 +200,10 @@ public class TaskWebSocketServer extends WebSocketServer {
             String type = (String) msgMap.getOrDefault("type", "");
             String sessionId = (String) msgMap.getOrDefault("sessionId", "");
             String msgContent = (String) msgMap.getOrDefault("message", "");
-            
+            if (msgContent == null || msgContent.isEmpty()) {
+                msgContent = (String) msgMap.getOrDefault("data", "");
+            }
+
             // 处理心跳
             if ("pong".equals(type)) {
                 if (connId != null) {

@@ -111,7 +111,7 @@ public class ExitPlanModeV2Tool implements Tool<ExitPlanModeInput, ExitPlanModeO
                     // 读取 plan 文件内容（如果有）
                     String planContent = readPlanFile();
                     
-                    return ToolResult.<ExitPlanModeOutput>success(ExitPlanModeOutput.success("normal", summary, planContent));
+                    return ToolResult.<ExitPlanModeOutput>success(ExitPlanModeOutput.success("act", summary, planContent));
                 } else {
                     return ToolResult.<ExitPlanModeOutput>error("退出计划模式失败");
                 }

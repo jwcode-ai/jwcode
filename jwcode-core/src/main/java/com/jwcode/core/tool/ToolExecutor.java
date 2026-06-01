@@ -225,8 +225,10 @@ public class ToolExecutor {
                         + " | " + askPayload);
                     // 发起审批请求，等待用户决策
                     try {
+                        String sessionId = context != null && context.getSession() != null
+                            ? context.getSession().getId() : null;
                         Boolean approved = HookApprovalManager.getInstance()
-                            .requestApproval(toolName, askPayload != null ? askPayload : "", 60_000)
+                            .requestApproval(toolName, askPayload != null ? askPayload : "", 60_000, sessionId)
                             .get(65, java.util.concurrent.TimeUnit.SECONDS);
                         if (approved == null || !approved) {
                             return CompletableFuture.completedFuture(

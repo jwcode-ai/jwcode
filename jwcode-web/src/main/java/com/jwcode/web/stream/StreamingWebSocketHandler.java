@@ -3,6 +3,7 @@ package com.jwcode.web.stream;
 import com.jwcode.common.config.ConfigLoader;
 import com.jwcode.core.agent.AgentRegistry;
 import com.jwcode.core.agent.EnhancedOrchestratorAgent;
+import com.jwcode.core.hook.HookApprovalManager;
 import com.jwcode.core.hook.HookChain;
 import com.jwcode.core.hook.HookContext;
 import com.jwcode.core.hook.HookEventType;
@@ -10,6 +11,7 @@ import com.jwcode.core.config.JwcodeConfig;
 import com.jwcode.core.config.YamlConfigLoader;
 import com.jwcode.core.llm.*;
 import com.jwcode.core.index.CodebaseIndexer;
+import com.jwcode.core.permission.PermissionManager;
 import com.jwcode.core.plan.PlanModeManager;
 import com.jwcode.core.session.Session;
 import com.jwcode.core.tool.Tool;
@@ -301,6 +303,25 @@ public class StreamingWebSocketHandler extends WebSocketServer {
      * 优先级：系统属性 > 环境变量 > 配置文件 > 默认值
      */
     private void loadConfig() {
+        // 0. 传播权限配置到 PermissionManager（必须在早期返回之前执行）
+        try {
+            JwcodeConfig config = YamlConfigLoader.getInstance().getConfig();
+            if (config != null && config.getSettings() != null && config.getSettings().getPermissions() != null) {
+                JwcodeConfig.PermissionSettings perm = config.getSettings().getPermissions();
+                PermissionManager pm = PermissionManager.getInstance();
+                pm.setAutoApproveRead(perm.isAutoApproveRead());
+                pm.setAutoApproveWrite(perm.isAutoApproveWrite());
+                pm.setAutoApproveDelete(perm.isAutoApproveDelete());
+                pm.setAutoApproveDestructive(perm.isAutoApproveDestructive());
+                logger.info("权限配置已传播: read=" + perm.isAutoApproveRead()
+                    + " write=" + perm.isAutoApproveWrite()
+                    + " delete=" + perm.isAutoApproveDelete()
+                    + " destructive=" + perm.isAutoApproveDestructive());
+            }
+        } catch (Exception e) {
+            logger.fine("无法传播权限配置: " + e.getMessage());
+        }
+
         // 1. 先尝试从系统属性读取
         String tokenFromProp = System.getProperty("jwcode.websocket.token");
         if (tokenFromProp != null && !tokenFromProp.isEmpty()) {
@@ -308,7 +329,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             logger.info("从系统属性加载 WebSocket token");
             return;
         }
-        
+
         // 2. 尝试从环境变量读取
         String tokenFromEnv = System.getenv("JWCODE_WEBSOCKET_TOKEN");
         if (tokenFromEnv != null && !tokenFromEnv.isEmpty()) {
@@ -316,12 +337,11 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             logger.info("从环境变量加载 WebSocket token");
             return;
         }
-        
+
         // 3. 尝试从 YAML 配置读取（通过全局设置）
         try {
             JwcodeConfig config = YamlConfigLoader.getInstance().getConfig();
             if (config != null && config.getSettings() != null) {
-                // 可通过 settings 的 advanced 配置扩展
                 JwcodeConfig.AdvancedSettings advanced = config.getSettings().getAdvanced();
                 if (advanced != null) {
                     // 这里可以扩展读取 websocket 配置
@@ -330,7 +350,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         } catch (Exception e) {
             logger.fine("无法从 YAML 配置加载: " + e.getMessage());
         }
-        
+
         // 4. 使用默认值（已经在构造函数中设置）
         logger.info("使用默认 WebSocket token");
     }
@@ -543,6 +563,8 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             activeSessionConnections.remove(sessionId);
             // 连接断开时取消正在运行的查询任务
             cancelRunningQuery(sessionId);
+            // 连接断开时拒绝该 session 的所有待审批 Hook 请求
+            HookApprovalManager.getInstance().denyAllForSession(sessionId);
         }
         
         // 清理心跳跟踪数据
@@ -660,6 +682,12 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                     break;
                 case "toggle_workspace_guard":
                     handleToggleWorkspaceGuard(conn, clientMsg);
+                    break;
+                case "hook_allow":
+                    handleHookApprovalResponse(clientMsg, true);
+                    break;
+                case "hook_deny":
+                    handleHookApprovalResponse(clientMsg, false);
                     break;
                 default:
                     logger.warning("未知消息类型: " + clientMsg.type);
@@ -1478,11 +1506,9 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                     .session(session)
                     .workingDirectory(wd)
                     .build();
-            // 检查是否绕过高工作区守卫
+            // Sync workspace guard bypass from session metadata (default: bypass)
             Boolean bypass = session.getMetadata("workspaceGuardBypass");
-            if (Boolean.TRUE.equals(bypass)) {
-                context.setBypassWorkspaceGuard(true);
-            }
+            context.setBypassWorkspaceGuard(!Boolean.FALSE.equals(bypass));
 
             java.util.concurrent.CompletableFuture<com.jwcode.core.tool.ToolExecutor.ToolExecutionResult> future =
                 toolExecutor.execute(toolName, argsNode, context);
@@ -1826,6 +1852,34 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         } catch (Exception e) {
             logger.warning("handleToggleWorkspaceGuard error: " + e.getMessage());
             sendMessage(conn, MessageType.ERROR, "Failed to toggle workspace guard: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Handle hook approval response (hook_allow / hook_deny) from frontend.
+     */
+    private void handleHookApprovalResponse(ClientMessage msg, boolean approved) {
+        try {
+            String dataStr = msg.data;
+            if (dataStr == null || dataStr.isEmpty()) {
+                logger.warning("[Hook] Empty hook response data");
+                return;
+            }
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            com.fasterxml.jackson.databind.JsonNode node = mapper.readTree(dataStr);
+            String approvalId = node.has("approvalId") ? node.get("approvalId").asText() : null;
+            if (approvalId == null || approvalId.isEmpty()) {
+                logger.warning("[Hook] Missing approvalId in hook response");
+                return;
+            }
+            if (approved) {
+                HookApprovalManager.getInstance().approve(approvalId);
+            } else {
+                HookApprovalManager.getInstance().deny(approvalId);
+            }
+            logger.info("[Hook] Approval " + (approved ? "allowed" : "denied") + " for " + approvalId);
+        } catch (Exception e) {
+            logger.warning("[Hook] Error processing hook approval: " + e.getMessage());
         }
     }
 

@@ -33,10 +33,6 @@ function extractFilePath(args: Record<string, unknown> | string): string | undef
   return (args.filePath || args.path || args.file || args.file_path) as string | undefined;
 }
 
-function getFirstLine(text: string): string {
-  const idx = text.indexOf('\n');
-  return idx > 0 ? text.slice(0, idx) : text;
-}
 
 export const ToolCallItem = memo(function ToolCallItem({ toolCall, defaultCollapsed = false }: ToolCallItemProps) {
   const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
@@ -113,10 +109,9 @@ export const ToolCallItem = memo(function ToolCallItem({ toolCall, defaultCollap
         </span>
       </div>
 
-      {/* Collapsible content */}
+      {/* Args — collapsible */}
       {!isCollapsed && (
-        <div className="px-3 pb-3 space-y-2">
-          {/* Args */}
+        <div className="px-3 pb-2">
           <div>
             <div className="text-[10px] text-dark-muted mb-1">参数</div>
             <pre className="text-[11px] font-mono bg-dark-bg border border-dark-border p-2 rounded overflow-x-auto max-h-24 overflow-y-auto">
@@ -125,42 +120,26 @@ export const ToolCallItem = memo(function ToolCallItem({ toolCall, defaultCollap
                 : JSON.stringify(toolCall.args, null, 2)}
             </pre>
           </div>
-
-          {/* Result */}
-          {hasResult && (
-            <div>
-              <div className="text-[10px] text-dark-muted mb-1">
-                {isError ? '错误' : '结果'}
-              </div>
-              {isFileModify && resultText ? (
-                <DiffPreview
-                  filePath={filePath}
-                  content={resultText}
-                />
-              ) : (
-                <pre className={`text-[11px] font-mono bg-dark-bg border border-dark-border p-2 rounded overflow-x-auto max-h-48 overflow-y-auto whitespace-pre-wrap break-all ${
-                  isError ? 'text-accent-red' : 'text-accent-green'
-                }`}>
-                  {resultText}
-                </pre>
-              )}
-            </div>
-          )}
         </div>
       )}
 
-      {/* Collapsed hint: show first line of result */}
-      {isCollapsed && hasResult && (
-        <div className="px-3 pb-2 text-[11px] text-dark-muted truncate border-t border-dark-border/30 pt-1.5">
-          {isFileModify && filePath ? (
-            <span className="text-accent-purple">📝 {filePath}</span>
-          ) : resultText ? (
-            <span className="text-dark-muted/60">
-              {getFirstLine(resultText).slice(0, 120)}
-              {resultText.length > 120 ? '...' : ''}
-            </span>
+      {/* Result — always visible, never collapsed */}
+      {hasResult && (
+        <div className="px-3 pb-3">
+          <div className="text-[10px] text-dark-muted mb-1">
+            {isError ? '错误' : '结果'}
+          </div>
+          {isFileModify && resultText ? (
+            <DiffPreview
+              filePath={filePath}
+              content={resultText}
+            />
           ) : (
-            <span>✓ 有返回结果</span>
+            <pre className={`text-[11px] font-mono bg-dark-bg border border-dark-border p-2 rounded overflow-x-auto max-h-48 overflow-y-auto whitespace-pre-wrap break-all ${
+              isError ? 'text-accent-red' : 'text-accent-green'
+            }`}>
+              {resultText}
+            </pre>
           )}
         </div>
       )}

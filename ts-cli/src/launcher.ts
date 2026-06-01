@@ -12,7 +12,7 @@ const __dirname = dirname(__filename);
 export function findProjectRoot(): string {
   let dir = join(__dirname, '..', '..');
   while (dir !== dirname(dir)) {
-    if (existsSync(join(dir, 'jwcode-parent', 'pom.xml'))) return dir;
+    if (existsSync(join(dir, 'pom.xml'))) return dir;
     dir = dirname(dir);
   }
   return process.cwd();

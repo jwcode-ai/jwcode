@@ -3,6 +3,7 @@ package com.jwcode.core.plan;
 import com.jwcode.core.tool.Tool;
 import com.jwcode.core.tool.ToolCategory;
 import com.jwcode.core.tool.SideEffect;
+import com.jwcode.core.permission.PermissionManager;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -236,8 +237,8 @@ public class PlanModeManager {
     }
     
     /**
-     * 退出 Plan Mode
-     * 
+     * 退出 Plan Mode 并自动进入 Act Mode
+     *
      * @param summary 计划摘要
      * @return 是否成功切换
      */
@@ -246,16 +247,16 @@ public class PlanModeManager {
             logger.fine("Not in plan mode");
             return false;
         }
-        
+
         Mode previousMode = currentMode;
-        currentMode = Mode.NORMAL;
+        currentMode = Mode.ACT;
         saveMode();
-        
-        ModeChangeEvent event = new ModeChangeEvent(previousMode, Mode.NORMAL, summary);
+
+        ModeChangeEvent event = new ModeChangeEvent(previousMode, Mode.ACT, summary);
         history.add(event);
         notifyListeners(event);
-        
-        logger.info("Exited plan mode: " + summary);
+
+        logger.info("Exited plan mode → Act mode: " + summary);
         return true;
     }
     
@@ -266,12 +267,15 @@ public class PlanModeManager {
         Mode previousMode = currentMode;
         currentMode = Mode.ACT;
         saveMode();
-        
+
+        // Act 模式下自动批准文件写入，只有 bash/shell 命令需要审批
+        PermissionManager.getInstance().setAutoApproveWrite(true);
+
         ModeChangeEvent event = new ModeChangeEvent(previousMode, Mode.ACT, "Entered act mode");
         history.add(event);
         notifyListeners(event);
-        
-        logger.info("Entered act mode");
+
+        logger.info("Entered act mode (autoApproveWrite=true)");
         return true;
     }
     
@@ -282,16 +286,19 @@ public class PlanModeManager {
         if (currentMode != Mode.ACT) {
             return false;
         }
-        
+
         Mode previousMode = currentMode;
         currentMode = Mode.NORMAL;
         saveMode();
-        
+
+        // 退出 Act 模式时恢复文件写入审批
+        PermissionManager.getInstance().setAutoApproveWrite(false);
+
         ModeChangeEvent event = new ModeChangeEvent(previousMode, Mode.NORMAL, "Exited act mode");
         history.add(event);
         notifyListeners(event);
-        
-        logger.info("Exited act mode");
+
+        logger.info("Exited act mode (autoApproveWrite=false)");
         return true;
     }
     

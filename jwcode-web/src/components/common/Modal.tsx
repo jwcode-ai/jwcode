@@ -25,7 +25,11 @@ export function Modal({
   // 按ESC关闭
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
     };
 
     if (isOpen) {

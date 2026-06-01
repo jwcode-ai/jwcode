@@ -121,7 +121,7 @@ export const MessageBubble = memo(function MessageBubble({
         {!message.steps?.length && message.toolCalls && message.toolCalls.length > 0 && !message.hookApproval && (
           <div className="mb-2 space-y-1">
             {message.toolCalls.map(toolCall => (
-              <ToolCallItem key={toolCall.id} toolCall={toolCall} defaultCollapsed />
+              <ToolCallItem key={toolCall.id} toolCall={toolCall} defaultCollapsed={toolCall.status !== 'running'} />
             ))}
           </div>
         )}

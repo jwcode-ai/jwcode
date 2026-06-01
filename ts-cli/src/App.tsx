@@ -10,11 +10,18 @@ import { StatusLine } from './components/StatusLine.js';
 import { ChatArea } from './components/ChatArea.js';
 import { CommandPalette } from './components/CommandPalette.js';
 import { ApprovalModal } from './components/ApprovalModal.js';
-import { updateAppState, useAppState, getStore } from './hooks/useAppState.js';
+import {
+  updateAppState, getStore,
+  useAppCurrentMessage, useAppConnected,
+  useAppPlanMode, useAppPlanWaiting,
+  useAppStatusText, useAppChatArea,
+  useAppIsGenerating,
+  useAppToolCallsExpanded,
+} from './hooks/useAppState.js';
 import { setClient } from './hooks/useWebSocket.js';
 import {
   createMessage, parseData,
-  type WSMessage, type ToolCall,
+  type WSMessage, type ToolCall, type Message,
 } from './protocol.js';
 import { SLASH_COMMANDS, HELP_TEXT } from './commands/index.js';
 
@@ -50,13 +57,28 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
     approvalId: string; toolName: string; payload: string;
   } | null>(null);
   const { exit } = useApp();
-  const state = useAppState();
+  // Selector-based subscriptions — each component re-renders only when its slice changes
+  const connected = useAppConnected();
+  const planMode = useAppPlanMode();
+  const planWaiting = useAppPlanWaiting();
+  const currentMessage = useAppCurrentMessage();
+  const isGenerating = useAppIsGenerating();
+  const chatAreaProps = useAppChatArea();
+  const toolCallsExpanded = useAppToolCallsExpanded();
+
+  // Refs for stable callback access
   const clientRef = useRef<JwCodeClient | null>(null);
+  const lastEscRef = useRef(0);
+  const currentMessageRef = useRef(currentMessage);
+  currentMessageRef.current = currentMessage;
+  const planModeRef = useRef(planMode);
+  planModeRef.current = planMode;
+
   const { stdout } = useStdout();
   const terminalRows = (stdout as NodeJS.WriteStream)?.rows || 24;
   const terminalCols = (stdout as NodeJS.WriteStream)?.columns || 80;
-  // Reserve rows for: status(1) + scroll-hint(1) + plan-waiting(optional) + input-border(2) + palette(optional)
-  const reservedRows = 8;
+  // Reserve rows for: input-border(3) + mode-toggle(1) + status-line(1-2)
+  const reservedRows = 6;
   const hline = '─'.repeat(terminalCols);
 
   // Initialize WebSocket connection
@@ -85,23 +107,6 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
 
     return () => { client.close(); };
   }, [backendUrl, wsUrl]);
-
-  // Generation elapsed timer — runs while currentMessage exists
-  const currentMsg = state.currentMessage;
-  useEffect(() => {
-    if (!currentMsg) {
-      updateAppState(prev => ({ ...prev, generationElapsed: 0 }));
-      return;
-    }
-    const startTime = currentMsg.timestamp;
-    const timer = setInterval(() => {
-      updateAppState(prev => ({
-        ...prev,
-        generationElapsed: Math.floor((Date.now() - startTime) / 1000),
-      }));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [currentMsg?.id]);
 
   // Shared command execution — callable from both handleSubmit and palette select
   const executeCommand = useCallback((value: string) => {
@@ -146,7 +151,10 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
           updateAppState(prev => ({ ...prev, autoMode: !prev.autoMode }));
           return;
         case 'clear':
-          updateAppState(prev => ({ ...prev, messages: [], currentMessage: null }));
+          updateAppState(prev => ({
+            ...prev,
+            messages: [], currentMessage: null,
+          }));
           return;
         case 'model_change':
           if (needsArg && cmdArg) client?.switchModel(cmdArg);
@@ -181,8 +189,8 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
     saveToHistory(text);
     const msg = createMessage('user', text);
     updateAppState(prev => ({ ...prev, messages: [...prev.messages, msg] }));
-    clientRef.current!.chat(text, state.planMode);
-  }, [onExit, state.planMode]);
+    clientRef.current!.chat(text, planModeRef.current);
+  }, [onExit]);
 
   const handleSubmit = useCallback((value: string) => {
     // When palette is open, Enter is handled by CommandPalette — avoid double execution
@@ -220,43 +228,84 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
     setShowApproval(null);
   }, []);
 
-  // Wire WS handlers — all streaming updates go through one batched render per tick
+  // Wire WS handlers — streaming updates batched via microtask scheduler
   function wireHandlers(client: JwCodeClient) {
-    // Shared batch state — accumulate then apply in a single updateAppState per cycle
-    const INTERVAL = 150; // ms between renders during streaming
-    let pendingContent = '';
-    let pendingThinking = '';
-    let pendingToolCalls: Array<(msg: Message) => void> = [];
-    let batchTimer: ReturnType<typeof setTimeout> | null = null;
-    let batchChanged = false;
+    // Microtask-based batch: same-tick events merge, cross-tick events flush per tick.
+    // Ink's internal 32ms throttle then composites flushes into smooth ~30fps frames.
+    let _pendingContent = '';
+    let _pendingThinking = '';
+    let _pendingToolFns: Array<(msg: Message) => Message> = [];
+    let _flushScheduled = false;
 
-    function applyBatch() {
-      batchTimer = null;
-      if (!batchChanged) return;
-      batchChanged = false;
-      const c = pendingContent; pendingContent = '';
-      const t = pendingThinking; pendingThinking = '';
-      const tcfns = pendingToolCalls; pendingToolCalls = [];
+    function doStreamFlush() {
+      _flushScheduled = false;
+      const c = _pendingContent; _pendingContent = '';
+      const t = _pendingThinking; _pendingThinking = '';
+      const fns = _pendingToolFns; _pendingToolFns = [];
+
+      if (!c && !t && fns.length === 0) return;
 
       updateAppState(prev => {
         if (!prev.currentMessage) return prev;
-        if (c) prev.currentMessage.content += c;
-        if (t) prev.currentMessage.thinking += t;
-        for (const fn of tcfns) fn(prev.currentMessage);
-        return { ...prev };
+        let msg = prev.currentMessage;
+        if (c) msg = { ...msg, content: msg.content + c };
+        if (t) msg = { ...msg, thinking: msg.thinking + t };
+        for (const fn of fns) msg = fn(msg);
+        return { ...prev, currentMessage: msg };
       });
     }
 
-    function scheduleBatch() {
-      batchChanged = true;
-      if (!batchTimer) batchTimer = setTimeout(applyBatch, INTERVAL);
+    function scheduleStreamFlush() {
+      if (_flushScheduled) return;
+      _flushScheduled = true;
+      queueMicrotask(doStreamFlush);
+      // 16ms fallback: guarantees flush even if microtask queue is starved
+      setTimeout(() => { if (_flushScheduled) doStreamFlush(); }, 16);
     }
 
-    // Flush immediately and cancel timer (used at start/complete)
-    function flushNow() {
-      if (batchTimer) { clearTimeout(batchTimer); batchTimer = null; }
-      applyBatch();
+    // Synchronous flush (used at start/complete boundaries)
+    function flushNow() { doStreamFlush(); }
+
+    // ---- token_update throttle ----
+    let _lastTotal = 0;
+    let _lastTotalTs = 0;
+    let _firstTokenUpdate = true;
+    let _pendingToken: Record<string, unknown> | null = null;
+    let _tokenScheduled = false;
+
+    function flushToken() {
+      _tokenScheduled = false;
+      const d = _pendingToken;
+      if (!d) return;
+      _pendingToken = null;
+
+      const promptTokens = Number(d.promptTokens) || 0;
+      const completionTokens = Number(d.completionTokens) || 0;
+      const totalTokens = Number(d.totalTokens) || 0;
+      const usageRatio = Number(d.usageRatio) || 0;
+      if (totalTokens <= 0) return;
+
+      const now = Date.now();
+      let tokenRate = 0;
+      if (_lastTotalTs > 0 && _lastTotal > 0 && now > _lastTotalTs && totalTokens > _lastTotal) {
+        const deltaTokens = totalTokens - _lastTotal;
+        const deltaSec = (now - _lastTotalTs) / 1000;
+        const instantRate = deltaTokens / deltaSec;
+        const prevRate = getStore().getState().tokenRate;
+        tokenRate = prevRate > 0 ? prevRate * 0.6 + instantRate * 0.4 : instantRate;
+      }
+      _lastTotal = totalTokens;
+      _lastTotalTs = now;
+
+      updateAppState(prev => ({
+        ...prev,
+        usage: { promptTokens, completionTokens, totalTokens, usageRatio },
+        modelName: (d!.model as string) || prev.modelName,
+        tokenRate,
+      }));
     }
+
+    // ---- event wiring ----
 
     client.on('start', () => {
       flushNow();
@@ -271,18 +320,18 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
 
     client.on('content', (m: WSMessage) => {
       const text = typeof m.data === 'string' ? m.data : (m.data ? String(m.data) : '');
-      pendingContent += text;
-      scheduleBatch();
+      _pendingContent += text;
+      scheduleStreamFlush();
     });
 
     client.on('thinking', (m: WSMessage) => {
-      pendingThinking += typeof m.data === 'string' ? m.data : '';
-      scheduleBatch();
+      _pendingThinking += typeof m.data === 'string' ? m.data : '';
+      scheduleStreamFlush();
     });
 
     client.on('tool_call', (m: WSMessage) => {
       const d = parseData(m) as unknown as ToolCall;
-      pendingToolCalls.push((msg: Message) => {
+      _pendingToolFns.push((msg: Message): Message => {
         let existingIdx = d.id
           ? msg.toolCalls.findIndex((t: ToolCall) => t.id === d.id)
           : -1;
@@ -291,16 +340,15 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
             (t: ToolCall) => t.name === d.name && t.status === 'running'
           );
         }
+        const tcs = [...msg.toolCalls];
         if (existingIdx >= 0) {
-          const existing = { ...msg.toolCalls[existingIdx] };
+          const existing = { ...tcs[existingIdx] };
           if (d.args) existing.args = cleanArgs(d.args);
           if (d.complete) existing.status = 'complete';
           if (d.result) existing.result = d.result;
-          msg.toolCalls = [...msg.toolCalls];
-          msg.toolCalls[existingIdx] = existing;
+          tcs[existingIdx] = existing;
         } else {
-          const updated = [...msg.toolCalls];
-          updated.push({
+          tcs.push({
             id: d.id || (d.name ? `${d.name}-${Date.now()}` : ''),
             name: d.name || '',
             args: d.args ? cleanArgs(d.args) : undefined,
@@ -308,15 +356,15 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
             complete: !!d.complete,
             timestamp: Date.now(),
           });
-          msg.toolCalls = updated;
         }
+        return { ...msg, toolCalls: tcs };
       });
-      scheduleBatch();
+      scheduleStreamFlush();
     });
 
     client.on('tool_result', (m: WSMessage) => {
       const d = parseData(m) as { toolName?: string; result?: string };
-      pendingToolCalls.push((msg) => {
+      _pendingToolFns.push((msg: Message): Message => {
         const tcs = [...msg.toolCalls];
         for (let i = tcs.length - 1; i >= 0; i--) {
           if (tcs[i].name === d.toolName && !tcs[i].result) {
@@ -326,28 +374,35 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
             break;
           }
         }
-        msg.toolCalls = tcs;
+        return { ...msg, toolCalls: tcs };
       });
-      scheduleBatch();
+      scheduleStreamFlush();
     });
 
     client.on('complete', () => {
       flushNow();
-      updateAppState(prev => ({ ...prev, currentMessage: null }));
+      updateAppState(prev => {
+        if (!prev.currentMessage) return prev;
+        const msgs = [...prev.messages];
+        const cm = prev.currentMessage;
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          if (msgs[i].type === 'assistant' && msgs[i].id === cm.id) {
+            msgs[i] = cm;
+            break;
+          }
+        }
+        return { ...prev, currentMessage: null, messages: msgs };
+      });
     });
 
     client.on('error', (m: WSMessage) => {
       const text = String(m.data || 'Error');
-      // Show errors compactly in status bar, avoid flooding chat
       updateAppState(prev => ({
         ...prev,
         statusText: `Error: ${text.slice(0, 120)}`,
       }));
     });
 
-    let _lastTotal = 0;
-    let _lastTotalTs = 0;
-    let firstTokenUpdate = true;
     client.on('token_update', (m: WSMessage) => {
       let d: Record<string, unknown> = {};
       if (typeof m.data === 'string') {
@@ -355,33 +410,17 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
       } else if (m.data && typeof m.data === 'object') {
         d = m.data as Record<string, unknown>;
       }
-      if (firstTokenUpdate) {
-        firstTokenUpdate = false;
+      if (_firstTokenUpdate) {
+        _firstTokenUpdate = false;
         console.log('[token_update] raw data type:', typeof m.data, '| parsed keys:', Object.keys(d).join(','));
       }
-      const promptTokens = Number(d.promptTokens) || 0;
-      const completionTokens = Number(d.completionTokens) || 0;
       const totalTokens = Number(d.totalTokens) || 0;
-      const usageRatio = Number(d.usageRatio) || 0;
       if (totalTokens > 0) {
-        // Compute token rate
-        const now = Date.now();
-        let tokenRate = 0;
-        if (_lastTotalTs > 0 && _lastTotal > 0 && now > _lastTotalTs && totalTokens > _lastTotal) {
-          const deltaTokens = totalTokens - _lastTotal;
-          const deltaSec = (now - _lastTotalTs) / 1000;
-          const instantRate = deltaTokens / deltaSec;
-          const prevRate = getStore().getState().tokenRate;
-          tokenRate = prevRate > 0 ? prevRate * 0.6 + instantRate * 0.4 : instantRate;
+        _pendingToken = d;
+        if (!_tokenScheduled) {
+          _tokenScheduled = true;
+          setTimeout(flushToken, 100);
         }
-        _lastTotal = totalTokens;
-        _lastTotalTs = now;
-        updateAppState(prev => ({
-          ...prev,
-          usage: { promptTokens, completionTokens, totalTokens, usageRatio },
-          modelName: (d.model as string) || prev.modelName,
-          tokenRate,
-        }));
       }
     });
 
@@ -406,7 +445,6 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
     client.on('hook_ask', (m: WSMessage) => {
       const d = parseData(m);
       const approvalId = (d.approvalId as string) || '';
-      // Auto-approve when auto mode is on
       if (getStore().getState().autoMode) {
         client.approveHook(approvalId);
         return;
@@ -432,31 +470,26 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
 
     client.on('plan_thinking', (m: WSMessage) => {
       const text = typeof m.data === 'string' ? m.data : (m.data ? String(m.data) : '');
-      updateAppState(prev => {
-        if (!prev.currentMessage) return prev;
-        prev.currentMessage.thinking += text + '\n';
-        return { ...prev };
-      });
+      _pendingThinking += text + '\n';
+      scheduleStreamFlush();
     });
 
     client.on('plan_tasks', () => {
-      updateAppState(prev => {
-        if (!prev.currentMessage) return prev;
-        prev.currentMessage.content += '\n📋 任务清单已生成\n';
-        return { ...prev };
-      });
+      _pendingContent += '\n📋 任务清单已生成\n';
+      scheduleStreamFlush();
     });
 
     client.on('plan_complete', (m: WSMessage) => {
       flushNow();
-      // status is at WS message root level, not inside data
       const status = (m as any).status as string | undefined;
       const planText = typeof m.data === 'string' ? m.data : '';
       updateAppState(prev => {
+        if (!prev.currentMessage) return prev;
         const msgs = [...prev.messages];
+        const cm = prev.currentMessage;
         for (let i = msgs.length - 1; i >= 0; i--) {
-          if (msgs[i].type === 'assistant' && !msgs[i].content) {
-            msgs[i] = { ...msgs[i], content: planText || 'Plan complete.' };
+          if (msgs[i].type === 'assistant' && msgs[i].id === cm.id) {
+            msgs[i] = { ...cm, content: planText || 'Plan complete.' };
             break;
           }
         }
@@ -480,14 +513,31 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
   }
 
   // Keyboard: escape + scroll
+  // ESC priority: 1) close approval  2) close help  3) pause/stop generation
   useInput((input, key) => {
-    if (key.escape && showApproval) {
-      handleApprovalDeny(showApproval.approvalId);
-      return;
-    }
-    if (key.escape && showHelp) {
-      setShowHelp(false);
-      return;
+    if (key.escape) {
+      if (showApproval) {
+        handleApprovalDeny(showApproval.approvalId);
+        return;
+      }
+      if (showHelp) {
+        setShowHelp(false);
+        return;
+      }
+      // Pause/stop generation — single ESC pauses, double ESC within 500ms stops
+      if (isGenerating) {
+        const now = Date.now();
+        const prev = lastEscRef.current;
+        lastEscRef.current = now;
+        if (prev > 0 && (now - prev) < 500) {
+          clientRef.current?.stop();
+          updateAppState(prev => ({ ...prev, statusText: '⏹ 已终止 (ESC×2)' }));
+        } else {
+          clientRef.current?.pause();
+          updateAppState(prev => ({ ...prev, statusText: '⏸ 已暂停 — 再按 ESC 终止' }));
+        }
+        return;
+      }
     }
     // Help scrolling (when help is visible)
     if (showHelp) {
@@ -503,6 +553,14 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
       }
       if ((key as any).home) { setHelpScroll(helpLines.length - 1); return; }
       if ((key as any).end) { setHelpScroll(0); return; }
+    }
+    // Ctrl+E: toggle tool call expand/collapse
+    if (key.ctrl && input === 'e') {
+      updateAppState(prev => ({
+        ...prev,
+        toolCallsExpanded: !prev.toolCallsExpanded,
+      }));
+      return;
     }
     // Scroll: arrow keys = fine, page keys = coarse
     if (key.pageUp) {
@@ -534,11 +592,17 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
       return;
     }
     if ((key as any).home || ((key as any).home && key.ctrl)) {
-      updateAppState(prev => ({ ...prev, scrollOffset: prev.messages.length }));
+      updateAppState(prev => ({
+        ...prev,
+        scrollOffset: prev.messages.length,
+      }));
       return;
     }
     if ((key as any).end || ((key as any).end && key.ctrl)) {
-      updateAppState(prev => ({ ...prev, scrollOffset: 0 }));
+      updateAppState(prev => ({
+        ...prev,
+        scrollOffset: 0,
+      }));
       return;
     }
     // Tab: toggle plan/act mode
@@ -552,12 +616,11 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
 
   return (
     <Box flexDirection="column" width="100%" height="100%">
-      <StatusLine />
       <Box flexGrow={1} flexDirection="column">
-        <ChatArea messages={state.messages} currentMessage={state.currentMessage} scrollOffset={state.scrollOffset} terminalRows={terminalRows} reservedRows={reservedRows} />
+        <ChatArea messages={chatAreaProps.messages} currentMessage={chatAreaProps.currentMessage} scrollOffset={chatAreaProps.scrollOffset} terminalRows={terminalRows} reservedRows={reservedRows} terminalCols={terminalCols} toolCallsExpanded={toolCallsExpanded} />
       </Box>
       {/* Input — fixed below ChatArea, above any status/palette; ChatArea height stable */}
-      <Box flexDirection="row" borderStyle="single" borderColor={state.connected ? 'cyan' : 'red'} paddingLeft={1}>
+      <Box flexDirection="row" borderStyle="single" borderColor={connected ? 'cyan' : 'red'} paddingLeft={1}>
         <Text color="green" bold>&gt; </Text>
         <Box flexGrow={1}>
           <TextInput
@@ -572,30 +635,30 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
       {/* Mode toggle */}
       <Box paddingLeft={2} height={1}>
         <Text
-          color={state.planMode ? 'cyan' : 'grey'}
-          bold={state.planMode}
-          dimColor={!state.planMode}
+          color={planMode ? 'cyan' : 'grey'}
+          bold={planMode}
+          dimColor={!planMode}
         >
-          {state.planMode ? '◉ Plan' : '○ Plan'}
+          {planMode ? '◉ Plan' : '○ Plan'}
         </Text>
         <Text>  </Text>
         <Text
-          color={!state.planMode ? 'green' : 'grey'}
-          bold={!state.planMode}
-          dimColor={state.planMode}
+          color={!planMode ? 'green' : 'grey'}
+          bold={!planMode}
+          dimColor={planMode}
         >
-          {!state.planMode ? '◉ Act' : '○ Act'}
+          {!planMode ? '◉ Act' : '○ Act'}
         </Text>
         <Text dimColor>  Tab 切换</Text>
       </Box>
       {/* Status / palette / help — below input,不影响 ChatArea 高度 */}
-      {!state.connected && (
+      {!connected && (
         <Box>
           <Text color="red">后端未连接 — WebSocket 重试中。如后端未启动请用 </Text>
           <Text color="yellow" bold>npm start</Text>
         </Box>
       )}
-      {state.planWaiting && (
+      {planWaiting && (
         <Box>
           <Text color="yellow" bold>Plan ready — /confirm to execute, /cancel to discard.</Text>
         </Box>
@@ -626,6 +689,7 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
           onDeny={() => handleApprovalDeny(showApproval.approvalId)}
         />
       )}
+      <StatusLine />
     </Box>
   );
 }

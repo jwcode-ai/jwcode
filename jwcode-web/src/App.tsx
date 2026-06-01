@@ -246,6 +246,38 @@ function App() {
     }
   }, [approvalStore.autoMode, approvalStore.pendingApprovals.length]);
 
+  // ESC 暂停/终止生成：单次 ESC 暂停，500ms 内双击 ESC 终止
+  // ChatPanel 内的 ESC 由 ChatPanel.handleKeyDown 优先处理
+  // Modal 会设置 e.defaultPrevented，此处跳过
+  const lastEscRef = useRef(0);
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (e.defaultPrevented) return; // Modal 等组件已消费
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable) return;
+
+      const chatStore = useChatStore.getState();
+      const sessionStore = useSessionStore.getState();
+      const activeSid = sessionStore.activeSessionId;
+      if (!activeSid || !chatStore.isGenerating(activeSid)) return;
+
+      e.preventDefault();
+      const now = Date.now();
+      const prev = lastEscRef.current;
+      lastEscRef.current = now;
+      if (prev > 0 && (now - prev) < 500) {
+        wsService.send({ type: 'stop', sessionId: activeSid });
+        toast.info('⏹ 已终止 (ESC×2)');
+      } else {
+        wsService.send({ type: 'pause', sessionId: activeSid });
+        toast.info('⏸ 已暂停 — 再按 ESC 终止');
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   const handleNewSession = useCallback(() => {
     startTransition(() => {
       // 新建会话继承当前工作目录

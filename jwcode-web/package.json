@@ -19,7 +19,6 @@
     "lucide-react": "^0.344.0",
     "prismjs": "^1.29.0",
     "react": "^18.2.0",
-    "react-dev-inspector": "^2.0.1",
     "react-dom": "^18.2.0",
     "react-markdown": "^9.0.1",
     "react-resizable-panels": "^2.0.0",
@@ -34,6 +33,7 @@
     "zustand": "^4.5.0"
   },
   "devDependencies": {
+    "react-dev-inspector": "^2.0.1",
     "@react-dev-inspector/vite-plugin": "^2.0.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",

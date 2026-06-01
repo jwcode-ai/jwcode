@@ -157,7 +157,7 @@ async function main(): Promise<void> {
   }
 
   const args = parseArgs();
-  const cmd = (args._cmd as string) || 'start';
+  const cmd = (args._cmd as string) || 'run';
 
   switch (cmd) {
     case 'start':

@@ -6,10 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Build Java backend only (Maven, skip tests for speed)
-cd jwcode-parent && mvn compile -pl ../jwcode-core,../jwcode-web -am
+mvn compile -pl jwcode-core,jwcode-web -am
 
 # Build with tests
-cd jwcode-parent && mvn package -pl ../jwcode-core,../jwcode-web -am
+mvn package -pl jwcode-core,jwcode-web -am
 
 # Start Java backend (HTTP :8080, WS :8081)
 mvn exec:java -pl jwcode-web -Dexec.mainClass=com.jwcode.web.WebLauncher -Dexec.args="8080 8081"

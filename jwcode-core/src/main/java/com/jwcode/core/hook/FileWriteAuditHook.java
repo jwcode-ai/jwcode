@@ -23,6 +23,10 @@ public class FileWriteAuditHook implements HookExecutor {
                     || !TARGET_TOOLS.contains(context.getToolName())) {
                     return HookResult.allow("FileWriteAuditHook");
                 }
+                // Act 模式下自动批准文件写入
+                if (com.jwcode.core.plan.PlanModeManager.getInstance().isActMode()) {
+                    return HookResult.allow("FileWriteAuditHook", "Act mode - auto approve file writes");
+                }
                 String fp = extractFilePath(context);
                 String tool = context.getToolName();
                 return HookResult.ask("FileWriteAuditHook",

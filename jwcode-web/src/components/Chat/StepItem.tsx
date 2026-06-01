@@ -129,7 +129,7 @@ export const StepItem = memo(function StepItem({ step, defaultCollapsed = false 
           {/* Tool Calls — unified ToolCallItem rendering */}
           {step.toolCalls && step.toolCalls.length > 0 && step.toolCalls.map((toolCall) => (
             <div key={toolCall.id} className="px-2 py-1">
-              <ToolCallItem toolCall={toolCall} defaultCollapsed />
+              <ToolCallItem toolCall={toolCall} defaultCollapsed={toolCall.status !== 'running'} />
             </div>
           ))}
 

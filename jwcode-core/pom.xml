@@ -6,9 +6,9 @@
 
     <parent>
         <groupId>com.jwcode</groupId>
-        <artifactId>jwcode-parent</artifactId>
+        <artifactId>jwcode</artifactId>
         <version>1.0.0-SNAPSHOT</version>
-        <relativePath>../jwcode-parent/pom.xml</relativePath>
+        <relativePath>../pom.xml</relativePath>
     </parent>
 
     <artifactId>jwcode-core</artifactId>
