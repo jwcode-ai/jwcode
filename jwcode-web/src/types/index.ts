@@ -256,14 +256,8 @@ export type WSMessageType =
   // Plan 模式消息
   | 'plan_start'
   | 'plan_thinking'
-  | 'plan_tasks'
-  | 'plan_task_start'
-  | 'plan_task_update'
-  | 'plan_task_result'
   | 'plan_complete'
   | 'plan_error'
-  | 'plan_confirm'
-  | 'plan_refine'
   | 'plan_mode_change'
   // 步骤提示消息
   | 'step_prompt'
@@ -288,6 +282,8 @@ export type WSMessageType =
   | 'hook_allow'
   | 'hook_deny'
   | 'hook_response_ack'
+  // 工作区守卫控制
+  | 'toggle_workspace_guard'
   // Token 用量
   | 'token_update';
 
@@ -397,83 +393,6 @@ export interface FileNode {
   type: 'file' | 'directory';
   children?: FileNode[];
   expanded?: boolean;
-}
-
-// === Plan 模式相关类型 ===
-
-export type PlanPhase = 'idle' | 'planning' | 'executing' | 'result' | 'error';
-
-export type ExecutionMode = 'SEQUENTIAL' | 'CONCURRENT';
-
-export type TaskPhase = 
-  | 'EXPLORATION' 
-  | 'DESIGN' 
-  | 'IMPLEMENTATION' 
-  | 'TESTING' 
-  | 'REVIEW' 
-  | 'DOCUMENTATION' 
-  | 'GENERAL';
-
-export interface PlanTask {
-  id: string;
-  title: string;
-  description: string;
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
-  agentType: string;
-  dependencies: string[];
-  /** 子任务列表（树形结构支持） */
-  children?: PlanTask[];
-  result?: string;
-  error?: string;
-  startedAt?: number;
-  completedAt?: number;
-  progress?: number;
-  logs?: string[];
-  /** 步骤编号（从1开始） */
-  stepNumber?: number;
-  /** 步骤动作（动词+名词） */
-  action?: string;
-  /** AI提示词 - 进入此步骤时向AI注入的上下文提示 */
-  stepPrompt?: string;
-  /** 任务上下文（文件路径、模块、约束等，注入到子Agent执行） */
-  context?: Record<string, string>;
-}
-
-/**
- * StructuredTask — 结构化任务（增强版 PlanTask）
- * 
- * 相比 PlanTask 增加了：
- * - executionMode: 执行模式（SEQUENTIAL/CONCURRENT）
- * - phase: 所属阶段（EXPLORATION/DESIGN/IMPLEMENTATION/TESTING/REVIEW/DOCUMENTATION）
- * - parallelGroup: 并发组ID（同组任务可并行执行）
- */
-export interface StructuredTask extends PlanTask {
-  /** 执行模式：串行或并发 */
-  executionMode: ExecutionMode;
-  /** 所属阶段 */
-  phase: TaskPhase;
-  /** 并发组ID（同一组的任务可并行执行） */
-  parallelGroup?: string;
-  /** 子任务（StructuredTask 类型） */
-  children?: StructuredTask[];
-}
-
-export interface Plan {
-  id: string;
-  sessionId: string;
-  phase: PlanPhase;
-  goal: string;
-  tasks: PlanTask[];
-  /** 结构化任务列表（增强版） */
-  structuredTasks?: StructuredTask[];
-  createdAt: number;
-  updatedAt: number;
-}
-
-export interface MessageQueueItem {
-  id: string;
-  content: string;
-  timestamp: number;
 }
 
 // Terminal types

@@ -404,10 +404,48 @@ export const useChatStore = create<ChatState>()(
         })),
 
       endGeneration: (sessionId, _error) =>
-        set((state) => ({
-          generatingSessions: state.generatingSessions.filter((s) => s !== sessionId),
-          pausedSessions: state.pausedSessions.filter((s) => s !== sessionId),
-        })),
+        set((state) => {
+          const messages = state.messagesBySession[sessionId] || [];
+          // 将所有仍在 running 的工具调用标记为 error（防止后端崩溃导致 UI 永久显示运行中）
+          const now = Date.now();
+          const cleanedMessages = messages.map(msg => {
+            let changed = false;
+            const cleanSteps = msg.steps?.map(step => {
+              if (!step.toolCalls) return step;
+              const cleanTCs = step.toolCalls.map(tc => {
+                if (tc.status !== 'running') return tc;
+                changed = true;
+                return { ...tc, status: 'error' as const, result: '生成已结束（工具执行超时或连接中断）', duration: Math.floor((now - (tc.timestamp || now)) / 1000) };
+              });
+              return cleanTCs !== step.toolCalls ? { ...step, toolCalls: cleanTCs } : step;
+            });
+            const cleanMsgTCs = msg.toolCalls?.map(tc => {
+              if (tc.status !== 'running') return tc;
+              changed = true;
+              return { ...tc, status: 'error' as const, result: '生成已结束（工具执行超时或连接中断）', duration: Math.floor((now - (tc.timestamp || now)) / 1000) };
+            });
+            if (!changed) return msg;
+            return { ...msg, steps: cleanSteps, toolCalls: cleanMsgTCs };
+          });
+
+          const lastMsg = cleanedMessages[cleanedMessages.length - 1];
+          if (lastMsg && lastMsg.type === 'assistant'
+            && !lastMsg.content && !lastMsg.thinking
+            && !lastMsg.steps?.length && !lastMsg.toolCalls?.length
+            && !lastMsg.hookApproval) {
+            const { [sessionId]: _, ...rest } = state.messagesBySession;
+            return {
+              generatingSessions: state.generatingSessions.filter(s => s !== sessionId),
+              pausedSessions: state.pausedSessions.filter(s => s !== sessionId),
+              messagesBySession: { ...rest, [sessionId]: cleanedMessages.slice(0, -1) },
+            };
+          }
+          return {
+            generatingSessions: state.generatingSessions.filter(s => s !== sessionId),
+            pausedSessions: state.pausedSessions.filter(s => s !== sessionId),
+            messagesBySession: { ...state.messagesBySession, [sessionId]: cleanedMessages },
+          };
+        }),
 
       pauseGeneration: (sessionId) =>
         set((state) => ({

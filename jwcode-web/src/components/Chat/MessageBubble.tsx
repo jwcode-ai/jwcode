@@ -18,6 +18,7 @@ export const MessageBubble = memo(function MessageBubble({
 }: MessageBubbleProps) {
   const isUser = message.type === 'user';
   const isSystem = message.type === 'system';
+  const isGenerating = sessionId ? useChatStore(s => s.generatingSessions.includes(sessionId)) : false;
   const [isThinkingCollapsed, setIsThinkingCollapsed] = useState(false);
 
   const handleHookResolved = useCallback((_approvalId: string, status: 'approved' | 'denied') => {
@@ -130,7 +131,7 @@ export const MessageBubble = memo(function MessageBubble({
           <div className="leading-relaxed">
             <MarkdownRenderer content={message.content.replace(/\n\s*\n+/g, '\n')} className="whitespace-pre-wrap" />
           </div>
-        ) : !message.thinking && !message.hookApproval && message.steps?.length ? null : !message.thinking && !message.hookApproval && !message.steps?.length ? (
+        ) : !message.thinking && !message.hookApproval && message.steps?.length ? null : !message.thinking && !message.hookApproval && !message.steps?.length && isGenerating ? (
           <div className="flex items-center gap-3 py-1 text-xs text-dark-muted">
             <span className="flex items-center gap-1">
               <span className="w-1.5 h-1.5 rounded-full bg-accent-blue animate-blink" />

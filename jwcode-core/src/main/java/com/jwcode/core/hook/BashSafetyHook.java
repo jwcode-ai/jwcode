@@ -1,0 +1,72 @@
+package com.jwcode.core.hook;
+
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.regex.Pattern;
+
+/**
+ * BashSafetyHook — 拦截危险 shell 命令，所有 shell 命令需用户审批。
+ *
+ * <p>Claude Code 风格：PRE_TOOL_USE 阶段检查 BashTool/PowerShellTool：
+ * <ul>
+ *   <li>危险命令 (rm -rf /, mkfs, fork bomb, DROP TABLE, etc.) → DENY</li>
+ *   <li>普通 shell 命令 → ASK（需用户确认）</li>
+ * </ul>
+ *
+ * <p>安全级 Hook，fail-closed（超时默认拒绝）。</p>
+ */
+public class BashSafetyHook implements HookExecutor {
+
+    private static final Set<String> TARGET_TOOLS = Set.of("BashTool", "PowerShellTool");
+
+    private static final Pattern DANGEROUS_CMD = Pattern.compile(
+        "rm\\s+-rf\\s+/|mkfs\\.|: *\\( *\\) *\\{ *:|DROP\\s+TABLE|DELETE\\s+FROM|" +
+        "format\\s+[a-z]:|del\\s+/[fF]\\s+/[sS]|shutdown\\s+-|>\\s*/dev/sd",
+        Pattern.CASE_INSENSITIVE);
+
+    @Override
+    public CompletableFuture<HookResult> execute(HookContext context) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                if (context.getToolName() == null
+                    || !TARGET_TOOLS.contains(context.getToolName())) {
+                    return HookResult.allow("BashSafetyHook");
+                }
+                String toolInput = context.getToolInput() != null
+                    ? context.getToolInput().toString() : "";
+                if (DANGEROUS_CMD.matcher(toolInput).find()) {
+                    return HookResult.deny("BashSafetyHook",
+                        "Dangerous command pattern detected: " + truncate(toolInput, 80));
+                }
+                return HookResult.ask("BashSafetyHook",
+                    truncate(toolInput, 100), "审批 shell 命令执行");
+            } catch (Exception e) {
+                return HookResult.allow("BashSafetyHook", "Hook error, fail-open");
+            }
+        });
+    }
+
+    @Override
+    public HookImplementationType getType() { return HookImplementationType.SHELL; }
+
+    @Override
+    public String getName() { return "BashSafetyHook"; }
+
+    @Override
+    public HookPriority getPriority() { return HookPriority.SECURITY; }
+
+    @Override
+    public boolean isFailOpen() { return false; }
+
+    @Override
+    public long getTimeoutMs() { return 5000; }
+
+    @Override
+    public boolean supportsEvent(HookEventType eventType) {
+        return eventType == HookEventType.PRE_TOOL_USE;
+    }
+
+    private static String truncate(String s, int maxLen) {
+        return s.length() <= maxLen ? s : s.substring(0, maxLen) + "...";
+    }
+}

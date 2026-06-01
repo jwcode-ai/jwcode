@@ -402,26 +402,11 @@ public class SimpleCompactionStrategy {
         return false;
     }
 
-    // 五级分层保留策略的工具分类
-    private static final java.util.Set<String> FILE_MODIFY_TOOLS = java.util.Set.of(
-        "FileWriteTool", "FileEditTool", "EditTool", "NotebookEditTool", "MergeFilesTool");
-    private static final java.util.Set<String> READ_TOOLS = java.util.Set.of(
-        "FileReadTool", "BatchReadTool", "GlobTool", "GrepTool",
-        "WebFetchTool", "WebSearchTool", "ToolSearchTool");
-    private static final java.util.Set<String> COMMAND_TOOLS = java.util.Set.of(
-        "BashTool", "PowerShellTool", "REPLTool");
+    private final MicroCompactService microCompactService = new MicroCompactService();
 
     /**
      * 提取用于压缩的消息内容。
-     *
-     * <p>五级分层保留策略：</p>
-     * <ul>
-     *   <li>Tier 1 (CRITICAL): 错误/异常 → 完整保留（最多 300 字符）</li>
-     *   <li>Tier 2 (HIGH): 文件修改 → 保留路径 + 变更摘要</li>
-     *   <li>Tier 3 (MEDIUM): 读取工具 → 保留路径 + 首尾 100 字符</li>
-     *   <li>Tier 4 (LOW): 命令执行 → 保留退出码 + 最后 200 字符</li>
-     *   <li>Tier 5 (MINIMAL): 其他 → 仅保留工具名 + success/fail</li>
-     * </ul>
+     * 委托给 MicroCompactService 执行五级分层保留压缩。
      */
     private String extractCompactContent(Message msg) {
         if (isNoiseMessage(msg)) {
@@ -439,68 +424,19 @@ public class SimpleCompactionStrategy {
                 Object resultObj = trc.getResult();
                 String result = resultObj != null ? resultObj.toString() : "";
                 String toolName = trc.getToolName();
-                boolean isError = result.startsWith("Error:")
-                    || result.contains("Exception")
-                    || result.contains("失败");
 
                 if ("AgentTool".equals(toolName)) {
                     if (result.length() > 500) {
                         result = result.substring(0, 500) + "\n...[AgentTool 结果已截断]";
                     }
                     sb.append("[AgentTool 结果: ").append(result).append("]\n");
-                } else if (isError) {
-                    // Tier 1: 错误信息完整保留
-                    sb.append("[").append(toolName).append(" ERROR: ")
-                        .append(truncate(result, 300)).append("]\n");
-                } else if (FILE_MODIFY_TOOLS.contains(toolName)) {
-                    // Tier 2: 文件修改 — 路径 + 变更摘要
-                    String paths = extractFilePaths(result);
-                    sb.append("[").append(toolName).append(": modified ")
-                        .append(paths).append("]\n");
-                } else if (READ_TOOLS.contains(toolName)) {
-                    // Tier 3: 读取工具 — 路径 + 首尾内容
-                    String trimmed = trimReadResult(result, 200);
-                    sb.append("[").append(toolName).append(": ")
-                        .append(trimmed).append("]\n");
-                } else if (COMMAND_TOOLS.contains(toolName)) {
-                    // Tier 4: 命令执行 — 退出码 + 尾部输出
-                    String exitInfo = result.contains("exit=0") ? "exit=0" : "exit!=0";
-                    String tail = result.length() > 200
-                        ? result.substring(result.length() - 200) : result;
-                    sb.append("[").append(toolName).append(" ").append(exitInfo)
-                        .append(": ").append(truncate(tail, 200)).append("]\n");
                 } else {
-                    // Tier 5: 其他 — 仅成功/失败
-                    sb.append("[").append(toolName).append(": success]\n");
+                    MicroCompactConfig.Tier tier = microCompactService.classifyToolResult(toolName, result);
+                    sb.append(microCompactService.microCompact(toolName, result, tier)).append("\n");
                 }
             }
         }
         return sb.toString().trim();
-    }
-
-    /** 从工具结果中提取文件路径 */
-    private String extractFilePaths(String result) {
-        if (result == null || result.isEmpty()) return "unknown";
-        StringBuilder paths = new StringBuilder();
-        for (String line : result.split("[\\n;]")) {
-            String trimmed = line.trim();
-            if (trimmed.contains("/") || trimmed.contains("\\")
-                || trimmed.endsWith(".java") || trimmed.endsWith(".ts")
-                || trimmed.endsWith(".js") || trimmed.endsWith(".py")) {
-                if (paths.length() > 0) paths.append(", ");
-                paths.append(trimmed);
-                if (paths.length() > 200) break;
-            }
-        }
-        return paths.length() > 0 ? paths.toString() : "files";
-    }
-
-    /** 截取读取结果的首尾内容 */
-    private String trimReadResult(String result, int maxLen) {
-        if (result == null || result.isEmpty()) return "(empty)";
-        if (result.length() <= maxLen) return result;
-        return result.substring(0, maxLen / 2) + "..."
-            + result.substring(result.length() - maxLen / 2);
     }
 
     /**

@@ -7,6 +7,7 @@ import com.jwcode.core.index.EmbeddingService;
 import com.jwcode.core.index.IndexConfig;
 import com.jwcode.core.task.TaskStore;
 import com.jwcode.core.tool.ToolRegistry;
+import com.jwcode.core.api.PlanTaskBroadcaster;
 import com.jwcode.web.stream.StreamingWebSocketHandler;
 import com.jwcode.web.terminal.TerminalHandler;
 import com.jwcode.web.terminal.TerminalSession;
@@ -139,6 +140,11 @@ public class WebServer {
         webSocketHandler = new StreamingWebSocketHandler(wsPort, toolRegistry);
         webSocketHandler.setCodebaseIndexer(codebaseIndexer);
         webSocketHandler.start();
+
+        // 将 PlanTaskBroadcaster 接入主 WebSocket，使 plan_* 消息通过当前连接发送
+        PlanTaskBroadcaster.setMessageSender((type, sid, data) ->
+            webSocketHandler.sendMessage(sid,
+                StreamingWebSocketHandler.MessageType.valueOf(type.toUpperCase()), data));
         
         logger.info("Web UI 服务器启动: http://localhost:" + port);
         logger.info("WebSocket 服务器启动: ws://localhost:" + wsPort);

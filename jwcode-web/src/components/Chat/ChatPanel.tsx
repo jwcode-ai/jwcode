@@ -1,13 +1,13 @@
 import { memo, useRef, useCallback, useState, useMemo } from 'react';
 import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
-import { MessageSquare, ListChecks, Zap, Square, Pause, Play } from 'lucide-react';
+import { MessageSquare, Zap, Square, Pause, Play } from 'lucide-react';
 import { Message, TabId, LogEntry, FileNode } from '../../types';
 import { MessageBubble } from './MessageBubble';
 import { SlashCommandMenu } from '../SlashCommandMenu';
 import { FileMentionMenu } from './FileMentionMenu';
 import { useSlashCommands, SlashCommand } from '../../hooks/useSlashCommands';
 import { useInputHistory, addToHistory } from '../../hooks/useInputHistory';
-import { usePlanStore } from '../../stores/planStore';
+import { useTokenStore } from '../../stores/tokenStore';
 import { api } from '../../services/api';
 import { ContextManager } from './ContextManager';
 import { SessionTaskBoard } from './SessionTaskBoard';
@@ -34,14 +34,6 @@ interface ChatPanelProps {
   setUnreadLogs: React.Dispatch<React.SetStateAction<number>>;
 }
 
-// Rough token estimation: CJK chars ~1.5 tokens, words ~1.3 tokens
-function estimateTokens(text: string): number {
-  const cjk = (text.match(/[一-鿿㐀-䶿]/g) || []).length;
-  const rest = text.replace(/[一-鿿㐀-䶿]/g, '');
-  const words = rest.trim() ? rest.split(/\s+/).length : 0;
-  return Math.ceil(cjk * 1.5 + words * 1.3);
-}
-
 async function searchFiles(query: string): Promise<FileNode[]> {
   if (!query) return [];
   try {
@@ -66,11 +58,6 @@ export const ChatPanel = memo(function ChatPanel({
   setActiveTab, createNewSession, clearMessages, setTheme, toggleTerminal, setLogs, setUnreadLogs,
 }: ChatPanelProps) {
 
-  const mode = usePlanStore((s) => s.mode);
-  const showConfirmButton = usePlanStore((s) => s.showConfirmButton);
-  const planConfirmed = usePlanStore((s) => s.planConfirmed);
-  const isPlanWaitingConfirm = mode === 'plan' && showConfirmButton && !planConfirmed;
-
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const isComposingRef = useRef(false);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
@@ -90,7 +77,8 @@ export const ChatPanel = memo(function ChatPanel({
   const { isOpen, setFilter, selectedIndex, setSelectedIndex, filteredCommands, closeMenu, selectNext, selectPrev, executeCommand, containerRef } = slashCommands;
 
   // Token estimate
-  const tokenEstimate = useMemo(() => estimateTokens(input), [input]);
+  const estimateTokens = useTokenStore((s) => s.estimateTokens);
+  const tokenEstimate = useMemo(() => estimateTokens(input), [input, estimateTokens]);
 
   const resetTextarea = () => {
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
@@ -306,8 +294,8 @@ export const ChatPanel = memo(function ChatPanel({
             <textarea
               ref={textareaRef} value={input} onChange={handleChange} onKeyDown={handleKeyDown}
               placeholder="输入消息... Shift+Enter 换行，/ 命令，@ 引用文件，↑ 历史"
-              className={`flex-1 bg-dark-bg border rounded-lg px-3 sm:px-4 py-2.5 sm:py-3 text-dark-text placeholder-dark-muted resize-none focus:outline-none text-sm min-h-[40px] max-h-[40vh] transition-colors ${mode === 'plan' ? 'border-accent-blue/50 focus:border-accent-blue' : 'border-dark-border focus:border-accent-green'}`}
-              rows={1} disabled={isGenerating || isPlanWaitingConfirm}
+              className="flex-1 bg-dark-bg border border-dark-border rounded-lg px-3 sm:px-4 py-2.5 sm:py-3 text-dark-text placeholder-dark-muted resize-none focus:outline-none focus:border-accent-green text-sm min-h-[40px] max-h-[40vh] transition-colors"
+              rows={1} disabled={isGenerating}
               onCompositionStart={() => { isComposingRef.current = true; }}
               onCompositionEnd={(e) => {
                 isComposingRef.current = false;
@@ -348,10 +336,10 @@ export const ChatPanel = memo(function ChatPanel({
               )}
             </div>
           ) : (
-            <button onClick={handleSend} disabled={!input.trim() || isPlanWaitingConfirm}
-              className={`px-4 py-3 text-white rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2 ${mode === 'plan' ? 'bg-accent-blue' : 'bg-accent-green'}`}>
-              {mode === 'plan' ? <ListChecks size={16} /> : <Zap size={16} />}
-              <span className="hidden sm:inline">{mode === 'plan' ? '生成计划' : '执行'}</span>
+            <button onClick={handleSend} disabled={!input.trim()}
+              className="px-4 py-3 text-white rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2 bg-accent-green">
+              <Zap size={16} />
+              <span className="hidden sm:inline">发送</span>
             </button>
           )}
         </div>

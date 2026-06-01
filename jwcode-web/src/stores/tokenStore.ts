@@ -14,7 +14,16 @@ interface TokenState {
   showTokenInfo: boolean;
   model: string;
   history: { timestamp: number; usage: TokenUsage }[];
+  _hasBackendData: boolean;
+  /** tokens/second rate during active streaming */
+  tokenRate: number;
+  /** tokens consumed since last reset (session delta) */
+  sessionBaseTotal: number;
+  _lastTotal: number;
+  _lastTotalTs: number;
 
+  compactingUntil: number;
+  lastCompactInfo: { originalCount: number; compressedCount: number; tokensSaved: number } | null;
   updateUsage: (usage: Partial<TokenUsage>) => void;
   setModel: (model: string) => void;
   setMaxContextTokens: (max: number) => void;
@@ -24,6 +33,7 @@ interface TokenState {
   recalculateFromMessages: (messages: Message[]) => void;
   pruneContext: (targetRatio: number) => { cutMessages: number; recoveredTokens: number };
   resetUsage: () => void;
+  setCompacting: (info: { originalCount: number; compressedCount: number; tokensSaved: number }) => void;
 }
 
 // Rough estimation: ~4 chars per token for Chinese, ~6 for mixed
@@ -44,17 +54,46 @@ export const useTokenStore = create<TokenState>((set, get) => ({
     totalTokens: 0,
     estimatedCost: 0,
   },
-  maxContextTokens: 128000,
+  maxContextTokens: 1_000_000,
+  compactingUntil: 0,
+  lastCompactInfo: null,
   showTokenInfo: false,
   model: '',
   history: [],
+  _hasBackendData: false,
+  tokenRate: 0,
+  sessionBaseTotal: 0,
+  _lastTotal: 0,
+  _lastTotalTs: 0,
 
-  updateUsage: (usage) => set((state) => ({
-    currentUsage: { ...state.currentUsage, ...usage },
-  })),
+  updateUsage: (usage) => set((state) => {
+    const newTotal = usage.totalTokens ?? state.currentUsage.totalTokens;
+    const now = Date.now();
+    const prevTotal = state._lastTotal;
+    const prevTs = state._lastTotalTs;
+    let tokenRate = state.tokenRate;
+    if (prevTs > 0 && prevTotal > 0 && now > prevTs && newTotal > prevTotal) {
+      const deltaTokens = newTotal - prevTotal;
+      const deltaSec = (now - prevTs) / 1000;
+      const instantRate = deltaTokens / deltaSec;
+      // exponential moving average to smooth rate display
+      tokenRate = tokenRate > 0
+        ? tokenRate * 0.6 + instantRate * 0.4
+        : instantRate;
+    }
+    return {
+      currentUsage: { ...state.currentUsage, ...usage },
+      _hasBackendData: true,
+      tokenRate,
+      _lastTotal: newTotal,
+      _lastTotalTs: now,
+    };
+  }),
   setModel: (model) => set({ model }),
 
   setMaxContextTokens: (max) => set({ maxContextTokens: max }),
+
+  setCompacting: (info) => set({ compactingUntil: Date.now() + 3000, lastCompactInfo: info }),
 
   setShowTokenInfo: (show) => set({ showTokenInfo: show }),
 
@@ -68,9 +107,13 @@ export const useTokenStore = create<TokenState>((set, get) => ({
     if (!messages || messages.length === 0) {
       set({
         currentUsage: { promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCost: 0 },
+        _hasBackendData: false,
       });
       return;
     }
+
+    // 如果后端已经发送了准确的 token 数据，不要用启发式估算覆盖
+    if (get()._hasBackendData) return;
 
     const estimate = get().estimateTokens;
     let promptTokens = 0;
@@ -144,7 +187,12 @@ export const useTokenStore = create<TokenState>((set, get) => ({
     };
   },
 
-  resetUsage: () => set({
+  resetUsage: () => set((state) => ({
     currentUsage: { promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCost: 0 },
-  }),
+    _hasBackendData: false,
+    sessionBaseTotal: state.currentUsage.totalTokens,
+    tokenRate: 0,
+    _lastTotal: 0,
+    _lastTotalTs: 0,
+  })),
 }));

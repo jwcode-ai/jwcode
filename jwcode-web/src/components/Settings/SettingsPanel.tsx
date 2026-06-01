@@ -1,6 +1,8 @@
 import { memo, useState } from 'react';
 import { Settings, Palette } from 'lucide-react';
 import { useSettingsStore } from '../../stores/settingsStore';
+import { useSessionStore } from '../../stores/sessionStore';
+import wsService from '../../services/websocket';
 import { FeatureToggle } from './FeatureToggle';
 import { CustomThemeColors } from '../../types';
 
@@ -25,9 +27,11 @@ export const SettingsPanel = memo(function SettingsPanel() {
     autoSwarm, setAutoSwarmEnabled,
     autoAI, setAutoAIEnabled,
     compression, setCompressionEnabled,
+    workspaceGuardBypass, setWorkspaceGuardBypass,
     customTheme, customThemeEnabled,
     setCustomTheme, setCustomThemeEnabled, resetCustomTheme,
   } = useSettingsStore();
+  const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const [showCustomTheme, setShowCustomTheme] = useState(customThemeEnabled);
 
   return (
@@ -147,6 +151,19 @@ export const SettingsPanel = memo(function SettingsPanel() {
               subtitle="上下文压缩 - 自动管理对话长度"
               enabled={compression.enabled}
               onChange={setCompressionEnabled}
+            />
+            <FeatureToggle
+              title="🔓 工作区守卫绕过"
+              subtitle="允许读取工作目录外的文件（临时取消路径限制）"
+              enabled={workspaceGuardBypass}
+              onChange={(enabled) => {
+                setWorkspaceGuardBypass(enabled);
+                wsService.send({
+                  type: 'toggle_workspace_guard',
+                  sessionId: activeSessionId || '',
+                  data: enabled ? 'true' : 'false',
+                });
+              }}
             />
           </div>
         </div>

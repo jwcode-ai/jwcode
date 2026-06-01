@@ -29,9 +29,9 @@ Web frontend builds with `tsc && vite build` → `jwcode-web/dist/`, served from
 
 ## Architecture
 
-**Four-layer Harness Engineering (v3.1):**
+**Four-layer Harness Engineering (v3.2):**
 - L4 Observability: CostTracker, ObservationPipeline, Doctor, analytics
-- L3 Quality: 5-level context compaction, AI self-healing, semantic memory
+- L3 Quality: Pregel BSP graph orchestration, 5-level context compaction, AI self-healing, semantic memory
 - L2 Cost: ModelRouter dynamic routing, token budget partitioning, prompt caching
 - L1 Security: DockerSandbox, WorkspaceGuard, PermissionManager, HookChain interceptor
 
@@ -44,6 +44,16 @@ Web frontend builds with `tsc && vite build` → `jwcode-web/dist/`, served from
 | `jwcode-mcp` | MCP client interface (1 file) |
 | `jwcode-parser` | Tree-sitter code analysis (8 files) |
 
+**Security pipeline (L1):**
+| Component | Purpose |
+|-----------|---------|
+| `bash/CommandInjectionDetector` | Detects backtick, $(), ${}, path traversal, reverse shell patterns |
+| `bash/CommandReadOnlyValidator` | 150+ read-only prefixes across Unix/Windows/git/npm/docker/kubectl/go/cargo/pip; riskScore 0-10 |
+| `bash/SedCommandValidator` | Validates `sed -i`, `s///e` exec flag, `w`/`W` file write commands |
+| `permission/AutoPermissionClassifier` | 7-layer heuristic: alwaysSafe→injection→userApproved→userDenied→riskScore→rateLimit→default |
+| `permission/PermissionManager` | Auto-mode switch delegating to AutoPermissionClassifier; session learning with approved/denied pattern sets |
+| `DockerSandboxExecutor` | alpine:3.20, --pids-limit=100, --read-only, --tmpfs noexec/nosuid, --security-opt=no-new-privileges |
+
 **Key design rules:**
 - Orchestrator agents **never execute tools directly** — they decompose and delegate to sub-agents
 - Sub-agents **cannot recursively spawn** more sub-agents
@@ -52,10 +62,46 @@ Web frontend builds with `tsc && vite build` → `jwcode-web/dist/`, served from
 - All tool execution passes through `PermissionManager` → `HookChain` → execution
 - Session recovery uses checkpoints + message replay buffer
 
+**Agent Graph System (v3.2 — LangGraph-inspired):**
+- Declarative DAG-based orchestration replacing hardcoded if-else agent pipelines
+- Channel-based state with typed reducers (LastValue, BinaryOp, Topic, Ephemeral)
+- BSP (Bulk Synchronous Parallel) execution: per-superstep plan → execute → write → checkpoint
+- Channel version tracking for fine-grained "which node saw what" incremental execution
+- Interrupt/resume with checkpoint persistence at any superstep boundary
+
+| Component | Purpose |
+|-----------|---------|
+| `AgentGraph` | Builder DSL: `addNode` / `addEdge` / `addConditionalEdge` / `compile` |
+| `CompiledAgentGraph` | PregelLoop execution engine with channel version tracking |
+| `OrchestratorGraphFactory` | Pre-built workflows: featureDev, bugFix, review, refactor, conditional routing |
+| `GraphState` | Channel collection + subscriber mapping per node |
+| `GraphNode` | Agent wrapper with triggers, writes, retryPolicy, timeout |
+| `GraphEdge` | Simple edges (A→B) or conditional edges (router function) |
+| `Channel<T>` | Typed state slot: `get()` / `update()` / `checkpoint()` / `consume()` |
+
+**Channel semantics (LangGraph equivalents):**
+| Channel | LangGraph | Behavior |
+|---------|-----------|----------|
+| `LastValueChannel<T>` | `LastValue` | Last writer wins (default) |
+| `BinaryOpChannel<T>` | `BinaryOperatorAggregate` | Reducer-merge (e.g. message list append) |
+| `TopicChannel<E>` | `Topic` | Accumulating pub/sub, drained on consume |
+| `EphemeralChannel<T>` | `EphemeralValue` | Not persisted in checkpoints |
+
+**Checkpoint storage backends:**
+| Backend | File | Use case |
+|---------|------|----------|
+| `InMemoryCheckpointStorage` | `checkpoint/InMemoryCheckpointStorage.java` | Ephemeral sessions, tests |
+| `SqliteCheckpointStorage` | `checkpoint/SqliteCheckpointStorage.java` | Cross-restart durability, WAL mode |
+
+SQLite schema: `checkpoints` (id, session, step, ts, source, channel_values) + `channel_versions` + `versions_seen` + `writes`. Database stored at `~/.jwcode/checkpoints/<sessionId>.db`.
+
 ## Key Paths
 
 - **Entry point:** `jwcode-web/.../WebLauncher.java` (starts `WebServer` with `com.sun.net.httpserver`)
 - **Agent system:** `jwcode-core/.../agent/` — 17 types: Orchestrator, Coder, Debugger, Architect, Reviewer, Explorer, etc.
+- **Agent graph:** `jwcode-core/.../graph/` — AgentGraph builder, CompiledAgentGraph (PregelLoop), OrchestratorGraphFactory
+- **Channels:** `jwcode-core/.../graph/channel/` — LastValueChannel, BinaryOpChannel, TopicChannel, EphemeralChannel
+- **Checkpoint storage:** `jwcode-core/.../checkpoint/` — CheckpointStorage, InMemoryCheckpointStorage, SqliteCheckpointStorage
 - **Tools:** `jwcode-core/.../tool/` — 47 tools: `execution/`, `shell/`, `analysis/`, `permission/`, `io/`
 - **WebSocket handler:** `jwcode-web/.../stream/StreamingWebSocketHandler.java` (3062 lines)
 - **React frontend:** `jwcode-web/src/` — Vite+React SPA, zustand stores, Tailwind CSS
@@ -63,6 +109,48 @@ Web frontend builds with `tsc && vite build` → `jwcode-web/dist/`, served from
 - **Config:** `~/.jwcode/config.yaml` (backend_url, ws_url, ws_auth_token)
 - **Hooks:** `~/.jwcode/hooks/` — user-defined lifecycle hook scripts
 - **Memory:** `~/.claude/projects/.../memory/` — persistent Claude Code memory
+
+## Bash Security (jwcode-core/.../tool/bash/)
+
+Three-stage validation pipeline before shell execution:
+
+| Stage | Class | Checks |
+|-------|-------|--------|
+| 1. Read-only detection | `CommandReadOnlyValidator` | 150+ read-only prefixes across Unix/Windows, git, npm, docker, kubectl, go, cargo, pip; `riskScore()` 0-10 |
+| 2. Injection detection | `CommandInjectionDetector` | Backtick substitution, `$()` / `${}`, path traversal, encoded payloads, reverse shell patterns (`/dev/tcp`, `nc -e`) |
+| 3. Sed validation | `SedCommandValidator` | `-i` in-place with backup detection, `s///e` exec flag, `w`/`W` file writes |
+
+All three integrated into `BashTool.validate()` and `isReadOnly()`.
+
+## Permission System
+
+`PermissionManager` → `AutoPermissionClassifier` (7-layer heuristic):
+alwaysSafe → injection detection → userApproved patterns → userDenied patterns → riskScore(0-10) → rateLimit(30/min) → default ASK.
+
+Auto mode bypasses permission prompts; session learning accumulates approved/denied patterns.
+
+## Slash Commands
+
+Registered via `CommandRegistry.createDefault()` — 7 user-facing commands:
+| Command | Purpose |
+|---------|---------|
+| `/doctor` | System diagnostic: Java env, OS, session, Docker check |
+| `/cost` | Token usage + estimated cost by model (prompt/completion/total) |
+| `/compact` | Context compaction: normal(30)/aggressive(10)/summary(20+summary) |
+| `/review` | Code review: logic, security, performance, style, completeness |
+| `/security-review` | OWASP Top 10 check + injection/path-traversal/privilege/sql risks |
+| `/memory` | Persistent memory CRUD: list/add/delete/clear for user/feedback/project/reference |
+| `/tasks` | Background task management: list/stop/output |
+
+## Team Collaboration & Config
+
+| Service | Purpose |
+|---------|---------|
+| `SharedMemoryService` | Team-level shared memory CRUD, type filtering, search, 30-day auto-cleanup, JSON per team |
+| `SessionSharingService` | Session sharing with view/fork counting, tag/keyword search, popular ranking, per-team JSON |
+| `ConfigMigrationManager` | Schema-versioned config (v0→v1→v2), auto-migration chain, backup/restore on failure |
+| `PromptCacheOptimizer` | SHA-256 breakpoint detection, adaptive cache strategy (AGGRESSIVE/CONSERVATIVE/ADAPTIVE) |
+| `AutoDreamService` | 30s idle threshold → codebaseInsight + todoDiscovery + cacheWarm on low-cost model |
 
 ## WebSocket Protocol
 
@@ -77,10 +165,11 @@ Built with Ink 5 (React for terminal), `ws`, esbuild. Source in `src/`, output i
 **Key components:**
 | File | Purpose |
 |------|---------|
-| `src/App.tsx` | Root component: WS event wiring, keyboard, command execution, layout |
+| `src/App.tsx` | Root component: WS event wiring, generation elapsed timer, token rate computation, keyboard, command execution |
 | `src/components/TextInput.tsx` | Text input with paste support (CJK-safe), ↑↓ input history (30 entries), token/char counter |
-| `src/components/ChatArea.tsx` | Virtual message window with scrollOffset, `[X/Y]` position indicator |
-| `src/components/StatusLine.tsx` | Model, token bar, Plan/Act tag, Auto tag, message count, connection indicator |
+| `src/components/ChatArea.tsx` | Virtual message window with scrollOffset, `[X/Y]` indicator; live elapsed timers for running tool calls, duration for completed |
+| `src/components/StatusLine.tsx` | Model, prompt+completion token breakdown, token rate (t/s), generation elapsed, Plan/Act/Auto tags, █░ bar |
+| `src/components/ApprovalModal.tsx` | CRITICAL/HIGH/MEDIUM/LOW risk classification, 15s countdown auto-approval, tool preview panel, y/n/1/2 shortcuts |
 | `src/components/CommandPalette.tsx` | `/` filterable popup with PgUp/PgDn page navigation |
 | `src/theme.ts` | Color constants, `JWCODE_THEME=dark\|light` env var support |
 
@@ -115,14 +204,24 @@ The web terminal tab uses [ttyd](https://github.com/tsl0922/ttyd) as a PTY sidec
 **Key stores (all zustand):**
 | Store | Purpose | Persist? |
 |-------|---------|----------|
-| `chatStore` | Per-session messages, generation state | localStorage (debounced) |
+| `chatStore` | Per-session messages, generation state, steps + toolCalls CRUD | localStorage (debounced) |
 | `sessionStore` | Session tabs, history, per-session tasks | localStorage |
 | `planStore` | Plan mode state, structured tasks, mode history | no |
 | `terminalStore` | Terminal session lifecycle (idle/running/error) | no |
 | `toastStore` | Toast notifications with auto-dismiss | no |
-| `tokenStore` | Token usage tracking | no |
-| `settingsStore` | Theme, workspace dir, feature toggles | localStorage |
-| `useHookApprovalStore` | Hook approval queue, auto-mode | no |
+| `tokenStore` | Token usage tracking, prompt/completion breakdown, EMA-smoothed token rate, session delta | no |
+| `settingsStore` | Theme, workspace dir, feature toggles, workspaceGuardBypass | localStorage |
+| `useHookApprovalStore` | Hook approval queue, auto-mode, per-session allow-list | partial (autoMode only) |
+
+**Key UI components:**
+| Component | Purpose |
+|-----------|---------|
+| `Chat/StatusLine.tsx` | Token breakdown (prompt+completion), split bar, t/s rate, elapsed timer, model, Plan/Act/Auto badges |
+| `Chat/StepItem.tsx` | Step card with live elapsed timer (setInterval for running), animated status, collapsible thought/result/toolCalls |
+| `Chat/ToolCallItem.tsx` | Tool call card with live elapsed timer, collapsible args/result, DiffPreview integration for file modifications |
+| `Chat/HookApprovalCard.tsx` | Risk-level classification (CRITICAL/HIGH/MEDIUM/LOW), 15s countdown auto-approval, command preview, dropdown options |
+| `Chat/DiffPreview.tsx` | Unified + side-by-side diff views, stats footer (+N/-M/hunks), language detection for 20+ languages |
+| `Chat/ExpandableResult.tsx` | Expand/collapse long result text with truncation |
 
 **WebSocket handlers** (`src/hooks/handlers/`): 775-line `useWebSocket.ts` split into category modules:
 | Module | Message types handled |
@@ -142,3 +241,10 @@ The web terminal tab uses [ttyd](https://github.com/tsl0922/ttyd) as a PTY sidec
 - Collapsible sidebar panels with React state (no DOM hacks)
 - Terminal tab conditionally hidden when ttyd unavailable
 - Messages capped at 200/session with debounced localStorage persistence
+- Step cards with live elapsed timers, animated running indicators, collapsible thought/result
+- Tool call cards with live elapsed timers, inline result preview, diff detection for file modifications
+- Hook approval cards with CRITICAL/HIGH/MEDIUM/LOW risk classification, 15s countdown, command preview
+- Token breakdown (prompt + completion) with split progress bar, EMA-smoothed tokens/sec rate
+- Diff preview with unified + side-by-side views, stats footer, 20+ language detection
+- CLI StatusLine with token breakdown, rate display, generation elapsed counter
+- CLI ApprovalModal with risk levels, countdown auto-approval, y/n/1/2 shortcuts

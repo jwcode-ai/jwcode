@@ -133,13 +133,14 @@ export function TerminalView() {
 
     const term = new Terminal({
       theme: TERM_THEME,
-      fontFamily: '"Cascadia Code", "Fira Code", Consolas, monospace',
+      fontFamily: '"Cascadia Code", "Fira Code", Consolas, "Courier New", monospace',
       fontSize: 14,
       lineHeight: 1.2,
       cursorBlink: true,
       cursorStyle: 'block',
       scrollback: 10000,
       convertEol: true,
+      allowProposedApi: true,
     });
 
     const fitAddon = new FitAddon();

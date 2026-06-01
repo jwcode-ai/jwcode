@@ -1,0 +1,36 @@
+2026-05-31 18:57:01.143 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-31 18:57:03.388 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-31 18:57:03.413 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)
+2026-05-31 19:16:22.685 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-31 19:16:22.784 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-31 19:16:22.807 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-31 19:16:22.813 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-31 19:39:50.938 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-31 19:39:52.728 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-31 19:39:52.757 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)
+2026-05-31 19:53:22.636 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-31 19:53:22.702 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-31 19:53:22.716 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-31 19:53:22.718 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-31 20:07:39.397 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-31 20:07:40.552 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-31 20:07:40.571 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)
+2026-05-31 20:08:05.618 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-31 20:08:05.692 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-31 20:08:05.708 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-31 20:08:05.711 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-31 20:36:48.327 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-31 20:36:49.113 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-31 20:36:49.132 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)
+2026-05-31 20:37:31.547 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-31 20:37:31.605 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-31 20:37:31.619 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-31 20:37:31.621 [ws-query-0] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-31 20:39:24.726 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-31 20:39:24.731 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-31 20:39:24.732 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-31 20:39:24.733 [ws-query-1] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-31 20:45:30.286 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-31 20:45:30.300 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-31 20:45:30.308 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式
+2026-05-31 20:45:30.311 [ws-query-2] INFO  c.j.core.planner.ai.AILearningMemory - [AILearningMemory] 加载了 0 个历史模式

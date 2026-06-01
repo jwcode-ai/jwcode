@@ -1,0 +1,12 @@
+2026-05-30 22:52:01.582 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-30 22:52:02.323 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-30 22:52:02.337 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)
+2026-05-30 23:05:33.061 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-30 23:05:33.780 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-30 23:05:33.794 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)
+2026-05-30 23:40:20.001 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-30 23:40:20.912 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-30 23:40:20.931 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)
+2026-05-30 23:52:40.368 [com.jwcode.web.WebLauncher.main()] INFO  com.jwcode.core.task.TaskScheduler - TaskScheduler initialized with maxConcurrent=10
+2026-05-30 23:52:41.066 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\ProgramData\jwcode\config.yaml (defaultProvider=null)
+2026-05-30 23:52:41.083 [com.jwcode.web.WebLauncher.main()] INFO  c.j.core.config.YamlConfigLoader - Loaded config from: C:\Users\HUAWEI\.jwcode\config.yaml (defaultProvider=deepseek)

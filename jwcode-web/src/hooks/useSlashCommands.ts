@@ -44,6 +44,21 @@ export function useSlashCommands(options: UseSlashCommandsOptions) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
 
+  // 将命令通过 chat 消息发送到后端执行
+  const sendToBackend = useCallback((cmd: string, args?: string) => {
+    const sessionId = useSessionStore.getState().activeSessionId;
+    if (sessionId) {
+      wsService.setSessionId(sessionId);
+      wsService.send({
+        type: 'chat',
+        sessionId,
+        message: args ? `/${cmd} ${args}` : `/${cmd}`,
+      });
+      return { success: true, message: `已发送命令 /${cmd}` };
+    }
+    return { success: false, message: '无活跃会话' };
+  }, []);
+
   const commands: SlashCommand[] = useMemo(() => [
     // Tab switching commands
     {
@@ -213,32 +228,17 @@ export function useSlashCommands(options: UseSlashCommandsOptions) {
       name: 'doctor',
       description: '系统自诊断 (Java/Maven/Config/API Key/Network/Docker/Disk)',
       icon: '🩺',
-      local: true,
-      action: () => { wsService.send({ type: 'doctor' as any }); return { success: true, message: '诊断已运行' }; },
-    },
-    {
-      id: 'rewind',
-      name: 'rewind',
-      description: '回退到最近检查点',
-      icon: '⏪',
-      local: true,
-      action: () => { wsService.send({ type: 'rewind' as any }); return { success: true, message: '回退请求已发送' }; },
-    },
-    {
-      id: 'update-docs',
-      name: 'update-docs',
-      description: '自动分析项目并更新文档 (README/AGENTS/ARCHITECTURE)',
-      icon: '📝',
-      local: true,
-      action: () => { wsService.send({ type: 'update_docs' as any }); return { success: true, message: '文档更新中...' }; },
+      local: false,
+      action: () => sendToBackend('doctor'),
     },
     {
       id: 'compact',
       name: 'compact',
       description: '压缩当前会话上下文',
+      args: '[aggressive|summary]',
       icon: '🗜️',
-      local: true,
-      action: () => { wsService.send({ type: 'compact' as any }); return { success: true, message: '压缩请求已发送' }; },
+      local: false,
+      action: (args) => sendToBackend('compact', args),
     },
     {
       id: 'help',
@@ -248,7 +248,96 @@ export function useSlashCommands(options: UseSlashCommandsOptions) {
       local: true,
       action: () => { return { success: true, message: '' }; },
     },
-  ], [setActiveTab, createNewSession, clearMessages, setTheme, toggleTerminal, setLogs, setUnreadLogs]);
+    // ============== 后端命令 ==============
+    {
+      id: 'cost',
+      name: 'cost',
+      description: '显示 token 使用量和 API 费用统计',
+      args: '[detail|reset]',
+      icon: '💰',
+      local: false,
+      action: (args) => sendToBackend('cost', args),
+    },
+    {
+      id: 'review',
+      name: 'review',
+      description: '代码审查 — 检查变更的正确性、安全性和代码质量',
+      args: '[file|diff|all] [--level low|medium|high]',
+      icon: '🔍',
+      local: false,
+      action: (args) => sendToBackend('review', args),
+    },
+    {
+      id: 'security-review',
+      name: 'security-review',
+      description: '安全审查 — OWASP Top 10 + 命令注入/路径遍历/权限提升',
+      args: '[file|diff|full]',
+      icon: '🔒',
+      local: false,
+      action: (args) => sendToBackend('security-review', args),
+    },
+    {
+      id: 'memory',
+      name: 'memory',
+      description: '管理 AI 持久记忆 (list/add/delete/clear)',
+      args: '[list|add|delete|clear]',
+      icon: '🧠',
+      local: false,
+      action: (args) => sendToBackend('memory', args),
+    },
+    {
+      id: 'tasks',
+      name: 'tasks',
+      description: '查看和管理后台任务、子代理和 shell 进程',
+      args: '[list|stop|output]',
+      icon: '📋',
+      local: false,
+      action: (args) => sendToBackend('tasks', args),
+    },
+    {
+      id: 'model',
+      name: 'model',
+      description: '查看或切换 AI 模型',
+      args: '[model-name]',
+      icon: '🤖',
+      local: false,
+      action: (args) => sendToBackend('model', args),
+    },
+    {
+      id: 'status',
+      name: 'status',
+      description: '显示当前会话状态 (会话ID/消息数/模型/工作目录)',
+      icon: '📊',
+      local: false,
+      action: () => sendToBackend('status'),
+    },
+    {
+      id: 'config',
+      name: 'config',
+      description: '管理应用程序配置 (get/set/list/delete)',
+      args: '<get|set|list|delete> [key] [value]',
+      icon: '🔧',
+      local: false,
+      action: (args) => sendToBackend('config', args),
+    },
+    {
+      id: 'exit',
+      name: 'exit',
+      description: '退出当前会话',
+      icon: '🚪',
+      local: false,
+      action: () => sendToBackend('exit'),
+    },
+    {
+      id: 'test',
+      name: 'test',
+      description: '运行 JWCode 能力评测 (simple/medium/complex/full/list)',
+      args: '[simple|medium|complex|full|list|help]',
+      icon: '🧪',
+      local: false,
+      action: (args) => sendToBackend('test', args),
+    },
+  ], [setActiveTab, createNewSession, clearMessages, setTheme, toggleTerminal, setLogs, setUnreadLogs, sendToBackend]);
 
   // 将后端命令转换为 SlashCommand 格式
   const backendSlashCommands: SlashCommand[] = useMemo(() => {

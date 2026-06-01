@@ -16,6 +16,10 @@ export interface AppState {
   modelName: string;
   connected: boolean;
   statusText: string;
+  /** seconds elapsed since generation started */
+  generationElapsed: number;
+  /** tokens/second rate during active streaming */
+  tokenRate: number;
 }
 
 const initialState: AppState = {
@@ -29,6 +33,8 @@ const initialState: AppState = {
   modelName: '',
   connected: false,
   statusText: 'connecting...',
+  generationElapsed: 0,
+  tokenRate: 0,
 };
 
 let _store: Store<AppState> | null = null;

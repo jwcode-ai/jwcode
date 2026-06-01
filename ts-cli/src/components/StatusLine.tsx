@@ -7,14 +7,32 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
+function formatRate(rate: number): string {
+  if (rate <= 0) return '';
+  if (rate >= 100) return `${Math.round(rate)}t/s`;
+  if (rate >= 10) return `${rate.toFixed(1)}t/s`;
+  return `${rate.toFixed(1)}t/s`;
+}
+
+function formatElapsed(sec: number): string {
+  if (sec <= 0) return '';
+  if (sec >= 60) {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}m${s}s`;
+  }
+  return `${sec}s`;
+}
+
 export function StatusLine() {
   const state = useAppState();
-  const { usage, modelName, planMode, autoMode, connected, statusText, messages } = state;
+  const { usage, modelName, planMode, autoMode, connected, statusText, messages,
+          generationElapsed, tokenRate } = state;
   const msgCount = messages.length;
 
   const pct = Math.min(100, Math.round(usage.usageRatio * 100));
   const filled = Math.round(pct / 10);
-  const bar = '='.repeat(filled) + '-'.repeat(10 - filled);
+  const bar = '█'.repeat(filled) + '░'.repeat(10 - filled);
   const model = modelName || (connected ? 'ready' : 'connecting...');
 
   const modeLabel = planMode ? ' Plan ' : ' Act ';
@@ -24,6 +42,14 @@ export function StatusLine() {
   const connColor = connected ? 'green' : 'red';
 
   const isError = statusText.startsWith('Error:');
+  const isGenerating = !!state.currentMessage;
+  const barColor = pct > 90 ? 'red' : pct > 70 ? 'yellow' : 'white';
+  const rateStr = formatRate(tokenRate);
+  const elapsedStr = formatElapsed(generationElapsed);
+
+  // Prompt vs completion breakdown
+  const p = usage.promptTokens;
+  const c = usage.completionTokens;
 
   return (
     <Box flexDirection="column" width="100%" paddingRight={1}>
@@ -42,10 +68,41 @@ export function StatusLine() {
         <Text color="green">{model}</Text>
         <Text>  </Text>
         <Text dimColor>{msgCount}msgs</Text>
-        <Text>  t: </Text>
-        <Text color="yellow">{formatTokens(usage.totalTokens)}</Text>
+
+        {/* Prompt + Completion breakdown */}
+        {p > 0 || c > 0 ? (
+          <>
+            <Text>  </Text>
+            <Text color="blue">{formatTokens(p)}</Text>
+            <Text dimColor>+</Text>
+            <Text color="green">{formatTokens(c)}</Text>
+            <Text dimColor>=</Text>
+            <Text color="yellow">{formatTokens(usage.totalTokens)}</Text>
+          </>
+        ) : (
+          <>
+            <Text>  t:</Text>
+            <Text color="yellow">{formatTokens(usage.totalTokens)}</Text>
+          </>
+        )}
         <Text>  </Text>
-        <Text color={pct > 90 ? 'red' : 'white'}>{bar} {pct}%</Text>
+        <Text color={barColor}>{bar} {pct}%</Text>
+
+        {/* Token rate during streaming */}
+        {isGenerating && rateStr && (
+          <>
+            <Text>  </Text>
+            <Text color="magenta">{rateStr}</Text>
+          </>
+        )}
+
+        {/* Elapsed timer */}
+        {isGenerating && elapsedStr && (
+          <>
+            <Text>  </Text>
+            <Text color="cyan">{elapsedStr}</Text>
+          </>
+        )}
       </Box>
       {statusText && statusText !== 'connecting...' && (
         <Box height={1}>

@@ -10,6 +10,11 @@ import com.jwcode.core.tool.ToolValidationResult;
 import com.jwcode.core.tool.context.ToolExecutionContext;
 import com.jwcode.core.tool.input.BashInput;
 import com.jwcode.core.tool.output.BashOutput;
+import com.jwcode.core.tool.shell.CommandInjectionDetector;
+import com.jwcode.core.tool.shell.CommandInjectionDetector.InjectionResult;
+import com.jwcode.core.tool.shell.CommandReadOnlyValidator;
+import com.jwcode.core.tool.shell.SedCommandValidator;
+import com.jwcode.core.tool.shell.SedCommandValidator.SedValidationResult;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -255,33 +260,57 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
     @Override
     public ToolValidationResult validate(BashInput input) {
         ToolValidationResult.Builder builder = ToolValidationResult.builder();
-        
+
         if (input.command() == null || input.command().trim().isEmpty()) {
             builder.addError("command 是必需的");
         } else {
-            // 【新增】Windows 平台 Unix 命令检测
+            String cmd = input.command().trim();
+
+            // 命令注入检测（纵深防御第一层）
+            InjectionResult injection = CommandInjectionDetector.detect(cmd, false);
+            if (injection.isInjected() && injection.severity() >= 8) {
+                builder.addError("⛔ 命令注入风险 [" + injection.riskType() + "]: " + injection.description());
+            } else if (injection.isInjected() && injection.severity() >= 5) {
+                builder.addWarning("⚠️ 潜在注入风险 [" + injection.riskType() + "]: " + injection.description());
+            }
+
+            // Sed 命令安全验证
+            if (cmd.toLowerCase().startsWith("sed ")) {
+                SedValidationResult sedResult = SedCommandValidator.validate(cmd);
+                if (!sedResult.safe()) {
+                    builder.addWarning("⚠️ sed 安全: " + sedResult.issue() + " → " + sedResult.recommendation());
+                }
+            }
+
+            // Windows 平台 Unix 命令检测
             if (isWindows()) {
-                String warning = detectUnixCommandWarning(input.command());
+                String warning = detectUnixCommandWarning(cmd);
                 if (warning != null) {
                     builder.addWarning(warning);
                 }
             }
-            
-            // 【新增】检测无法持久化的任务（会重试的任务）
-            String persistentWarning = detectPersistentChangeWarning(input.command());
+
+            // 检测无法持久化的任务（会重试的任务）
+            String persistentWarning = detectPersistentChangeWarning(cmd);
             if (persistentWarning != null) {
                 builder.addWarning(persistentWarning);
             }
+
+            // 风险评分提示
+            int riskScore = CommandReadOnlyValidator.riskScore(cmd);
+            if (riskScore >= 8) {
+                builder.addWarning("⚠️ 命令风险评分: " + riskScore + "/10 — 请确认操作意图");
+            }
         }
-        
+
         if (input.timeout() != null && input.timeout() < 100) {
             builder.addWarning("超时时间太短（" + input.timeout() + "ms），建议至少 1000ms");
         }
-        
+
         if (input.timeout() != null && input.timeout() > 3600000) {
             builder.addWarning("超时时间太长（" + input.timeout() + "ms），建议不超过 3600000ms（1小时）");
         }
-        
+
         return builder.build();
     }
     
@@ -434,26 +463,7 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
     
     @Override
     public boolean isReadOnly(BashInput input) {
-        // 检查是否是只读命令
-        String command = input.command().toLowerCase().trim();
-        
-        // Unix 只读命令
-        boolean unixReadOnly = command.startsWith("ls ") || command.startsWith("cat ") ||
-                command.startsWith("echo ") || command.startsWith("pwd") ||
-                command.startsWith("whoami") || command.startsWith("date") ||
-                command.startsWith("head ") || command.startsWith("tail ") ||
-                command.startsWith("find ") || command.startsWith("grep ") ||
-                command.startsWith("wc ") || command.startsWith("du ");
-        
-        // Windows 只读命令
-        boolean windowsReadOnly = command.startsWith("dir ") || command.startsWith("type ") ||
-                command.startsWith("cd") || command.startsWith("echo ") ||
-                command.startsWith("whoami") || command.startsWith("date /t") ||
-                command.startsWith("ver") || command.startsWith("systeminfo") ||
-                command.startsWith("where ") || command.startsWith("get-") ||  // PowerShell
-                command.startsWith("chcp");
-        
-        return unixReadOnly || windowsReadOnly;
+        return CommandReadOnlyValidator.isReadOnly(input.command());
     }
     
     @Override

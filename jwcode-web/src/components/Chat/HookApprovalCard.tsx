@@ -1,33 +1,102 @@
-import { memo, useState, useCallback } from 'react';
-import { Shield, Check, X, ChevronDown } from 'lucide-react';
+import { memo, useState, useCallback, useEffect, useRef } from 'react';
+import { Shield, Check, X, ChevronDown, AlertTriangle, Zap, Clock } from 'lucide-react';
 import { HookApprovalInfo } from '../../types';
 import wsService from '../../services/websocket';
 import { useHookApprovalStore } from '../../stores/useHookApprovalStore';
 
 interface HookApprovalCardProps {
   approval: HookApprovalInfo;
-  /** 回调：审批完成后更新消息状态 */
   onResolved?: (approvalId: string, status: 'approved' | 'denied') => void;
 }
 
-/**
- * HookApprovalCard — 嵌入对话消息中的权限申请卡片。
- *
- * 展示工具名称、申请原因，并提供"允许"、"拒绝"按钮，
- * 以及一个下拉菜单选择更细粒度的控制选项。
- */
+type RiskLevel = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
+
+// Heuristic risk classification by tool name
+function classifyRisk(toolName: string, askPayload: string): { level: RiskLevel; reason: string } {
+  const name = toolName.toLowerCase();
+
+  // CRITICAL: destructive operations, shell execution, network access
+  if (/\b(rm|del|delete|drop|truncate|format|mkfs)\b/.test(name)) {
+    return { level: 'CRITICAL', reason: '破坏性操作 - 可能删除数据' };
+  }
+  if (/\b(bash|shell|exec|cmd|powershell|terminal)\b/.test(name)) {
+    // Check for dangerous patterns in the payload
+    if (/\b(rm\s+-rf|sudo|chmod\s+777|curl.*\|\s*(ba)?sh|wget.*-O|>\/dev\/|mkfs)\b/i.test(askPayload)) {
+      return { level: 'CRITICAL', reason: '高危命令 - 包含系统级操作' };
+    }
+    return { level: 'HIGH', reason: 'Shell 命令执行' };
+  }
+  if (/\b(Write|Edit|save|upload|deploy|publish)\b/i.test(name)) {
+    return { level: 'HIGH', reason: '文件写入操作' };
+  }
+  if (/\b(install|uninstall|npm|pip|cargo|gem|apt|brew|choco|yum|dnf)\b/i.test(name)) {
+    return { level: 'HIGH', reason: '包管理操作' };
+  }
+  if (/\b(git|commit|push|merge|rebase)\b/i.test(name)) {
+    const isDestructive = /\b(push|force|hard\s*reset|rebase)\b/i.test(askPayload);
+    return { level: isDestructive ? 'HIGH' : 'MEDIUM', reason: isDestructive ? 'Git 强制操作' : 'Git 操作' };
+  }
+  if (/\b(http|fetch|curl|wget|api|request|download)\b/i.test(name)) {
+    return { level: 'MEDIUM', reason: '网络请求' };
+  }
+  if (/\b(read|open|list|ls|dir|cat|view|search|find|grep|glob)\b/i.test(name)) {
+    return { level: 'LOW', reason: '只读操作' };
+  }
+  return { level: 'MEDIUM', reason: '工具调用' };
+}
+
+const RISK_CONFIG: Record<RiskLevel, { bg: string; border: string; text: string; badge: string; icon: string }> = {
+  CRITICAL: { bg: 'bg-red-900/20', border: 'border-red-500/40', text: 'text-red-400', badge: 'bg-red-500/20 text-red-400 border-red-500/30', icon: '⛔' },
+  HIGH:     { bg: 'bg-orange-900/15', border: 'border-orange-500/30', text: 'text-orange-400', badge: 'bg-orange-500/20 text-orange-400 border-orange-500/30', icon: '⚠️' },
+  MEDIUM:   { bg: 'bg-yellow-900/10', border: 'border-yellow-500/25', text: 'text-yellow-400', badge: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/25', icon: '⚡' },
+  LOW:      { bg: 'bg-blue-900/10', border: 'border-blue-500/25', text: 'text-blue-400', badge: 'bg-blue-500/15 text-blue-400 border-blue-500/25', icon: '📋' },
+};
+
+const COUNTDOWN_SECONDS = 15;
+
 export const HookApprovalCard = memo(function HookApprovalCard({
   approval,
   onResolved,
 }: HookApprovalCardProps) {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [resolving, setResolving] = useState(false);
+  const [countdown, setCountdown] = useState(COUNTDOWN_SECONDS);
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const isPending = approval.status === 'pending';
+  const { level, reason } = classifyRisk(approval.toolName, approval.askPayload);
+  const rc = RISK_CONFIG[level];
+
+  // Countdown timer — auto-approve when it hits 0
+  useEffect(() => {
+    if (!isPending) return;
+    setCountdown(COUNTDOWN_SECONDS);
+    countdownRef.current = setInterval(() => {
+      setCountdown((prev) => {
+        if (prev <= 1) {
+          if (countdownRef.current) clearInterval(countdownRef.current);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => { if (countdownRef.current) clearInterval(countdownRef.current); };
+  }, [isPending, approval.approvalId]);
+
+  // Auto-approve when countdown reaches 0
+  useEffect(() => {
+    if (countdown === 0 && isPending && !resolving) {
+      handleAllow();
+    }
+  }, [countdown]);
+
+  // Extract command/file preview from askPayload
+  const preview = extractPreview(approval.toolName, approval.askPayload);
 
   const handleAllow = useCallback(() => {
     if (!isPending || resolving) return;
     setResolving(true);
+    if (countdownRef.current) clearInterval(countdownRef.current);
     wsService.send({
       type: 'hook_allow' as any,
       data: JSON.stringify({ approvalId: approval.approvalId }),
@@ -38,6 +107,7 @@ export const HookApprovalCard = memo(function HookApprovalCard({
   const handleDeny = useCallback(() => {
     if (!isPending || resolving) return;
     setResolving(true);
+    if (countdownRef.current) clearInterval(countdownRef.current);
     wsService.send({
       type: 'hook_deny' as any,
       data: JSON.stringify({ approvalId: approval.approvalId }),
@@ -48,6 +118,7 @@ export const HookApprovalCard = memo(function HookApprovalCard({
   const handleAllowSession = useCallback(() => {
     if (!isPending || resolving) return;
     setResolving(true);
+    if (countdownRef.current) clearInterval(countdownRef.current);
     const approvalStore = useHookApprovalStore.getState();
     approvalStore.addToSessionAllowList(approval.toolName);
     wsService.send({
@@ -60,17 +131,12 @@ export const HookApprovalCard = memo(function HookApprovalCard({
   const handleSelectOption = useCallback((option: 'allow' | 'deny' | 'allow_session' | 'allow_always') => {
     setIsDropdownOpen(false);
     switch (option) {
-      case 'allow':
-        handleAllow();
-        break;
-      case 'deny':
-        handleDeny();
-        break;
-      case 'allow_session':
-        handleAllowSession();
-        break;
+      case 'allow': handleAllow(); break;
+      case 'deny': handleDeny(); break;
+      case 'allow_session': handleAllowSession(); break;
       case 'allow_always':
-        // 持久化允许：设置 autoMode 并批准
+        setResolving(true);
+        if (countdownRef.current) clearInterval(countdownRef.current);
         useHookApprovalStore.getState().setAutoMode(true);
         wsService.send({
           type: 'hook_allow' as any,
@@ -81,7 +147,6 @@ export const HookApprovalCard = memo(function HookApprovalCard({
     }
   }, [handleAllow, handleDeny, handleAllowSession, approval.approvalId, onResolved]);
 
-  // 已处理状态显示
   if (!isPending) {
     const isApproved = approval.status === 'approved';
     return (
@@ -99,36 +164,74 @@ export const HookApprovalCard = memo(function HookApprovalCard({
     );
   }
 
+  const countdownPct = (countdown / COUNTDOWN_SECONDS) * 100;
+  const countdownUrgent = countdown <= 5;
+
   return (
-    <div className="bg-dark-bg border border-accent-yellow/40 rounded-lg overflow-hidden">
-      {/* 头部：标题 + 状态 */}
-      <div className="flex items-center gap-2 px-3 py-2 bg-accent-yellow/5 border-b border-accent-yellow/20">
-        <Shield size={16} className="text-yellow-400 shrink-0" />
+    <div className={`bg-dark-bg border rounded-lg overflow-hidden ${rc.border}`}>
+      {/* Header: risk badge + tool name + countdown */}
+      <div className={`flex items-center gap-2 px-3 py-2 ${rc.bg} border-b ${rc.border}`}>
+        <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${rc.badge}`}>
+          {rc.icon} {level}
+        </span>
+        <Shield size={14} className={rc.text} />
         <span className="text-xs font-medium text-dark-text">权限申请</span>
-        <span className="text-[10px] text-yellow-400 ml-auto animate-pulse">等待确认</span>
+        <span className="text-[10px] text-dark-muted ml-auto">{reason}</span>
+
+        {/* Countdown bar */}
+        <div className="flex items-center gap-1.5 ml-2">
+          <Clock size={11} className={countdownUrgent ? 'text-accent-red' : 'text-dark-muted'} />
+          <span className={`text-[11px] font-mono ${countdownUrgent ? 'text-accent-red animate-pulse' : 'text-dark-muted'}`}>
+            {countdown}s
+          </span>
+          <div className="w-10 h-1 bg-dark-border rounded-full overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-1000 ${
+                countdownUrgent ? 'bg-accent-red' : countdown <= 8 ? 'bg-accent-yellow' : 'bg-accent-green'
+              }`}
+              style={{ width: `${countdownPct}%` }}
+            />
+          </div>
+        </div>
       </div>
 
-      {/* 内容 */}
+      {/* Body */}
       <div className="px-3 py-2.5 space-y-2">
-        {/* 工具名称 */}
+        {/* Tool name + reason */}
         <div className="flex items-center gap-2 text-xs">
           <span className="text-dark-muted shrink-0">工具：</span>
-          <code className="text-blue-400 font-mono text-xs bg-dark-surface px-1.5 py-0.5 rounded">
+          <code className="text-accent-blue font-mono text-xs bg-dark-surface px-1.5 py-0.5 rounded">
             {approval.toolName}
           </code>
         </div>
 
-        {/* 申请原因 */}
-        {approval.askPayload && (
+        {/* Command/Args preview */}
+        {preview && (
+          <div className="bg-dark-surface rounded border border-dark-border p-2 max-h-24 overflow-y-auto">
+            <pre className="text-[11px] font-mono text-dark-text whitespace-pre-wrap break-all leading-relaxed">
+              {preview}
+            </pre>
+          </div>
+        )}
+
+        {/* Ask reason */}
+        {approval.askPayload && !preview && (
           <div className="text-xs text-dark-muted leading-relaxed">
             <span className="text-dark-muted/70">原因：</span>
             <span className="text-dark-text">{approval.askPayload}</span>
           </div>
         )}
 
-        {/* 按钮组 */}
+        {/* Alert for CRITICAL/HIGH risk */}
+        {(level === 'CRITICAL' || level === 'HIGH') && (
+          <div className={`flex items-center gap-1.5 text-[11px] px-2 py-1 rounded ${rc.bg} ${rc.text}`}>
+            <AlertTriangle size={12} />
+            <span>{level === 'CRITICAL' ? '此操作可能造成不可逆的影响，请仔细确认' : '请确认此操作为预期行为'}</span>
+          </div>
+        )}
+
+        {/* Action buttons */}
         <div className="flex gap-2 pt-1">
-          {/* 允许按钮 */}
           <button
             onClick={handleAllow}
             disabled={resolving}
@@ -136,9 +239,9 @@ export const HookApprovalCard = memo(function HookApprovalCard({
           >
             <Check size={12} />
             <span>允许</span>
+            <span className="text-[10px] opacity-60">({countdown}s)</span>
           </button>
 
-          {/* 拒绝按钮 */}
           <button
             onClick={handleDeny}
             disabled={resolving}
@@ -148,7 +251,7 @@ export const HookApprovalCard = memo(function HookApprovalCard({
             <span>拒绝</span>
           </button>
 
-          {/* 更多选项下拉按钮 */}
+          {/* More options dropdown */}
           <div className="relative">
             <button
               onClick={() => setIsDropdownOpen(!isDropdownOpen)}
@@ -161,7 +264,6 @@ export const HookApprovalCard = memo(function HookApprovalCard({
 
             {isDropdownOpen && (
               <>
-                {/* 点击外部关闭 */}
                 <div className="fixed inset-0 z-10" onClick={() => setIsDropdownOpen(false)} />
                 <div className="absolute right-0 top-full mt-1 z-20 w-52 bg-dark-surface border border-dark-border rounded-lg shadow-xl overflow-hidden">
                   <button
@@ -179,7 +281,7 @@ export const HookApprovalCard = memo(function HookApprovalCard({
                     onClick={() => handleSelectOption('allow_always')}
                     className="w-full px-3 py-2 text-xs text-left text-dark-text hover:bg-dark-hover transition-colors flex items-center gap-2"
                   >
-                    <span className="text-blue-400">🔄</span>
+                    <span className="text-purple-400"><Zap size={14} /></span>
                     <div>
                       <div>自动模式（全部允许）</div>
                       <div className="text-[10px] text-dark-muted">自动批准所有 Hook 请求</div>
@@ -194,3 +296,24 @@ export const HookApprovalCard = memo(function HookApprovalCard({
     </div>
   );
 });
+
+function extractPreview(toolName: string, askPayload: string): string | null {
+  // For Bash/Shell tools, show the command
+  if (/\b(bash|shell|exec|cmd|powershell|terminal)\b/i.test(toolName)) {
+    return askPayload || null;
+  }
+  // For Write/Edit tools, try to extract file path and snippet
+  if (/\b(write|edit|save|create)\b/i.test(toolName)) {
+    // Try to extract file_path from JSON-like payload
+    const fileMatch = askPayload.match(/(?:file_path|path|file)["\s:=]+([^\s",}]+)/i);
+    if (fileMatch) {
+      return `📄 ${fileMatch[1]}\n${askPayload.slice(0, 200)}`;
+    }
+    return askPayload.slice(0, 200) || null;
+  }
+  // Generic: show first 200 chars
+  if (askPayload && askPayload.length > 0) {
+    return askPayload.length > 200 ? askPayload.slice(0, 200) + '...' : askPayload;
+  }
+  return null;
+}

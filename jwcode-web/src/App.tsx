@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, lazy, Suspense, startTransition } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense, startTransition } from 'react';
 import { MessageSquare, Terminal, FolderTree, Settings, Brain, Wrench, Target, Users, FileText, ScrollText, LucideIcon, Menu, X, ChevronDown, ChevronUp, ListChecks } from 'lucide-react';
 import { useChatStore } from './stores/chatStore';
 import { useSessionStore } from './stores/sessionStore';
@@ -8,6 +8,7 @@ import { usePlanStore } from './stores/planStore';
 import { useHookApprovalStore } from './stores/useHookApprovalStore';
 import wsService from './services/websocket';
 import { useWebSocket } from './hooks/useWebSocket';
+import { apiClient } from './services/api/client';
 import { Tab, TabId, LogEntry, SessionTask } from './types';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { api } from './services/api';
@@ -24,7 +25,7 @@ const SessionTabs = lazy(() => import('./components/Chat/SessionTabs').then(m =>
 const SessionGrid = lazy(() => import('./components/Chat/SessionGrid').then(m => ({ default: m.SessionGrid })));
 const SettingsPanel = lazy(() => import('./components/Settings/SettingsPanel').then(m => ({ default: m.SettingsPanel })));
 const LogsPanel = lazy(() => import('./components/Logs/LogsPanel').then(m => ({ default: m.LogsPanel })));
-const PlanPanel = lazy(() => import('./components/Plan/PlanPanel').then(m => ({ default: m.PlanPanel })));
+
 const HookApprovalModal = lazy(() => import('./components/Hook/HookApprovalModal').then(m => ({ default: m.HookApprovalModal })));
 import { ToastContainer } from './components/Toast/ToastContainer';
 import { toast } from './stores/toastStore';
@@ -39,6 +40,7 @@ const PanelFallback = () => (
 // Tab configuration
 const TABS: Tab[] = [
   { id: 'chat', title: '对话', icon: 'MessageSquare' },
+
   { id: 'terminal', title: '终端', icon: 'Terminal' },
   { id: 'files', title: '文件', icon: 'FolderTree' },
   { id: 'models', title: '模型', icon: 'Brain' },
@@ -64,10 +66,16 @@ function App() {
   const [hookModalOpen, setHookModalOpen] = useState(false);
   const [isTaskListOpen, setIsTaskListOpen] = useState(true);
   const [isHistoryOpen, setIsHistoryOpen] = useState(true);
+  const [ttydAvailable, setTtydAvailable] = useState<boolean | null>(null); // null = checking
 
   const { toggleTerminal } = useTerminalStore();
   const { theme, setTheme, workspaceDir, setWorkspaceDir } = useSettingsStore();
   const approvalStore = useHookApprovalStore();
+
+  // 过滤可见 Tab：ttyd 不可用时隐藏终端
+  const filteredTabs = useMemo(() =>
+    TABS.filter(tab => !(tab.id === 'terminal' && ttydAvailable === false)),
+  [ttydAvailable]);
 
   // 使用 startTransition 包裹 Tab 切换，避免懒加载组件在同步事件中 suspend
   const handleTabChange = useCallback((tabId: TabId) => {
@@ -181,6 +189,13 @@ function App() {
   // WebSocket connection
   useWebSocket({ activeTab, setLogs, setUnreadLogs });
 
+  // 检查 ttyd 是否可用，决定是否显示终端 Tab
+  useEffect(() => {
+    apiClient.get<{ ttydAvailable?: boolean }>('/api/terminal/status')
+      .then(res => setTtydAvailable(res.success && res.data ? res.data.ttydAvailable !== false : false))
+      .catch(() => setTtydAvailable(false));
+  }, []);
+
   // 监听 switch-tab 自定义事件（用于 Plan 模式自动切换到 Plan 面板）
   useEffect(() => {
     const handler = (e: CustomEvent) => {
@@ -239,7 +254,6 @@ function App() {
 
       // 重置 planStore 全局状态，避免模式/确认状态残留
       usePlanStore.getState().setMode('act');
-      usePlanStore.getState().setShowConfirmButton(false);
     });
   }, [addSessionTab, workspaceDir]);
 
@@ -270,19 +284,6 @@ function App() {
 
     const planStore = usePlanStore.getState();
 
-    // Plan 模式校验：如果有未确认的计划，阻止发送新消息
-    if (planStore.mode === 'plan' && planStore.showConfirmButton && !planStore.planConfirmed) {
-      console.warn('[App] Plan 模式下有待确认的计划，不能发送新消息');
-      // 添加系统提示消息告知用户
-      useChatStore.getState().addMessage(sessionId, {
-        id: `msg-${Date.now()}`,
-        type: 'system',
-        content: '⚠️ 当前有未确认的计划。请先在上方确认或取消当前计划，再发送新消息。',
-        timestamp: Date.now(),
-      });
-      return;
-    }
-
     // 发送新消息时清除暂停状态
     useChatStore.getState().resumeGeneration(sessionId);
 
@@ -305,11 +306,7 @@ function App() {
     // 根据 Plan/Act 模式决定消息类型
     const currentMode = planStore.mode;
     if (currentMode === 'plan') {
-      // Plan 模式：发送 plan 消息，自动创建 Task（PENDING）
-      // 后端 handlePlanMessage 会处理规划流程
-      if (planStore.activePlanSessionId !== sessionId) {
-        planStore.startPlanning(sessionId, content.trim());
-      }
+      // Plan 模式：发送 plan 消息（只读分析）
       wsService.send({
         type: 'plan',
         sessionId,
@@ -363,7 +360,6 @@ function App() {
         // 清空所有 session 的消息和计划
         store.sessionTabs.forEach(t => {
           useChatStore.getState().clearMessages(t.id);
-          usePlanStore.getState().clearPlan(t.id);
         });
         // 直接重置 sessionTabs 和 sessions 为空
         useSessionStore.setState({
@@ -643,8 +639,6 @@ function App() {
           </div>
         );
       }
-      case 'plan':
-        return <PlanPanel />;
       case 'terminal':
         return <TerminalView />;
       case 'files':
@@ -689,7 +683,7 @@ function App() {
 
           {/* Tab Navigation */}
           <nav className="flex-1 flex items-center gap-1 overflow-x-auto">
-            {TABS.map(tab => {
+            {filteredTabs.map(tab => {
               const Icon = ICON_MAP[tab.icon || 'MessageSquare'] as LucideIcon;
               const isActive = activeTab === tab.id;
               const isLogTab = tab.id === 'logs';
@@ -740,7 +734,7 @@ function App() {
         {isMobileMenuOpen && (
           <div className="md:hidden fixed inset-0 bg-dark-bg/95 z-40 pt-12">
             <div className="p-4 space-y-2">
-              {TABS.map(tab => {
+              {filteredTabs.map(tab => {
                 const Icon = ICON_MAP[tab.icon || 'MessageSquare'] as LucideIcon;
                 const isActive = activeTab === tab.id;
                 return (
@@ -764,7 +758,7 @@ function App() {
         )}
 
         {/* Status line: 实时显示模型/Token/预算/生成状态 */}
-        <StatusLine />
+        <StatusLine activeTab={activeTab} />
 
         {/* Main Content Area */}
         <div className="flex-1 flex overflow-hidden min-h-0">

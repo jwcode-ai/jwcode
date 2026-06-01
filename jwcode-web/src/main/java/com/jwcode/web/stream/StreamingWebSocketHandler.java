@@ -193,8 +193,12 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         // 初始化 Hook 审批系统 — Bash/FileWrite 操作需要用户确认
         try {
             var registry = new com.jwcode.core.hook.HookRegistry();
-            var logger = new com.jwcode.core.hook.HookAuditLogger();
-            this.hookChain = new com.jwcode.core.hook.HookChain(registry, logger);
+            // 注册内置安全钩子
+            registry.register(new com.jwcode.core.hook.BashSafetyHook());
+            registry.register(new com.jwcode.core.hook.FileWriteAuditHook());
+            var auditLogger = new com.jwcode.core.hook.HookAuditLogger();
+            this.hookChain = new com.jwcode.core.hook.HookChain(registry, auditLogger);
+            System.out.println("[WS] Hook系统已初始化: BashSafety + FileWriteAudit (shell/文件写入需用户确认)");
         } catch (Exception e) {
             System.err.println("[WS] Hook init failed: " + e.getMessage());
         }
@@ -583,10 +587,6 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                     logger.info("处理 plan 消息");
                     handlePlanMessage(conn, clientMsg);
                     break;
-                case "plan_confirm":
-                    logger.info("处理 plan_confirm 消息");
-                    handlePlanConfirm(conn, clientMsg);
-                    break;
                 case "ping":
                     lastPongTime.put(conn, System.currentTimeMillis());
                     sendMessage(conn, MessageType.PONG, null);
@@ -657,6 +657,9 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                     break;
                 case "plugin":
                     handlePluginCommand(conn, clientMsg);
+                    break;
+                case "toggle_workspace_guard":
+                    handleToggleWorkspaceGuard(conn, clientMsg);
                     break;
                 default:
                     logger.warning("未知消息类型: " + clientMsg.type);
@@ -911,117 +914,45 @@ public class StreamingWebSocketHandler extends WebSocketServer {
      */
     private String getPlanSystemPrompt() {
         return """
-            # Plan 模式 - 需求分析专家（只读模式，禁止修改代码）
+            # Plan 模式 — 只读需求分析专家
 
             ## 当前工作目录
             """ + this.defaultWorkingDirectory + """
 
-            ## ⚠️ 核心约束（必须遵守）
-            1. 你当前处于 **Plan 模式**，职责仅限于：分析需求、探索代码、制定任务计划
-            2. **绝对不允许**修改任何文件、创建任何文件、删除任何文件、执行任何 Shell 命令
+            ## 核心约束
+            1. 你当前处于 **Plan 模式**，职责仅限于：分析需求、探索代码、输出自然语言分析报告
+            2. **绝对不允许**修改任何文件、创建/删除文件、执行 Shell 命令
             3. **绝对不允许**在分析过程中直接实现功能或编写业务代码
-            4. 即使你认为某个修改"很小"或"显而易见"，也必须先在任务计划中列出，等待用户确认后由 Act 模式执行
-            5. 你的输出将被自动解析为结构化任务列表并交由 Act 模式执行，因此**必须严格遵循下方规定的输出格式**
+            4. 即使你认为某个修改"很小"，也只能在分析报告中说明，不能实际执行
 
             ## 你的角色
-            你是 Plan 模式下的软件工程需求分析师。你的职责是：
+            你是 Plan 模式下的资深软件工程需求分析师。你的职责是：
             1. 深入理解用户的需求和目标
-            2. 分析需求的可行性和潜在风险
-            3. 使用只读工具探索项目结构和相关文件
+            2. 使用只读工具探索项目结构和相关文件
+            3. 分析需求的可行性和潜在风险
             4. 给出高层次的实施建议和步骤
-            5. 输出结构化的任务计划（供 Act 模式执行）
+            5. 输出清晰的自然语言分析报告
 
             ## 分析原则
             - 基于实际项目结构进行分析，使用工具探索代码
             - 诚实标注不确定的内容："需要进一步确认"
             - 分析要有层次：先宏观再微观
-            - 最后给出清晰的任务分解建议
 
-            ## 输出要求（必须遵守）
+            ## 输出要求
             - 使用自然语言，像资深架构师一样思考和分析
-            - 分析的最后，必须用 "## 任务计划" 标题给出具体的任务分解建议
-            - 每个任务必须包含：任务名称、目标、建议的 Agent 类型
-            - Agent 类型只能从以下取值：explore / architect / coder / test / review / doc / debug
+            - **不需要**输出 JSON 或结构化任务列表
+            - 给出清晰的分析和建议即可
+            - 分析完成后，提醒用户：**切换到 Act 模式即可开始执行**
 
             ## 分析结构建议
             1. **需求理解**：用自己的话重述需求，确认理解正确
-            2. **影响范围**：分析需要修改或新增的模块
+            2. **影响范围**：分析需要修改或新增的模块和文件
             3. **技术方案**：给出高层次的实现思路
             4. **风险与注意事项**：潜在问题和注意事项
-            5. **任务计划**：具体的任务分解（用 ## 任务计划 标题）
-
-            ## 任务计划输出格式（重要！你的输出会被自动解析）
-
-            在自然语言分析的最后，你必须按以下格式输出任务计划：
-
-            ### 格式一：Markdown 列表（必选，用于前端展示）
-            ```
-            ## 任务计划
-
-            1. **分析现有代码结构** — 使用 Explorer 探索相关模块，识别关键文件和依赖关系
-               Agent: explore
-            2. **设计接口和架构** — 使用 Architect 制定技术方案和接口定义
-               Agent: architect
-            3. **实现功能代码** — 使用 Coder 编写具体实现
-               Agent: coder
-            4. **编写测试** — 使用 Tester 编写单元测试和集成测试
-               Agent: test
-            5. **代码审查** — 使用 Reviewer 审查代码质量和安全性
-               Agent: review
-            ```
-
-            ### 格式二：JSON 代码块（可选但强烈推荐，用于精确任务解析）
-            在 Markdown 列表之后，额外输出一个 JSON 代码块，使任务解析更精确：
-            ```json
-            {
-              "tasks": [
-                {
-                  "id": "task-1",
-                  "title": "分析现有代码结构",
-                  "agentType": "explorer",
-                  "phase": "exploration",
-                  "description": "探索相关模块，识别关键文件和依赖关系",
-                  "dependencies": []
-                },
-                {
-                  "id": "task-2",
-                  "title": "设计接口和架构",
-                  "agentType": "architect",
-                  "phase": "design",
-                  "description": "制定技术方案和接口定义",
-                  "dependencies": ["task-1"]
-                },
-                {
-                  "id": "task-3",
-                  "title": "实现功能代码",
-                  "agentType": "coder",
-                  "phase": "implementation",
-                  "description": "编写具体实现代码",
-                  "dependencies": ["task-2"]
-                },
-                {
-                  "id": "task-4",
-                  "title": "编写测试",
-                  "agentType": "test",
-                  "phase": "testing",
-                  "description": "编写单元测试和集成测试",
-                  "dependencies": ["task-3"]
-                },
-                {
-                  "id": "task-5",
-                  "title": "代码审查",
-                  "agentType": "review",
-                  "phase": "review",
-                  "description": "审查代码质量和安全性",
-                  "dependencies": ["task-4"]
-                }
-              ]
-            }
-            ```
+            5. **实施建议**：建议的执行步骤（自然语言即可）
 
             ## 可用工具（仅只读工具）
-            你可以使用以下只读工具来分析项目：
-            - **SmartAnalyzeTool**: 智能分析项目整体结构，自动识别关键文件（Plan 模式首选）
+            - **SmartAnalyzeTool**: 智能分析项目整体结构（Plan 模式首选）
             - **GlobTool**: 按模式搜索文件路径
             - **GrepTool**: 在文件内容中搜索关键词
             - **FileReadTool**: 读取文件内容
@@ -1030,14 +961,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
 
             ## 使用建议
             - 分析开始时，先用 SmartAnalyzeTool 了解项目整体结构
-            - 然后根据需求用 GlobTool/GrepTool 定位相关文件
-            - 用 FileReadTool 读取关键文件的具体内容
-            - 基于实际代码内容做出准确的分析和判断
-            - 分析完成后，严格按照上述格式输出任务计划
-
-            ## 使用建议
-            - 分析开始时，先用 SmartAnalyzeTool 了解项目整体结构
-            - 然后根据需求用 GlobTool/GrepTool 定位相关文件
+            - 然后用 GlobTool/GrepTool 定位相关文件
             - 用 FileReadTool 读取关键文件的具体内容
             - 基于实际代码内容做出准确的分析和判断
             """;
@@ -1244,8 +1168,6 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                         "请分析以下需求：\n\n" + message
                     ));
                     
-                    // 保存用户目标到 session metadata（供 plan_confirm 使用）
-                    session.setMetadata("plan_goal", message);
                     systemMessagesInjected = true;
                 }
                 
@@ -1269,30 +1191,52 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                 // 使用 StringBuilder 收集完整响应
                 StringBuilder fullContentBuilder = new StringBuilder();
                 
-                // 最大工具调用迭代次数，防止无限循环
-                int maxToolIterations = 15;
+                // 最大工具调用轮次（对齐 claude-code maxTurns=200，Plan 模式给 100 足够）
+                int maxToolIterations = 100;
                 int toolIteration = 0;
                 boolean finished = false;
-                
+                // 连续失败计数器 — 防止 LLM 幻觉出不存在的工具导致死循环
+                int consecutiveUnknownTools = 0;
+                int consecutiveToolErrors = 0;
+
                 while (!finished && toolIteration < maxToolIterations) {
                     toolIteration++;
-                    
+
+                    // 熔断：连续 5 轮工具都失败/未知，停止循环给出已有结果
+                    if (consecutiveToolErrors >= 5) {
+                        logger.warning("Plan 查询: 连续 " + consecutiveToolErrors + " 轮工具执行失败，停止工具调用循环");
+                        session.addMessage(com.jwcode.core.model.Message.createSystemMessage(
+                            "工具调用连续失败，请基于已有信息直接给出分析结果。"));
+                        // 最后一轮不带工具调用，直接获取最终回答
+                        java.util.List<LLMMessage> finalMessages = buildLLMMessagesFromSession(session);
+                        CompletableFuture<LLMResponse> finalFuture = llmService.chatStreamWithTools(
+                            finalMessages, java.util.List.of(), fullContentBuilder::append, null, null);
+                        try {
+                            LLMResponse finalResponse = finalFuture.get(baseTimeout, TimeUnit.SECONDS);
+                            if (!finalResponse.hasError()) {
+                                fullContentBuilder.append(finalResponse.getContent());
+                            }
+                        } catch (Exception ignored) {}
+                        finished = true;
+                        break;
+                    }
+
                     // 转换会话消息
                     java.util.List<LLMMessage> llmMessages = buildLLMMessagesFromSession(session);
-                    
+
                     // 定义流式内容回调 - 实时推送到前端
                     java.util.function.Consumer<String> contentConsumer = chunk -> {
                         fullContentBuilder.append(chunk);
                         sendMessage(querySessionId, MessageType.CONTENT, chunk);
                     };
-                    
+
                     // 调用流式 API（带工具）
                     future = llmService.chatStreamWithTools(
                         llmMessages, planTools, contentConsumer, null, null);
                     // 动态超时：重试时使用更长的超时
                     int currentTimeout = retryCount > 0 ? baseTimeout * (retryCount + 1) : baseTimeout;
                     LLMResponse response = future.get(currentTimeout, TimeUnit.SECONDS);
-                    
+
                     if (response.hasError()) {
                         String errorMsg = response.getErrorMessage();
                         logger.severe("Plan 查询失败: " + errorMsg);
@@ -1302,7 +1246,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                         );
                         return;
                     }
-                    
+
                     // 检查是否有工具调用
                     if (response.hasToolCalls()) {
                         // 将 AI 的 tool_calls 消息加入 session
@@ -1316,44 +1260,76 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                         }
                         session.addMessage(com.jwcode.core.model.Message.createAssistantMessageWithToolCalls(
                             response.getContent(), toolCallInfos));
-                        
+
+                        // 检查是否有已知工具调用
+                        boolean anyKnownTool = false;
+                        boolean anySuccess = false;
+
                         // 广播工具调用日志
+                        int toolIndex = 0;
                         for (LLMMessage.ToolCall tc : response.getToolCalls()) {
                             String toolName = tc.getFunction().getName();
                             String args = tc.getFunction().getArguments();
-                            logger.info("Plan 工具调用: " + toolName + " args=" + 
-                                (args.length() > 200 ? args.substring(0, 200) + "..." : args));
+                            String toolCallId = tc.getId();
+                            boolean isKnown = toolExecutor.getToolRegistry().getTool(toolName) != null;
+                            if (isKnown) anyKnownTool = true;
+                            logger.info("Plan 工具调用: " + toolName
+                                + (isKnown ? "" : " [未知工具!]")
+                                + " args=" + (args.length() > 200 ? args.substring(0, 200) + "..." : args));
                             WebSocketLogBroadcaster.getInstance().broadcast(
-                                LogEntry.info("Plan", "调用工具: " + toolName)
+                                LogEntry.info("Plan", (isKnown ? "调用工具: " : "⚠ 未知工具: ") + toolName)
                             );
-                            // 发送工具调用事件到前端（使用 args 字段，与 Act 模式保持一致）
+                            // 发送工具调用事件到前端（带 id + index 用于后续 TOOL_RESULT 匹配）
                             String toolCallJson = String.format(
-                                "{\"name\":\"%s\",\"args\":%s}",
-                                escapeJson(toolName), args
+                                "{\"name\":\"%s\",\"args\":%s,\"id\":\"%s\",\"index\":%d}",
+                                escapeJson(toolName), args, escapeJson(toolCallId), toolIndex
                             );
                             sendMessage(querySessionId, MessageType.TOOL_CALL, toolCallJson);
+                            toolIndex++;
                         }
-                        
+
+                        // 如果本轮所有工具都不存在，注入提示让 LLM 知道可用工具
+                        if (!anyKnownTool) {
+                            consecutiveUnknownTools++;
+                            List<String> availableNames = toolExecutor.getEnabledTools().stream()
+                                .map(t -> t.getName())
+                                .toList();
+                            String hint = "以下工具调用不存在: " + toolCallInfos.stream()
+                                .map(tc -> tc.getName()).toList()
+                                + "。当前可用的工具只有: " + availableNames
+                                + "。请使用这些实际存在的工具重新尝试。";
+                            session.addMessage(com.jwcode.core.model.Message.createSystemMessage(hint));
+                            logger.warning("Plan 查询: LLM 尝试调用不存在的工具 (" + consecutiveUnknownTools + " 次累计)");
+                        }
+
                         // 执行每个工具调用
                         for (LLMMessage.ToolCall tc : response.getToolCalls()) {
                             String toolName = tc.getFunction().getName();
                             String args = tc.getFunction().getArguments();
                             String toolCallId = tc.getId();
-                            
+
                             // 执行工具
-                            String result = executePlanTool(toolExecutor, toolName, args, toolCallId);
-                            
+                            String result = executePlanTool(toolExecutor, toolName, args, toolCallId, session);
+
+                            // 检查结果是否为错误
+                            boolean isError = result.startsWith("Error:");
+                            if (isError) {
+                                consecutiveToolErrors++;
+                            } else {
+                                anySuccess = true;
+                            }
+
                             // 将工具结果加入 session
                             session.addMessage(com.jwcode.core.model.Message.createToolResultMessage(
                                 toolCallId, toolName, args, result));
-                            
-                            // 发送工具结果到前端（与 Act 模式保持一致）
+
+                            // 发送工具结果到前端（带 id 用于精确匹配）
                             String resultJson = String.format(
-                                "{\"toolName\":\"%s\",\"result\":\"%s\"}",
-                                escapeJson(toolName), escapeJson(result)
+                                "{\"toolName\":\"%s\",\"id\":\"%s\",\"result\":\"%s\"}",
+                                escapeJson(toolName), escapeJson(toolCallId), escapeJson(result)
                             );
                             sendMessage(querySessionId, MessageType.TOOL_RESULT, resultJson);
-                            
+
                             // 广播工具结果
                             String resultPreview = result.length() > 200 ? result.substring(0, 200) + "..." : result;
                             logger.info("Plan 工具结果: " + toolName + " -> " + resultPreview);
@@ -1361,7 +1337,12 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                                 LogEntry.info("Plan", "工具 " + toolName + " 执行完成")
                             );
                         }
-                        
+
+                        // 任一工具成功就重置连续错误计数
+                        if (anySuccess) {
+                            consecutiveToolErrors = 0;
+                        }
+
                         // 继续循环，让 AI 基于工具结果继续分析
                         WebSocketLogBroadcaster.getInstance().broadcast(
                             LogEntry.info("Plan", "继续分析中...（第 " + toolIteration + " 轮）")
@@ -1374,21 +1355,18 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                 
                 String fullContent = fullContentBuilder.toString();
                 
-                logger.info("Plan AI 分析完成，内容长度: " + fullContent.length() + 
+                logger.info("Plan AI 分析完成，内容长度: " + fullContent.length() +
                     "，工具调用轮次: " + toolIteration);
-                
-                // 将完整响应保存到 Session metadata（供 plan_confirm 使用）
-                session.setMetadata("plan_response", fullContent);
-                
+
                 // 发送 COMPLETE 标记（让前端 chatStore 完成消息记录）
                 sendMessage(querySessionId, MessageType.COMPLETE, null);
-                
-                // 发送 PLAN_COMPLETE 状态 waiting_confirm，通知前端等待用户确认
-                sendMessage(querySessionId, MessageType.PLAN_COMPLETE, 
-                    "{\"status\":\"waiting_confirm\"}");
-                
+
+                // 发送 PLAN_COMPLETE，通知前端分析完成，提示切换到 Act 模式
+                sendMessage(querySessionId, MessageType.PLAN_COMPLETE,
+                    "{\"status\":\"analysis_complete\",\"message\":\"分析完成，请切换到 Act 模式执行\"}");
+
                 WebSocketLogBroadcaster.getInstance().broadcast(
-                    LogEntry.success("Plan 分析完成，等待用户确认")
+                    LogEntry.success("Plan 分析完成")
                 );
                 
                 return; // 成功完成，退出
@@ -1479,7 +1457,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     /**
      * 执行单个 Plan 工具调用，返回结果字符串
      */
-    private String executePlanTool(ToolExecutor toolExecutor, String toolName, String args, String toolCallId) {
+    private String executePlanTool(ToolExecutor toolExecutor, String toolName, String args, String toolCallId, Session session) {
         try {
             // Windows 路径转义清洗：修复 LLM 生成的 JSON 中无效转义序列（如 \_、\t 等）
             if (System.getProperty("os.name").toLowerCase().contains("win")) {
@@ -1489,12 +1467,24 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             }
             com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
             com.fasterxml.jackson.databind.JsonNode argsNode = mapper.readTree(args);
-            
-            // 使用 ToolExecutionContext 执行工具
-            com.jwcode.core.tool.context.ToolExecutionContext context = 
-                com.jwcode.core.tool.context.ToolExecutionContext.builder().build();
-            
-            java.util.concurrent.CompletableFuture<com.jwcode.core.tool.ToolExecutor.ToolExecutionResult> future = 
+
+            // 使用 ToolExecutionContext 执行工具（带工作区守卫绕过检查）
+            String sessionWd = session.getWorkingDirectory();
+            java.nio.file.Path wd = (sessionWd != null && !sessionWd.isEmpty())
+                ? java.nio.file.Path.of(sessionWd)
+                : java.nio.file.Path.of(System.getProperty("user.dir"));
+            com.jwcode.core.tool.context.ToolExecutionContext context =
+                com.jwcode.core.tool.context.ToolExecutionContext.builder()
+                    .session(session)
+                    .workingDirectory(wd)
+                    .build();
+            // 检查是否绕过高工作区守卫
+            Boolean bypass = session.getMetadata("workspaceGuardBypass");
+            if (Boolean.TRUE.equals(bypass)) {
+                context.setBypassWorkspaceGuard(true);
+            }
+
+            java.util.concurrent.CompletableFuture<com.jwcode.core.tool.ToolExecutor.ToolExecutionResult> future =
                 toolExecutor.execute(toolName, argsNode, context);
             com.jwcode.core.tool.ToolExecutor.ToolExecutionResult execResult = future.get(60, TimeUnit.SECONDS);
             
@@ -1520,419 +1510,6 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         } catch (Exception e) {
             return "Error: " + e.getMessage();
         }
-    }
-    
-    /**
-     * 按依赖顺序执行 Plan 任务
-     * 使用 EnhancedOrchestratorAgent 或 LLMQueryEngine 进行真实的任务执行
-     */
-    private void executePlanTasks(String sessionId, com.fasterxml.jackson.databind.JsonNode tasksNode) {
-        try {
-            // 构建任务列表
-            java.util.List<PlanTaskInfo> tasks = new java.util.ArrayList<>();
-            for (int i = 0; i < tasksNode.size(); i++) {
-                com.fasterxml.jackson.databind.JsonNode task = tasksNode.get(i);
-                PlanTaskInfo info = new PlanTaskInfo();
-                info.id = task.has("id") ? task.get("id").asText() : "task-" + (i + 1);
-                info.title = task.has("title") ? task.get("title").asText() : "任务 " + (i + 1);
-                info.description = task.has("description") ? task.get("description").asText() : "";
-                info.agentType = task.has("agentType") ? task.get("agentType").asText() : "coder";
-                info.status = "pending";
-                
-                // 解析依赖
-                if (task.has("dependencies") && task.get("dependencies").isArray()) {
-                    for (com.fasterxml.jackson.databind.JsonNode dep : task.get("dependencies")) {
-                        info.dependencies.add(dep.asText());
-                    }
-                }
-                tasks.add(info);
-            }
-            
-            // 拓扑排序
-            java.util.List<PlanTaskInfo> sortedTasks = topologicalSort(tasks);
-            
-            // 获取当前会话对应的 Session 和 LLMQueryEngine
-            Session session = sessions.get(sessionId);
-            if (session == null) {
-                logger.warning("Plan 执行失败: 找不到会话 sessionId=" + sessionId);
-                sendMessage(sessionId, MessageType.PLAN_ERROR, escapeJson("会话不存在"));
-                return;
-            }
-
-            // 从会话中获取或创建 LLMQueryEngine
-            LLMQueryEngine engine = getOrCreateQueryEngine(session);
-            boolean useRealExecution = (engine != null);
-
-            if (!useRealExecution) {
-                logger.warning("Plan 执行: LLMQueryEngine 不可用，回退到模拟执行");
-            }
-            
-            // 逐个执行任务
-            for (PlanTaskInfo task : sortedTasks) {
-                if (!isSessionActive(sessionId)) {
-                    logger.warning("Plan 执行中断: 会话已断开, sessionId=" + sessionId);
-                    break;
-                }
-                
-                // 发送任务开始
-                String taskStartJson = String.format(
-                    "{\"id\":\"%s\",\"title\":\"%s\",\"description\":\"%s\",\"agentType\":\"%s\",\"status\":\"running\"}",
-                    escapeJson(task.id), escapeJson(task.title), escapeJson(task.description), escapeJson(task.agentType)
-                );
-                sendMessage(sessionId, MessageType.PLAN_TASK_START, taskStartJson);
-                WebSocketLogBroadcaster.getInstance().broadcast(
-                    LogEntry.info("Plan", "[执行] " + task.title + " (" + task.agentType + ")")
-                );
-
-                if (useRealExecution) {
-                    // 真实执行：通过 LLMQueryEngine 调用 LLM + Agent + Tools
-                    try {
-                        // 构建任务提示词：注入 Agent 角色和任务描述
-                        String taskPrompt = String.format(
-                            "【Plan 模式子任务】\n角色: %s\n任务: %s\n描述: %s\n\n请以 %s 的身份执行此任务。",
-                            task.agentType, task.title, task.description, task.agentType
-                        );
-
-                        // 发送进度更新：开始执行
-                        sendMessage(sessionId, MessageType.PLAN_TASK_UPDATE, String.format(
-                            "{\"id\":\"%s\",\"progress\":10,\"logs\":[\"正在调用 %s Agent 执行: %s\"]}",
-                            escapeJson(task.id), escapeJson(task.agentType), escapeJson(task.title)
-                        ));
-
-                        // ★ 发送 START 标记，让前端 chatStore 创建 assistant 消息以承载 step 树形结构
-                        sendMessage(sessionId, MessageType.START, null);
-
-                        // ★ 设置 StepCallback，将步骤事件通过主 WebSocket 流式发送给前端
-                        final String finalSessionId = sessionId;
-                        engine.setStepCallback(new LLMQueryEngine.StepCallback() {
-                            @Override
-                            public void onStepStart(String stepName, String description) {
-                                String json = String.format(
-                                    "{\"step\":\"%s\",\"description\":\"%s\",\"status\":\"start\"}",
-                                    escapeJson(stepName), escapeJson(description)
-                                );
-                                sendMessage(finalSessionId, MessageType.STEP_START, json);
-                            }
-
-                            @Override
-                            public void onStepThinking(String stepName, String thought) {
-                                String json = String.format(
-                                    "{\"step\":\"%s\",\"thought\":\"%s\",\"status\":\"thinking\"}",
-                                    escapeJson(stepName), escapeJson(thought)
-                                );
-                                sendMessage(finalSessionId, MessageType.STEP_THINKING, json);
-                            }
-
-                            @Override
-                            public void onStepAction(String stepName, String action) {
-                                String json = String.format(
-                                    "{\"step\":\"%s\",\"action\":\"%s\",\"status\":\"action\"}",
-                                    escapeJson(stepName), escapeJson(action)
-                                );
-                                sendMessage(finalSessionId, MessageType.STEP_ACTION, json);
-                            }
-
-                            @Override
-                            public void onStepComplete(String stepName, String result) {
-                                String json = String.format(
-                                    "{\"step\":\"%s\",\"result\":\"%s\",\"status\":\"complete\"}",
-                                    escapeJson(stepName), escapeJson(result)
-                                );
-                                sendMessage(finalSessionId, MessageType.STEP_COMPLETE, json);
-                            }
-
-                            @Override
-                            public void onToolResult(String toolName, String result) {
-                                String json = String.format(
-                                    "{\"toolName\":\"%s\",\"result\":\"%s\"}",
-                                    escapeJson(toolName), escapeJson(result)
-                                );
-                                sendMessage(finalSessionId, MessageType.TOOL_RESULT, json);
-                            }
-
-                            @Override
-                            public void onToolCallChunk(LLMService.StreamToolCallEvent event) {
-                                String json = String.format(
-                                    "{\"id\":\"%s\",\"name\":\"%s\",\"args\":\"%s\",\"complete\":%b,\"index\":%d}",
-                                    escapeJson(event.getId()),
-                                    escapeJson(event.getName()),
-                                    escapeJson(event.getArguments()),
-                                    event.isComplete(),
-                                    event.getIndex()
-                                );
-                                sendMessage(finalSessionId, MessageType.TOOL_CALL, json);
-                            }
-                        });
-
-                        // 使用 LLMQueryEngine 执行（引擎内部 pipeline 事件将通过 StepCallback 转发）
-                        java.util.concurrent.CompletableFuture<LLMQueryEngine.QueryResult> future = engine.query(taskPrompt);
-                        LLMQueryEngine.QueryResult result = future.get(300, java.util.concurrent.TimeUnit.SECONDS);
-
-                        // ★ 发送 COMPLETE 标记，结束该 assistant 消息
-                        sendMessage(finalSessionId, MessageType.COMPLETE, null);
-                        // 发送实时 Token 用量
-                        sendTokenUpdate(finalSessionId, engine);
-
-                        if (result != null && result.isSuccess()) {
-                            String resultContent = result.getMessage() != null
-                                ? result.getMessage().getTextContent() : "任务执行完成";
-                            // 截断过长结果
-                            if (resultContent.length() > 500) {
-                                resultContent = resultContent.substring(0, 500) + "...";
-                            }
-                            String resultJson = String.format(
-                                "{\"id\":\"%s\",\"status\":\"completed\",\"result\":\"%s\",\"logs\":[\"任务执行成功\"]}",
-                                escapeJson(task.id), escapeJson(resultContent)
-                            );
-                            sendMessage(sessionId, MessageType.PLAN_TASK_RESULT, resultJson);
-                            WebSocketLogBroadcaster.getInstance().broadcast(
-                                LogEntry.success("Plan [完成] " + task.title)
-                            );
-                        } else {
-                            String errorMsg = (result != null) ? result.getErrorMessage() : "执行返回空结果";
-                            String resultJson = String.format(
-                                "{\"id\":\"%s\",\"status\":\"failed\",\"error\":\"%s\",\"logs\":[\"执行失败: %s\"]}",
-                                escapeJson(task.id), escapeJson(errorMsg), escapeJson(errorMsg)
-                            );
-                            sendMessage(sessionId, MessageType.PLAN_TASK_RESULT, resultJson);
-                            WebSocketLogBroadcaster.getInstance().broadcast(
-                                LogEntry.error("Plan [失败] " + task.title + ": " + errorMsg)
-                            );
-                        }
-                    } catch (java.util.concurrent.TimeoutException e) {
-                        logger.warning("Plan 子任务执行超时: " + task.id);
-                        sendMessage(sessionId, MessageType.COMPLETE, null); // 关闭 assistant 消息
-                        String resultJson = String.format(
-                            "{\"id\":\"%s\",\"status\":\"failed\",\"error\":\"执行超时\",\"logs\":[\"任务执行超时（300秒）\"]}",
-                            escapeJson(task.id)
-                        );
-                        sendMessage(sessionId, MessageType.PLAN_TASK_RESULT, resultJson);
-                    } catch (Exception e) {
-                        logger.warning("Plan 子任务执行异常: " + task.id + " - " + e.getMessage());
-                        sendMessage(sessionId, MessageType.COMPLETE, null); // 关闭 assistant 消息
-                        String resultJson = String.format(
-                            "{\"id\":\"%s\",\"status\":\"failed\",\"error\":\"%s\",\"logs\":[\"执行异常: %s\"]}",
-                            escapeJson(task.id), escapeJson(e.getMessage()), escapeJson(e.getMessage())
-                        );
-                        sendMessage(sessionId, MessageType.PLAN_TASK_RESULT, resultJson);
-                    }
-                } else {
-                    // 回退：模拟执行（LLMQueryEngine 不可用时）
-                    for (int progress = 10; progress <= 90; progress += 20) {
-                        Thread.sleep(500);
-                        String updateJson = String.format(
-                            "{\"id\":\"%s\",\"progress\":%d,\"logs\":[\"执行进度: %d%%\"]}",
-                            escapeJson(task.id), progress, progress
-                        );
-                        sendMessage(sessionId, MessageType.PLAN_TASK_UPDATE, updateJson);
-                    }
-
-                    String resultJson = String.format(
-                        "{\"id\":\"%s\",\"status\":\"completed\",\"result\":\"任务 '%s' 执行完成\",\"logs\":[\"任务执行成功\"]}",
-                        escapeJson(task.id), escapeJson(task.title)
-                    );
-                    sendMessage(sessionId, MessageType.PLAN_TASK_RESULT, resultJson);
-                    WebSocketLogBroadcaster.getInstance().broadcast(
-                        LogEntry.info("Plan", "[完成] " + task.title)
-                    );
-                }
-            }
-            
-            // 全部完成
-            sendMessage(sessionId, MessageType.PLAN_COMPLETE, "{\"status\":\"completed\"}");
-            WebSocketLogBroadcaster.getInstance().broadcast(
-                LogEntry.info("Plan", "所有任务执行完成")
-            );
-            
-        } catch (Exception e) {
-            logger.severe("Plan 任务执行失败: " + e.getMessage());
-            sendMessage(sessionId, MessageType.PLAN_ERROR, escapeJson("任务执行失败: " + e.getMessage()));
-            WebSocketLogBroadcaster.getInstance().broadcast(
-                LogEntry.error("Plan 任务执行异常: " + e.getMessage())
-            );
-        }
-    }
-    
-    /**
-     * 处理 Plan 确认消息 - 用户确认后，将 AI 的分析结果交给 EnhancedOrchestratorAgent 执行
-     * 
-     * 流程：
-     * 1. 从 Session metadata 取出之前保存的 plan_response
-     * 2. 创建 EnhancedOrchestratorAgent
-     * 3. 调用 processConfirmedPlan() 执行任务
-     * 4. 将执行进度推送给前端
-     */
-    private void handlePlanConfirm(WebSocket conn, ClientMessage msg) {
-        String sessionId = connectionSessions.get(conn);
-        if (sessionId == null) {
-            sessionId = "session-" + System.currentTimeMillis();
-            connectionSessions.put(conn, sessionId);
-        }
-        activeSessionConnections.put(sessionId, conn);
-        final String querySessionId = sessionId;
-        
-        try {
-            // 检查连接是否仍然活跃
-            if (!isSessionActive(sessionId)) {
-                logger.info("Plan 确认已取消（连接已断开）: sessionId=" + sessionId);
-                return;
-            }
-            
-            Session session = sessions.get(sessionId);
-            if (session == null) {
-                sendMessage(querySessionId, MessageType.PLAN_ERROR, escapeJson("会话不存在"));
-                return;
-            }
-            
-            // 从 Session metadata 取出之前保存的 plan 响应和 goal
-            String planResponse = session.getMetadata("plan_response");
-            String goal = session.getMetadata("plan_goal");
-            
-            if (planResponse == null || planResponse.isEmpty()) {
-                sendMessage(querySessionId, MessageType.PLAN_ERROR, 
-                    escapeJson("未找到 Plan 分析结果，请重新执行 Plan 模式"));
-                return;
-            }
-            
-            if (goal == null || goal.isEmpty()) {
-                goal = msg.message != null ? msg.message : "执行任务计划";
-            }
-            
-            logger.info("Plan 确认: goal=" + truncate(goal, 50) 
-                + ", planResponse.length=" + planResponse.length());
-            
-            WebSocketLogBroadcaster.getInstance().broadcast(
-                LogEntry.info("Plan", "用户已确认，开始执行任务计划...")
-            );
-            
-            // 发送 PLAN_THINKING 状态
-            sendMessage(querySessionId, MessageType.PLAN_THINKING, 
-                escapeJson("正在解析任务计划并开始执行..."));
-            
-            // 创建 EnhancedOrchestratorAgent
-            JwcodeConfig config = YamlConfigLoader.getInstance().getConfig();
-            LLMFactory llmFactory = LLMFactory.fromConfig(config);
-            LLMService llmService = llmFactory.getLLMService();
-            
-            EnhancedOrchestratorAgent orchestrator = new EnhancedOrchestratorAgent(
-                llmService, this.toolRegistry, null);
-            
-            // 设置 PlanTaskBroadcaster 的 WebSocket 服务器
-            // 将当前 handler 作为广播目标，确保 plan_* 消息通过当前 WebSocket 连接发送
-            com.jwcode.core.api.PlanTaskBroadcaster broadcaster = 
-                com.jwcode.core.api.PlanTaskBroadcaster.getInstance();
-            
-            // 如果 PlanTaskBroadcaster 尚未配置 WebSocket 服务器，使用 sendMessage 直接发送
-            // EnhancedOrchestratorAgent 内部会通过 PlanTaskBroadcaster 广播任务进度
-            // 我们通过 sendMessage 直接转发这些广播到前端
-            
-            // 【Phase 2 优化】优先尝试从 plan_response 中提取 JSON 任务列表
-            // 如果提取成功，直接传递结构化任务，跳过正则解析
-            com.jwcode.core.agent.TaskAgent taskAgent = new com.jwcode.core.agent.TaskAgent();
-            java.util.List<com.jwcode.core.model.StructuredTask> jsonTasks = taskAgent.parseJsonTaskList(planResponse, "plan-" + java.util.UUID.randomUUID().toString().substring(0, 8));
-            
-            String result;
-            if (jsonTasks != null && !jsonTasks.isEmpty()) {
-                // JSON 任务列表解析成功 — 使用结构化任务重载方法
-                logger.info("Plan 确认: JSON 任务列表解析成功，共 " + jsonTasks.size() + " 个任务");
-                WebSocketLogBroadcaster.getInstance().broadcast(
-                    LogEntry.info("Plan", "JSON 任务列表解析成功，共 " + countAllJsonTasks(jsonTasks) + " 个任务")
-                );
-                
-                // 发送 PLAN_THINKING 状态
-                sendMessage(querySessionId, MessageType.PLAN_THINKING, 
-                    escapeJson("JSON 任务列表解析成功，开始执行..."));
-                
-                // 广播结构化任务树到前端
-                broadcastStructuredTasksFromJson(jsonTasks, querySessionId);
-                
-                result = orchestrator.executeWithStructuredTasks(jsonTasks, goal);
-            } else {
-                // 无 JSON 任务列表 — 回退到传统 processConfirmedPlan（正则解析）
-                logger.info("Plan 确认: 未找到 JSON 任务列表，回退到正则解析");
-                WebSocketLogBroadcaster.getInstance().broadcast(
-                    LogEntry.info("Plan", "未找到 JSON 任务列表，使用正则解析")
-                );
-                result = orchestrator.processConfirmedPlan(planResponse, goal);
-            }
-            
-            logger.info("Plan 执行完成，结果长度: " + result.length());
-            WebSocketLogBroadcaster.getInstance().broadcast(
-                LogEntry.success("Plan 执行完成")
-            );
-            
-            // 发送执行结果
-            sendMessage(querySessionId, MessageType.PLAN_COMPLETE, 
-                "{\"status\":\"completed\"}");
-            
-            // 清理 session 中的 plan 数据
-            session.setMetadata("plan_response", null);
-            session.setMetadata("plan_goal", null);
-            
-        } catch (Exception e) {
-            logger.log(java.util.logging.Level.SEVERE, "Plan 确认执行失败", e);
-            sendMessage(querySessionId, MessageType.PLAN_ERROR, 
-                escapeJson("Plan 执行失败: " + e.getMessage()));
-            WebSocketLogBroadcaster.getInstance().broadcast(
-                LogEntry.error("Plan 异常: " + e.getMessage())
-            );
-        }
-    }
-    
-    /**
-     * 拓扑排序 - 按依赖顺序排列任务
-     */
-    private java.util.List<PlanTaskInfo> topologicalSort(java.util.List<PlanTaskInfo> tasks) {
-        java.util.List<PlanTaskInfo> sorted = new java.util.ArrayList<>();
-        java.util.Map<String, PlanTaskInfo> taskMap = new java.util.HashMap<>();
-        java.util.Map<String, Integer> inDegree = new java.util.HashMap<>();
-        java.util.Map<String, java.util.List<String>> adjList = new java.util.HashMap<>();
-        
-        // 初始化
-        for (PlanTaskInfo task : tasks) {
-            taskMap.put(task.id, task);
-            inDegree.put(task.id, 0);
-            adjList.put(task.id, new java.util.ArrayList<>());
-        }
-        
-        // 构建依赖图
-        for (PlanTaskInfo task : tasks) {
-            for (String depId : task.dependencies) {
-                if (adjList.containsKey(depId)) {
-                    adjList.get(depId).add(task.id);
-                    inDegree.put(task.id, inDegree.getOrDefault(task.id, 0) + 1);
-                }
-            }
-        }
-        
-        // Kahn 算法
-        java.util.Queue<PlanTaskInfo> queue = new java.util.LinkedList<>();
-        for (PlanTaskInfo task : tasks) {
-            if (inDegree.getOrDefault(task.id, 0) == 0) {
-                queue.add(task);
-            }
-        }
-        
-        while (!queue.isEmpty()) {
-            PlanTaskInfo task = queue.poll();
-            sorted.add(task);
-            
-            for (String neighbor : adjList.getOrDefault(task.id, new java.util.ArrayList<>())) {
-                inDegree.put(neighbor, inDegree.get(neighbor) - 1);
-                if (inDegree.get(neighbor) == 0) {
-                    queue.add(taskMap.get(neighbor));
-                }
-            }
-        }
-        
-        // 如果有环，将剩余任务追加到末尾
-        for (PlanTaskInfo task : tasks) {
-            if (!sorted.contains(task)) {
-                sorted.add(task);
-            }
-        }
-        
-        return sorted;
     }
     
     /**
@@ -2051,40 +1628,6 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         logger.info("已恢复 sessionId=" + sessionId + " 的查询任务");
     }
 
-    /**
-     * 获取或创建 LLMQueryEngine 实例
-     * 用于 Plan 模式下的真实任务执行
-     */
-    private LLMQueryEngine getOrCreateQueryEngine(Session session) {
-        if (session == null) return null;
-        try {
-            JwcodeConfig config = YamlConfigLoader.getInstance().getConfig();
-            LLMFactory llmFactory = LLMFactory.fromConfig(config);
-            AgentRegistry agentRegistry = AgentRegistry.createDefault();
-            return llmFactory.createQueryEngine(
-                session,
-                this.toolRegistry,
-                null,
-                agentRegistry
-            );
-        } catch (Exception e) {
-            logger.warning("创建 LLMQueryEngine 失败: " + e.getMessage());
-            return null;
-        }
-    }
-    
-    /**
-     * Plan 任务信息内部类
-     */
-    private static class PlanTaskInfo {
-        String id;
-        String title;
-        String description;
-        String agentType;
-        String status;
-        java.util.List<String> dependencies = new java.util.ArrayList<>();
-    }
-    
     /**
      * 模拟流式输出效果
      */
@@ -2261,6 +1804,28 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         } catch (Exception e) {
             logger.warning("handleEffort error: " + e.getMessage());
             sendMessage(conn, MessageType.ERROR, "Failed to set effort: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Handle workspace guard bypass toggle.
+     * Message format: {type: "toggle_workspace_guard", data: "true"|"false"}
+     */
+    private void handleToggleWorkspaceGuard(WebSocket conn, ClientMessage msg) {
+        try {
+            String dataStr = msg.data;
+            boolean bypass = "true".equalsIgnoreCase(dataStr) || "1".equals(dataStr);
+            String sessionId = getOrGenerateSessionId(conn, msg);
+            Session session = sessions.get(sessionId);
+            if (session != null) {
+                session.setMetadata("workspaceGuardBypass", bypass);
+            }
+            String state = bypass ? "已绕过（允许访问工作目录外的路径）" : "已恢复（仅限工作目录内）";
+            sendMessage(conn, MessageType.NOTIFICATION, "工作区守卫: " + state);
+            logger.info("Session " + sessionId + " workspace guard bypass: " + bypass);
+        } catch (Exception e) {
+            logger.warning("handleToggleWorkspaceGuard error: " + e.getMessage());
+            sendMessage(conn, MessageType.ERROR, "Failed to toggle workspace guard: " + e.getMessage());
         }
     }
 
@@ -2477,7 +2042,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
      * 发送消息到客户端（通过 sessionId 查找当前活跃连接）
      * 所有消息都会在 JSON 中附加 sessionId，方便前端路由
      */
-    private void sendMessage(String sessionId, MessageType type, String data) {
+    public void sendMessage(String sessionId, MessageType type, String data) {
         if (sessionId == null) {
             logger.fine("sendMessage 被调用但 sessionId 为 null, type=" + type);
             return;
@@ -2614,99 +2179,6 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     }
     
     /**
-     * 尝试从非结构化 LLM 响应中提取 tasks JSON
-     * 当 LLM 返回的 JSON 解析失败时，尝试从中提取可能的 tasks 数组
-     */
-    private String tryExtractTasksFromContent(String content) {
-        if (content == null || content.isEmpty()) return null;
-        try {
-            // 尝试1: 查找 {"analysis": ... "tasks": [...]} 模式
-            int tasksStart = content.indexOf("\"tasks\"");
-            if (tasksStart >= 0) {
-                int bracketStart = content.indexOf("[", tasksStart);
-                if (bracketStart >= 0) {
-                    // 找到匹配的闭合括号
-                    int depth = 0;
-                    int bracketEnd = -1;
-                    for (int i = bracketStart; i < content.length(); i++) {
-                        char c = content.charAt(i);
-                        if (c == '[') depth++;
-                        else if (c == ']') {
-                            depth--;
-                            if (depth == 0) {
-                                bracketEnd = i;
-                                break;
-                            }
-                        }
-                    }
-                    if (bracketEnd > bracketStart) {
-                        String tasksArrayStr = content.substring(bracketStart, bracketEnd + 1);
-                        // 验证是否为合法的 JSON 数组
-                        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-                        com.fasterxml.jackson.databind.JsonNode testNode = mapper.readTree(tasksArrayStr);
-                        if (testNode.isArray() && testNode.size() > 0) {
-                            // 提取 analysis
-                            String analysis = "";
-                            int analysisStart = content.indexOf("\"analysis\"");
-                            if (analysisStart >= 0) {
-                                int colonPos = content.indexOf(":", analysisStart + 9);
-                                if (colonPos >= 0) {
-                                    int valStart = content.indexOf("\"", colonPos + 1);
-                                    if (valStart >= 0) {
-                                        int valEnd = valStart + 1;
-                                        while (valEnd < content.length() && !(content.charAt(valEnd) == '\"' && content.charAt(valEnd - 1) != '\\')) {
-                                            valEnd++;
-                                        }
-                                        if (valEnd < content.length()) {
-                                            analysis = content.substring(valStart + 1, valEnd);
-                                        }
-                                    }
-                                }
-                            }
-                            // 构建标准格式
-                            StringBuilder result = new StringBuilder();
-                            result.append("{\"analysis\":\"").append(escapeJson(analysis)).append("\",\"tasks\":");
-                            result.append(tasksArrayStr);
-                            result.append("}");
-                            return result.toString();
-                        }
-                    }
-                }
-            }
-
-            // 尝试2: 查找 markdown 代码块中的 JSON
-            int jsonBlock = content.indexOf("```json");
-            if (jsonBlock >= 0) {
-                int start = content.indexOf("{", jsonBlock);
-                int end = content.lastIndexOf("}");
-                if (start >= 0 && end > start) {
-                    String jsonCandidate = content.substring(start, end + 1);
-                    com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-                    com.fasterxml.jackson.databind.JsonNode rootNode = mapper.readTree(jsonCandidate);
-                    if (rootNode.has("tasks") && rootNode.get("tasks").isArray()) {
-                        return jsonCandidate;
-                    }
-                }
-            }
-
-            // 尝试3: 直接在整个文本中查找 {...} 并验证是否为合法 tasks JSON
-            int firstBrace = content.indexOf("{");
-            int lastBrace = content.lastIndexOf("}");
-            if (firstBrace >= 0 && lastBrace > firstBrace) {
-                String jsonCandidate = content.substring(firstBrace, lastBrace + 1);
-                com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-                com.fasterxml.jackson.databind.JsonNode rootNode = mapper.readTree(jsonCandidate);
-                if (rootNode.has("tasks") && rootNode.get("tasks").isArray()) {
-                    return jsonCandidate;
-                }
-            }
-        } catch (Exception e) {
-            logger.fine("尝试提取 tasks JSON 失败: " + e.getMessage());
-        }
-        return null;
-    }
-
-    /**
      * 执行查询 - 增强版，支持步骤展示
      * 步骤与消息分离：步骤显示在独立容器中，完成后收起或淡化
      */
@@ -2732,7 +2204,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             String defaultProviderName = config != null ? config.getDefaultProviderName() : "null";
             JwcodeConfig.ModelDefinition modelDef = config != null ? config.getDefaultModel() : null;
             String model = modelDef != null ? modelDef.getId() : "unknown";
-            
+
             // === 模型加载诊断日志 ===
             logger.info("[ModelDebug] defaultProviderName=" + defaultProviderName
                 + ", modelId=" + model
@@ -2747,23 +2219,29 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                     logger.warning("[ModelDebug] defaultProvider is NULL! providerName=" + defaultProviderName);
                 }
             }
-            
+
             WebSocketLogBroadcaster.getInstance().broadcast(
                 LogEntry.info("System", "使用模型: " + model + " (provider: " + defaultProviderName + ")")
             );
-            
+
             // 如果 session 没有设置 model，则设置
             if (session.getModel() == null) {
                 session.setModel(model);
             }
-            
+
             // 创建 LLMFactory 和 QueryEngine（与 CLI 端一致，使用完整参数）
             LLMFactory llmFactory = LLMFactory.fromConfig(config);
             AgentRegistry agentRegistry = AgentRegistry.createDefault();
+            // 创建带 HookChain 的 ToolExecutor — shell/文件写入操作需用户确认
+            ToolExecutor toolExecutor = new ToolExecutor(
+                this.toolRegistry,
+                new com.jwcode.core.permission.PermissionManagerChecker(),
+                null,
+                this.hookChain);
             LLMQueryEngine engine = llmFactory.createQueryEngine(
                 session,
-                this.toolRegistry,  // 使用 WebServer 传入的 toolRegistry
-                null,               // toolExecutor 使用默认
+                this.toolRegistry,
+                toolExecutor,
                 agentRegistry       // 启用分层 Agent 架构
             );
             
@@ -2842,6 +2320,26 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                     );
                     sendMessage(querySessionId, MessageType.TOOL_CALL, json);
                 }
+                
+                @Override
+                public void onTokenUpdate(long usedTokens, long totalBudget, double usageRatio) {
+                    String json = String.format(
+                        "{\"promptTokens\":%d,\"completionTokens\":%d,\"totalTokens\":%d,\"usageRatio\":%.3f,\"model\":\"%s\"}",
+                        usedTokens, 0, usedTokens, usageRatio, engine.getModelName());
+                    sendMessage(querySessionId, MessageType.TOKEN_UPDATE, json);
+                }
+
+                @Override
+                public void onContextCompressed(int originalCount, int compressedCount,
+                                                 long tokensSaved, String summary) {
+                    String json = String.format(
+                        "{\"originalCount\":%d,\"compressedCount\":%d,\"tokensSaved\":%d,\"summary\":\"%s\"}",
+                        originalCount, compressedCount, tokensSaved, escapeJson(summary));
+                    sendMessage(querySessionId, MessageType.CONTEXT_COMPRESSED, json);
+                    WebSocketLogBroadcaster.getInstance().broadcast(
+                        LogEntry.info("Compact", String.format(
+                            "上下文压缩: %d → %d 条消息, 释放 %,d tokens", originalCount, compressedCount, tokensSaved)));
+                }
             };
             
             // 设置回调
@@ -2881,6 +2379,9 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             // 执行流式查询
             LLMQueryEngine.QueryResult result = engine.queryStream(message, contentConsumer, thinkingConsumer, toolCallConsumer).join();
             
+            // 发送实时 Token 用量（修复: Act 模式缺少 Token 更新推送）
+            sendTokenUpdate(querySessionId, engine);
+            
             if (result.isSuccess()) {
                 sendMessage(querySessionId, MessageType.COMPLETE, null);
                 WebSocketLogBroadcaster.getInstance().broadcast(
@@ -2896,7 +2397,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             
         } catch (Exception e) {
             logger.log(java.util.logging.Level.SEVERE, "查询执行失败", e);
-            
+
             sendMessage(querySessionId, MessageType.ERROR, escapeJson("执行失败: " + e.getMessage()));
             WebSocketLogBroadcaster.getInstance().broadcast(
                 LogEntry.error("执行异常: " + e.getMessage())
@@ -3083,39 +2584,6 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     // ==================== Phase 2 辅助方法 ====================
 
     /**
-     * 统计结构化任务总数（含子任务）
-     */
-    private int countAllJsonTasks(java.util.List<com.jwcode.core.model.StructuredTask> tasks) {
-        int count = 0;
-        for (com.jwcode.core.model.StructuredTask task : tasks) {
-            count++;
-            if (task.getChildren() != null && !task.getChildren().isEmpty()) {
-                count += countAllJsonTasks(task.getChildren());
-            }
-        }
-        return count;
-    }
-
-    /**
-     * 将结构化任务树广播到前端（用于 JSON 任务列表解析成功后的展示）
-     */
-    private void broadcastStructuredTasksFromJson(
-            java.util.List<com.jwcode.core.model.StructuredTask> tasks, String sessionId) {
-        try {
-            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-            String tasksJson = mapper.writeValueAsString(tasks);
-            
-            // 发送 plan_tasks 消息到前端
-            String message = "{\"structuredTasks\":" + tasksJson + ",\"analysis\":\"JSON 任务列表解析成功\"}";
-            sendMessage(sessionId, MessageType.PLAN_TASKS, message);
-            
-            logger.info("广播 JSON 结构化任务: " + tasks.size() + " 个阶段任务");
-        } catch (Exception e) {
-            logger.warning("广播 JSON 结构化任务失败: " + e.getMessage());
-        }
-    }
-    
-    /**
      * 关闭所有连接
      */
     public void shutdown() {
@@ -3175,11 +2643,13 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         PLAN_COMPLETE,  // 规划完成
         PLAN_ERROR,     // 规划错误
         PLAN_MODE_CHANGE, // Plan/Act 模式切换事件（后端广播到前端）
+        STEP_PROMPT,    // 步骤上下文提示（Plan 模式执行阶段）
         WORKSPACE_CHANGED,  // 工作目录已切换
         // 生成控制消息
         GENERATION_PAUSED,  // 生成已暂停
         GENERATION_RESUMED, // 生成已恢复
-        TOKEN_UPDATE        // Token 用量更新（实时）
+        TOKEN_UPDATE,       // Token 用量更新（实时）
+        CONTEXT_COMPRESSED  // 上下文压缩通知（自动压缩时广播到前端）
     }
     
     /**

@@ -22,9 +22,12 @@ public class TerminalSession {
             ttydPath,
             "--port", String.valueOf(port),
             "--interface", "127.0.0.1",
+            "--charset", "UTF-8",
             "--cwd", workspaceDir,
             "node", tsCliPath, "run"
         );
+        pb.environment().put("TERM", "xterm-256color");
+        pb.environment().put("LANG", "en_US.UTF-8");
         pb.redirectErrorStream(true);
         pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
         this.process = pb.start();

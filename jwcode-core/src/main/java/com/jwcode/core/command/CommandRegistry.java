@@ -99,6 +99,13 @@ public class CommandRegistry {
         registry.register(new StatusCommand());
         registry.register(new ModelCommand());
         registry.register(new EvalCommand());
+        registry.register(new DoctorCommand());
+        registry.register(new CostCommand());
+        registry.register(new CompactCommand());
+        registry.register(new ReviewCommand());
+        registry.register(new SecurityReviewCommand());
+        registry.register(new MemoryCommand());
+        registry.register(new TasksCommand());
         return registry;
     }
 }

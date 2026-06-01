@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { Session, SessionTab, SessionTask, SplitLayout } from '../types';
-import { usePlanStore } from './planStore';
+
 
 const MAX_SESSION_TABS = 6;
 const MAX_HISTORY_SESSIONS = 50;
@@ -162,8 +162,6 @@ export const useSessionStore = create<SessionState>()(
         const remaining = state.sessionTabs.filter((t) => t.id !== sessionId);
         if (remaining.length === 0) return; // 至少保留一个
 
-        // 关闭会话时清理 planStore 中该会话的数据，防止 localStorage 膨胀
-        usePlanStore.getState().clearPlan(sessionId);
 
         // 关闭的会话移入历史列表（保留最近 MAX_HISTORY_SESSIONS 条）
         let historySessions = state.historySessions;

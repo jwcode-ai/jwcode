@@ -39,6 +39,9 @@ public class ToolExecutionContext {
     
     // 工作区安全守卫
     private WorkspaceGuard workspaceGuard;
+
+    // 工作区守卫绕过开关（允许临时取消工作目录限制）
+    private boolean bypassWorkspaceGuard = false;
     
     public ToolExecutionContext(Session session, Path workingDirectory, 
                                  PermissionChecker permissionChecker) {
@@ -213,6 +216,20 @@ public class ToolExecutionContext {
     public boolean hasWorkspaceGuard() {
         return workspaceGuard != null;
     }
+
+    /**
+     * 是否绕过工作区守卫（允许访问工作目录外的路径）。
+     */
+    public boolean isBypassWorkspaceGuard() {
+        return bypassWorkspaceGuard;
+    }
+
+    /**
+     * 设置是否绕过工作区守卫。
+     */
+    public void setBypassWorkspaceGuard(boolean bypassWorkspaceGuard) {
+        this.bypassWorkspaceGuard = bypassWorkspaceGuard;
+    }
     
     /**
      * 校验路径是否在工作区内。
@@ -223,7 +240,7 @@ public class ToolExecutionContext {
      * @throws WorkspaceGuard.WorkspaceAccessException 如果路径不在工作区内
      */
     public void validatePath(Path targetPath, String toolName) {
-        if (workspaceGuard != null) {
+        if (workspaceGuard != null && !bypassWorkspaceGuard) {
             workspaceGuard.validateOrThrow(targetPath, toolName);
         }
     }
@@ -237,11 +254,11 @@ public class ToolExecutionContext {
      * @throws WorkspaceGuard.WorkspaceAccessException 如果路径不在工作区内
      */
     public Path resolveAndValidate(String rawPath, String toolName) {
-        if (workspaceGuard != null) {
+        if (workspaceGuard != null && !bypassWorkspaceGuard) {
             Path workingDir = workingDirectory != null ? workingDirectory : Path.of("").toAbsolutePath();
             return workspaceGuard.resolveAndValidate(rawPath, workingDir, toolName);
         }
-        // 没有守卫时，回退到简单解析
+        // 没有守卫或被绕过时，回退到简单解析
         Path path = Path.of(rawPath);
         if (!path.isAbsolute() && workingDirectory != null) {
             path = workingDirectory.resolve(path);

@@ -86,6 +86,23 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
     return () => { client.close(); };
   }, [backendUrl, wsUrl]);
 
+  // Generation elapsed timer — runs while currentMessage exists
+  const currentMsg = state.currentMessage;
+  useEffect(() => {
+    if (!currentMsg) {
+      updateAppState(prev => ({ ...prev, generationElapsed: 0 }));
+      return;
+    }
+    const startTime = currentMsg.timestamp;
+    const timer = setInterval(() => {
+      updateAppState(prev => ({
+        ...prev,
+        generationElapsed: Math.floor((Date.now() - startTime) / 1000),
+      }));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [currentMsg?.id]);
+
   // Shared command execution — callable from both handleSubmit and palette select
   const executeCommand = useCallback((value: string) => {
     const text = value.trim();
@@ -289,6 +306,7 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
             args: d.args ? cleanArgs(d.args) : undefined,
             status: d.complete ? 'complete' : 'running',
             complete: !!d.complete,
+            timestamp: Date.now(),
           });
           msg.toolCalls = updated;
         }
@@ -302,7 +320,9 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
         const tcs = [...msg.toolCalls];
         for (let i = tcs.length - 1; i >= 0; i--) {
           if (tcs[i].name === d.toolName && !tcs[i].result) {
-            tcs[i] = { ...tcs[i], result: d.result || '', status: 'complete' };
+            const tc = tcs[i];
+            const duration = tc.timestamp ? Math.floor((Date.now() - tc.timestamp) / 1000) : undefined;
+            tcs[i] = { ...tc, result: d.result || '', status: 'complete', duration };
             break;
           }
         }
@@ -325,16 +345,16 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
       }));
     });
 
+    let _lastTotal = 0;
+    let _lastTotalTs = 0;
     let firstTokenUpdate = true;
     client.on('token_update', (m: WSMessage) => {
-      // Try parsing data — backend sends it as a JSON string inside the WS data field
       let d: Record<string, unknown> = {};
       if (typeof m.data === 'string') {
         try { d = JSON.parse(m.data); } catch { /* ignore */ }
       } else if (m.data && typeof m.data === 'object') {
         d = m.data as Record<string, unknown>;
       }
-      // One-time debug: log raw format to help diagnose parsing issues
       if (firstTokenUpdate) {
         firstTokenUpdate = false;
         console.log('[token_update] raw data type:', typeof m.data, '| parsed keys:', Object.keys(d).join(','));
@@ -344,12 +364,43 @@ export function App({ backendUrl, wsUrl, onExit }: Props) {
       const totalTokens = Number(d.totalTokens) || 0;
       const usageRatio = Number(d.usageRatio) || 0;
       if (totalTokens > 0) {
+        // Compute token rate
+        const now = Date.now();
+        let tokenRate = 0;
+        if (_lastTotalTs > 0 && _lastTotal > 0 && now > _lastTotalTs && totalTokens > _lastTotal) {
+          const deltaTokens = totalTokens - _lastTotal;
+          const deltaSec = (now - _lastTotalTs) / 1000;
+          const instantRate = deltaTokens / deltaSec;
+          const prevRate = getStore().getState().tokenRate;
+          tokenRate = prevRate > 0 ? prevRate * 0.6 + instantRate * 0.4 : instantRate;
+        }
+        _lastTotal = totalTokens;
+        _lastTotalTs = now;
         updateAppState(prev => ({
           ...prev,
           usage: { promptTokens, completionTokens, totalTokens, usageRatio },
           modelName: (d.model as string) || prev.modelName,
+          tokenRate,
         }));
       }
+    });
+
+    client.on('context_compressed', (m: WSMessage) => {
+      let d: Record<string, unknown> = {};
+      if (typeof m.data === 'string') {
+        try { d = JSON.parse(m.data); } catch { /* ignore */ }
+      } else if (m.data && typeof m.data === 'object') {
+        d = m.data as Record<string, unknown>;
+      }
+      const orig = Number(d.originalCount) || 0;
+      const comp = Number(d.compressedCount) || 0;
+      const saved = Number(d.tokensSaved) || 0;
+      const tokensStr = saved >= 1000 ? `${(saved / 1000).toFixed(1)}K` : String(saved);
+      updateAppState(prev => ({
+        ...prev,
+        statusText: `上下文压缩: ${orig}→${comp} 条消息, 释放 ${tokensStr} tokens`,
+        usage: { ...prev.usage, usageRatio: Math.max(0, prev.usage.usageRatio - 0.15) },
+      }));
     });
 
     client.on('hook_ask', (m: WSMessage) => {

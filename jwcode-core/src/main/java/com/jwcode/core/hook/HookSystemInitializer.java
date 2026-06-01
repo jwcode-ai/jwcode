@@ -214,42 +214,41 @@ public class HookSystemInitializer {
         String status = "OK";
 
         try {
-            // 0. 按需初始化：无 hooks.json 配置时跳过（降低空转开销）
-            Path hooksFile = projectRoot.resolve(HOOKS_FILE);
-            boolean hasConfig = Files.exists(hooksFile) && Files.size(hooksFile) > 50;
-            if (!hasConfig) {
-                logger.fine("[HookInit] No hooks config found, skipping initialization");
-                return new HookInitResult(0, "SKIPPED (no config)", System.currentTimeMillis() - startTime);
-            }
-
-            // 1. 确保 .jwcode 目录存在
+            // 0. 确保 .jwcode 目录存在
             Path hooksDir = projectRoot.resolve(HOOKS_DIR);
             Files.createDirectories(hooksDir);
 
-            // 3. 创建 HookRegistry 并加载配置
+            // 1. 自动创建 hooks.json 模板（如果不存在）
+            Path hooksFile = projectRoot.resolve(HOOKS_FILE);
+            if (!Files.exists(hooksFile) || Files.size(hooksFile) < 50) {
+                Files.writeString(hooksFile, HOOKS_JSON_TEMPLATE);
+                logger.info("[HookInit] Created default hooks.json template");
+            }
+
+            // 2. 创建 HookRegistry 并加载配置
             HookRegistry registry = new HookRegistry(hooksFile);
 
-            // 4. 注册内置 Hook（纯 Java 实现，零外部依赖）
+            // 3. 注册内置 Hook（纯 Java 实现，零外部依赖 — 无论 hooks.json 是否为空都生效）
             registry.register(new BashSafetyExecutor());
             registry.register(new FileWriteAuditExecutor());
             registry.register(new ToolUsageStatsExecutor());
             logger.info("[HookInit] Registered 3 built-in hooks");
 
-            // 5. 创建工厂并解析配置文件中的 Hook
+            // 4. 创建工厂并解析配置文件中的 Hook
             HookExecutorFactory factory = new HookExecutorFactory(llmCallback, agentCallback);
             int resolved = registry.resolveConfiguredExecutors(factory);
             if (resolved > 0) {
                 logger.info("[HookInit] Resolved " + resolved + " configured hook(s)");
             }
 
-            // 6. 统计总数
+            // 5. 统计总数
             hookCount = registry.getAllExecutors().size();
 
-            // 7. 创建 HookChain + 审计日志
+            // 6. 创建 HookChain + 审计日志
             HookAuditLogger auditLogger = new HookAuditLogger();
             HookChain chain = new HookChain(registry, auditLogger);
 
-            // 8. 注入到各拦截点
+            // 7. 注入到各拦截点
             if (toolExecutor != null) {
                 toolExecutor.setHookChain(chain);
                 logger.info("[HookInit] Injected → ToolExecutor");
@@ -263,7 +262,7 @@ public class HookSystemInitializer {
                 logger.info("[HookInit] Injected → LocalAgentDispatcher");
             }
 
-            // 9. 广播
+            // 8. 广播
             HookEventBroadcaster.broadcastInit(hookCount, resolved);
 
         } catch (Exception e) {

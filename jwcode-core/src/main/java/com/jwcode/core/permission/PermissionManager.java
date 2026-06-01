@@ -46,6 +46,10 @@ public class PermissionManager {
         "/bin"
     );
     
+    // 自动权限分类器
+    private final AutoPermissionClassifier autoClassifier = new AutoPermissionClassifier();
+    private boolean autoMode = false;
+
     private PermissionManager() {
         // 添加默认的只读目录
         String home = System.getProperty("user.home");
@@ -130,22 +134,42 @@ public class PermissionManager {
     }
     
     /**
-     * 检查命令执行权限
+     * 检查命令执行权限（增强版 — 支持 Auto Mode）
      */
     public PermissionCheckResult canExecuteCommand(String command) {
-        // 检查是否是危险命令
+        // Auto Mode: 使用分类器自动判断
+        if (autoMode) {
+            AutoPermissionClassifier.ClassificationResult cr =
+                autoClassifier.classifyCommand(command, null);
+            return switch (cr.decision()) {
+                case AUTO_ALLOW -> PermissionCheckResult.allowed();
+                case AUTO_DENY -> PermissionCheckResult.denied(cr.reason());
+                case ASK_USER -> {
+                    if (!autoApproveDestructive) {
+                        String operationKey = "cmd:" + command;
+                        if (!approvedOperations.contains(operationKey)) {
+                            yield PermissionCheckResult.needsConfirmation(
+                                PermissionLevel.DANGEROUS, cr.reason());
+                        }
+                    }
+                    yield PermissionCheckResult.allowed();
+                }
+            };
+        }
+
+        // 标准模式: 原有逻辑
         if (isDangerousCommand(command)) {
             if (!autoApproveDestructive) {
                 String operationKey = "cmd:" + command;
                 if (!approvedOperations.contains(operationKey)) {
                     return PermissionCheckResult.needsConfirmation(
-                        PermissionLevel.DANGEROUS, 
+                        PermissionLevel.DANGEROUS,
                         "执行危险命令: " + command
                     );
                 }
             }
         }
-        
+
         return PermissionCheckResult.allowed();
     }
     
@@ -230,6 +254,23 @@ public class PermissionManager {
     
     public void addReadOnlyPath(String path) {
         readOnlyPaths.add(path);
+    }
+
+    // ==== Auto Mode ====
+
+    /** 启用/禁用自动模式 */
+    public void setAutoMode(boolean enabled) {
+        this.autoMode = enabled;
+    }
+
+    /** 是否在自动模式下 */
+    public boolean isAutoMode() {
+        return autoMode;
+    }
+
+    /** 获取自动分类器（用于记录学习反馈） */
+    public AutoPermissionClassifier getAutoClassifier() {
+        return autoClassifier;
     }
     
     /**

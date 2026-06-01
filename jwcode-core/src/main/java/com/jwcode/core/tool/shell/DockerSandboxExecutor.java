@@ -24,10 +24,13 @@ import java.util.logging.Logger;
 public class DockerSandboxExecutor implements BackgroundCommandExecutor {
     private static final Logger logger = Logger.getLogger(DockerSandboxExecutor.class.getName());
 
-    private static final String DOCKER_IMAGE = "alpine:latest";
+    private static final String DOCKER_IMAGE = "alpine:3.20"; // 锁定版本，避免 latest 漂移
     private static final long DEFAULT_TIMEOUT_SEC = 300;
     private static final String MEMORY_LIMIT = "512m";
     private static final String CPU_LIMIT = "1";
+    private static final String PIDS_LIMIT = "100";
+    private static final String TMPFS_SIZE = "64m";
+    private static final long FALLBACK_TIMEOUT_SEC = 120;
 
     private final Path workspaceRoot;
     private final WorkspaceGuard guard;
@@ -86,13 +89,26 @@ public class DockerSandboxExecutor implements BackgroundCommandExecutor {
         Path wd = workingDir != null ? workingDir.toAbsolutePath() : workspaceRoot;
         String relWd = workspaceRoot.relativize(wd).toString();
 
+        // 使用 docker run --cidfile 获取容器 ID
+        Path cidFile = tmpDir.resolve("container_" + System.currentTimeMillis() + ".cid");
+
         List<String> cmd = new ArrayList<>(List.of(
             "docker", "run", "--rm",
             "--network=none",
             "--memory=" + MEMORY_LIMIT,
             "--cpus=" + CPU_LIMIT,
+            "--pids-limit=" + PIDS_LIMIT,
+            "--read-only",
+            "--tmpfs", "/tmp:rw,noexec,nosuid,size=" + TMPFS_SIZE,
+            "--tmpfs", "/var/tmp:rw,noexec,nosuid,size=" + TMPFS_SIZE,
+            "--security-opt=no-new-privileges",
+            "--cap-drop=ALL",
+            "--cap-add=DAC_OVERRIDE",
+            "--ulimit", "nofile=256:512",
+            "--ulimit", "nproc=128:256",
+            "--cidfile", cidFile.toString(),
             "-v", workspaceRoot + ":/workspace:ro",
-            "-v", tmpDir + ":/tmp:rw",
+            "-v", tmpDir + ":/workspace-rw:rw",
             "-w", "/workspace/" + relWd,
             DOCKER_IMAGE,
             "sh", "-c", command
@@ -116,11 +132,26 @@ public class DockerSandboxExecutor implements BackgroundCommandExecutor {
 
         boolean finished = p.waitFor(DEFAULT_TIMEOUT_SEC, TimeUnit.SECONDS);
         if (!finished) {
+            String containerId = readContainerId(cidFile);
             p.destroyForcibly();
-            new ProcessBuilder("docker", "stop", "--time=5", getContainerId()).start();
+            if (!containerId.isEmpty()) {
+                new ProcessBuilder("docker", "stop", "--time=5", containerId).start();
+                new ProcessBuilder("docker", "rm", "-f", containerId).start();
+            }
             return output + "\n[TIMEOUT after " + DEFAULT_TIMEOUT_SEC + "s]";
         }
+        // 清理 cid 文件
+        try { Files.deleteIfExists(cidFile); } catch (IOException ignored) {}
         return output.toString();
+    }
+
+    private String readContainerId(Path cidFile) {
+        try {
+            if (Files.exists(cidFile)) {
+                return Files.readString(cidFile).trim();
+            }
+        } catch (IOException ignored) {}
+        return "";
     }
 
     /** Docker 不可用时的降级方案 */
@@ -130,10 +161,17 @@ public class DockerSandboxExecutor implements BackgroundCommandExecutor {
         Path wd = workingDir != null ? workingDir.toAbsolutePath() : workspaceRoot;
         guard.validateOrThrow(wd, "DockerSandbox(fallback)");
 
-        Process p = new ProcessBuilder("sh", "-c", command)
+        // 降级模式下也增加注入检测
+        var injectionResult = com.jwcode.core.tool.shell.CommandInjectionDetector.detect(command, false);
+        if (injectionResult.isInjected() && injectionResult.severity() >= 8) {
+            return "⛔ 命令注入风险 [" + injectionResult.riskType() + "]: " + injectionResult.description();
+        }
+
+        ProcessBuilder pb = new ProcessBuilder("sh", "-c", command)
             .directory(wd.toFile())
-            .redirectErrorStream(true)
-            .start();
+            .redirectErrorStream(true);
+
+        Process p = pb.start();
 
         StringBuilder output = new StringBuilder();
         try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
@@ -144,16 +182,13 @@ public class DockerSandboxExecutor implements BackgroundCommandExecutor {
             }
         }
 
-        boolean finished = p.waitFor(120, TimeUnit.SECONDS);
+        boolean finished = p.waitFor(FALLBACK_TIMEOUT_SEC, TimeUnit.SECONDS);
         if (!finished) {
             p.destroyForcibly();
+            p.waitFor(5, TimeUnit.SECONDS);
             return output + "\n[TIMEOUT - fallback mode]";
         }
         return output.toString();
-    }
-
-    private String getContainerId() {
-        return ""; // simplified: in production, capture from docker run output
     }
 
     static class ContainerTask {

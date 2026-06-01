@@ -16,6 +16,8 @@ export interface ToolCall {
   status: 'running' | 'complete' | 'error';
   complete: boolean;
   index?: number;
+  timestamp?: number;
+  duration?: number;
 }
 
 export interface Step {
@@ -27,6 +29,8 @@ export interface Step {
   result?: string;
   status: 'running' | 'success' | 'error' | 'thinking' | 'action' | 'start';
   tools: ToolCall[];
+  timestamp?: number;
+  duration?: number;
 }
 
 export interface Message {
@@ -68,7 +72,7 @@ export const EVENT_TYPES = [
   'plan_complete', 'plan_error', 'plan_mode_change',
   'workspace_changed',
   'generation_paused', 'generation_resumed',
-  'token_update',
+  'token_update', 'context_compressed',
   'hook_ask',
   'doctor_result',
 ] as const;

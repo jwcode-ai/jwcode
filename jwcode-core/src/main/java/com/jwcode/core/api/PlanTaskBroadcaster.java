@@ -12,19 +12,10 @@ import java.util.logging.Logger;
  * PlanTaskBroadcaster — Plan 模式任务状态广播器。
  *
  * <p>专门用于将 Plan 模式下的任务状态变更通过 WebSocket 广播到前端。
- * 与 StepMessageBroadcaster 职责分离，StepMessageBroadcaster 负责 step_* 消息（Chat 面板步骤），
- * 而 PlanTaskBroadcaster 负责 plan_* 消息（Plan 面板任务树）。</p>
- *
- * <p>支持的消息类型：
+ * 支持两种传输通道：
  * <ul>
- *   <li>plan_start — 开始规划</li>
- *   <li>plan_thinking — 规划思考中</li>
- *   <li>plan_tasks — 任务列表生成</li>
- *   <li>plan_task_start — 单个任务开始执行</li>
- *   <li>plan_task_update — 单个任务进度更新</li>
- *   <li>plan_task_result — 单个任务完成/失败</li>
- *   <li>plan_complete — 全部任务完成</li>
- *   <li>plan_error — 规划出错</li>
+ *   <li>主通道：TaskWebSocketServer（独立 WS 服务器）</li>
+ *   <li>回退通道：MessageSender（直接注入 sendMessage 回调，通过主 WebSocket 发送）</li>
  * </ul>
  * </p>
  */
@@ -35,8 +26,11 @@ public class PlanTaskBroadcaster {
             .registerModule(new JavaTimeModule())
             .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
-    // WebSocket 服务器实例
+    // WebSocket 服务器实例（独立通道）
     private static volatile TaskWebSocketServer wsServer;
+
+    // 回退发送器：当 wsServer 为 null 时使用（直接注入 sendMessage 回调）
+    private static volatile MessageSender messageSender;
 
     // 广播器单例
     private static volatile PlanTaskBroadcaster instance;
@@ -70,6 +64,14 @@ public class PlanTaskBroadcaster {
     }
 
     /**
+     * 设置回退消息发送器（当 wsServer 为 null 时使用）
+     */
+    public static void setMessageSender(MessageSender sender) {
+        messageSender = sender;
+        logger.info("PlanTaskBroadcaster: messageSender configured (fallback transport)");
+    }
+
+    /**
      * 启用/禁用广播
      */
     public void setEnabled(boolean enabled) {
@@ -78,10 +80,34 @@ public class PlanTaskBroadcaster {
     }
 
     /**
-     * 检查是否已配置
+     * 检查是否已配置（任一通道可用即为已配置）
      */
     public static boolean isConfigured() {
-        return wsServer != null;
+        return wsServer != null || messageSender != null;
+    }
+
+    // ==================== 统一分发 ====================
+
+    /**
+     * 通过可用通道发送广播消息
+     */
+    private void dispatch(String type, String sessionId, String data) {
+        if (!enabled || sessionId == null) return;
+        if (wsServer != null) {
+            try {
+                wsServer.broadcast(Map.of("type", type, "sessionId", sessionId, "data", data));
+                return;
+            } catch (Exception e) {
+                logger.log(Level.WARNING, "Failed to broadcast via wsServer, trying fallback", e);
+            }
+        }
+        if (messageSender != null) {
+            try {
+                messageSender.send(type, sessionId, data);
+            } catch (Exception e) {
+                logger.log(Level.WARNING, "Failed to send via messageSender", e);
+            }
+        }
     }
 
     // ==================== 广播方法 ====================
@@ -90,51 +116,26 @@ public class PlanTaskBroadcaster {
      * 广播 plan_start — 开始规划
      */
     public void broadcastPlanStart(String sessionId, String data) {
-        if (!enabled || wsServer == null || sessionId == null) return;
-        try {
-            wsServer.broadcast(Map.of(
-                    "type", "plan_start",
-                    "sessionId", sessionId,
-                    "data", data != null ? data : ""
-            ));
-            logger.fine("[PlanBroadcaster] plan_start: session=" + sessionId);
-        } catch (Exception e) {
-            logger.log(Level.WARNING, "Failed to broadcast plan_start", e);
-        }
+        dispatch("plan_start", sessionId, data != null ? data : "");
+        logger.fine("[PlanBroadcaster] plan_start: session=" + sessionId);
     }
 
     /**
      * 广播 plan_thinking — 规划思考中
      */
     public void broadcastPlanThinking(String sessionId, String thought) {
-        if (!enabled || wsServer == null || sessionId == null) return;
-        try {
-            wsServer.broadcast(Map.of(
-                    "type", "plan_thinking",
-                    "sessionId", sessionId,
-                    "data", thought != null ? thought : ""
-            ));
-        } catch (Exception e) {
-            logger.log(Level.WARNING, "Failed to broadcast plan_thinking", e);
-        }
+        dispatch("plan_thinking", sessionId, thought != null ? thought : "");
     }
 
     /**
      * 广播 plan_tasks — 发送完整的任务树列表
-     * <p>注意：此方法会自动将 data 用 {"tasks": ...} 包装。
-     * 如果需要发送原始结构化数据（如 {"structuredTasks": [...]}），请使用 broadcastPlanData()。</p>
      */
     public void broadcastPlanTasks(String sessionId, Object tasksJson) {
-        if (!enabled || wsServer == null || sessionId == null) return;
         try {
             String dataStr = tasksJson instanceof String
                     ? (String) tasksJson
                     : MAPPER.writeValueAsString(tasksJson);
-            wsServer.broadcast(Map.of(
-                    "type", "plan_tasks",
-                    "sessionId", sessionId,
-                    "data", "{\"tasks\":" + dataStr + "}"
-            ));
+            dispatch("plan_tasks", sessionId, "{\"tasks\":" + dataStr + "}");
             logger.info("[PlanBroadcaster] plan_tasks sent: session=" + sessionId);
         } catch (Exception e) {
             logger.log(Level.WARNING, "Failed to broadcast plan_tasks", e);
@@ -142,25 +143,14 @@ public class PlanTaskBroadcaster {
     }
 
     /**
-     * 广播 plan_tasks — 发送原始结构化数据（不额外包装 {"tasks": ...}）。
-     *
-     * <p>与 broadcastPlanTasks 不同，此方法直接将 payload 序列化为 data 字段，
-     * 不会额外嵌套 tasks 层。适用于 {@code {"structuredTasks": [...]}} 等自定义格式。</p>
-     *
-     * @param sessionId 会话 ID
-     * @param payload   原始数据对象（将被序列化为 JSON 作为 data 字段）
+     * 广播 plan_tasks — 发送原始结构化数据（不额外包装）
      */
     public void broadcastPlanData(String sessionId, Object payload) {
-        if (!enabled || wsServer == null || sessionId == null) return;
         try {
             String dataStr = payload instanceof String
                     ? (String) payload
                     : MAPPER.writeValueAsString(payload);
-            wsServer.broadcast(Map.of(
-                    "type", "plan_tasks",
-                    "sessionId", sessionId,
-                    "data", dataStr
-            ));
+            dispatch("plan_tasks", sessionId, dataStr);
             logger.info("[PlanBroadcaster] plan_tasks raw data sent: session=" + sessionId);
         } catch (Exception e) {
             logger.log(Level.WARNING, "Failed to broadcast plan_tasks raw data", e);
@@ -171,40 +161,23 @@ public class PlanTaskBroadcaster {
      * 广播 plan_task_start — 单个任务开始执行
      */
     public void broadcastPlanTaskStart(String sessionId, String taskId, String agentType) {
-        if (!enabled || wsServer == null || sessionId == null) return;
-        try {
-            wsServer.broadcast(Map.of(
-                    "type", "plan_task_start",
-                    "sessionId", sessionId,
-                    "data", "{\"id\":\"" + escapeJson(taskId) + "\",\"agentType\":\"" + escapeJson(agentType) + "\"}"
-            ));
-            logger.fine("[PlanBroadcaster] plan_task_start: " + taskId);
-        } catch (Exception e) {
-            logger.log(Level.WARNING, "Failed to broadcast plan_task_start", e);
-        }
+        dispatch("plan_task_start", sessionId,
+                "{\"id\":\"" + escapeJson(taskId) + "\",\"agentType\":\"" + escapeJson(agentType) + "\"}");
+        logger.fine("[PlanBroadcaster] plan_task_start: " + taskId);
     }
 
     /**
      * 广播 plan_task_update — 单个任务进度更新
      */
     public void broadcastPlanTaskUpdate(String sessionId, String taskId, int progress, String logs) {
-        if (!enabled || wsServer == null || sessionId == null) return;
-        try {
-            StringBuilder json = new StringBuilder();
-            json.append("{\"id\":\"").append(escapeJson(taskId)).append("\"");
-            json.append(",\"progress\":").append(progress);
-            if (logs != null && !logs.isEmpty()) {
-                json.append(",\"logs\":\"").append(escapeJson(logs)).append("\"");
-            }
-            json.append("}");
-            wsServer.broadcast(Map.of(
-                    "type", "plan_task_update",
-                    "sessionId", sessionId,
-                    "data", json.toString()
-            ));
-        } catch (Exception e) {
-            logger.log(Level.WARNING, "Failed to broadcast plan_task_update", e);
+        StringBuilder json = new StringBuilder();
+        json.append("{\"id\":\"").append(escapeJson(taskId)).append("\"");
+        json.append(",\"progress\":").append(progress);
+        if (logs != null && !logs.isEmpty()) {
+            json.append(",\"logs\":\"").append(escapeJson(logs)).append("\"");
         }
+        json.append("}");
+        dispatch("plan_task_update", sessionId, json.toString());
     }
 
     /**
@@ -212,61 +185,34 @@ public class PlanTaskBroadcaster {
      */
     public void broadcastPlanTaskResult(String sessionId, String taskId,
                                          String status, String result, String error) {
-        if (!enabled || wsServer == null || sessionId == null) return;
-        try {
-            StringBuilder json = new StringBuilder();
-            json.append("{\"id\":\"").append(escapeJson(taskId)).append("\"");
-            json.append(",\"status\":\"").append(escapeJson(status)).append("\"");
-            if (result != null && !result.isEmpty()) {
-                json.append(",\"result\":\"").append(escapeJson(result)).append("\"");
-            }
-            if (error != null && !error.isEmpty()) {
-                json.append(",\"error\":\"").append(escapeJson(error)).append("\"");
-            }
-            json.append("}");
-            wsServer.broadcast(Map.of(
-                    "type", "plan_task_result",
-                    "sessionId", sessionId,
-                    "data", json.toString()
-            ));
-            logger.fine("[PlanBroadcaster] plan_task_result: " + taskId + " = " + status);
-        } catch (Exception e) {
-            logger.log(Level.WARNING, "Failed to broadcast plan_task_result", e);
+        StringBuilder json = new StringBuilder();
+        json.append("{\"id\":\"").append(escapeJson(taskId)).append("\"");
+        json.append(",\"status\":\"").append(escapeJson(status)).append("\"");
+        if (result != null && !result.isEmpty()) {
+            json.append(",\"result\":\"").append(escapeJson(result)).append("\"");
         }
+        if (error != null && !error.isEmpty()) {
+            json.append(",\"error\":\"").append(escapeJson(error)).append("\"");
+        }
+        json.append("}");
+        dispatch("plan_task_result", sessionId, json.toString());
+        logger.fine("[PlanBroadcaster] plan_task_result: " + taskId + " = " + status);
     }
 
     /**
      * 广播 plan_complete — 全部任务完成
      */
     public void broadcastPlanComplete(String sessionId, String result) {
-        if (!enabled || wsServer == null || sessionId == null) return;
-        try {
-            wsServer.broadcast(Map.of(
-                    "type", "plan_complete",
-                    "sessionId", sessionId,
-                    "data", result != null ? result : ""
-            ));
-            logger.info("[PlanBroadcaster] plan_complete: session=" + sessionId);
-        } catch (Exception e) {
-            logger.log(Level.WARNING, "Failed to broadcast plan_complete", e);
-        }
+        dispatch("plan_complete", sessionId, result != null ? result : "");
+        logger.info("[PlanBroadcaster] plan_complete: session=" + sessionId);
     }
 
     /**
      * 广播 plan_error — 规划出错
      */
     public void broadcastPlanError(String sessionId, String error) {
-        if (!enabled || wsServer == null || sessionId == null) return;
-        try {
-            wsServer.broadcast(Map.of(
-                    "type", "plan_error",
-                    "sessionId", sessionId,
-                    "data", error != null ? error : "未知错误"
-            ));
-            logger.warning("[PlanBroadcaster] plan_error: session=" + sessionId + " error=" + error);
-        } catch (Exception e) {
-            logger.log(Level.WARNING, "Failed to broadcast plan_error", e);
-        }
+        dispatch("plan_error", sessionId, error != null ? error : "未知错误");
+        logger.warning("[PlanBroadcaster] plan_error: session=" + sessionId + " error=" + error);
     }
 
     /**
@@ -274,26 +220,17 @@ public class PlanTaskBroadcaster {
      */
     public void broadcastStepPrompt(String sessionId, String taskId, int stepIndex,
                                      String description, String action, String stepPrompt, String agentType) {
-        if (!enabled || wsServer == null || sessionId == null) return;
-        try {
-            StringBuilder json = new StringBuilder();
-            json.append("{\"taskId\":\"").append(escapeJson(taskId)).append("\"");
-            json.append(",\"stepIndex\":").append(stepIndex);
-            json.append(",\"stepNumber\":").append(stepIndex + 1);
-            json.append(",\"description\":\"").append(escapeJson(description)).append("\"");
-            json.append(",\"action\":\"").append(escapeJson(action != null ? action : "")).append("\"");
-            json.append(",\"stepPrompt\":\"").append(escapeJson(stepPrompt != null ? stepPrompt : "")).append("\"");
-            json.append(",\"agentType\":\"").append(escapeJson(agentType != null ? agentType : "")).append("\"");
-            json.append("}");
-            wsServer.broadcast(Map.of(
-                    "type", "step_prompt",
-                    "sessionId", sessionId,
-                    "data", json.toString()
-            ));
-            logger.info("[PlanBroadcaster] step_prompt: session=" + sessionId + " step=" + (stepIndex + 1));
-        } catch (Exception e) {
-            logger.log(Level.WARNING, "Failed to broadcast step_prompt", e);
-        }
+        StringBuilder json = new StringBuilder();
+        json.append("{\"taskId\":\"").append(escapeJson(taskId)).append("\"");
+        json.append(",\"stepIndex\":").append(stepIndex);
+        json.append(",\"stepNumber\":").append(stepIndex + 1);
+        json.append(",\"description\":\"").append(escapeJson(description)).append("\"");
+        json.append(",\"action\":\"").append(escapeJson(action != null ? action : "")).append("\"");
+        json.append(",\"stepPrompt\":\"").append(escapeJson(stepPrompt != null ? stepPrompt : "")).append("\"");
+        json.append(",\"agentType\":\"").append(escapeJson(agentType != null ? agentType : "")).append("\"");
+        json.append("}");
+        dispatch("step_prompt", sessionId, json.toString());
+        logger.info("[PlanBroadcaster] step_prompt: session=" + sessionId + " step=" + (stepIndex + 1));
     }
 
     // ==================== 工具方法 ====================

@@ -8,6 +8,8 @@ interface SettingsState extends Settings, AdvancedSettings {
   // 自定义主题颜色
   customTheme: CustomThemeColors;
   customThemeEnabled: boolean;
+  // 工作区守卫绕过
+  workspaceGuardBypass: boolean;
 
   // Actions
   setTheme: (theme: 'dark' | 'light' | 'auto') => void;
@@ -22,6 +24,7 @@ interface SettingsState extends Settings, AdvancedSettings {
   setCompressionMaxMessages: (value: number) => void;
   setCompressionTokenThreshold: (value: number) => void;
   setWorkspaceDir: (dir: string) => void;
+  setWorkspaceGuardBypass: (bypass: boolean) => void;
   setCustomTheme: (colors: Partial<CustomThemeColors>) => void;
   setCustomThemeEnabled: (enabled: boolean) => void;
   resetCustomTheme: () => void;
@@ -44,6 +47,7 @@ export const useSettingsStore = create<SettingsState>()(
         tokenThreshold: 4000,
       },
       workspaceDir: 'c:\\Users\\HUAWEI\\Desktop\\jwcode',
+      workspaceGuardBypass: true,
       customTheme: DEFAULT_DARK_THEME,
       customThemeEnabled: false,
 
@@ -57,6 +61,7 @@ export const useSettingsStore = create<SettingsState>()(
       setAutoAIEnabled: (enabled) => set({ autoAI: { enabled } }),
       setCustomTheme: (colors) => set((state) => ({ customTheme: { ...state.customTheme, ...colors } })),
       setCustomThemeEnabled: (enabled) => set({ customThemeEnabled: enabled }),
+      setWorkspaceGuardBypass: (bypass) => set({ workspaceGuardBypass: bypass }),
       resetCustomTheme: () => set({ customTheme: DEFAULT_DARK_THEME }),
       setCompressionEnabled: (enabled) =>
         set((state) => ({

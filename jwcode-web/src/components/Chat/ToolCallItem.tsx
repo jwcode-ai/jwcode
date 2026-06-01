@@ -1,5 +1,5 @@
-import { memo, useState } from 'react';
-import { Plus, Minus } from 'lucide-react';
+import { memo, useState, useEffect, useRef } from 'react';
+import { Plus, Minus, Clock } from 'lucide-react';
 import { ToolCall } from '../../types';
 import { DiffPreview } from './DiffPreview';
 
@@ -8,7 +8,18 @@ interface ToolCallItemProps {
   defaultCollapsed?: boolean;
 }
 
-const FILE_MODIFY_TOOLS = ['FileEditTool', 'FileWriteTool', 'EditTool', 'NotebookEditTool'];
+const FILE_MODIFY_TOOLS = [
+  'FileEditTool', 'FileWriteTool', 'EditTool', 'NotebookEditTool',
+  'Write', 'Edit', 'WriteTool', 'FileCreateTool',
+];
+
+const FILE_WRITE_PATTERNS = /\b(write|edit|save|create|update|modify|patch)\b/i;
+const FILE_READ_PATTERNS = /\b(read|open|cat|view|list|ls|dir|find|grep|glob|search)\b/i;
+
+function detectFileModify(name: string): boolean {
+  if (FILE_MODIFY_TOOLS.includes(name)) return true;
+  return FILE_WRITE_PATTERNS.test(name) && !FILE_READ_PATTERNS.test(name);
+}
 
 function extractResultText(result: unknown): string {
   if (typeof result === 'string') return result;
@@ -16,63 +27,141 @@ function extractResultText(result: unknown): string {
   return String(result ?? '');
 }
 
+function extractFilePath(args: Record<string, unknown> | string): string | undefined {
+  if (typeof args === 'string') return undefined;
+  if (!args) return undefined;
+  return (args.filePath || args.path || args.file || args.file_path) as string | undefined;
+}
+
+function getFirstLine(text: string): string {
+  const idx = text.indexOf('\n');
+  return idx > 0 ? text.slice(0, idx) : text;
+}
+
 export const ToolCallItem = memo(function ToolCallItem({ toolCall, defaultCollapsed = false }: ToolCallItemProps) {
   const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
+  const [elapsed, setElapsed] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   const isRunning = toolCall.status === 'running';
   const hasResult = toolCall.result !== undefined && toolCall.result !== null;
-  const isFileModify = FILE_MODIFY_TOOLS.includes(toolCall.name);
+  const isError = toolCall.status === 'error';
+  const isFileModify = detectFileModify(toolCall.name);
   const resultText = hasResult ? extractResultText(toolCall.result) : '';
+  const filePath = typeof toolCall.args === 'object' && toolCall.args
+    ? extractFilePath(toolCall.args as Record<string, unknown>)
+    : undefined;
+  const duration = toolCall.duration ?? (isRunning ? elapsed : 0);
+  const durationStr = duration > 0
+    ? duration >= 60 ? `${Math.floor(duration / 60)}m ${duration % 60}s` : `${duration}s`
+    : '';
+
+  // Live elapsed timer for running tool calls
+  useEffect(() => {
+    if (isRunning) {
+      setElapsed(0);
+      const startTime = toolCall.timestamp || Date.now();
+      timerRef.current = setInterval(() => {
+        setElapsed(Math.floor((Date.now() - startTime) / 1000));
+      }, 1000);
+    } else {
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    }
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [isRunning, toolCall.timestamp]);
+
+  const statusConfig = isRunning
+    ? { dot: 'bg-accent-blue', border: 'border-accent-blue/40', text: 'text-accent-blue', label: '运行中' }
+    : isError
+    ? { dot: 'bg-accent-red', border: 'border-accent-red/40', text: 'text-accent-red', label: '错误' }
+    : { dot: 'bg-accent-green', border: 'border-accent-green/40', text: 'text-accent-green', label: '完成' };
 
   return (
-    <div className="bg-dark-bg border border-dark-border rounded-lg overflow-hidden">
-      {/* Header - Always visible, clickable to collapse/expand */}
+    <div className={`bg-dark-bg border rounded-lg overflow-hidden ${statusConfig.border}`}>
+      {/* Header — always visible, clickable */}
       <div
-        className="flex items-center justify-between px-3 py-2 bg-dark-surface border-b border-dark-border cursor-pointer hover:bg-dark-hover"
+        className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-dark-surface/50"
         onClick={() => setIsCollapsed(!isCollapsed)}
       >
-        <div className="flex items-center gap-2">
-          {isCollapsed ? <Plus size={14} className="text-accent-blue" /> : <Minus size={14} className="text-accent-blue" />}
-          <span className="text-accent-blue">🔧</span>
-          <span className="font-medium text-sm">{toolCall.name}</span>
-        </div>
-        <span className={`text-xs px-2 py-0.5 rounded ${
-          isRunning ? 'bg-accent-blue text-white' : 'bg-accent-green text-white'
-        }`}>
-          {isRunning ? '运行中' : '完成'}
+        {isCollapsed ? <Plus size={14} className="text-accent-blue shrink-0" /> : <Minus size={14} className="text-accent-blue shrink-0" />}
+
+        {/* Status dot */}
+        <span className={`w-2 h-2 rounded-full shrink-0 ${isRunning ? 'animate-pulse ' : ''}${statusConfig.dot}`} />
+
+        <span className="text-xs text-dark-muted shrink-0">🔧</span>
+        <span className="font-medium text-sm text-dark-text truncate">{toolCall.name}</span>
+
+        {/* Elapsed timer for running */}
+        {isRunning && (
+          <span className="text-[11px] text-accent-blue animate-pulse shrink-0 flex items-center gap-1">
+            <Clock size={11} />
+            <span>{elapsed}s</span>
+          </span>
+        )}
+
+        {/* Duration for completed */}
+        {!isRunning && durationStr && (
+          <span className="text-[10px] text-dark-muted shrink-0 flex items-center gap-1">
+            <Clock size={10} />
+            <span>{durationStr}</span>
+          </span>
+        )}
+
+        {/* Status badge */}
+        <span className={`text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ml-auto ${statusConfig.text} bg-dark-surface`}>
+          {statusConfig.label}
         </span>
       </div>
 
       {/* Collapsible content */}
       {!isCollapsed && (
-        <div className="p-3">
-          <div className="text-xs text-dark-muted mb-1">参数</div>
-          <pre className="text-xs font-mono bg-dark-bg p-2 rounded overflow-x-auto">
-            {typeof toolCall.args === 'string'
-              ? toolCall.args
-              : JSON.stringify(toolCall.args, null, 2)}
-          </pre>
+        <div className="px-3 pb-3 space-y-2">
+          {/* Args */}
+          <div>
+            <div className="text-[10px] text-dark-muted mb-1">参数</div>
+            <pre className="text-[11px] font-mono bg-dark-bg border border-dark-border p-2 rounded overflow-x-auto max-h-24 overflow-y-auto">
+              {typeof toolCall.args === 'string'
+                ? toolCall.args
+                : JSON.stringify(toolCall.args, null, 2)}
+            </pre>
+          </div>
+
+          {/* Result */}
           {hasResult && (
-            <>
-              <div className="text-xs text-dark-muted mb-1 mt-2">结果</div>
-              {isFileModify ? (
+            <div>
+              <div className="text-[10px] text-dark-muted mb-1">
+                {isError ? '错误' : '结果'}
+              </div>
+              {isFileModify && resultText ? (
                 <DiffPreview
-                  filePath={typeof toolCall.args === 'object' && toolCall.args ? (toolCall.args as any).filePath || (toolCall.args as any).path : undefined}
+                  filePath={filePath}
                   content={resultText}
                 />
               ) : (
-                <pre className="text-xs font-mono bg-dark-bg p-2 rounded overflow-x-auto text-accent-green">
+                <pre className={`text-[11px] font-mono bg-dark-bg border border-dark-border p-2 rounded overflow-x-auto max-h-48 overflow-y-auto whitespace-pre-wrap break-all ${
+                  isError ? 'text-accent-red' : 'text-accent-green'
+                }`}>
                   {resultText}
                 </pre>
               )}
-            </>
+            </div>
           )}
         </div>
       )}
 
-      {/* Show hint if collapsed */}
+      {/* Collapsed hint: show first line of result */}
       {isCollapsed && hasResult && (
-        <div className="px-3 py-2 text-xs text-dark-muted">
-          ✓ 有返回结果
+        <div className="px-3 pb-2 text-[11px] text-dark-muted truncate border-t border-dark-border/30 pt-1.5">
+          {isFileModify && filePath ? (
+            <span className="text-accent-purple">📝 {filePath}</span>
+          ) : resultText ? (
+            <span className="text-dark-muted/60">
+              {getFirstLine(resultText).slice(0, 120)}
+              {resultText.length > 120 ? '...' : ''}
+            </span>
+          ) : (
+            <span>✓ 有返回结果</span>
+          )}
         </div>
       )}
     </div>

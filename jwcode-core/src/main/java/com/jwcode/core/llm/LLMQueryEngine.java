@@ -30,6 +30,7 @@ import com.jwcode.core.service.ContextWindowManager;
 import com.jwcode.core.service.SimpleCompactionStrategy;
 import com.jwcode.core.aicl.AICLPromptBuilder;
 import com.jwcode.core.agent.BudgetExhaustedHandler;
+import com.jwcode.core.permission.PermissionManagerChecker;
 import com.jwcode.core.task.TaskLifecycleManager;
 
 /**
@@ -65,6 +66,8 @@ public class LLMQueryEngine {
     private int lastCompactMessageCount = 0;
     // 去重：记录已注册的 StepCallbackAdapter，防止重复订阅导致日志重复
     private StepCallbackAdapter stepCallbackAdapter;
+    // 原始回调引用，用于直接推送 Token 更新等实时事件
+    private StepCallback stepCallback;
     // 【修复】压缩冷却时间：避免短时间内多次压缩
     private long lastCompactTime = 0;
     private static final long COMPACT_COOLDOWN_MS = 30000; // 30秒冷却时间
@@ -208,6 +211,7 @@ public class LLMQueryEngine {
                 this.pipeline.unsubscribe(this.stepCallbackAdapter);
                 logger.info("[LLMQueryEngine] Removed old StepCallbackAdapter before adding new one");
             }
+            this.stepCallback = callback;
             this.stepCallbackAdapter = new StepCallbackAdapter(callback);
             this.pipeline.subscribe(this.stepCallbackAdapter);
         }
@@ -257,6 +261,17 @@ public class LLMQueryEngine {
          * 流式工具调用片段（实时推送部分工具调用参数）
          */
         default void onToolCallChunk(LLMService.StreamToolCallEvent event) {}
+        
+        /**
+         * Token 用量更新（实时推送 Token 预算变化）
+         * @param usedTokens 已用 token 数
+         * @param totalBudget 总预算
+         * @param usageRatio 使用率 (0.0~1.0)
+         */
+        default void onTokenUpdate(long usedTokens, long totalBudget, double usageRatio) {}
+
+        default void onContextCompressed(int originalCount, int compressedCount,
+                                         long tokensSaved, String summary) {}
     }
     
     /**
@@ -528,7 +543,7 @@ public class LLMQueryEngine {
     // 空回复时的引导提示
     private static final String EMPTY_RESPONSE_PROMPT = "你上一条回复为空。请继续完成当前任务，如果已完成请添加 [FINISH] 标记。";
     // 【优化】无进展检测：连续 N 轮仅工具调用无文本回复则强制终止
-    private static final int MAX_CONSECUTIVE_TOOL_ONLY_ROUNDS = 15;
+    private static final int MAX_CONSECUTIVE_TOOL_ONLY_ROUNDS = Integer.MAX_VALUE;
     // 【优化】重复工具检测：同一工具连续调用超过此阈值触发干预
     private static final int MAX_REPEATED_TOOL_CALLS = 8;
     // 【优化】[FINISH] 提示注入间隔：每 N 轮才检查一次，避免频繁注入
@@ -541,9 +556,9 @@ public class LLMQueryEngine {
      * @param emptyResponseCount 连续空回复次数
      */
     private CompletableFuture<QueryResult> runConversationLoop(int iteration, int emptyResponseCount) {
-        // 硬上限：迭代超过 20 轮强制终止
-        if (iteration > 20) {
-            logger.warning("[LLMQueryEngine] Max iteration (20) reached, force stop");
+        // 迭代限制已移至 QueryConfig.maxIterations 配置
+        if (config.getMaxIterations() > 0 && iteration >= config.getMaxIterations()) {
+            logger.warning("[LLMQueryEngine] Max iterations reached: " + config.getMaxIterations());
             return CompletableFuture.completedFuture(QueryResult.error("Max iterations exceeded"));
         }
         // 检测会话是否被外部压缩（如 /compact 命令），如果是则重置 TokenBudget
@@ -576,11 +591,16 @@ public class LLMQueryEngine {
         // 【修复】自动触发上下文压缩（优先于耗尽检查，给压缩一次拯救机会）
         // 使用 ContextWindowManager 统一压缩入口，包含 TokenBudget 释放和事件通知
         // 注意：预算已耗尽时绕过冷却时间，执行紧急压缩
+        // 【修复】冷却期内若使用率 > 85% 也允许跳过冷却，防止冷却期阻塞紧急压缩
         long now = System.currentTimeMillis();
         boolean budgetExhausted = tokenBudget.isExhausted();
+        boolean inCooldown = (now - lastCompactTime) <= COMPACT_COOLDOWN_MS;
+        boolean highUrgency = tokenBudget.usageRatio() > 0.85;
         if (tokenBudget.usageRatio() > 0.70 && session.getMessages().size() > 10 
-            && ((now - lastCompactTime) > COMPACT_COOLDOWN_MS || budgetExhausted)) {
-            String compactReason = budgetExhausted ? "EMERGENCY (budget exhausted)" : "usage=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100);
+            && (!inCooldown || budgetExhausted || highUrgency)) {
+            String compactReason = budgetExhausted ? "EMERGENCY (budget exhausted)" 
+                : highUrgency ? "HIGH_URGENCY usage=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100)
+                : "usage=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100);
             logger.info("[LLMQueryEngine] Auto-compacting context, reason=" + compactReason + "...");
             int beforeCount = session.getMessages().size();
             // 使用 ContextWindowManager 统一压缩入口
@@ -592,31 +612,39 @@ public class LLMQueryEngine {
                 session.markCompacted();
                 lastCompactTime = now; // 更新压缩时间
                 
-                // Token 银行：基于消息内容估算释放的 token（替代硬编码 500）
                 int messagesRemoved = beforeCount - compacted.size();
-                long estimatedTokensSaved = estimateCompactTokenSavings(compacted, messagesRemoved);
-                if (estimatedTokensSaved > 0) {
-                    tokenBudget.releaseTokens(estimatedTokensSaved);
-                    logger.info("[LLMQueryEngine] Token 银行: 自动压缩释放 " + estimatedTokensSaved 
-                        + " tokens (移除了 " + messagesRemoved + " 条消息)");
+                long tokensSaved;
+                if (budgetExhausted) {
+                    // 紧急压缩：上下文已从根本上重构，旧 token 计数无意义，应完全重置
+                    tokenBudget.reset();
+                    tokensSaved = (long) messagesRemoved * 100;
+                    logger.info("[LLMQueryEngine] Token 银行: 紧急压缩后重置预算 (移除了 " + messagesRemoved + " 条消息)");
+                } else {
+                    tokensSaved = estimateCompactTokenSavings(compacted, messagesRemoved);
+                    if (tokensSaved > 0) {
+                        tokenBudget.releaseTokens(tokensSaved);
+                        logger.info("[LLMQueryEngine] Token 银行: 自动压缩释放 " + tokensSaved
+                            + " tokens (移除了 " + messagesRemoved + " 条消息)");
+                    }
                 }
-                
-                // 发布压缩事件通知
+
+                String compactSummary = "Token 使用率 " + String.format("%.0f%%", tokenBudget.usageRatio() * 100) + "，自动触发上下文压缩";
                 pipeline.publish(new ObservationEvent.ContextCompressed(
-                    beforeCount,
-                    compacted.size(),
-                    estimatedTokensSaved,
-                    "Token 使用率 " + String.format("%.0f%%", tokenBudget.usageRatio() * 100) + "，自动触发上下文压缩"
-                ));
-                
+                    beforeCount, compacted.size(), tokensSaved, compactSummary));
+                if (stepCallback != null) {
+                    stepCallback.onContextCompressed(beforeCount, compacted.size(),
+                        tokensSaved, compactSummary);
+                }
+
                 logger.info("[LLMQueryEngine] Auto-compacted: " + beforeCount + " -> " + session.getMessages().size()
                     + " messages, budget after compact=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100));
             } else {
                 logger.warning("[LLMQueryEngine] Auto-compact skipped: result size not reduced (before=" + beforeCount + ")");
             }
-        } else if (tokenBudget.usageRatio() > 0.70 && (now - lastCompactTime) <= COMPACT_COOLDOWN_MS && !budgetExhausted) {
+        } else if (tokenBudget.usageRatio() > 0.70 && inCooldown && !budgetExhausted && !highUrgency) {
             logger.info("[LLMQueryEngine] Auto-compact skipped: cooldown period active (" 
-                + ((COMPACT_COOLDOWN_MS - (now - lastCompactTime)) / 1000) + "s remaining)");
+                + ((COMPACT_COOLDOWN_MS - (now - lastCompactTime)) / 1000) + "s remaining, usage=" 
+                + String.format("%.0f%%", tokenBudget.usageRatio() * 100) + ")");
         }
 
         // 压缩后再次检查 Token 预算（放在压缩之后，给压缩一次拯救机会）
@@ -723,6 +751,10 @@ public class LLMQueryEngine {
                 response.getModel() != null ? response.getModel() : "unknown"));
             logger.info("[LLMQueryEngine] Token usage: +" + completionTokens +
                 " completion (total used=" + tokenBudget.getUsedTotal() + "/" + tokenBudget.getTotalBudget() + ")");
+            // 实时推送 Token 更新到回调
+            if (stepCallback != null) {
+                stepCallback.onTokenUpdate(tokenBudget.getUsedTotal(), tokenBudget.getTotalBudget(), tokenBudget.usageRatio());
+            }
         }
 
         // 打印 AI 思考内容
@@ -745,15 +777,17 @@ public class LLMQueryEngine {
             session.addMessage(assistantMessage);
             
             // 【优化】无进展检测：检查回复是否仅有工具调用而无实质文本内容
+            // 注意：只要有工具调用就视为有进展，重置计数器（工具调用本身就是进展）
             String content = response.getContent();
             boolean hasSubstantiveContent = content != null && !content.trim().isEmpty()
                 && content.trim().length() > 10; // 少于10个字符视为无实质内容
-            if (!hasSubstantiveContent) {
+            boolean hasToolCalls = response.hasToolCalls();
+            if (!hasSubstantiveContent && !hasToolCalls) {
                 consecutiveToolOnlyRounds++;
                 logger.info("[LLMQueryEngine] Tool-only round #" + consecutiveToolOnlyRounds
-                    + " (no substantive text content)");
+                    + " (no substantive text content and no tool calls)");
             } else {
-                consecutiveToolOnlyRounds = 0; // 有实质内容则重置
+                consecutiveToolOnlyRounds = 0; // 有实质内容或工具调用则重置
             }
             
             // 【优化】重复工具检测：检查本次工具名列表是否与上次高度重复
@@ -911,11 +945,16 @@ public class LLMQueryEngine {
         // 自动触发上下文压缩（优先于耗尽检查，给压缩一次拯救机会）
         // 使用 ContextWindowManager 统一压缩入口，包含 TokenBudget 释放和事件通知
         // 注意：预算已耗尽时绕过冷却时间，执行紧急压缩
+        // 【修复】冷却期内若使用率 > 85% 也允许跳过冷却，防止冷却期阻塞紧急压缩
         long now = System.currentTimeMillis();
         boolean budgetExhausted = tokenBudget.isExhausted();
+        boolean inCooldown = (now - lastCompactTime) <= COMPACT_COOLDOWN_MS;
+        boolean highUrgency = tokenBudget.usageRatio() > 0.85;
         if (tokenBudget.usageRatio() > 0.70 && session.getMessages().size() > 10
-            && ((now - lastCompactTime) > COMPACT_COOLDOWN_MS || budgetExhausted)) {
-            String compactReason = budgetExhausted ? "EMERGENCY (budget exhausted)" : "usage=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100);
+            && (!inCooldown || budgetExhausted || highUrgency)) {
+            String compactReason = budgetExhausted ? "EMERGENCY (budget exhausted)" 
+                : highUrgency ? "HIGH_URGENCY usage=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100)
+                : "usage=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100);
             logger.info("[LLMQueryEngine] Auto-compacting context, reason=" + compactReason + "...");
             int beforeCount = session.getMessages().size();
             // 使用 ContextWindowManager 统一压缩入口
@@ -927,31 +966,39 @@ public class LLMQueryEngine {
                 session.markCompacted();
                 lastCompactTime = now; // 更新压缩时间
                 
-                // Token 银行：基于消息内容估算释放的 token（替代硬编码 500）
                 int messagesRemoved = beforeCount - compacted.size();
-                long estimatedTokensSaved = estimateCompactTokenSavings(compacted, messagesRemoved);
-                if (estimatedTokensSaved > 0) {
-                    tokenBudget.releaseTokens(estimatedTokensSaved);
-                    logger.info("[LLMQueryEngine] Token 银行: 自动压缩释放 " + estimatedTokensSaved 
-                        + " tokens (移除了 " + messagesRemoved + " 条消息)");
+                long tokensSaved;
+                if (budgetExhausted) {
+                    // 紧急压缩：上下文已从根本上重构，旧 token 计数无意义，应完全重置
+                    tokenBudget.reset();
+                    tokensSaved = (long) messagesRemoved * 100;
+                    logger.info("[LLMQueryEngine] Token 银行: 紧急压缩后重置预算 (移除了 " + messagesRemoved + " 条消息)");
+                } else {
+                    tokensSaved = estimateCompactTokenSavings(compacted, messagesRemoved);
+                    if (tokensSaved > 0) {
+                        tokenBudget.releaseTokens(tokensSaved);
+                        logger.info("[LLMQueryEngine] Token 银行: 自动压缩释放 " + tokensSaved
+                            + " tokens (移除了 " + messagesRemoved + " 条消息)");
+                    }
                 }
-                
-                // 发布压缩事件通知
+
+                String compactSummary = "Token 使用率 " + String.format("%.0f%%", tokenBudget.usageRatio() * 100) + "，自动触发上下文压缩";
                 pipeline.publish(new ObservationEvent.ContextCompressed(
-                    beforeCount,
-                    compacted.size(),
-                    estimatedTokensSaved,
-                    "Token 使用率 " + String.format("%.0f%%", tokenBudget.usageRatio() * 100) + "，自动触发上下文压缩"
-                ));
-                
+                    beforeCount, compacted.size(), tokensSaved, compactSummary));
+                if (stepCallback != null) {
+                    stepCallback.onContextCompressed(beforeCount, compacted.size(),
+                        tokensSaved, compactSummary);
+                }
+
                 logger.info("[LLMQueryEngine] Auto-compacted: " + beforeCount + " -> " + session.getMessages().size()
                     + " messages, budget=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100));
             } else {
                 logger.warning("[LLMQueryEngine] Auto-compact skipped: result size not reduced (before=" + beforeCount + ")");
             }
-        } else if (tokenBudget.usageRatio() > 0.70 && (now - lastCompactTime) <= COMPACT_COOLDOWN_MS && !budgetExhausted) {
+        } else if (tokenBudget.usageRatio() > 0.70 && inCooldown && !budgetExhausted && !highUrgency) {
             logger.info("[LLMQueryEngine] Auto-compact skipped: cooldown period active ("
-                + ((COMPACT_COOLDOWN_MS - (now - lastCompactTime)) / 1000) + "s remaining)");
+                + ((COMPACT_COOLDOWN_MS - (now - lastCompactTime)) / 1000) + "s remaining, usage="
+                + String.format("%.0f%%", tokenBudget.usageRatio() * 100) + ")");
         }
 
         // 压缩后再次检查 Token 预算
@@ -1085,6 +1132,10 @@ public class LLMQueryEngine {
             tokenBudget.consume(promptTokens, completionTokens);
             pipeline.publish(new ObservationEvent.TokenUsage(promptTokens, completionTokens,
                 response.getModel() != null ? response.getModel() : "unknown"));
+            // 实时推送 Token 更新到回调
+            if (stepCallback != null) {
+                stepCallback.onTokenUpdate(tokenBudget.getUsedTotal(), tokenBudget.getTotalBudget(), tokenBudget.usageRatio());
+            }
         }
 
         // 打印 AI 思考内容
@@ -1425,6 +1476,11 @@ public class LLMQueryEngine {
             );
         }
         
+        // Sync workspace guard bypass from session metadata (allows runtime toggle)
+        // Default to true — only disable bypass when metadata is explicitly false
+        Boolean bypassWsGuard = session.getMetadata("workspaceGuardBypass");
+        toolContext.setBypassWorkspaceGuard(!Boolean.FALSE.equals(bypassWsGuard));
+
         // 通过 ToolExecutor 执行工具，并应用三阶段恢复协议
         return RecoveryExecutor.executeWithRecovery(
             () -> toolExecutor.execute(toolName, argsNode, toolContext),
@@ -1964,7 +2020,11 @@ public class LLMQueryEngine {
                 throw new IllegalArgumentException("LLMService is required");
             }
             if (toolExecutor == null) {
-                toolExecutor = new ToolExecutor(toolRegistry != null ? toolRegistry : ToolRegistry.createDefault());
+                toolExecutor = new ToolExecutor(
+                    toolRegistry != null ? toolRegistry : ToolRegistry.createDefault(),
+                    new PermissionManagerChecker(),
+                    null,
+                    null);
             }
             return new LLMQueryEngine(session, llmService, toolExecutor, config, agentRegistry);
         }
