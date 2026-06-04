@@ -38,6 +38,14 @@ export const WS_COMMANDS: CmdEntry[] = [
   { cmd: '/agents', desc: '列出配置的 Agent 代理', via: 'ws', action: 'agents' },
   { cmd: '/config', desc: '管理配置 (get/set/list)', via: 'ws', action: 'config' },
   { cmd: '/plugin', desc: '插件管理 (install/list/remove)', via: 'ws', action: 'plugin' },
+  { cmd: '/tokens', desc: '显示 Token 使用详情', via: 'ws', action: 'tokens' },
+  { cmd: '/memory', desc: '浏览项目记忆', via: 'ws', action: 'memory' },
+  { cmd: '/export', desc: '导出会话 (用法: /export <路径>)', via: 'ws', action: 'export' },
+  { cmd: '/checkpoint', desc: '设置或恢复检查点', via: 'ws', action: 'checkpoint' },
+  { cmd: '/test', desc: '运行当前项目测试', via: 'ws', action: 'test' },
+  { cmd: '/lint', desc: '对变更文件运行 Linter', via: 'ws', action: 'lint' },
+  { cmd: '/search', desc: '搜索代码库 (用法: /search <关键词>)', via: 'ws', action: 'search' },
+  { cmd: '/project', desc: '生成项目文档', via: 'ws', action: 'project' },
 ];
 
 export const ALL_COMMANDS: CmdEntry[] = [...LOCAL_COMMANDS, ...WS_COMMANDS];
@@ -68,6 +76,14 @@ export const SLASH_COMMANDS: Record<string, { action: string; needsArg?: boolean
   '/agents': { action: 'agents' },
   '/config': { action: 'config', needsArg: true },
   '/plugin': { action: 'plugin', needsArg: true },
+  '/tokens': { action: 'tokens' },
+  '/memory': { action: 'memory' },
+  '/export': { action: 'export', needsArg: true },
+  '/checkpoint': { action: 'checkpoint' },
+  '/test': { action: 'test' },
+  '/lint': { action: 'lint' },
+  '/search': { action: 'search', needsArg: true },
+  '/project': { action: 'project' },
 };
 
 export const HELP_TEXT = `
@@ -100,6 +116,14 @@ export const HELP_TEXT = `
 ║  /agents      列出 Agent 代理             ║
 ║  /config <操> 管理配置 (get/set/list)     ║
 ║  /plugin <操> 插件管理                    ║
+║  /tokens      显示 Token 使用详情         ║
+║  /memory      浏览项目记忆                ║
+║  /export <路> 导出会话到文件              ║
+║  /checkpoint  设置或恢复检查点            ║
+║  /test        运行当前项目测试            ║
+║  /lint        对变更文件运行 Linter       ║
+║  /search <词> 搜索代码库                  ║
+║  /project     生成项目文档                ║
 ╠══════════════════════════════════════════╣
 ║  快捷键:                                  ║
 ║  ↑↓           浏览输入历史 (最近30条)     ║

@@ -1,49 +1,51 @@
 ## PROTOCOL: Report Format
 
 ### Standard Report Structure
-All execution reports MUST follow this structure:
+
+All execution reports should follow this structure:
 
 ```markdown
-# 🤖 AI Task Execution Report
+# AI Task Execution Report
 
-## 📋 Executive Summary
+## Executive Summary
 | Field | Value |
 |-------|-------|
 | Task Goal | {goal} |
-| Status | ✅ Success / ❌ Failed / ⚠️ Partial |
+| Status | Success / Failed / Partial |
 | Total Duration | {duration} |
 | Sub-tasks | {completed}/{total} |
 | Test Pass Rate | {rate} |
 
-## 📂 Change List
+## Change List
 | Operation | File | Lines |
 |-----------|------|-------|
-| ✅ Added | {path} | {lines} |
-| ✅ Modified | {path} | +{add}/-{del} |
-| ❌ Deleted | {path} | {lines} |
+| Added | {path} | {lines} |
+| Modified | {path} | +{add}/-{del} |
+| Deleted | {path} | {lines} |
 
-## 🧪 Test Results
+## Test Results
 | Test Case | Status | Duration |
 |-----------|--------|----------|
-| {name} | ✅ Pass / ❌ Fail | {ms} |
+| {name} | Pass / Fail | {ms} |
 
-## 🔍 Code Review
+## Code Review
 | Severity | Count | Status |
 |----------|-------|--------|
-| 🔴 Critical | {n} | Fixed/Open |
-| 🟡 Medium | {n} | Fixed/Open |
-| 🟢 Suggestion | {n} | Accepted/Open |
+| Critical | {n} | Fixed/Open |
+| Medium | {n} | Fixed/Open |
+| Suggestion | {n} | Accepted/Open |
 
-## ⏱️ Execution Timeline
+## Execution Timeline
 | Phase | Duration | Agent |
 |-------|----------|-------|
 | {phase} | {ms} | {agent} |
 
-## 💡 Recommendations
+## Recommendations
 1. {suggestion}
 ```
 
 ### Output Formats
+
 | Format | Use Case |
 |--------|----------|
 | Markdown | Terminal display, README |

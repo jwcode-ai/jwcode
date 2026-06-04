@@ -3,13 +3,34 @@
  * JWCode TypeScript CLI — entry point.
  *
  * Commands:
- *   jwcode start [--port 8080] [--ws-port 8081] [--build]
- *   jwcode run [--backend http://localhost:8080] [--ws ws://localhost:8081/ws]
+ *   jwcode start [-p <port>] [-B]
+ *   jwcode run [-b <url>]
  *   jwcode version
  */
 import { render } from 'ink';
 import { createElement } from 'react';
 import { App } from './App.js';
+
+// EPIPE / ECONNRESET on process streams means the remote end disappeared.
+// Attach no-op error listeners so they never become unhandled crashes.
+['stdout', 'stderr'].forEach(name => {
+  const stream = (process as any)[name];
+  if (stream) {
+    stream.on('error', (e: NodeJS.ErrnoException) => {
+      if (e.code === 'EPIPE' || e.code === 'ECONNRESET') { /* suppress */ }
+    });
+  }
+});
+
+// Last-resort safety net: swallow EPIPE/ECONNRESET so the reconnect loop
+// can keep running instead of crashing the process.
+process.on('uncaughtException', (err: NodeJS.ErrnoException) => {
+  if (err.code === 'EPIPE' || err.code === 'ECONNRESET') {
+    return;
+  }
+  console.error('Fatal error:', err);
+  process.exit(1);
+});
 import {
   findProjectRoot, findMvn, jarExists, buildBackend,
   startBackend, waitForBackend, cleanupBackend,
@@ -28,11 +49,10 @@ function printUsage(): void {
   console.log('  jwcode version            Print version');
   console.log('');
   console.log('Options:');
-  console.log('  --port, -p <port>         Backend HTTP port (default: 8080)');
-  console.log('  --ws-port <port>          WebSocket port (default: 8081)');
-  console.log('  --build, -B               Force rebuild backend');
-  console.log('  --backend, -b <url>       Backend URL (run mode)');
-  console.log('  --ws <url>                WebSocket URL (run mode)');
+  console.log('  -p, --port <port>         HTTP port (default: 8080, WS auto: port+1)');
+  console.log('  -B, --build               Force rebuild backend');
+  console.log('  -b, --backend <url>       Backend URL (run mode, WS auto-derived)');
+  console.log('  --ws <url>                Override WebSocket URL');
   console.log('');
   console.log('Environment:');
   console.log('  JWCODE_THEME=dark|light   Color theme (default: dark)');
@@ -53,7 +73,6 @@ function parseArgs(): Record<string, string | boolean> {
     const arg = argv[i];
     if (arg === '--build' || arg === '-B') args.build = true;
     else if (arg === '--port' || arg === '-p') args.port = argv[++i];
-    else if (arg === '--ws-port') args['ws-port'] = argv[++i];
     else if (arg === '--backend' || arg === '-b') args.backend = argv[++i];
     else if (arg === '--ws') args.ws = argv[++i];
     else if (!arg.startsWith('-')) args._cmd = arg;
@@ -63,7 +82,7 @@ function parseArgs(): Record<string, string | boolean> {
 
 async function cmdStart(args: Record<string, string | boolean>): Promise<void> {
   const port = parseInt(String(args.port || '8080'), 10);
-  const wsPort = parseInt(String(args['ws-port'] || '8081'), 10);
+  const wsPort = port + 1; // WS port auto-derived from HTTP port
   const build = !!args.build;
 
   const root = findProjectRoot();
@@ -130,9 +149,18 @@ async function cmdRun(args: Record<string, string | boolean>): Promise<void> {
     process.exit(1);
   }
 
+  // Enable bracketed paste mode so the terminal wraps pasted content
+  // in \e[200~ ... \e[201~ markers. TextInput detects these to show a
+  // "[Pasted text #N +X chars]" summary instead of flooding the input line.
+  // Only enable if the terminal supports it (modern Windows Terminal, iTerm2, etc.)
+  if (process.env.JWCODE_NO_BRACKETED_PASTE !== '1') {
+    process.stdout.write('\x1b[?2004h');
+  }
+
   const config = loadConfig();
   const backendUrl = String(args.backend || config.backend_url);
-  const wsUrl = String(args.ws || config.ws_url);
+  // Derive WS URL from backend URL (port+1), or explicit override, or config
+  const wsUrl = String(args.ws || backendUrl.replace(/^http/, 'ws').replace(/:(\d+)/, (_, p) => ':' + (parseInt(p) + 1)) + '/ws' || config.ws_url);
 
   const { unmount, waitUntilExit } = render(
     createElement(App, {

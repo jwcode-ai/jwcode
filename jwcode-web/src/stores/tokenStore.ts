@@ -10,6 +10,23 @@ interface TokenUsage {
 
 interface TokenState {
   currentUsage: TokenUsage;
+  /** Degradation status from backend infrastructure */
+  degradation: {
+    active: boolean;
+    retryCount: number;
+    maxRetries: number;
+    mode: "normal" | "retrying" | "alternative" | "degraded" | "verifying" | "verified_fail";
+    message: string;
+    label: string;
+  } | null;
+  setDegradation: (d: {
+    active: boolean;
+    retryCount: number;
+    maxRetries: number;
+    mode: "normal" | "retrying" | "alternative" | "degraded" | "verifying" | "verified_fail";
+    message: string;
+    label: string;
+  } | null) => void;
   maxContextTokens: number;
   showTokenInfo: boolean;
   model: string;
@@ -55,6 +72,7 @@ export const useTokenStore = create<TokenState>((set, get) => ({
     estimatedCost: 0,
   },
   maxContextTokens: 1_000_000,
+  degradation: null,
   compactingUntil: 0,
   lastCompactInfo: null,
   showTokenInfo: false,
@@ -92,6 +110,8 @@ export const useTokenStore = create<TokenState>((set, get) => ({
   setModel: (model) => set({ model }),
 
   setMaxContextTokens: (max) => set({ maxContextTokens: max }),
+
+  setDegradation: (d) => set({ degradation: d }),
 
   setCompacting: (info) => set({ compactingUntil: Date.now() + 3000, lastCompactInfo: info }),
 

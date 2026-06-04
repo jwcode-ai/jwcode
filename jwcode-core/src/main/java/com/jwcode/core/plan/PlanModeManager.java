@@ -115,7 +115,10 @@ public class PlanModeManager {
         "McpAuth",
         // AgentTool 在 Plan 模式下也应禁止 — Plan 模式只做调研不做执行
         // 如果需要创建子 Agent 做调研，应通过 Orchestrator 的只读子 Agent 机制
-        "AgentTool"
+        "AgentTool",
+        "EnterPlanMode",
+        "ExitPlanMode",
+        "ExitPlanModeV2"
     );
     
     // 单例
@@ -123,6 +126,9 @@ public class PlanModeManager {
     
     // 当前模式
     private volatile Mode currentMode = Mode.NORMAL;
+
+    /** Hard lock: prevents direct API calls from bypassing Plan mode isolation. */
+    private volatile boolean planModeLocked = false;
     
     // 模式切换监听器
     private final List<ModeChangeListener> listeners = new ArrayList<>();
@@ -138,18 +144,24 @@ public class PlanModeManager {
         loadMode();
     }
     
+    /** 残留状态过期阈值（5分钟） */
+    private static final long STALE_THRESHOLD_MS = 300_000;
+
     /**
-     * 残留状态检测：如果状态文件超过 5 分钟且模式为 PLAN，自动重置为 NORMAL。
-     * 防止上次会话残留的 Plan Mode 影响本次启动。
+     * 残留状态检测：如果状态文件超过阈值且模式为 PLAN 或 ACT，自动重置为 NORMAL。
+     * 防止上次会话崩溃/异常退出导致残留的 Plan/Act Mode 影响本次启动。
+     *
+     * <p>ACT 模式残留尤其危险：autoApproveWrite=true 状态会意外批准文件写入。</p>
      */
-    private boolean isStalePlanMode() {
-        if (currentMode != Mode.PLAN) return false;
+    private boolean isStaleMode() {
+        if (currentMode == Mode.NORMAL) return false;
         try {
             if (Files.exists(stateFilePath)) {
                 long lastModified = Files.getLastModifiedTime(stateFilePath).toMillis();
                 long age = System.currentTimeMillis() - lastModified;
-                if (age > 300_000) { // 5分钟
-                    logger.warning("Plan mode state stale (" + (age / 1000) + "s old), resetting to NORMAL");
+                if (age > STALE_THRESHOLD_MS) {
+                    logger.warning(currentMode.getValue() + " mode state stale ("
+                        + (age / 1000) + "s old), resetting to NORMAL");
                     return true;
                 }
             }
@@ -199,6 +211,19 @@ public class PlanModeManager {
     /**
      * 是否处于 Act Mode
      */
+    /**
+     * Check if a tool is allowed in Plan Mode.
+     */
+    public boolean isToolAllowedInCurrentMode(ToolCategory category, SideEffect sideEffect, String toolName) {
+        if (currentMode != Mode.PLAN) return true;
+        if (PLAN_MODE_ALWAYS_BLOCKED_TOOLS.contains(toolName)) return false;
+        if (PLAN_MODE_ALWAYS_ALLOWED_TOOLS.contains(toolName)) return true;
+        if (PLAN_MODE_ALLOWED_CATEGORIES.contains(category)) return true;
+        if (PLAN_MODE_ALLOWED_SIDE_EFFECTS.contains(sideEffect)) return true;
+        return false;
+    }
+
+
     public boolean isActMode() {
         return currentMode == Mode.ACT;
     }
@@ -226,6 +251,7 @@ public class PlanModeManager {
         
         Mode previousMode = currentMode;
         currentMode = Mode.PLAN;
+        planModeLocked = true;
         saveMode();
         
         ModeChangeEvent event = new ModeChangeEvent(previousMode, Mode.PLAN, taskDescription);
@@ -250,6 +276,7 @@ public class PlanModeManager {
 
         Mode previousMode = currentMode;
         currentMode = Mode.ACT;
+        planModeLocked = false;
         saveMode();
 
         ModeChangeEvent event = new ModeChangeEvent(previousMode, Mode.ACT, summary);
@@ -264,8 +291,13 @@ public class PlanModeManager {
      * 进入 Act Mode
      */
     public synchronized boolean enterActMode() {
+        if (currentMode == Mode.PLAN && planModeLocked) {
+            logger.warning("Plan mode locked: use ExitPlanModeV2 tool to exit plan mode first.");
+            return false;
+        }
         Mode previousMode = currentMode;
         currentMode = Mode.ACT;
+        planModeLocked = false;
         saveMode();
 
         // Act 模式下自动批准文件写入，只有 bash/shell 命令需要审批
@@ -413,9 +445,13 @@ public class PlanModeManager {
                     int end = content.indexOf("\"", start + 1);
                     if (end > start + 1) {
                         String modeStr = content.substring(start + 1, end);
-                        currentMode = Mode.fromString(modeStr);
-                        // 残留检测：超过5分钟的PLAN状态自动重置
-                        if (isStalePlanMode()) {
+                        Mode loadedMode = Mode.fromString(modeStr);
+                        currentMode = loadedMode;
+                        // 残留检测：超过阈值的 PLAN/ACT 状态自动重置
+                        if (isStaleMode()) {
+                            if (currentMode == Mode.ACT) {
+                                PermissionManager.getInstance().setAutoApproveWrite(false);
+                            }
                             currentMode = Mode.NORMAL;
                             saveMode();
                         }

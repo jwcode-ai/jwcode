@@ -7,6 +7,7 @@ import { SlashCommandMenu } from '../SlashCommandMenu';
 import { FileMentionMenu } from './FileMentionMenu';
 import { useSlashCommands, SlashCommand } from '../../hooks/useSlashCommands';
 import { useInputHistory, addToHistory } from '../../hooks/useInputHistory';
+import { usePlanStore } from '../../stores/planStore';
 import { useTokenStore } from '../../stores/tokenStore';
 import { api } from '../../services/api';
 import { ContextManager } from './ContextManager';
@@ -57,6 +58,8 @@ export const ChatPanel = memo(function ChatPanel({
   messages, isGenerating, isPaused, onSend, onStop, onPause, onResume, input, setInput, sessionId,
   setActiveTab, createNewSession, clearMessages, setTheme, toggleTerminal, setLogs, setUnreadLogs,
 }: ChatPanelProps) {
+  const planMode = usePlanStore((s) => s.mode);
+  const toggleMode = usePlanStore((s) => s.toggleMode);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const isComposingRef = useRef(false);
@@ -294,6 +297,15 @@ export const ChatPanel = memo(function ChatPanel({
         <SessionTaskBoard sessionId={sessionId} />
       </div>
 
+      {/* Plan Mode Banner */}
+      {planMode === "plan" && (
+        <div className="px-3 pt-1 pb-0.5 bg-accent-purple/10 border-b border-accent-purple/20 flex items-center gap-2 text-xs">
+          <span className="text-accent-purple font-bold">Plan Mode - Read-only</span>
+          <span className="text-dark-muted">Files wont&#39;t be modified</span>
+          <button onClick={toggleMode} className="ml-auto px-2 py-0.5 text-[10px] bg-accent-green text-white rounded">Switch to Act</button>
+        </div>
+      )}
+
       {/* Input Area */}
       <div className="px-3 pb-3 pt-2 border-t border-dark-border bg-dark-surface relative shrink-0">
         {/* Slash command menu */}
@@ -308,9 +320,8 @@ export const ChatPanel = memo(function ChatPanel({
           <div className="flex-1 flex flex-col gap-1">
             <textarea
               ref={textareaRef} value={input} onChange={handleChange} onKeyDown={handleKeyDown}
-              placeholder="输入消息... Shift+Enter 换行，/ 命令，@ 引用文件，↑ 历史"
-              className="flex-1 bg-dark-bg border border-dark-border rounded-lg px-3 sm:px-4 py-2.5 sm:py-3 text-dark-text placeholder-dark-muted resize-none focus:outline-none focus:border-accent-green text-sm min-h-[40px] max-h-[40vh] transition-colors"
-              rows={1} disabled={isGenerating}
+              placeholder={planMode === "plan" ? "Plan Mode -- analysis only, switch to Act to execute" : "输入消息... Shift+Enter 换行，/ 命令，@ 引用文件，↑ 历史"}
+              rows={1} disabled={isGenerating || planMode === "plan"} className={`flex-1 bg-dark-bg border border-dark-border rounded-lg px-3 sm:px-4 py-2.5 sm:py-3 text-dark-text placeholder-dark-muted resize-none focus:outline-none focus:border-accent-green text-sm min-h-[40px] max-h-[40vh] transition-colors ${planMode === "plan" ? "opacity-60 cursor-not-allowed" : ""}`}
               onCompositionStart={() => { isComposingRef.current = true; }}
               onCompositionEnd={(e) => {
                 isComposingRef.current = false;

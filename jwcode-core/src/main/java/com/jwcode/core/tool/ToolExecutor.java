@@ -31,6 +31,9 @@ public class ToolExecutor {
     private final PermissionChecker permissionChecker;
     private final ToolExecutionListener executionListener;
     private volatile HookChain hookChain;
+    private final ConsecutiveFailureTracker failureTracker = new ConsecutiveFailureTracker();
+
+    private final PlanModeManager planModeManager = PlanModeManager.getInstance();
     
     public ToolExecutor() {
         this(ToolRegistry.createDefault(), null, null, null);
@@ -133,12 +136,18 @@ public class ToolExecutor {
             Consumer<ToolProgress<?>> onProgress) {
         
         Tool<?, ?, ?> tool = toolRegistry.getTool(toolName);
-        if (tool == null) {
+                if (tool == null) {
             return CompletableFuture.completedFuture(
                 ToolExecutionResult.error("未知工具: " + toolName)
             );
+        }        
+        // Plan Mode isolation: reject write/execute tools
+        if (!planModeManager.isToolAllowedInCurrentMode(tool.getCategory(), tool.getSideEffects().stream().findFirst().orElse(null), toolName)) {
+            return CompletableFuture.completedFuture(ToolExecutionResult.error(toolName,
+                "[Plan Mode] " + toolName + " blocked -- write/execute tools require Act Mode"));
         }
-        
+
+                
         if (!tool.isEnabled()) {
             return CompletableFuture.completedFuture(
                 ToolExecutionResult.error("工具已禁用: " + toolName)
@@ -223,23 +232,19 @@ public class ToolExecutor {
                     String askPayload = hookResult.getAskPayload();
                     logger.info("[Hook] PRE_TOOL_USE ASK: " + toolName
                         + " | " + askPayload);
-                    // 发起审批请求，等待用户决策
+                    // 发起审批请求，一直等待用户决策（不超时）
                     try {
                         String sessionId = context != null && context.getSession() != null
                             ? context.getSession().getId() : null;
                         Boolean approved = HookApprovalManager.getInstance()
-                            .requestApproval(toolName, askPayload != null ? askPayload : "", 60_000, sessionId)
-                            .get(65, java.util.concurrent.TimeUnit.SECONDS);
+                            .requestApproval(toolName, askPayload != null ? askPayload : "", -1, sessionId)
+                            .get();
                         if (approved == null || !approved) {
                             return CompletableFuture.completedFuture(
                                 ToolResult.error("用户拒绝了 Hook 审批: " + askPayload));
                         }
                         logger.info("[Hook] PRE_TOOL_USE ASK approved by user: " + toolName);
                         // 审批通过，继续执行
-                    } catch (java.util.concurrent.TimeoutException e) {
-                        logger.warning("[Hook] PRE_TOOL_USE ASK timeout: " + toolName);
-                        return CompletableFuture.completedFuture(
-                            ToolResult.error("Hook审批超时: " + askPayload));
                     } catch (Exception e) {
                         logger.warning("[Hook] PRE_TOOL_USE ASK error: " + e.getMessage());
                         return CompletableFuture.completedFuture(
@@ -264,9 +269,26 @@ public class ToolExecutor {
         // 添加完成回调
         return future.whenComplete((result, throwable) -> {
             long duration = System.currentTimeMillis() - startTime;
-            
+
             if (throwable != null) {
                 logger.severe("工具执行异常: " + toolName + " - " + throwable.getMessage());
+                // 早期退出：跟踪连续同类失败，超过阈值时注入策略切换信号
+                failureTracker.recordFailure(toolName, throwable.getMessage());
+            } else if (result != null && !result.isSuccess()) {
+                String errMsg = result.getContent() != null ? result.getContent() : "未知错误";
+                String earlyExitMsg = failureTracker.recordFailure(toolName, errMsg);
+                // 将策略切换信号注入到错误结果中，让 Agent 感知
+                if (earlyExitMsg != null) {
+                    logger.warning("[EarlyExit] Injecting strategy-change prompt for " + toolName);
+                    String currentContent = result.getContent() != null ? result.getContent() : "";
+                    result.setContent(currentContent + earlyExitMsg);
+                }
+            } else {
+                // 成功则重置该工具的错误计数
+                failureTracker.recordSuccess(toolName);
+            }
+
+            if (throwable != null) {
                 if (executionListener != null) {
                     executionListener.onToolError(toolName, throwable, duration);
                 }
@@ -281,7 +303,7 @@ public class ToolExecutor {
         });
     }
 
-    /** 触发 POST_TOOL_USE 或 POST_TOOL_USE_FAILURE Hook */
+    /** 触发 POST_TOOL_USE 或 POST_TOOL_USE_FAILURE Hook，并将 hook contextOutput 注入工具结果 */
     private void triggerPostHook(String toolName, ToolExecutionContext context,
                                   ToolResult<?> result, Throwable error) {
         if (hookChain == null) return;
@@ -305,7 +327,19 @@ public class ToolExecutor {
             }
             logger.info("[Hook] POST_TOOL_USE: " + toolName
                 + (error != null ? " FAILURE" : " OK"));
-            hookChain.execute(hookCtx);
+            HookResult hookResult = hookChain.execute(hookCtx);
+
+            // 将 Hook 的 contextOutput 注入工具结果，使 Agent 能"看到"外部信号
+            if (hookResult != null && hookResult.hasContextOutput() && result != null) {
+                String injection = com.jwcode.core.hook.HookContextInjector.fromResult(
+                    hookResult, "PostToolUse");
+                if (!injection.isEmpty()) {
+                    String currentContent = result.getContent() != null ? result.getContent() : "";
+                    result.setContent(currentContent + injection);
+                    logger.fine("[Hook] Injected contextOutput from " + hookResult.getHookName()
+                        + " into tool result for " + toolName);
+                }
+            }
         } catch (Exception e) {
             logger.fine("[Hook] Post-hook error (ignored): " + e.getMessage());
         }

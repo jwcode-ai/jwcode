@@ -145,6 +145,47 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
                   - 使用 /bin/bash 执行命令
                   - 常用命令: ls, cat, grep, find, chmod, chown 等
                
+
+                3. Python 命令（跨平台通用）：
+                   - 可直接执行 Python 代码（无需文件）
+                   - 快速计算: python -c "print(2**10)"
+                   - JSON 处理: python -c "import json,sys; print(json.dumps(json.load(sys.stdin), indent=2))" < data.json
+                   - 文本加工: type file.txt | python -c "import sys; [print(l.strip()) for l in sys.stdin]"
+                   - 运行 Python 脚本: python script.py arg1 arg2
+                   - 提示：复杂逻辑优先用 Python 而非混合 shell 管道
+
+                4. Node.js 命令：
+                   - 运行 JavaScript: node script.js
+                   - 内联 JS: node -e "console.log(JSON.parse(require('fs').readFileSync('data.json','utf8')))"
+                   - 安装依赖: npm install <package>
+                   - 运行脚本: npm run <script>
+                   - 一次性运行: npx <package> [args]
+
+                5. Git 命令：
+                   - 状态查看: git status
+                   - 差异查看: git diff [file]
+                   - 日志查看: git log --oneline -10
+                   - 分支列表: git branch -a
+                   - 提交: git add -A && git commit -m "msg"
+
+                6. HTTP 请求：
+                   - GET: curl https://api.example.com
+                   - POST: curl -X POST -H "Content-Type: application/json" -d '{"key":"value"}' https://api.example.com
+                   - 下载文件: curl -o output.zip https://example.com/file.zip
+                   - 本地服务测试: curl http://localhost:8080/health
+
+                7. Java / Maven 命令（项目构建）：
+                   - 编译: mvn compile -pl <module> -am -q
+                   - 测试: mvn test -pl <module>
+                   - 运行单测: mvn test -Dtest=<TestClass>
+                   - 打包: mvn package -DskipTests
+                   - 运行 Java: java -jar target/*.jar
+
+                8. VS Code CLI：
+                   - 打开文件/目录: code <path>
+                   - 对比文件: code --diff <file1> <file2>
+
+
                ========================================
                智能推荐
                ========================================

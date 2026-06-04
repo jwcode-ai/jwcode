@@ -150,6 +150,10 @@ public class ShellHookExecutor implements HookExecutor {
 
     /**
      * 解析 stdout JSON 为 HookResult。
+     *
+     * <p>脚本可在 JSON 响应中附带 {@code contextOutput} 字段，内容将作为
+     * XML 标签块注入到 Agent 上下文（如 lint 结果、测试输出、git status 等）。
+     * 仅 ALLOW 决策时注入；DENY 时的 contextOutput 被忽略。</p>
      */
     private HookResult parseResult(String stdout) {
         try {
@@ -179,6 +183,10 @@ public class ShellHookExecutor implements HookExecutor {
             }
             if (decision == HookDecision.DEFER && root.has("deferToken")) {
                 builder.deferToken(root.get("deferToken").asText());
+            }
+            // contextOutput: hook stdout text to inject into agent context
+            if (root.has("contextOutput")) {
+                builder.contextOutput(root.get("contextOutput").asText());
             }
 
             return builder.build();

@@ -259,6 +259,10 @@ export type WSMessageType =
   | 'plan_complete'
   | 'plan_error'
   | 'plan_mode_change'
+  | 'plan_tasks'
+  | 'plan_task_start'
+  | 'plan_task_update'
+  | 'plan_task_result'
   // 步骤提示消息
   | 'step_prompt'
   // TodoWrite 消息
@@ -285,7 +289,12 @@ export type WSMessageType =
   // 工作区守卫控制
   | 'toggle_workspace_guard'
   // Token 用量
-  | 'token_update';
+  | 'token_update'
+  // Infrastructure & diagnostics
+  | 'degradation_update'
+  | 'doctor_result'
+  | 'context_compressed'
+  | 'notification';
 
 
 export interface WSMessage {

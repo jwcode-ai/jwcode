@@ -31,4 +31,4 @@ logs/
 eval-results/
 *.pyc
 nul
-*.json
+*.lst

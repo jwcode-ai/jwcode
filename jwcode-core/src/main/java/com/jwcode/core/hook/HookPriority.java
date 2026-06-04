@@ -83,7 +83,20 @@ public enum HookPriority {
         private ConflictResolver() {}
 
         /**
+         * 合并两个 HookResult 的 contextOutput，用换行分隔。
+         */
+        private static String mergeContextOutput(HookResult a, HookResult b) {
+            String outA = a != null && a.hasContextOutput() ? a.getContextOutput() : null;
+            String outB = b != null && b.hasContextOutput() ? b.getContextOutput() : null;
+            if (outA == null && outB == null) return null;
+            if (outA == null) return outB;
+            if (outB == null) return outA;
+            return outA + "\n---\n" + outB;
+        }
+
+        /**
          * 将新的 HookResult 合并到当前累积结果中。
+         * <p>contextOutput 在所有 Hook 间累积，不因决策覆盖而丢失。</p>
          *
          * @param accumulated 当前累积结果（可为 null 表示第一个 Hook）
          * @param next        下一个 Hook 的结果
@@ -99,37 +112,60 @@ public enum HookPriority {
 
             // 规则 1：DENY/VOID 最高优先
             if (nextDecision.isTerminal()) {
-                return next; // DENY 或 VOID 覆盖一切
+                return new HookResult.Builder(next.getDecision(), next.getHookName())
+                    .reason(next.getReason())
+                    .contextOutput(mergeContextOutput(accumulated, next))
+                    .build();
             }
             if (accDecision.isTerminal()) {
-                return accumulated; // 已拒绝，保留拒绝结果
+                return new HookResult.Builder(accumulated.getDecision(), accumulated.getHookName())
+                    .reason(accumulated.getReason())
+                    .contextOutput(mergeContextOutput(accumulated, next))
+                    .build();
             }
 
             // 规则 2：MODIFY 链式传递
             if (nextDecision == HookDecision.MODIFY) {
-                // 使用 next 的 modifiedInput 构建合并结果
-                return HookResult.modify(
-                    next.getHookName(),
-                    next.getModifiedInput(),
-                    next.getReason()
-                );
+                return new HookResult.Builder(HookDecision.MODIFY, next.getHookName())
+                    .modifiedInput(next.getModifiedInput())
+                    .reason(next.getReason())
+                    .contextOutput(mergeContextOutput(accumulated, next))
+                    .build();
             }
             if (accDecision == HookDecision.MODIFY && nextDecision == HookDecision.ALLOW) {
-                return accumulated; // 保留修改结果
+                return new HookResult.Builder(accumulated.getDecision(), accumulated.getHookName())
+                    .modifiedInput(accumulated.getModifiedInput())
+                    .reason(accumulated.getReason())
+                    .contextOutput(mergeContextOutput(accumulated, next))
+                    .build();
             }
 
             // 规则 3：ASK 覆盖 ALLOW
             if (nextDecision == HookDecision.ASK) {
-                return next;
+                return new HookResult.Builder(next.getDecision(), next.getHookName())
+                    .askPayload(next.getAskPayload())
+                    .reason(next.getReason())
+                    .contextOutput(mergeContextOutput(accumulated, next))
+                    .build();
             }
 
-            // 规则 4：DEFER 聚合（保留最后一个 DEFER token）
+            // 规则 4：DEFER 聚合
             if (nextDecision == HookDecision.DEFER) {
-                return next;
+                return new HookResult.Builder(next.getDecision(), next.getHookName())
+                    .deferToken(next.getDeferToken())
+                    .reason(next.getReason())
+                    .contextOutput(mergeContextOutput(accumulated, next))
+                    .build();
             }
 
-            // 默认：保留当前结果
-            return accumulated;
+            // 默认：保留当前结果，累积 contextOutput
+            return new HookResult.Builder(accumulated.getDecision(), accumulated.getHookName())
+                .reason(accumulated.getReason())
+                .modifiedInput(accumulated.getModifiedInput())
+                .askPayload(accumulated.getAskPayload())
+                .deferToken(accumulated.getDeferToken())
+                .contextOutput(mergeContextOutput(accumulated, next))
+                .build();
         }
 
         /**

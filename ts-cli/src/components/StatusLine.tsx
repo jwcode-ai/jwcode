@@ -1,6 +1,6 @@
 import { memo, useState, useEffect } from 'react';
 import { Box, Text } from 'ink';
-import { useAppStatusLine, useAppIsGenerating, useAppCurrentMessage } from '../hooks/useAppState.js';
+import { useAppStatusLine, useAppIsGenerating, useAppCurrentMessage, useAppDegradation, useAppPdcaPhase, useAppPlanTasks } from '../hooks/useAppState.js';
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -28,6 +28,9 @@ function formatElapsed(sec: number): string {
 export const StatusLine = memo(function StatusLine() {
   const { usage, modelName, planMode, autoMode, connected, statusText, messagesLen,
           tokenRate } = useAppStatusLine();
+  const degradation = useAppDegradation();
+  const pdcaPhase = useAppPdcaPhase();
+  const planTasks = useAppPlanTasks();
   const msgCount = messagesLen;
 
   // Local elapsed timer — avoids global state updates every second
@@ -76,6 +79,21 @@ export const StatusLine = memo(function StatusLine() {
             <Text>  </Text>
           </>
         )}
+        {pdcaPhase && (
+          <>
+            <Text backgroundColor="yellow" color="black"> {pdcaPhase} </Text>
+            <Text>  </Text>
+          </>
+        )}
+        {planTasks.length > 0 && (
+          <>
+            <Text color="cyan">{planTasks.filter(t => t.status === 'completed').length}</Text>
+            <Text dimColor>/</Text>
+            <Text color="white">{planTasks.length}</Text>
+            <Text dimColor> tasks</Text>
+            <Text>  </Text>
+          </>
+        )}
         <Text color={connColor}>{connIcon} </Text>
         <Text color="green">{model}</Text>
         <Text>  </Text>
@@ -116,6 +134,14 @@ export const StatusLine = memo(function StatusLine() {
           </>
         )}
       </Box>
+      {degradation.active && (
+        <Box height={1}>
+          <Text color="yellow" dimColor>
+            [{degradation.mode.toUpperCase()}] {degradation.message}
+            {degradation.retryCount > 0 ? ` (${degradation.retryCount}/${degradation.maxRetries})` : ''}
+          </Text>
+        </Box>
+      )}
       {statusText && statusText !== 'connecting...' && (
         <Box height={1}>
           <Text color={isError ? 'red' : 'grey'} dimColor={!isError}>

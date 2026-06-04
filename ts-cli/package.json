@@ -3,9 +3,9 @@
   "version": "3.0.0",
   "description": "JWCode — Java AI Coding Tool TypeScript CLI",
   "type": "module",
-  "main": "dist/main.js",
+  "main": "dist/cli.js",
   "bin": {
-    "jwcode": "./dist/main.js"
+    "jwcode": "./dist/cli.js"
   },
   "scripts": {
     "test": "vitest run",

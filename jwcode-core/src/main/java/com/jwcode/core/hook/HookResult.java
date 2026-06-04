@@ -35,6 +35,7 @@ public class HookResult {
     private final RollbackAction rollbackAction;
     private final long durationMs;
     private final Instant timestamp;
+    private final String contextOutput;
 
     private HookResult(Builder builder) {
         this.decision = Objects.requireNonNull(builder.decision, "decision");
@@ -46,6 +47,7 @@ public class HookResult {
         this.rollbackAction = builder.rollbackAction;
         this.durationMs = builder.durationMs;
         this.timestamp = builder.timestamp != null ? builder.timestamp : Instant.now();
+        this.contextOutput = builder.contextOutput;
     }
 
     // ==================== Getters ====================
@@ -59,6 +61,9 @@ public class HookResult {
     public RollbackAction getRollbackAction() { return rollbackAction; }
     public long getDurationMs() { return durationMs; }
     public Instant getTimestamp() { return timestamp; }
+    /** Hook stdout text to inject into agent context (wrapped in XML tags). */
+    public String getContextOutput() { return contextOutput; }
+    public boolean hasContextOutput() { return contextOutput != null && !contextOutput.isBlank(); }
 
     // ==================== 工厂方法 ====================
 
@@ -147,6 +152,7 @@ public class HookResult {
         private RollbackAction rollbackAction;
         private long durationMs;
         private Instant timestamp;
+        private String contextOutput;
 
         public Builder(HookDecision decision, String hookName) {
             this.decision = decision;
@@ -160,6 +166,8 @@ public class HookResult {
         public Builder rollbackAction(RollbackAction action) { this.rollbackAction = action; return this; }
         public Builder durationMs(long ms) { this.durationMs = ms; return this; }
         public Builder timestamp(Instant ts) { this.timestamp = ts; return this; }
+        /** Text from hook stdout to inject into agent context as an XML-tagged block. */
+        public Builder contextOutput(String output) { this.contextOutput = output; return this; }
 
         public HookResult build() {
             return new HookResult(this);

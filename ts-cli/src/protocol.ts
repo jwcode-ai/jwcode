@@ -43,6 +43,30 @@ export interface Message {
   timestamp: number;
 }
 
+export interface PlanTask {
+  id: string;
+  title: string;
+  description?: string;
+  phase: number;
+  phaseName: string;
+  agentType?: string;
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'blocked';
+  dependencies?: string[];
+  result?: string;
+  error?: string;
+  timestamp?: number;
+  duration?: number;
+}
+
+
+export interface DegradationStatus {
+  active: boolean;
+  retryCount: number;
+  maxRetries: number;
+  mode: "normal" | "retrying" | "alternative" | "degraded" | "verifying" | "verified_fail";
+  message: string;
+}
+
 export interface TokenUsage {
   promptTokens: number;
   completionTokens: number;
@@ -75,6 +99,11 @@ export const EVENT_TYPES = [
   'token_update', 'context_compressed',
   'hook_ask',
   'doctor_result',
+  'degradation_update',
+  "plan_mode_enter", "plan_mode_exit",
+  "todo_update", "todo_item_done", "todo_progress",
+  "hook_response_ack",
+  "toggle_workspace_guard",
 ] as const;
 
 export type EventType = typeof EVENT_TYPES[number];

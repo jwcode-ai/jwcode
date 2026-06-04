@@ -1,5 +1,5 @@
-/**
- * Bundle script — produces single dist/cli.js with esbuild.
+﻿/**
+ * Bundle script -- produces single dist/cli.js with esbuild.
  * Uses packages=external to avoid CJS/ESM interop issues.
  */
 import * as esbuild from 'esbuild';
@@ -13,9 +13,9 @@ await esbuild.build({
   outfile: 'dist/cli.js',
   packages: 'external',
   resolveExtensions: ['.tsx', '.ts', '.js', '.json'],
-  logLevel: 'info',
-  minify: false,
+  minify: true,
   keepNames: true,
+  logLevel: 'info',
 });
 
 console.log('[build] Bundle: dist/cli.js');

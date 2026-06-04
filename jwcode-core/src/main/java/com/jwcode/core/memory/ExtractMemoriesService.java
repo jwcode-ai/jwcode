@@ -95,8 +95,14 @@ public class ExtractMemoriesService {
         public Path filePath;
         /** 最后修改时间 */
         public Instant lastModified;
+        /** 最后验证时间 */
+        public Instant lastVerified;
         /** Token 估算 */
         public long tokenEstimate;
+        /** 为什么有这个规则/事实（用于未来判断边界情况） */
+        public String why;
+        /** 什么时候、在哪里适用这条规则 */
+        public String howToApply;
 
         /**
          * 解析 frontmatter。
@@ -106,6 +112,8 @@ public class ExtractMemoriesService {
          * name: {{slug}}
          * description: {{one-line}}
          * type: {{user|feedback|project|reference}}
+         * why: {{reason — past incident or strong preference}}
+         * how_to_apply: {{when/where this rule kicks in}}
          * ---
          * {{body}}
          * </pre>
@@ -128,6 +136,8 @@ public class ExtractMemoriesService {
                                 case "name" -> entry.name = value;
                                 case "description" -> entry.description = value;
                                 case "type" -> entry.type = MemoryType.fromString(value);
+                                case "why" -> entry.why = value;
+                                case "how_to_apply" -> entry.howToApply = value;
                             }
                         }
                     }
@@ -153,11 +163,24 @@ public class ExtractMemoriesService {
             if (type != null) {
                 sb.append("type: ").append(type.value).append("\n");
             }
+            if (why != null && !why.isEmpty()) {
+                sb.append("why: ").append(why).append("\n");
+            }
+            if (howToApply != null && !howToApply.isEmpty()) {
+                sb.append("how_to_apply: ").append(howToApply).append("\n");
+            }
             sb.append("---\n");
             if (body != null && !body.isEmpty()) {
                 sb.append("\n").append(body).append("\n");
             }
             return sb.toString();
+        }
+
+        /** 判断记忆是否可能过期（超过 30 天未验证）。 */
+        public boolean isPossiblyStale() {
+            if (lastVerified == null && lastModified == null) return false;
+            Instant reference = lastVerified != null ? lastVerified : lastModified;
+            return reference.isBefore(Instant.now().minus(java.time.Duration.ofDays(30)));
         }
     }
 
@@ -365,9 +388,22 @@ public class ExtractMemoriesService {
         return findRelevantMemories(query, 5);
     }
 
+    /** MEMORY.md 最大行数（对标 Claude Code：超过 200 行会被截断） */
+    private static final int MAX_MEMORY_INDEX_LINES = 200;
+
+    /** 记忆过期天数（超过此天数未验证标记为"可能过期"） */
+    private static final int MEMORY_STALE_DAYS = 30;
+
     /**
-     * 格式化记忆清单（用于注入 Fork Agent prompt）。
+     * 格式化记忆清单（用于注入 System Prompt 和 Fork Agent prompt）。
      * 对标 Claude Code 的 formatMemoryManifest()。
+     *
+     * <p>特性：</p>
+     * <ul>
+     *   <li>最多 200 行，超限时优先保留 user/feedback 类型</li>
+     *   <li>每条记忆附加创建时间和过期标记</li>
+     *   <li>接近上限时注入清理提醒</li>
+     * </ul>
      */
     public String formatMemoryManifest() {
         List<MemoryEntry> entries = scanMemories();
@@ -375,20 +411,98 @@ public class ExtractMemoriesService {
             return "(记忆目录为空)";
         }
 
+        // 排序：user/feedback 优先（更重要的个人记忆），然后 project，最后 reference
+        entries.sort((a, b) -> {
+            int priorityA = memoryTypePriority(a.type);
+            int priorityB = memoryTypePriority(b.type);
+            return Integer.compare(priorityA, priorityB);
+        });
+
         StringBuilder sb = new StringBuilder();
         sb.append("当前记忆文件清单:\n\n");
+
+        int lineCount = 0;
+        int totalEntries = entries.size();
+        int shownEntries = 0;
+        boolean truncated = false;
+
         for (MemoryEntry entry : entries) {
-            sb.append("- [").append(entry.name).append("](")
-              .append(entry.name).append(".md)");
-            if (entry.description != null && !entry.description.isEmpty()) {
-                sb.append(" — ").append(entry.description);
+            String line = formatMemoryLine(entry);
+            lineCount++;
+
+            if (lineCount > MAX_MEMORY_INDEX_LINES) {
+                truncated = true;
+                break;
             }
-            if (entry.type != null) {
-                sb.append(" (类型: ").append(entry.type.value).append(")");
-            }
-            sb.append("\n");
+            sb.append(line).append("\n");
+            shownEntries++;
         }
+
+        if (truncated) {
+            sb.append("\n⚠️ 记忆索引已满（>").append(MAX_MEMORY_INDEX_LINES)
+              .append(" 行），").append(totalEntries - shownEntries)
+              .append(" 条记忆未显示。请用 /memory 命令清理过时记忆。\n");
+        } else if (lineCount > MAX_MEMORY_INDEX_LINES * 0.8) {
+            sb.append("\n📋 记忆索引接近上限（").append(lineCount)
+              .append("/").append(MAX_MEMORY_INDEX_LINES).append(" 行），建议清理过时记忆。\n");
+        }
+
         return sb.toString();
+    }
+
+    /**
+     * 格式化单条记忆行（含新鲜度标记）。
+     */
+    private String formatMemoryLine(MemoryEntry entry) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("- [").append(entry.name).append("](")
+          .append(entry.name).append(".md)");
+
+        if (entry.description != null && !entry.description.isEmpty()) {
+            sb.append(" — ").append(entry.description);
+        }
+        if (entry.type != null) {
+            sb.append(" (类型: ").append(entry.type.value);
+            // 添加新鲜度标记
+            if (entry.isPossiblyStale()) {
+                sb.append(", ⚠️可能过期");
+            }
+            sb.append(")");
+        }
+
+        // 附加时间信息
+        if (entry.lastModified != null) {
+            sb.append(" [").append(formatTimeAgo(entry.lastModified)).append("]");
+        }
+
+        return sb.toString();
+    }
+
+    /**
+     * 格式化相对时间（如 "3天前"、"2小时前"）。
+     */
+    private String formatTimeAgo(Instant time) {
+        java.time.Duration duration = java.time.Duration.between(time, Instant.now());
+        long days = duration.toDays();
+        if (days > 0) return days + "天前";
+        long hours = duration.toHours();
+        if (hours > 0) return hours + "小时前";
+        long minutes = duration.toMinutes();
+        if (minutes > 0) return minutes + "分钟前";
+        return "刚刚";
+    }
+
+    /**
+     * 记忆类型优先级（数值越小越优先保留）。
+     */
+    private static int memoryTypePriority(MemoryType type) {
+        if (type == null) return 2;
+        return switch (type) {
+            case USER -> 0;
+            case FEEDBACK -> 0;
+            case PROJECT -> 1;
+            case REFERENCE -> 2;
+        };
     }
 
     /**
@@ -592,9 +706,10 @@ public class ExtractMemoriesService {
 
             1. 使用 Read 工具浏览现有记忆文件
             2. 使用 FileWrite 创建新记忆，使用 FileEdit 更新现有记忆
-            3. 每个记忆文件使用 frontmatter 格式（name, description, type 字段）
-            4. 更新 MEMORY.md 索引文件添加新条目
-            5. 完成后停止，不继续对话
+            3. 每个记忆文件使用 frontmatter 格式（name, description, type, why, how_to_apply 字段）
+            4. feedback 和 project 类型必须填写 why（原因）和 how_to_apply（适用条件）
+            5. 更新 MEMORY.md 索引文件添加新条目
+            6. 完成后停止，不继续对话
             """;
     }
 
@@ -614,16 +729,22 @@ public class ExtractMemoriesService {
 
             ## 文件格式
 
-            每个记忆文件使用以下 frontmatter：
+            每个记忆文件使用以下 frontmatter（feedback 和 project 类型必须填写 why 和 how_to_apply）：
             ```
             ---
             name: {{short-slug}}
             description: {{one-line summary}}
             type: {{user|feedback|project|reference}}
+            why: {{reason — past incident or strong preference}}
+            how_to_apply: {{when/where this rule kicks in}}
             ---
 
             {{memory body}}
             ```
+
+            **重要：** feedback 和 project 类型的记忆必须包含 why 和 how_to_apply 字段。
+            why 让未来的判断能理解边界情况，how_to_apply 指明适用条件。
+            没有 why 的规则是死规则 —— 无法在情境变化时判断是否还该遵守。
 
             开始分析。""",
             newMessageCount, manifest);

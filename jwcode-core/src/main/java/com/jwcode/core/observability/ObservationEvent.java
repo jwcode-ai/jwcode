@@ -55,13 +55,38 @@ public sealed interface ObservationEvent {
     /**
      * Token 使用统计 — 每次 LLM 调用的消耗
      */
-    record TokenUsage(int promptTokens, int completionTokens, String model, Instant timestamp) implements ObservationEvent {
+    record TokenUsage(
+        int promptTokens,
+        int completionTokens,
+        String model,
+        int cacheCreationInputTokens,
+        int cacheReadInputTokens,
+        Instant timestamp
+    ) implements ObservationEvent {
+        /** Backward-compatible: no cache data. */
         public TokenUsage(int promptTokens, int completionTokens, String model) {
-            this(promptTokens, completionTokens, model, Instant.now());
+            this(promptTokens, completionTokens, model, 0, 0, Instant.now());
+        }
+
+        /** Full constructor with cache data. */
+        public TokenUsage(int promptTokens, int completionTokens, String model,
+                          int cacheCreationInputTokens, int cacheReadInputTokens) {
+            this(promptTokens, completionTokens, model, cacheCreationInputTokens, cacheReadInputTokens, Instant.now());
         }
 
         public int totalTokens() {
             return promptTokens + completionTokens;
+        }
+
+        /** Total tokens that touched the cache layer (read + creation + uncached input). */
+        public int cacheTotal() {
+            return cacheReadInputTokens + cacheCreationInputTokens + promptTokens;
+        }
+
+        /** Cache read rate: read / (read + creation + uncached). 0..1, or 0 if no cache activity. */
+        public double cacheHitRate() {
+            int total = cacheTotal();
+            return total > 0 ? (double) cacheReadInputTokens / total : 0.0;
         }
     }
 

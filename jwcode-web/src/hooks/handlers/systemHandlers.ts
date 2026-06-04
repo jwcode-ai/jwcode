@@ -2,6 +2,7 @@ import { useTokenStore } from '../../stores/tokenStore';
 import { useCommandStore } from '../../stores/commandStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import wsService from '../../services/websocket';
+import { toast } from '../../stores/toastStore';
 import type { LogEntry } from '../../types';
 
 interface SystemCtx {
@@ -77,6 +78,87 @@ export function handleSystemMessage(rawType: string, rawData: any, _sessionId: s
       } catch {
         // ignore, keep old dir
       }
+      break;
+
+    case "degradation_update":
+      try {
+        const degData = typeof rawData === "string" ? JSON.parse(rawData) : (rawData || {});
+        const active = degData.active as boolean;
+        const mode = (degData.mode as string) || "normal";
+        const retryCount = Number(degData.retryCount) || 0;
+        const maxRetries = Number(degData.maxRetries) || 0;
+        const message = (degData.message as string) || "";
+
+        const modeLabels: Record<string, string> = {
+          normal: "normal",
+          retrying: "retrying",
+          alternative: "alternative model",
+          degraded: "degraded",
+          verifying: "verifying",
+          verified_fail: "verify failed",
+        };
+        const label = modeLabels[mode] || mode;
+
+        useTokenStore.getState().setDegradation({
+          active,
+          retryCount,
+          maxRetries,
+          mode: mode as any,
+          message,
+          label,
+        });
+
+        if (active) {
+          const retryInfo = retryCount > 0 ? ` (${retryCount}/${maxRetries})` : "";
+          toast.warning(message || `API Degraded: ${label}${retryInfo}`, 8000);
+          ctx.setLogs(prev => [...prev, {
+            id: `deg-${Date.now()}`,
+            level: "warn" as const,
+            source: "Infrastructure",
+            message: `Degradation: ${label} | ${message || "no details"}`,
+            timestamp: Date.now(),
+          }].slice(-500));
+        } else {
+          toast.success("API Normal");
+        }
+      } catch (e) { console.error("[WS] degradation_update parse error:", e); }
+      break;
+
+    case "doctor_result":
+      try {
+        const doctorData = typeof rawData === "string" ? JSON.parse(rawData) : (rawData || {});
+        const status = doctorData.overallStatus || doctorData.status || "unknown";
+        const healthRate = doctorData.healthRate;
+        const issues = doctorData.issues || [];
+
+        const statusLabels: Record<string, string> = {
+          healthy: "healthy",
+          degraded: "degraded",
+          unhealthy: "unhealthy",
+          unknown: "unknown",
+        };
+        const statusLabel = statusLabels[status as string] || status;
+        const healthText = typeof healthRate === "number"
+          ? ` (${Math.round(healthRate * 100)}%)`
+          : "";
+
+        if (status === "healthy") {
+          toast.success(`Doctor: ${statusLabel}${healthText}`);
+        } else {
+          toast.warning(`Doctor: ${statusLabel}${healthText}`, 10000);
+          if (issues && issues.length > 0) {
+            for (const issue of issues) {
+              ctx.setLogs(prev => [...prev, {
+                id: `doctor-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                level: "warn" as const,
+                source: "Doctor",
+                message: typeof issue === "string" ? issue : (issue.message || JSON.stringify(issue)),
+                timestamp: Date.now(),
+              }].slice(-500));
+            }
+          }
+        }
+      } catch (e) { console.error("[WS] doctor_result parse error:", e); }
       break;
   }
 }

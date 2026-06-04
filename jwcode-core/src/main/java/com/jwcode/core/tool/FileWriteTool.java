@@ -34,6 +34,18 @@ public class FileWriteTool implements Tool<FileWriteTool.Input, FileWriteTool.Ou
     public String getDescription() {
         return "写入内容到文件。支持自动创建父目录。";
     }
+
+    @Override
+    public String getNegativeGuidance() {
+        return """
+            **When NOT to use FileWriteTool:**
+            - **修改现有文件的少量内容**（几行到几十行）→ 使用 EditTool 进行精确替换，避免重写整个文件
+            - **基于 diff 的编辑**→ 考虑 FileEditTool
+            - **在文件末尾追加内容**→ 优先使用 EditTool（old_string 定位到文件末尾）
+            - **写入前未读取文件**→ 如果要修改现有文件，ALWAYS 先用 FileReadTool 读取内容，避免覆盖未读的变更
+            - **路径是目录而非文件**→ path 必须包含文件名和扩展名
+            """;
+    }
     
     @Override
     public String getPrompt() {

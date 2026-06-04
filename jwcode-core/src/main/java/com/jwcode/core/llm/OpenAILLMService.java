@@ -771,15 +771,8 @@ public class OpenAILLMService implements LLMService {
     private ObjectNode buildRequestBody(List<LLMMessage> messages, List<LLMTool> tools) {
         List<LLMMessage> filteredMessages = messages;
         
-        // 检查是否有需要截断的消息
-        if (messages.size() > MAX_MESSAGE_COUNT) {
-            log.warning("[OpenAI] Too many messages (" + messages.size() + "), filtering to " + MAX_MESSAGE_COUNT);
-            
-            filteredMessages = smartFilterMessages(messages, MAX_MESSAGE_COUNT);
-            
-            log.info("[OpenAI] Filtered to " + filteredMessages.size() + " messages (skipped " + 
-                     (messages.size() - filteredMessages.size()) + " old messages)");
-        }
+        // 主动验证并修复 tool_calls 配对完整性
+        filteredMessages = preValidateToolCalls(messages);
         
         OpenAIRequestBuilder builder = new OpenAIRequestBuilder(config.getModel())
             .temperature(config.getTemperature())
@@ -803,6 +796,74 @@ public class OpenAILLMService implements LLMService {
      * 
      * 如果截断后的消息以 tool 开头，需要向前查找对应的 assistant 消息
      */
+    /**
+     * 发送前主动验证工具调用配对完整性
+     * 双向验证：移除孤立的TOOL消息，以及移除ASSISTANT中没有对应TOOL的tool_calls
+     */
+    private List<LLMMessage> preValidateToolCalls(List<LLMMessage> messages) {
+        if (messages == null || messages.isEmpty()) return messages;
+        java.util.Set<String> assistantIds = new java.util.HashSet<>();
+        for (LLMMessage msg : messages) {
+            if (msg.getRole() == LLMMessage.Role.ASSISTANT && msg.hasToolCalls()) {
+                for (LLMMessage.ToolCall tc : msg.getToolCalls()) {
+                    if (tc.getId() != null) assistantIds.add(tc.getId());
+                }
+            }
+        }
+        java.util.List<LLMMessage> systemMsgs = new java.util.ArrayList<>();
+        java.util.List<LLMMessage> nonSystem = new java.util.ArrayList<>();
+        for (LLMMessage msg : messages) {
+            if (msg.getRole() == LLMMessage.Role.SYSTEM) systemMsgs.add(msg);
+            else nonSystem.add(msg);
+        }
+        java.util.List<LLMMessage> cleaned = new java.util.ArrayList<>();
+        for (LLMMessage msg : nonSystem) {
+            if (msg.getRole() == LLMMessage.Role.TOOL) {
+                String tid = msg.getToolCallId();
+                if (tid == null || !assistantIds.contains(tid)) {
+                    log.warning("[OpenAI] Pre-validation: removing orphaned TOOL: tool_call_id=" + tid);
+                    continue;
+                }
+            }
+            cleaned.add(msg);
+        }
+        java.util.Set<String> validToolIds = new java.util.HashSet<>();
+        for (LLMMessage msg : cleaned) {
+            if (msg.getRole() == LLMMessage.Role.TOOL && msg.getToolCallId() != null)
+                validToolIds.add(msg.getToolCallId());
+        }
+        java.util.List<LLMMessage> finalized = new java.util.ArrayList<>();
+        for (int i = 0; i < cleaned.size(); i++) {
+            LLMMessage msg = cleaned.get(i);
+            if (msg.getRole() == LLMMessage.Role.ASSISTANT && msg.hasToolCalls()) {
+                java.util.Set<String> following = new java.util.HashSet<>();
+                for (int j = i + 1; j < cleaned.size(); j++) {
+                    LLMMessage n = cleaned.get(j);
+                    if (n.getRole() == LLMMessage.Role.TOOL) {
+                        if (n.getToolCallId() != null) following.add(n.getToolCallId());
+                    } else break;
+                }
+                java.util.List<LLMMessage.ToolCall> valid = new java.util.ArrayList<>();
+                for (LLMMessage.ToolCall tc : msg.getToolCalls()) {
+                    if (tc.getId() != null && following.contains(tc.getId())) valid.add(tc);
+                    else log.warning("[OpenAI] Pre-validation: removing orphaned tool_call " + tc.getId());
+                }
+                if (valid.isEmpty()) {
+                    log.warning("[OpenAI] Pre-validation: all orphaned, converting to text-only");
+                    finalized.add(LLMMessage.assistant(msg.getContent() != null ? msg.getContent() : "", msg.getReasoningContent()));
+                } else if (valid.size() < msg.getToolCalls().size()) {
+                    log.info("[OpenAI] Pre-validation: trimmed orphaned tool_calls");
+                    finalized.add(LLMMessage.assistantWithTools(msg.getContent(), valid, msg.getReasoningContent()));
+                } else { finalized.add(msg); }
+            } else { finalized.add(msg); }
+        }
+        java.util.List<LLMMessage> result = new java.util.ArrayList<>(systemMsgs);
+        result.addAll(finalized);
+        if (result.size() != messages.size())
+            log.info("[OpenAI] Pre-validation: " + messages.size() + " -> " + result.size() + " messages");
+        return result;
+    }
+
     private List<LLMMessage> fixToolMessageSequence(
             List<LLMMessage> truncatedMessages, 
             List<LLMMessage> allMessages,

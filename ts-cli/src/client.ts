@@ -8,12 +8,18 @@ type Handler = (msg: WSMessage) => void;
 
 const PING_INTERVAL = 30000;
 const MAX_RECONNECT_DELAY = 30000;
+const MAX_RECONNECT_RETRIES = 50;
+
+function stderr(msg: string): void {
+  try { process.stderr.write(msg); } catch {}
+}
 
 export class JwCodeClient {
   private ws: WebSocket | null = null;
   private handlers = new Map<string, Set<Handler>>();
   private _running = false;
   private _reconnecting = false;
+  private _reconnectRetries = 0;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private reconnectDelay = 1000;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -38,13 +44,33 @@ export class JwCodeClient {
   async connect(): Promise<string> {
     this._running = true;
 
+    // Tear down the old socket before creating a new one — prevents stale
+    // error events on a half-dead TCP socket from crashing the process.
+    if (this.ws) {
+      try { this.ws.close(); } catch {}
+      this.ws = null;
+    }
+
     return new Promise((resolve, reject) => {
+      let settled = false;
+
+      const settle = (fn: (v: any) => void, v: any) => {
+        if (!settled) { settled = true; fn(v); }
+      };
+
       try {
         this.ws = new WebSocket(this.wsUrl);
       } catch (e) {
-        reject(e);
+        settle(reject, e);
         return;
       }
+
+      // Silence EPIPE on the raw TCP socket.  The ws library normally
+      // forwards socket errors to ws.on('error'), but there is a narrow
+      // window after a remote-close where a queued write hits EPIPE on the
+      // socket and ws has already removed its internal error listener.
+      const sock = (this.ws as any)._socket as NodeJS.EventEmitter | undefined;
+      if (sock) sock.on('error', () => {});
 
       this.ws.on('message', (raw: WebSocket.Data) => {
         let data: WSMessage;
@@ -60,25 +86,29 @@ export class JwCodeClient {
             this._startHeartbeat();
             this._startReadLoop();
             this._reconnecting = false;
+            this._reconnectRetries = 0;
             this.reconnectDelay = 1000;
-            resolve(sid);
-          }).catch(reject);
+            settle(resolve, sid);
+          }).catch(err => settle(reject, err));
           return;
         }
         if (data.type === 'auth_failed') {
-          reject(new Error(`Auth failed: ${JSON.stringify(data)}`));
+          settle(reject, new Error(`Auth failed: ${JSON.stringify(data)}`));
           return;
         }
       });
 
       this.ws.on('error', (err) => {
-        // If we haven't authenticated yet, reject so the initial connect / reconnect catch handles it
-        if (!this.sessionId) reject(err);
+        if (!this.sessionId) settle(reject, err);
         else this.dispatch({ type: 'error', data: `WebSocket error: ${err.message}` });
       });
 
       this.ws.on('close', () => {
         this._stopHeartbeat();
+        // If connect() hasn't settled yet (close before auth), reject so promise doesn't hang
+        if (!this.sessionId && !this._reconnecting) {
+          settle(reject, new Error('Connection closed before authentication'));
+        }
         if (this._running && !this._reconnecting) {
           this._startReconnect();
         }
@@ -91,7 +121,7 @@ export class JwCodeClient {
     const data = await resp.json() as Record<string, unknown>;
     const inner = (data.data as Record<string, unknown>) || {};
     const sid = (inner.sessionId as string) || (data.sessionId as string) || (data.id as string) || 'default-session';
-    console.log(`[ws] Session: ${sid}`);
+    stderr(`[ws] Session: ${sid}\n`);
     return sid;
   }
 
@@ -109,7 +139,11 @@ export class JwCodeClient {
     this._stopHeartbeat();
     this.pingTimer = setInterval(() => {
       if (this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ type: 'ping' }));
+        try {
+          this.ws.send(JSON.stringify({ type: 'ping' }));
+        } catch {
+          // Socket may have closed between the readyState check and send
+        }
       }
     }, PING_INTERVAL);
   }
@@ -120,21 +154,26 @@ export class JwCodeClient {
 
   private _startReconnect(): void {
     if (!this._running || this._reconnecting) return;
+    if (this._reconnectRetries >= MAX_RECONNECT_RETRIES) {
+      stderr(`[ws] Max reconnect retries (${MAX_RECONNECT_RETRIES}) reached, giving up.\n`);
+      this.dispatch({ type: 'error', data: 'Connection lost — max retries reached.' });
+      return;
+    }
     this._reconnecting = true;
+    this._reconnectRetries++;
 
-    // Clear any stale timer
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
 
     this.reconnectTimer = setTimeout(async () => {
       try {
-        console.log(`[ws] Reconnecting...`);
-        this.dispatch({ type: 'notification', data: 'Reconnecting...' });
+        stderr(`[ws] Reconnecting (attempt ${this._reconnectRetries})...\n`);
+        this.dispatch({ type: 'notification', data: `Reconnecting (${this._reconnectRetries})...` });
         await this.connect();
-        this._reconnecting = false;
+        // On success, _reconnecting and _reconnectRetries are reset inside connect()
         this.dispatch({ type: 'notification', data: 'Reconnected.' });
       } catch {
         this.reconnectDelay = Math.min(this.reconnectDelay * 2, MAX_RECONNECT_DELAY);
-        this._reconnecting = false; // allow next schedule
+        this._reconnecting = false;
         this._startReconnect();
       }
     }, this.reconnectDelay);

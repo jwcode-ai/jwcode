@@ -1,5 +1,9 @@
 import { useState, useRef, useCallback } from 'react';
 import { Box, Text, useInput } from 'ink';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
+import { pasteSummary } from '../pasteBuffer.js';
 
 // Rough token estimation: English ~4 chars/token, CJK ~1.5 chars/token
 function estimateTokens(text: string): number {
@@ -16,21 +20,25 @@ function estimateTokens(text: string): number {
 }
 
 const MAX_HISTORY = 30;
-const HISTORY_KEY = 'jwcode-tscli-history';
+const HISTORY_DIR = join(homedir(), '.jwcode');
+const HISTORY_FILE = join(HISTORY_DIR, 'history.json');
+
+function ensureHistoryDir() {
+  try { mkdirSync(HISTORY_DIR, { recursive: true }); } catch { /* ignore */ }
+}
 
 function loadHistory(): string[] {
   try {
-    const raw = process.env.JWCODE_HISTORY
-      || (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(HISTORY_KEY) : null);
-    return raw ? JSON.parse(raw) : [];
+    if (process.env.JWCODE_HISTORY) return JSON.parse(process.env.JWCODE_HISTORY);
+    const raw = readFileSync(HISTORY_FILE, 'utf-8');
+    return JSON.parse(raw);
   } catch { return []; }
 }
 
 function saveHistory(entries: string[]) {
   try {
-    if (typeof sessionStorage !== 'undefined') {
-      sessionStorage.setItem(HISTORY_KEY, JSON.stringify(entries));
-    }
+    ensureHistoryDir();
+    writeFileSync(HISTORY_FILE, JSON.stringify(entries), 'utf-8');
   } catch { /* ignore */ }
 }
 
@@ -54,6 +62,12 @@ export function TextInput({ value, onChange, onSubmit, placeholder, disabled }: 
   const historyRef = useRef<string[]>(loadHistory());
   const histIdxRef = useRef(-1);
   const draftRef = useRef('');
+  const cursorRef = useRef<number>(value.length);
+
+  // Sync cursor when value changes externally
+  if (cursorRef.current > value.length) {
+    cursorRef.current = value.length;
+  }
 
   const navigateHistory = useCallback((dir: 'up' | 'down'): string | null => {
     const history = historyRef.current;
@@ -88,8 +102,47 @@ export function TextInput({ value, onChange, onSubmit, placeholder, disabled }: 
     draftRef.current = '';
   }, []);
 
+  // Bracketed paste state — persists across renders via refs
+  const pasteState = useRef<{ accumulating: boolean; buf: string }>({ accumulating: false, buf: '' });
+
   useInput((input, key) => {
     if (disabled) return;
+
+    // ── bracketed paste detection ──
+    // Terminal wraps paste in \e[200~ ... \e[201~.  Ink strips the leading
+    // \e so we see "[200~" / "[201~".  Content between markers is buffered
+    // into pasteBuffer and replaced with a compact summary.
+    const PASTE_START = '[200~';
+    const PASTE_END = '[201~';
+
+    if (input.includes(PASTE_START)) {
+      pasteState.current.accumulating = true;
+      pasteState.current.buf = input.split(PASTE_START).slice(1).join(PASTE_START);
+      if (pasteState.current.buf.includes(PASTE_END)) {
+        const parts = pasteState.current.buf.split(PASTE_END);
+        pasteState.current.buf = parts[0] || '';
+        pasteState.current.accumulating = false;
+        const { label } = pasteSummary(pasteState.current.buf);
+        onChange(value + label);
+      }
+      return;
+    }
+
+    if (pasteState.current.accumulating && input.includes(PASTE_END)) {
+      const parts = input.split(PASTE_END);
+      pasteState.current.buf += parts[0] || '';
+      pasteState.current.accumulating = false;
+      const { label } = pasteSummary(pasteState.current.buf);
+      onChange(value + label);
+      return;
+    }
+
+    if (pasteState.current.accumulating) {
+      pasteState.current.buf += input;
+      return;
+    }
+
+    // ── normal input ──
 
     if (key.return) {
       onSubmit(value);
@@ -97,14 +150,23 @@ export function TextInput({ value, onChange, onSubmit, placeholder, disabled }: 
       return;
     }
 
+    if (key.leftArrow) {
+      cursorRef.current = Math.max(0, cursorRef.current - 1);
+      return;
+    }
+    if (key.rightArrow) {
+      cursorRef.current = Math.min(value.length, cursorRef.current + 1);
+      return;
+    }
+
     if (key.upArrow) {
       const hist = navigateHistory('up');
-      if (hist !== null) onChange(hist);
+      if (hist !== null) { onChange(hist); cursorRef.current = hist.length; }
       return;
     }
     if (key.downArrow) {
       const hist = navigateHistory('down');
-      if (hist !== null) onChange(hist);
+      if (hist !== null) { onChange(hist); cursorRef.current = hist.length; }
       return;
     }
 
@@ -113,11 +175,28 @@ export function TextInput({ value, onChange, onSubmit, placeholder, disabled }: 
       resetHistory();
     }
 
-    if (key.backspace || key.delete) {
-      onChange(value.slice(0, -1));
+    if (key.backspace) {
+      if (cursorRef.current > 0) {
+        var p = cursorRef.current;
+        onChange(value.slice(0, p-1) + value.slice(p));
+        cursorRef.current = p - 1;
+        resetHistory();
+      }
+      return;
+    }
+    if (key.delete) {
+      if (cursorRef.current < value.length) {
+        var p = cursorRef.current;
+        onChange(value.slice(0, p) + value.slice(p+1));
+        resetHistory();
+      }
+      return;
+    }
+    if (input && !key.ctrl && !key.meta && !key.tab && !key.escape) {
+      var p = cursorRef.current;
+      onChange(value.slice(0, p) + input + value.slice(p));
+      cursorRef.current = p + input.length;
       resetHistory();
-    } else if (input && !key.ctrl && !key.meta && !key.tab && !key.escape) {
-      onChange(value + input);
     }
   });
 
@@ -125,16 +204,28 @@ export function TextInput({ value, onChange, onSubmit, placeholder, disabled }: 
   const showPlaceholder = !display && placeholder;
   const tokenEstimate = display ? estimateTokens(display) : 0;
   const charCount = display.length;
+  const cursor = cursorRef.current;
 
   return (
     <Box flexDirection="column">
       <Box>
-        {display ? <Text>{display}</Text> : <Text dimColor>{placeholder}</Text>}
-        <Text dimColor>▊</Text>
+        {display ? (
+          <Text>
+            <Text>{value.slice(0, cursor)}</Text>
+            <Text inverse>{value[cursor] || ' '}</Text>
+            <Text>{value.slice(cursor + 1)}</Text>
+          </Text>
+        ) : (
+          <Text>
+            <Text dimColor>{placeholder}</Text>
+            <Text dimColor>▊</Text>
+          </Text>
+        )}
       </Box>
       {charCount > 0 && (
         <Box>
           <Text dimColor>  {charCount} 字符 ≈ {tokenEstimate} tokens</Text>
+          <Text dimColor>  [{cursor+1}/{charCount}]</Text>
           {tokenEstimate > 100000 && (
             <Text color="red">  ⚠ 接近上下文上限</Text>
           )}

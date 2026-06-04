@@ -11,7 +11,7 @@ interface StatusLineProps {
 }
 
 export const StatusLine = memo(function StatusLine(_props: StatusLineProps) {
-  const { currentUsage, maxContextTokens, model, tokenRate, compactingUntil, lastCompactInfo } = useTokenStore();
+  const { currentUsage, maxContextTokens, model, tokenRate, compactingUntil, lastCompactInfo, degradation } = useTokenStore();
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const isGenerating = useChatStore((s) => activeSessionId ? s.isGenerating(activeSessionId) : false);
   const [elapsed, setElapsed] = useState(0);
@@ -39,8 +39,8 @@ export const StatusLine = memo(function StatusLine(_props: StatusLineProps) {
     : 0;
 
   // Split bar: prompt vs completion proportion
-  const promptRatio = total > 0 ? prompt / total : 0;
-  const completionRatio = total > 0 ? completion / total : 0;
+  // const promptRatio = total > 0 ? prompt / total : 0;
+  // const completionRatio = total > 0 ? completion / total : 0;
 
   const formatTokens = (n: number): string => {
     if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
@@ -56,7 +56,7 @@ export const StatusLine = memo(function StatusLine(_props: StatusLineProps) {
     : '';
 
   return (
-    <div className="h-7 bg-dark-surface border-t border-dark-border flex items-center px-3 gap-3 shrink-0 select-none text-xs">
+    <div className="h-7 bg-dark-surface border-b border-dark-border flex items-center px-3 gap-3 shrink-0 select-none text-xs">
       <span className="text-accent-orange font-bold">jwcode</span>
 
       {/* Plan | Act mode selector — two always-visible buttons */}
@@ -113,18 +113,29 @@ export const StatusLine = memo(function StatusLine(_props: StatusLineProps) {
         <span className="text-dark-muted/60">/</span>
         <span>{formatTokens(maxContextTokens)}</span>
 
-        {/* Split bar: prompt (blue) + completion (green) proportion */}
-        <div className="inline-flex w-16 h-1.5 bg-dark-border rounded-full overflow-hidden ml-1 align-middle gap-0">
+        {/* Watermark bar with 70%/90% thresholds */}
+        <div className="relative inline-flex w-20 h-2 bg-dark-border rounded-full overflow-hidden ml-1 align-middle gap-0 group/token">
+          {/* Background threshold markers */}
+          <div className="absolute inset-0 flex pointer-events-none">
+            <div className="h-full border-r border-dark-text/20" style={{ width: "70%" }} />
+            <div className="h-full border-r border-dark-text/20" style={{ width: `${(90 / 70 - 1) * 100}%`, marginLeft: "70%" }} />
+          </div>
+          {/* Actual fill */}
           <div
-            className="h-full bg-accent-blue/70 transition-all duration-500"
-            style={{ width: `${Math.max(0, promptRatio * 100)}%` }}
-          />
-          <div
-            className="h-full bg-accent-green/70 transition-all duration-500"
-            style={{ width: `${Math.max(0, completionRatio * 100)}%` }}
+            className={`h-full transition-all duration-700 ${
+              usagePercent >= 90 ? "bg-accent-red/80" :
+              usagePercent >= 70 ? "bg-accent-yellow/80" :
+              usagePercent >= 50 ? "bg-accent-blue/60" :
+              "bg-accent-blue/40"
+            }`}
+            style={{ width: `${Math.min(100, usagePercent)}%` }}
           />
         </div>
-        <span className="ml-0.5 text-dark-text">{usagePercent}%</span>
+        <span className={`ml-1 font-mono text-[11px] ${
+          usagePercent >= 90 ? "text-accent-red font-bold" :
+          usagePercent >= 70 ? "text-accent-yellow" :
+          "text-dark-text"
+        }`}>{usagePercent}%</span>
       </span>
 
       {/* Cost */}
@@ -158,8 +169,26 @@ export const StatusLine = memo(function StatusLine(_props: StatusLineProps) {
         </span>
       )}
 
-      {usagePercent > 85 && (
-        <span className="text-accent-red font-bold">⚠ Budget</span>
+      {/* Watermark threshold warnings */}
+      {usagePercent >= 90 && (
+        <span className="text-accent-red font-bold animate-pulse flex items-center gap-0.5" title="Hard threshold - compaction triggered">
+          <span className="text-[10px]">⚠</span>
+          <span className="text-[11px]">90%+ Compacting</span>
+        </span>
+      )}
+      {usagePercent >= 70 && usagePercent < 90 && (
+        <span className="text-accent-yellow flex items-center gap-0.5" title="Soft threshold - compaction advised">
+          <span className="text-[10px]">⚠</span>
+          <span className="text-[11px]">70%+ Watch</span>
+        </span>
+      )}
+
+      {/* Degradation indicator */}
+      {degradation && degradation.active && (
+        <span className="text-accent-orange flex items-center gap-0.5" title={`${degradation.label}${degradation.retryCount > 0 ? ` (${degradation.retryCount}/${degradation.maxRetries})` : ""}: ${degradation.message}`}>
+          <span className="text-[10px]">⚠</span>
+          <span className="text-[11px]">{degradation.label}{degradation.retryCount > 0 ? ` ${degradation.retryCount}/${degradation.maxRetries}` : ""}</span>
+        </span>
       )}
     </div>
   );

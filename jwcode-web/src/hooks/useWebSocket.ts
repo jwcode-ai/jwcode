@@ -75,7 +75,7 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
     }
 
     // System messages
-    if (['token_update', 'auth_required', 'auth_success', 'auth_failed', 'log', 'commands_list', 'ping', 'workspace_changed'].includes(rawType)) {
+    if (['token_update', 'auth_required', 'auth_success', 'auth_failed', 'log', 'commands_list', 'ping', 'workspace_changed', 'degradation_update', 'doctor_result'].includes(rawType)) {
       handleSystemMessage(rawType, rawData, sessionId, { activeTab, setLogs, setUnreadLogs });
       return;
     }

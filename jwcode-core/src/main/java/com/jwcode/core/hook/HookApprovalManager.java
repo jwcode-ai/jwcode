@@ -4,7 +4,6 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
 
@@ -15,13 +14,16 @@ import java.util.logging.Logger;
  * 审批管理器维护一个 pending 审批映射，前端通过 WebSocket 发送
  * {@code hook_allow}/{@code hook_deny} 来驱动审批决策。</p>
  *
+ * <p>v3.0 特性：审批指纹缓存。已批准的脚本指纹自动放行，
+ * 避免 AI Agent 循环中重复的只读命令反复打断用户。</p>
+ *
  * <h3>使用方式</h3>
  * <pre>{@code
  * // ToolExecutor 中：
  * HookApprovalManager mgr = HookApprovalManager.getInstance();
  * mgr.setWebSocketBroadcaster(sessionId -> wsServer.broadcastToSession(...));
  * CompletableFuture<Boolean> approval = mgr.requestApproval(
- *     toolName, askPayload, 60_000);
+ *     toolName, askPayload, -1);
  * boolean approved = approval.get();
  * }</pre>
  *
@@ -56,11 +58,17 @@ public class HookApprovalManager {
     /** pending 审批映射：approvalId → ApprovalRequest */
     private final Map<String, ApprovalRequest> pendingApprovals = new ConcurrentHashMap<>();
 
+    /** 审批指纹缓存：fingerprint → 过期时间戳(epochMs)，60分钟TTL */
+    private final Map<String, Long> fingerprintCache = new ConcurrentHashMap<>();
+
+    /** 指纹缓存 TTL（毫秒） */
+    private static final long FINGERPRINT_TTL_MS = 60 * 60 * 1000;
+
     /** WebSocket 广播回调 */
     private volatile Consumer<ApprovalRequest> wsBroadcaster;
 
-    /** 默认审批超时（毫秒），超时后自动拒绝 */
-    private volatile long defaultTimeoutMs = 60_000;
+    /** 默认审批超时（毫秒），≤0 表示不超时一直等待 */
+    private volatile long defaultTimeoutMs = -1;
 
     private HookApprovalManager() {}
 
@@ -77,18 +85,55 @@ public class HookApprovalManager {
     }
 
     /**
-     * 设置默认审批超时。
+     * 设置默认审批超时。≤0 表示不超时（一直等待用户响应）。
      */
     public void setDefaultTimeoutMs(long timeoutMs) {
         this.defaultTimeoutMs = timeoutMs;
     }
 
+    // ==================== 指纹缓存 ====================
+
     /**
-     * 发起审批请求，阻塞等待用户决策。
+     * 检查某个命令行指纹是否在60分钟TTL内被批准缓存。
+     */
+    public boolean isFingerprintCached(String fingerprint) {
+        if (fingerprint == null) return false;
+        Long expiresAt = fingerprintCache.get(fingerprint);
+        if (expiresAt == null) return false;
+        if (System.currentTimeMillis() > expiresAt) {
+            fingerprintCache.remove(fingerprint);
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * 直接缓存一个审批指纹，60分钟TTL（外部调用场景）。
+     */
+    public void cacheFingerprint(String fingerprint) {
+        if (fingerprint != null && !fingerprint.isEmpty()) {
+            fingerprintCache.put(fingerprint, System.currentTimeMillis() + FINGERPRINT_TTL_MS);
+            logger.info("[HookApproval] Fingerprint cached (60min TTL): " + truncate(fingerprint, 80));
+        }
+    }
+
+    /**
+     * 清除所有缓存的审批指纹。
+     */
+    public void clearFingerprintCache() {
+        int size = fingerprintCache.size();
+        fingerprintCache.clear();
+        logger.info("[HookApproval] Cleared " + size + " cached fingerprints");
+    }
+
+    // ==================== 审批流程 ====================
+
+    /**
+     * 发起审批请求。
      *
      * @param toolName   工具名称
      * @param askPayload ASK 载荷（展示给用户的提示信息）
-     * @param timeoutMs  超时（毫秒），≤0 使用默认值
+     * @param timeoutMs  超时（毫秒），≤0 表示不超时一直等待
      * @return true=允许, false=拒绝
      */
     public CompletableFuture<Boolean> requestApproval(String toolName, String askPayload, long timeoutMs) {
@@ -103,39 +148,63 @@ public class HookApprovalManager {
         CompletableFuture<Boolean> future = new CompletableFuture<>();
         ApprovalRequest request = new ApprovalRequest(id, toolName, askPayload, future, sessionId);
 
+        // 如果设置了有效超时（>0），挂载超时自动拒绝
         long effectiveTimeout = timeoutMs > 0 ? timeoutMs : defaultTimeoutMs;
-
-        // 设置超时自动拒绝
-        future.orTimeout(effectiveTimeout, TimeUnit.MILLISECONDS)
-            .exceptionally(ex -> {
-                logger.warning("[HookApproval] Timeout for " + id + " (" + toolName + "), auto-deny");
-                pendingApprovals.remove(id);
-                return false;
-            });
+        if (effectiveTimeout > 0) {
+            future.orTimeout(effectiveTimeout, java.util.concurrent.TimeUnit.MILLISECONDS)
+                .exceptionally(ex -> {
+                    logger.warning("[HookApproval] Timeout for " + id + " (" + toolName + "), auto-deny");
+                    pendingApprovals.remove(id);
+                    return false;
+                });
+        }
+        // effectiveTimeout ≤ 0: 不设超时，一直等待用户（由 session 断开等外部机制兜底）
 
         pendingApprovals.put(id, request);
         logger.info("[HookApproval] Pending: " + id + " | " + toolName
-            + (sessionId != null ? " | session=" + sessionId : ""));
+            + (sessionId != null ? " | session=" + sessionId : "")
+            + (effectiveTimeout > 0 ? " | timeout=" + effectiveTimeout + "ms" : " | no-timeout"));
 
-        // 通过 WebSocket 通知前端
+        // 通过 WebSocket 通知前端（Web 模式）
         if (wsBroadcaster != null) {
             try {
                 wsBroadcaster.accept(request);
             } catch (Exception e) {
                 logger.warning("[HookApproval] Broadcast failed: " + e.getMessage());
             }
+            return future;
         }
 
+        // CLI fallback：无 WebSocket 前端时，通过 stdin/stdout 交互
+        logger.warning("[HookApproval] No WebSocket broadcaster, using CLI prompt");
+        System.out.println("\n========== Hook Approval Required ==========");
+        System.out.println("Tool: " + toolName);
+        System.out.println("Payload: " + askPayload);
+        System.out.print("Approve? (y/N): ");
+        System.out.flush();
+        try {
+            java.util.Scanner scanner = new java.util.Scanner(System.in);
+            String input = scanner.nextLine();
+            boolean approved = "y".equalsIgnoreCase(input.trim());
+            System.out.println(approved ? "Approved." : "Denied.");
+            future.complete(approved);
+        } catch (Exception e) {
+            logger.warning("[HookApproval] CLI prompt failed: " + e.getMessage());
+            future.complete(false);
+        }
         return future;
     }
 
     /**
-     * 用户批准。
+     * 用户批准 — 同时将命令指纹加入60分钟TTL缓存。
      */
     public void approve(String approvalId) {
         ApprovalRequest request = pendingApprovals.remove(approvalId);
         if (request != null) {
-            logger.info("[HookApproval] APPROVED: " + approvalId + " (" + request.toolName + ")");
+            // 缓存审批指纹（从 askPayload 中提取），60分钟内同命令免审
+            cacheFingerprintFromAskPayload(request.askPayload);
+            logger.info("[HookApproval] APPROVED: " + approvalId + " (" + request.toolName
+                + ") | fingerprint valid for 60min");
             request.future.complete(true);
         } else {
             logger.fine("[HookApproval] Unknown approval ID: " + approvalId);
@@ -181,5 +250,29 @@ public class HookApprovalManager {
      */
     public int getPendingCount() {
         return pendingApprovals.size();
+    }
+
+    // ==================== 内部方法 ====================
+
+    /**
+     * 从 hook 编码的 askPayload 中提取指纹并缓存（60分钟TTL）。
+     * BashSafetyHook 编码格式: {@code fingerprint + "\n---\n" + displayText}
+     */
+    private void cacheFingerprintFromAskPayload(String askPayload) {
+        if (askPayload == null || askPayload.isEmpty()) return;
+        int separatorIdx = askPayload.indexOf("\n---\n");
+        if (separatorIdx > 0) {
+            String fingerprint = askPayload.substring(0, separatorIdx);
+            if (!fingerprint.isEmpty()) {
+                fingerprintCache.put(fingerprint, System.currentTimeMillis() + FINGERPRINT_TTL_MS);
+                logger.info("[HookApproval] Fingerprint cached from approval (60min TTL): "
+                    + truncate(fingerprint, 80));
+            }
+        }
+    }
+
+    private static String truncate(String s, int maxLen) {
+        if (s == null) return "";
+        return s.length() <= maxLen ? s : s.substring(0, maxLen) + "...";
     }
 }

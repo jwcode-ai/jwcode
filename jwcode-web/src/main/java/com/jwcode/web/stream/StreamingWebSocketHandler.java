@@ -213,6 +213,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         
         // 初始化 TodoWriteBroadcaster（接线待办状态广播）
         initTodoWriteBroadcaster();
+        initHookApprovalBroadcaster();
     }
     
     /**
@@ -1512,7 +1513,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
 
             java.util.concurrent.CompletableFuture<com.jwcode.core.tool.ToolExecutor.ToolExecutionResult> future =
                 toolExecutor.execute(toolName, argsNode, context);
-            com.jwcode.core.tool.ToolExecutor.ToolExecutionResult execResult = future.get(60, TimeUnit.SECONDS);
+            com.jwcode.core.tool.ToolExecutor.ToolExecutionResult execResult = future.get();
             
             if (execResult != null && execResult.isSuccess()) {
                 com.jwcode.core.tool.ToolResult<?> toolResult = execResult.getResult();
@@ -1531,8 +1532,6 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                 String errorMsg = execResult != null ? execResult.getErrorMessage() : "Execution failed";
                 return "Error: " + errorMsg;
             }
-        } catch (java.util.concurrent.TimeoutException e) {
-            return "Error: Tool execution timed out after 60 seconds";
         } catch (Exception e) {
             return "Error: " + e.getMessage();
         }
@@ -2801,6 +2800,44 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     /**
      * 客户端消息结构
      */
+
+    private void initHookApprovalBroadcaster() {
+        try {
+            com.jwcode.core.hook.HookApprovalManager.getInstance().setWebSocketBroadcaster(request -> {
+                String sid = request.sessionId;
+                if (sid != null) {
+                    WebSocket conn = activeSessionConnections.get(sid);
+                    if (conn != null && conn.isOpen()) sendHookApproval(conn, request);
+                    return;
+                }
+                for (var entry : activeSessionConnections.entrySet()) {
+                    WebSocket conn = entry.getValue();
+                    if (conn != null && conn.isOpen()) sendHookApproval(conn, request);
+                }
+            });
+            logger.info("HookApproval broadcaster wired to WebSocket");
+        } catch (Exception e) {
+            logger.warning("Failed to wire HookApproval broadcaster: " + e.getMessage());
+        }
+    }
+
+    private void sendHookApproval(WebSocket conn, com.jwcode.core.hook.HookApprovalManager.ApprovalRequest req) {
+        try {
+            var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            var dataNode = mapper.createObjectNode();
+            dataNode.put("approvalId", req.id);
+            dataNode.put("toolName", req.toolName);
+            dataNode.put("askPayload", req.askPayload != null ? req.askPayload : "");
+            dataNode.put("createdAt", req.createdAt);
+            var msgNode = mapper.createObjectNode();
+            msgNode.put("type", "hook_ask");
+            msgNode.set("data", dataNode);
+            conn.send(mapper.writeValueAsString(msgNode));
+        } catch (Exception e) {
+            logger.warning("Failed to send hook approval: " + e.getMessage());
+        }
+    }
+
     private static class ClientMessage {
         String type;
         String sessionId;

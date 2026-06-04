@@ -46,6 +46,9 @@ public interface Tool<I, O, P> {
     default String getPrompt() {
         return getDescription();
     }
+
+    default String getNegativeGuidance() { return ""; }
+    default String getDisciplineRules() { return ""; }
     
     /**
      * 获取输入参数的 JSON Schema

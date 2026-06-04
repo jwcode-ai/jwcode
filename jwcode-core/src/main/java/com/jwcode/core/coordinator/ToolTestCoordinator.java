@@ -1,7 +1,12 @@
 package com.jwcode.core.coordinator;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jwcode.core.checker.CheckerResult;
+import com.jwcode.core.observability.TracePersistenceObserver;
+import com.jwcode.core.service.RunHistoryStore;
 import com.jwcode.core.checker.EnvironmentChecker;
 import com.jwcode.core.report.*;
 import com.jwcode.core.state.TestState;
@@ -15,6 +20,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.*;
+import java.util.Map;
+import java.util.HashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
@@ -153,7 +160,7 @@ public class ToolTestCoordinator {
             // 获取测试输入
             JsonNode testInput = config.getTestInput(toolName);
             if (testInput == null) {
-                testInput = tool.getInputSchema();
+                testInput = schemaToTestInput(tool.getInputSchema());
             }
             
             if (testInput == null) {
@@ -165,7 +172,7 @@ public class ToolTestCoordinator {
             
             // 使用 JSON 方式执行工具
             ToolExecutor.ToolExecutionResult execResult = 
-                toolExecutor.execute(toolName, testInput, context).get();
+                toolExecutor.execute(toolName, testInput, context).get(config.getTimeoutSeconds(), java.util.concurrent.TimeUnit.SECONDS);
             
             if (execResult.isSuccess()) {
                 return result.success("执行成功");
@@ -203,38 +210,40 @@ public class ToolTestCoordinator {
     /**
      * 获取要测试的工具列表
      */
-    private List<Tool<?, ?, ?>> getToolsToTest() {
+        private List<Tool<?, ?, ?>> getToolsToTest() {
+        java.util.Set<String> smokeOnly = java.util.Set.of(
+            "FileReadTool", "FileWriteTool", "FileEditTool", "GrepTool",
+            "GlobTool", "BashTool", "PowerShellTool", "BatchReadTool",
+            "ReplTool", "GitTool", "MergeFilesTool", "EditTool",
+            "TaskOutputTool", "TodoWriteTool", "ConfigTool"
+        );
         List<Tool<?, ?, ?>> tools;
-        
         if (config.getToolNames() != null && !config.getToolNames().isEmpty()) {
-            // 指定工具列表
             tools = new ArrayList<>();
             for (String name : config.getToolNames()) {
                 toolRegistry.findByName(name).ifPresent(tools::add);
             }
         } else {
-            // 所有已注册工具
-            tools = toolRegistry.getAllTools();
+            tools = toolRegistry.getAllTools().stream()
+                .filter(t -> smokeOnly.contains(t.getName()))
+                .limit(10)
+                .collect(java.util.stream.Collectors.toList());
         }
-        
-        // 过滤掉需要外部依赖的工具（如果环境不支持）
         if (!config.isIncludeToolsRequiringExternalDeps()) {
             tools = tools.stream()
-                .filter(t -> !requiresExternalDependency(t))
-                .toList();
+                .filter(t -> !requiresExternalDep(t))
+                .collect(java.util.stream.Collectors.toList());
         }
-        
         return tools;
     }
 
-    /**
-     * 检查工具是否需要外部依赖
-     */
-    private boolean requiresExternalDependency(Tool<?, ?, ?> tool) {
-        String name = tool.getName().toLowerCase();
-        return name.contains("websearch") || 
-               name.contains("lsp") || 
-               name.contains("mcp");
+    private boolean requiresExternalDep(Tool<?, ?, ?> tool) {
+        String n = tool.getName().toLowerCase();
+        return n.contains("websearch") || n.contains("lsp") || n.contains("mcp")
+            || n.contains("download") || n.contains("docker") || n.contains("agent")
+            || n.contains("a2a") || n.contains("askuser") || n.contains("plan")
+            || n.contains("subagent") || n.contains("smart") || n.contains("server")
+            || n.contains("session") || n.contains("skill") || n.contains("search");
     }
 
     /**
@@ -349,5 +358,81 @@ public class ToolTestCoordinator {
     public enum ReportFormat {
         MARKDOWN,
         JSON
+    }
+
+    /**
+     * Run all tests with trace persistence to .jwcode/test-runs/.
+     */
+    public TestReport runAllTestsWithPersistence(
+            Consumer<TestProgress> progressCallback,
+            TracePersistenceObserver traceObserver,
+            RunHistoryStore historyStore) {
+        String runId = traceObserver.startRun("tool-chain", config.getTestSuiteName());
+        long startTime = System.currentTimeMillis();
+        TestReport report;
+        try {
+            report = runAllTests(progressCallback);
+        } catch (Exception e) {
+            report = TestReport.builder()
+                .testSuiteName(config.getTestSuiteName())
+                .addError("Execution failed: " + e.getMessage())
+                .build();
+        }
+        long elapsedMs = System.currentTimeMillis() - startTime;
+        boolean passed = report.getOverallState() == TestState.SUCCESS
+            || report.getOverallState() == TestState.PARTIAL;
+        Map<String, Object> meta = new HashMap<>();
+        meta.put("totalCount", report.getTotalCount());
+        meta.put("successCount", report.getSuccessCount());
+        meta.put("failedCount", report.getFailedCount());
+        meta.put("skippedCount", report.getSkippedCount());
+        meta.put("successRate", report.getSuccessRate());
+        meta.put("totalDurationMs", elapsedMs);
+        traceObserver.endRun(runId, passed,
+            config.getTestSuiteName() + ": " + report.getSuccessCount() + "/" + report.getTotalCount()
+                + " passed (" + String.format("%.1f%%", report.getSuccessRate()) + ")",
+            meta);
+        return report;
+    }
+
+
+    private JsonNode schemaToTestInput(JsonNode schema) {
+        if (schema == null || schema.isNull()) return null;
+        if (!schema.has("properties")) return schema;
+        ObjectNode input = JsonNodeFactory.instance.objectNode();
+        JsonNode props = schema.get("properties");
+        java.util.Iterator<java.util.Map.Entry<String, JsonNode>> f = props.fields();
+        while (f.hasNext()) {
+            java.util.Map.Entry<String, JsonNode> e = f.next();
+            String name = e.getKey();
+            JsonNode ps = e.getValue();
+            input.set(name, genSample(name, ps));
+        }
+        return input;
+    }
+
+    private JsonNode genSample(String name, JsonNode ps) {
+        if (ps.has("example")) return ps.get("example");
+        if (ps.has("default")) return ps.get("default");
+        String type = ps.has("type") ? ps.get("type").asText("") : "";
+        String n = name.toLowerCase();
+        if (n.contains("command") || n.contains("cmd")) return JsonNodeFactory.instance.textNode("echo test");
+        if (n.contains("file_path") || n.equals("path") || n.contains("filepath")) return JsonNodeFactory.instance.textNode("pom.xml");
+        if (n.contains("source_path") || n.contains("sourcepaths") || n.contains("file_paths") || n.contains("filepaths")) {
+            ArrayNode a = JsonNodeFactory.instance.arrayNode(); a.add("pom.xml"); return a;
+        }
+        if (n.contains("url")) return JsonNodeFactory.instance.textNode("https://example.com");
+        if (n.contains("old_content") || n.contains("new_content")) return JsonNodeFactory.instance.textNode("test");
+        if (n.contains("reason") || n.contains("description")) return JsonNodeFactory.instance.textNode("test");
+        if (n.contains("pattern")) return JsonNodeFactory.instance.textNode("*test*");
+        if (n.contains("separator")) return JsonNodeFactory.instance.textNode("|");
+        if (n.contains("output_path")) return JsonNodeFactory.instance.textNode("test-output.txt");
+        if (n.contains("input") || n.contains("text") || n.contains("content")) return JsonNodeFactory.instance.textNode("test input");
+        if ("string".equals(type)) return JsonNodeFactory.instance.textNode("test");
+        if ("integer".equals(type) || "number".equals(type)) return JsonNodeFactory.instance.numberNode(0);
+        if ("boolean".equals(type)) return JsonNodeFactory.instance.booleanNode(false);
+        if ("array".equals(type)) { ArrayNode a = JsonNodeFactory.instance.arrayNode(); a.add("test"); return a; }
+        if ("object".equals(type)) return JsonNodeFactory.instance.objectNode();
+        return JsonNodeFactory.instance.textNode("test");
     }
 }

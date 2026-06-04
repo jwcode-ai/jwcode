@@ -35,46 +35,23 @@ public class ChatHandler implements HttpHandler {
         }
     }
     
-    private void handleChat(HttpExchange exchange) throws IOException {
-        try {
-            // 读取请求体
-            String body = readRequestBody(exchange);
-            ObjectNode json = objectMapper.readValue(body, ObjectNode.class);
-            
-            String message = json.get("message").asText();
-            String sessionId = json.has("sessionId") ? json.get("sessionId").asText() : "default";
-            
-            // 处理消息（简化实现）
-            ObjectNode response = objectMapper.createObjectNode();
-            response.put("success", true);
-            response.put("message", "收到: " + message);
-            response.put("sessionId", sessionId);
-            
-            sendJsonResponse(exchange, 200, response);
-            
-        } catch (Exception e) {
-            sendJsonResponse(exchange, 500, createError(e.getMessage()));
-        }
+        private void handleChat(HttpExchange exchange) throws IOException {
+        ObjectNode r = objectMapper.createObjectNode();
+        r.put("success", false);
+        r.put("error", "Chat requires WebSocket upgrade");
+        r.put("hint", "Use WebSocket ws://host:8081");
+        sendJsonResponse(exchange, 426, r);
     }
     
     private void handleGetHistory(HttpExchange exchange) throws IOException {
-        ObjectNode response = objectMapper.createObjectNode();
-        response.put("success", true);
-        
-        ObjectNode message1 = objectMapper.createObjectNode();
-        message1.put("role", "user");
-        message1.put("content", "你好");
-        
-        ObjectNode message2 = objectMapper.createObjectNode();
-        message2.put("role", "assistant");
-        message2.put("content", "你好！我是 JwCode Web。");
-        
-        response.putArray("messages").add(message1).add(message2);
-        
-        sendJsonResponse(exchange, 200, response);
+        ObjectNode r = objectMapper.createObjectNode();
+        r.put("success", true);
+        r.putArray("messages");
+        r.put("hint", "Session history via WebSocket");
+        sendJsonResponse(exchange, 200, r);
     }
     
-    private String readRequestBody(HttpExchange exchange) throws IOException {
+private String readRequestBody(HttpExchange exchange) throws IOException {
         try (InputStream is = exchange.getRequestBody()) {
             return new String(is.readAllBytes(), StandardCharsets.UTF_8);
         }

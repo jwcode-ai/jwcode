@@ -220,18 +220,21 @@ public class PermissionManager {
      */
     private boolean isDangerousCommand(String command) {
         String lower = command.toLowerCase();
-        String[] dangerousPatterns = {
-            "rm -rf /", "rm -rf /*", "> /dev/sda", "mkfs", 
+
+        // Literal substring patterns — safe for String.contains()
+        String[] literalPatterns = {
+            "rm -rf /", "rm -rf /*", "> /dev/sda", "mkfs",
             "dd if=/dev/zero", "chmod -r 777 /", "chown -r",
-            "curl.*\\|.*bash", "wget.*\\|.*bash",
             "sudo", ":(){ :|:& };:"
         };
-        
-        for (String pattern : dangerousPatterns) {
-            if (lower.matches(".*" + pattern + ".*") || lower.contains(pattern.replace(".*", ""))) {
-                return true;
-            }
+        for (String pattern : literalPatterns) {
+            if (lower.contains(pattern)) return true;
         }
+
+        // Regex patterns — pipe-to-shell (curl/wget | bash)
+        if (lower.matches(".*curl.*\\|.*bash.*")) return true;
+        if (lower.matches(".*wget.*\\|.*bash.*")) return true;
+
         return false;
     }
     

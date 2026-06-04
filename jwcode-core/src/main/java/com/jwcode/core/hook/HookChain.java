@@ -119,6 +119,7 @@ public class HookChain {
                 .askPayload(result.getAskPayload())
                 .deferToken(result.getDeferToken())
                 .rollbackAction(result.getRollbackAction())
+                .contextOutput(result.getContextOutput())
                 .durationMs(duration)
                 .build();
 

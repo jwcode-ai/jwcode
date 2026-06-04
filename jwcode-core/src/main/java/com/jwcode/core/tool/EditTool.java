@@ -37,34 +37,17 @@ public class EditTool implements Tool<EditTool.Input, EditTool.Output, EditTool.
     }
 
     @Override
-    public JsonNode getInputSchema() {
-        try {
-            String schema = """
-               {
-                 "type": "object",
-                 "properties": {
-                   "file_path": {"type": "string", "description": "要编辑的文件路径"},
-                   "old_string": {"type": "string", "description": "文件中存在的精确字符串，将被替换"},
-                   "new_string": {"type": "string", "description": "替换后的新字符串"}
-                 },
-                 "required": ["file_path", "old_string"]
-               }
-               """;
-            return MAPPER.readTree(schema);
-        } catch (Exception e) {
-            return null;
-        }
+    public String getNegativeGuidance() {
+        return """
+            **When NOT to use EditTool:**
+            - **创建新文件** → 使用 FileWriteTool（EditTool 需要 old_string 匹配，无法创建文件）
+            - **大范围重写文件**（超过 50% 内容）→ 使用 FileWriteTool 直接写入完整内容
+            - **基于 diff 的编辑**（语义级替换）→ 考虑 FileEditTool
+            - **old_string 不唯一**（文件中有多处匹配）→ EditTool 要求 old_string 在文件中唯一，否则编辑失败
+            - **未先读取文件** → ALWAYS 使用 FileReadTool 读取文件确认 old_string 存在后再编辑
+            """;
     }
 
-    @Override
-    public TypeReference<Input> getInputType() {
-        return new TypeReference<Input>() {};
-    }
-
-    @Override
-    public TypeReference<Output> getOutputType() {
-        return new TypeReference<Output>() {};
-    }
 
     @Override
     public CompletableFuture<ToolResult<Output>> call(

@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Wrench, Search, RefreshCw, ToggleLeft, ToggleRight, ChevronRight, ChevronDown, AlertTriangle } from 'lucide-react';
+import { Wrench, Search, RefreshCw, ToggleLeft, ToggleRight, ChevronRight, ChevronDown, AlertTriangle, Lock } from 'lucide-react';
+import { usePlanStore } from '../../stores/planStore';
 import { api, type Tool } from '../../services/api';
 
 export function ToolsView() {
+  const planMode = usePlanStore((s) => s.mode);
   const [tools, setTools] = useState<Tool[]>([]);
   const [filteredTools, setFilteredTools] = useState<Tool[]>([]);
   const [loading, setLoading] = useState(true);
@@ -173,6 +175,8 @@ export function ToolsView() {
                     {tool.category}
                   </span>
                   <span className="font-medium">{tool.name}</span>
+                  {planMode === "plan" && (tool.category === "File Operation" || tool.category === "Execution") && <Lock size={14} className="text-accent-red ml-1.5" />}
+                  {planMode === "plan" && (tool.category === "File Operation" || tool.category === "Execution") && <Lock size={14} className="text-accent-red ml-1.5" />}
                 </div>
                 
                 <div className="flex items-center gap-3">

@@ -6,7 +6,7 @@ import com.jwcode.core.a2a.model.A2ATask;
 import com.jwcode.core.a2a.model.AgentCard;
 import com.jwcode.core.a2a.model.TaskOutput;
 import com.jwcode.core.api.PlanTaskBroadcaster;
-import com.jwcode.core.config.ResourcePromptLoader;
+import com.jwcode.core.config.SystemPromptAssembler;
 import com.jwcode.core.hook.HookSystemInitializer;
 import com.jwcode.core.agent.AgentMessageBus;
 import com.jwcode.core.agent.AgentStateManager;
@@ -31,6 +31,7 @@ import com.jwcode.core.tool.ToolRegistry;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 
 import java.time.Duration;
@@ -589,6 +590,10 @@ public class EnhancedOrchestratorAgent {
                     // 真正创建并提交任务
                     TaskOutput simpleOutput = executeSingleTask(simpleAgent, analysis);
                     sb.append(formatTaskOutput(simpleOutput));
+                    // trust-but-verify: independent evaluation
+                    if (simpleOutput != null && simpleOutput.isSuccess()) {
+                        sb.append(verifySubAgentOutput(simpleOutput, analysis));
+                    }
                     break;
 
                 case MEDIUM:
@@ -652,9 +657,9 @@ public class EnhancedOrchestratorAgent {
                     TaskOutput reviewerOutput = executeSingleTask("Reviewer", analysis);
                     sb.append(formatTaskOutput(reviewerOutput));
 
-                    // 闭环2: 质量反馈 — Reviewer/Evaluator 评分低于阈值时自动注入
-                    if (coderOutput != null && reviewerOutput != null) {
-                        sb.append(evaluateAndFeedback(coderOutput, analysis));
+                    // 闭环2: trust-but-verify — 独立 Evaluator 验证子 Agent 输出
+                    if (coderOutput != null) {
+                        sb.append(verifySubAgentOutput(coderOutput, analysis));
                     }
 
                     // Phase 6: GAN 迭代循环（Generator ⇄ Evaluator）
@@ -727,7 +732,7 @@ public class EnhancedOrchestratorAgent {
      * 通过 IterativeSprintOrchestrator 驱动最多 N 轮迭代。</p>
      */
     /** 闭环2: 质量反馈 — Evaluator 评分，低于阈值自动注入反馈 */
-    private String evaluateAndFeedback(TaskOutput coderOutput, AnalysisResult analysis) {
+    private String verifySubAgentOutput(TaskOutput coderOutput, AnalysisResult analysis) {
         if (a2aFacade == null) return "";
         try {
             TaskOutput evalOutput = a2aFacade.submitTaskSync("evaluator",
@@ -1185,36 +1190,35 @@ public class EnhancedOrchestratorAgent {
     }
 
     /**
-     * 获取完整的 System Prompt
+     * Get the full system prompt via SystemPromptAssembler (v4.0).
+     * Falls back to a minimal built-in prompt if the prompt directory is unavailable.
      */
     public String getSystemPrompt() {
-        // 优先从 classpath 资源加载
-        if (ResourcePromptLoader.promptResourcesExist()) {
-            return ResourcePromptLoader.loadFullPrompt();
+        Path promptDir = SystemPromptAssembler.getDefaultPromptDir();
+        if (Files.exists(promptDir) && Files.isDirectory(promptDir)) {
+            SystemPromptAssembler assembler = new SystemPromptAssembler(promptDir, null);
+            return assembler.assemble();
         }
-
-        // 回退到内置默认值
         return buildDefaultSystemPrompt();
     }
 
     /**
-     * 获取特定角色的提示词
+     * Get a role-specific prompt snippet.
      */
     public String getRolePrompt(String roleName) {
-        String prompt = ResourcePromptLoader.loadRolePrompt(roleName);
-        if (prompt != null) return prompt;
         return "You are a " + roleName + " agent in the JWCode multi-agent system.";
     }
 
     /**
-     * 内置默认 System Prompt
+     * Minimal built-in fallback — the real prompt comes from
+     * {@code ~/.jwcode/system-prompt/core.md} via SystemPromptAssembler.
      */
     private String buildDefaultSystemPrompt() {
         return """
-            # JWCode System Prompt
+            # JWCode System Prompt v4.0
 
-            You are JWCode Orchestrator, an expert software engineering AI.
-            You NEVER execute work directly. You analyze, decompose, delegate, verify, and report.
+            You are JWCode Orchestrator, an AI coding agent with senior engineering judgment.
+            You analyze, decompose, delegate, verify, and report. You never execute work directly.
 
             ## Available Agents
             - Coder: Code writing and refactoring
@@ -1226,11 +1230,11 @@ public class EnhancedOrchestratorAgent {
             - Architect: Architecture design
 
             ## Workflow
-            1. Analyze user intent
-            2. Decompose into sub-tasks
-            3. Dispatch to appropriate agents
-            4. Verify results
-            5. Generate report
+            1. Analyze user intent and assess complexity
+            2. Decompose into sub-tasks with acceptance criteria
+            3. Dispatch to appropriate agents (parallel where possible)
+            4. Verify results against acceptance criteria
+            5. Generate structured report
             """;
     }
 

@@ -5,6 +5,8 @@ import com.jwcode.core.a2a.model.RetryPolicy;
 import com.jwcode.core.a2a.model.TaskLifecycle;
 
 import java.util.concurrent.*;
+import java.util.Map;
+import java.util.HashMap;
 import java.util.function.Supplier;
 import java.util.logging.Logger;
 
@@ -24,6 +26,9 @@ public class RetryOrchestrator {
     private static final Logger logger = Logger.getLogger(RetryOrchestrator.class.getName());
 
     private final ScheduledExecutorService scheduler;
+
+    /** Tracks consecutive failures per step for strategy escalation. */
+    private final Map<String, ConsecutiveFailureRecord> failureTracker = new HashMap<>();
 
     public RetryOrchestrator() {
         this.scheduler = Executors.newScheduledThreadPool(2, r -> {
@@ -290,6 +295,32 @@ public class RetryOrchestrator {
     }
 
     // ==================== 辅助方法 ====================
+
+    /**
+     * Tracks consecutive failures for strategy escalation.
+     * Resets on success (handled externally by clearing the map entry).
+     */
+    public static class ConsecutiveFailureRecord {
+        int consecutiveFailures = 0;
+        String lastErrorType = "UNKNOWN";
+        boolean escalated = false;
+
+        void reset() {
+            consecutiveFailures = 0;
+            lastErrorType = "UNKNOWN";
+            escalated = false;
+        }
+    }
+
+    /** Clear failure tracking for a specific step (call on success). */
+    public void clearFailureTracking(String stepId) {
+        failureTracker.remove(stepId);
+    }
+
+    /** Clear all failure tracking. */
+    public void clearAllFailureTracking() {
+        failureTracker.clear();
+    }
 
     private String classifyError(Throwable e) {
         if (e == null) return "UNKNOWN";

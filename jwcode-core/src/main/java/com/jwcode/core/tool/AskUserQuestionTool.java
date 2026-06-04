@@ -23,106 +23,92 @@ import java.util.concurrent.CompletableFuture;
  * @since 1.0.0
  */
 public class AskUserQuestionTool implements Tool<AskUserQuestionTool.Input, AskUserQuestionTool.Output, AskUserQuestionTool.Progress> {
-    
+
     public static final String NAME = "AskUserQuestion";
-    
+
     @Override
-    public String getName() {
-        return NAME;
-    }
-    
+    public String getName() { return NAME; }
+
     @Override
     public String getDescription() {
-        return "向用户提出问题以获取额外信息或澄清。当需要用户输入或确认时使用此工具。";
+        return "吢用户提出问题以获取额外信息或澄清。当需要用户输入或确认时使用此工具。";
     }
-    
+
     @Override
-    public TypeReference<Input> getInputType() {
-        return new TypeReference<Input>() {};
+    public String getPrompt() {
+        return
+            "Use AskUserQuestionTool to ask the user for input.\n" +
+            "\n" +
+            "When to ask:\n" +
+            "- Task description is ambiguous, need clarification\n" +
+            "- Multiple solutions exist, need user decision\n" +
+            "- Dangerous operation needs confirmation\n" +
+            "- Not enough info to proceed\n" +
+            "\n" +
+            "When NOT to ask:\n" +
+            "- You can find the answer by reading code or running tests\n" +
+            "- You can verify your guess yourself first\n" +
+            "- User already gave clear instructions\n" +
+            "\n" +
+            "Parameters:\n" +
+            "- question: the question text (required)\n" +
+            "- questionType: open_ended, yes_no, multiple_choice, confirm\n" +
+            "- options: list of choices (for multiple_choice)\n" +
+            "- defaultAnswer: default if user does not respond\n" +
+            "- allowEmpty: allow empty answer (default false)\n" +
+            "\n" +
+            "Best practice: ask ONE question at a time, be specific.\n";
     }
-    
+
     @Override
-    public TypeReference<Output> getOutputType() {
-        return new TypeReference<Output>() {};
-    }
-    
+    public TypeReference<Input> getInputType() { return new TypeReference<Input>() {}; }
+    @Override
+    public TypeReference<Output> getOutputType() { return new TypeReference<Output>() {}; }
+
     @Override
     public JsonNode getInputSchema() {
         return com.jwcode.core.tool.ToolSchemaGenerator.generateSchema(Input.class);
     }
-    
+
     @Override
     public JsonNode getOutputSchema() {
         return com.jwcode.core.tool.ToolSchemaGenerator.generateSchema(Output.class);
     }
-    
+
     @Override
     public CompletableFuture<ToolResult<Output>> call(
             Input args,
             ToolExecutionContext context,
             java.util.function.Consumer<ToolProgress<Progress>> onProgress) {
-        
         return CompletableFuture.supplyAsync(() -> {
             try {
-                // 检查是否为交互式会话
                 boolean isInteractive = context.isInteractive();
-                
-                if (!isInteractive) {
-                    // 非交互模式下，返回需要用户输入的标志
-                    Output output = new Output();
-                    output.question = args.question;
-                    output.questionType = args.questionType != null ? args.questionType : "open_ended";
-                    output.answer = null;
-                    output.status = "awaiting_user_input";
-                    output.message = "需要用户输入：" + args.question;
-                    return ToolResult.<Output>builder().data(output).build();
-                }
-                
-                // 交互模式下，显示问题并等待回答
-                if (onProgress != null) {
-                    onProgress.accept(new ToolProgress<>(new Progress("asking", "正在向用户提问...")));
-                }
-                
-                // 在实际实现中，这里会通过 UI 显示问题并等待用户输入
-                // 目前返回需要用户输入的标志
                 Output output = new Output();
                 output.question = args.question;
                 output.questionType = args.questionType != null ? args.questionType : "open_ended";
                 output.options = args.options;
                 output.status = "awaiting_user_input";
                 output.message = "问题：" + args.question;
-                
                 return ToolResult.<Output>builder().data(output).build();
-                
             } catch (Exception e) {
-                return ToolResult.<Output>builder()
-                        .data(createErrorOutput(args, e.getMessage()))
-                        .build();
+                return ToolResult.<Output>builder().data(createErrorOutput(args, e.getMessage())).build();
             }
         });
     }
-    
+
     private Output createErrorOutput(Input args, String error) {
         Output output = new Output();
         output.question = args.question;
         output.error = error;
         return output;
     }
-    
+
     @Override
-    public boolean isConcurrencySafe(Input input) {
-        return true;
-    }
-    
+    public boolean isConcurrencySafe(Input input) { return true; }
     @Override
-    public boolean isReadOnly(Input input) {
-        return true;
-    }
-    
-    /**
-     * 输入类
-     */
-    public static class Input {
+    public boolean isReadOnly(Input input) { return true; }
+
+public static class Input {
         public String question;
         public String questionType; // open_ended, yes_no, multiple_choice, confirm
         public String[] options;

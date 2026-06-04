@@ -60,6 +60,18 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
     public String getDescription() {
         return "创建和管理多个 Agent 进行协作。支持并行执行、任务分配、结果收集和汇总。";
     }
+
+    @Override
+    public String getNegativeGuidance() {
+        return """
+            **When NOT to use AgentTool:**
+            - **单个简单查询**（读文件、搜索、列表）→ 直接用 GlobTool / GrepTool / FileReadTool，不需要创建 Agent
+            - **单步操作**（写一个文件、运行一个命令）→ 直接用 EditTool / FileWriteTool / BashTool
+            - **需要实时交互**（Agent 创建后异步执行，不适用于需要立即响应的场景）
+            - **Plan Mode 下**→ AgentTool 在 Plan Mode 被禁用，使用 SmartAnalyzeTool / GlobTool / FileReadTool 替代
+            - **子 Agent 还能递归创建 Agent** → 子 Agent 不能再创建 Agent，设计你的任务分解时将并行度控制在第一层
+            """;
+    }
     
     @Override
     public String getPrompt() {

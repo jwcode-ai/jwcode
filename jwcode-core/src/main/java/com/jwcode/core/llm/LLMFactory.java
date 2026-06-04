@@ -227,6 +227,24 @@ public class LLMFactory {
             .build();
     }
     
+    /** 压缩专用低成本模型 ID（null = 使用主模型）。可配置以降低压缩 token 费用。 */
+    private String compactionModelId;
+
+    /**
+     * 设置压缩专用模型（如 "haiku"）。
+     * <p>压缩不需要强推理能力，使用低成本模型可显著降低 token 费用。</p>
+     */
+    public void setCompactionModelId(String modelId) {
+        this.compactionModelId = modelId;
+        if (sharedCompactorAgent != null) {
+            sharedCompactorAgent.setCompactionModel(modelId);
+        }
+    }
+
+    public String getCompactionModelId() {
+        return compactionModelId;
+    }
+
     /**
      * 获取或创建共享的 CompactorAgent（跨 LLMQueryEngine 实例复用）
      */
@@ -234,7 +252,11 @@ public class LLMFactory {
         if (sharedCompactorAgent == null) {
             sharedCompactorAgent = new com.jwcode.core.agent.CompactorAgent(
                 getLLMService(), new com.jwcode.core.service.SimpleCompactionStrategy(getLLMService()));
-            logger.info("[LLMFactory] Created shared CompactorAgent");
+            if (compactionModelId != null) {
+                sharedCompactorAgent.setCompactionModel(compactionModelId);
+            }
+            logger.info("[LLMFactory] Created shared CompactorAgent"
+                + (compactionModelId != null ? " (compaction model: " + compactionModelId + ")" : ""));
         }
         return sharedCompactorAgent;
     }

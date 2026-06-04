@@ -789,9 +789,6 @@ function App() {
           </div>
         )}
 
-        {/* Status line: 实时显示模型/Token/预算/生成状态 */}
-        <StatusLine activeTab={activeTab} />
-
         {/* Main Content Area */}
         <div className="flex-1 flex overflow-hidden min-h-0">
           <div className="flex-1 flex flex-col min-w-0 min-h-0">
@@ -943,6 +940,9 @@ function App() {
 
           </div>
         </div>
+
+        {/* Status line: 实时显示模型/Token/预算/生成状态 — 放在底部 */}
+        <StatusLine activeTab={activeTab} />
       </div>
 
       {/* Hook 审批弹窗 */}

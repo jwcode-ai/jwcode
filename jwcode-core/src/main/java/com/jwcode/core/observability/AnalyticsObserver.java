@@ -20,6 +20,8 @@ public class AnalyticsObserver implements ObservationPipeline.Observer {
     private final AtomicInteger errorCount = new AtomicInteger(0);
     private final AtomicLong totalPromptTokens = new AtomicLong(0);
     private final AtomicLong totalCompletionTokens = new AtomicLong(0);
+    private final AtomicLong totalCacheCreationTokens = new AtomicLong(0);
+    private final AtomicLong totalCacheReadTokens = new AtomicLong(0);
     private volatile Instant sessionStart;
 
     public AnalyticsObserver() {
@@ -34,6 +36,8 @@ public class AnalyticsObserver implements ObservationPipeline.Observer {
             llmCallCount.incrementAndGet();
             totalPromptTokens.addAndGet(e.promptTokens());
             totalCompletionTokens.addAndGet(e.completionTokens());
+            totalCacheCreationTokens.addAndGet(e.cacheCreationInputTokens());
+            totalCacheReadTokens.addAndGet(e.cacheReadInputTokens());
         } else if (event instanceof ObservationEvent.Error) {
             errorCount.incrementAndGet();
         } else if (event instanceof ObservationEvent.StepStart e) {
@@ -60,6 +64,8 @@ public class AnalyticsObserver implements ObservationPipeline.Observer {
             errorCount.get(),
             totalPromptTokens.get(),
             totalCompletionTokens.get(),
+            totalCacheCreationTokens.get(),
+            totalCacheReadTokens.get(),
             elapsed
         );
     }
@@ -70,6 +76,8 @@ public class AnalyticsObserver implements ObservationPipeline.Observer {
         errorCount.set(0);
         totalPromptTokens.set(0);
         totalCompletionTokens.set(0);
+        totalCacheCreationTokens.set(0);
+        totalCacheReadTokens.set(0);
         sessionStart = Instant.now();
     }
 
@@ -79,17 +87,28 @@ public class AnalyticsObserver implements ObservationPipeline.Observer {
         int errors,
         long promptTokens,
         long completionTokens,
+        long cacheCreationTokens,
+        long cacheReadTokens,
         Duration elapsed
     ) {
         public long totalTokens() {
             return promptTokens + completionTokens;
         }
 
+        public long cacheTotal() {
+            return cacheReadTokens + cacheCreationTokens + promptTokens;
+        }
+
+        public double cacheHitRate() {
+            long total = cacheTotal();
+            return total > 0 ? (double) cacheReadTokens / total : 0.0;
+        }
+
         @Override
         public String toString() {
             return String.format(
-                "ExecutionSummary{llmCalls=%d, toolCalls=%d, errors=%d, tokens=%d, elapsed=%.1fs}",
-                llmCalls, toolCalls, errors, totalTokens(), elapsed.toMillis() / 1000.0
+                "ExecutionSummary{llmCalls=%d, toolCalls=%d, errors=%d, tokens=%d, cacheHitRate=%.1f%%, elapsed=%.1fs}",
+                llmCalls, toolCalls, errors, totalTokens(), cacheHitRate() * 100, elapsed.toMillis() / 1000.0
             );
         }
     }

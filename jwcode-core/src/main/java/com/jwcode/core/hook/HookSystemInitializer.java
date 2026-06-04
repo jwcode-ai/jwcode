@@ -53,7 +53,7 @@ public class HookSystemInitializer {
 
     // ──────────── 钩子实现 ────────────
 
-    /** BashSafetyHook — 纯 Java 实现，拦截危险 shell 命令 */
+    /** BashSafetyHook — 纯 Java 实现，拦截危险 shell 命令，支持60分钟审批指纹缓存 */
     private static class BashSafetyExecutor implements HookExecutor {
         private static final Set<String> TARGET_TOOLS = Set.of("BashTool", "PowerShellTool");
 
@@ -61,7 +61,6 @@ public class HookSystemInitializer {
         public CompletableFuture<HookResult> execute(HookContext context) {
             return CompletableFuture.supplyAsync(() -> {
                 try {
-                    // 仅对目标工具生效
                     if (context.getToolName() == null
                         || !TARGET_TOOLS.contains(context.getToolName())) {
                         return HookResult.allow("BashSafetyHook");
@@ -72,9 +71,19 @@ public class HookSystemInitializer {
                         return HookResult.deny("BashSafetyHook",
                             "Dangerous command pattern detected: " + truncate(toolInput, 80));
                     }
-                    // Claude Code 风格: 所有 shell 命令需审批
-                    return HookResult.ask("BashSafetyHook",
-                        truncate(toolInput, 100), "审批 shell 命令执行");
+
+                    // 审批指纹缓存：相同命令60分钟内被批准过 → 自动放行
+                    String fingerprint = normalizeFingerprint(toolInput);
+                    if (HookApprovalManager.getInstance().isFingerprintCached(fingerprint)) {
+                        return HookResult.allow("BashSafetyHook",
+                            "Auto-approved (cached fingerprint): " + truncate(toolInput, 80));
+                    }
+
+                    // ASK 审批：将指纹编码到 askPayload 中，审批通过后在 HookApprovalManager 中自动缓存
+                    String displayText = truncate(toolInput, 100);
+                    String askPayload = fingerprint + "\n---\n" + displayText;
+                    return HookResult.ask("BashSafetyHook", askPayload,
+                        "审批 shell 命令执行");
                 } catch (Exception e) {
                     return HookResult.allow("BashSafetyHook", "Hook error, fail-open");
                 }
@@ -87,6 +96,14 @@ public class HookSystemInitializer {
         @Override public long getTimeoutMs() { return 5000; }
         @Override public boolean supportsEvent(HookEventType eventType) {
             return eventType == HookEventType.PRE_TOOL_USE;
+        }
+
+        /**
+         * 标准化命令文本为指纹：去首尾空白、压缩连续空白、转小写。
+         */
+        private static String normalizeFingerprint(String command) {
+            if (command == null) return "";
+            return command.trim().replaceAll("\\s+", " ").toLowerCase();
         }
     }
 

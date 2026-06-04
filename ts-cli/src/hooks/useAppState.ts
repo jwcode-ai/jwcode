@@ -4,7 +4,7 @@
  */
 import { useSyncExternalStore, useRef } from 'react';
 import { createStore, type Store } from '../store.js';
-import type { Message, TokenUsage } from '../protocol.js';
+import type { Message, PlanTask, TokenUsage } from '../protocol.js';
 
 export interface AppState {
   messages: Message[];
@@ -19,6 +19,9 @@ export interface AppState {
   statusText: string;
   tokenRate: number;
   toolCallsExpanded: boolean;
+  planTasks: PlanTask[];
+  pdcaPhase: string;
+  degradation: import("../protocol.js").DegradationStatus;
 }
 
 const initialState: AppState = {
@@ -34,6 +37,9 @@ const initialState: AppState = {
   statusText: 'connecting...',
   tokenRate: 0,
   toolCallsExpanded: false,
+  planTasks: [],
+  pdcaPhase: '',
+  degradation: { active: false, retryCount: 0, maxRetries: 0, mode: "normal", message: "" },
 };
 
 let _store: Store<AppState> | null = null;
@@ -58,6 +64,9 @@ const selStatusText = (s: AppState) => s.statusText;
 const selTokenRate = (s: AppState) => s.tokenRate;
 const selIsGenerating = (s: AppState) => s.currentMessage !== null;
 const selToolCallsExpanded = (s: AppState) => s.toolCallsExpanded;
+const selPlanTasks = (s: AppState) => s.planTasks;
+const selPdcaPhase = (s: AppState) => s.pdcaPhase;
+const selDegradation = (s: AppState) => s.degradation;
 
 // ChatArea compound selector: all three change together during streaming
 const selChatArea = (s: AppState) => ({
@@ -133,6 +142,9 @@ export const useAppIsGenerating = () => useAppSlice(selIsGenerating);
 export const useAppChatArea = () => useAppSlice(selChatArea);
 export const useAppStatusLine = () => useAppSlice(selStatusLine);
 export const useAppToolCallsExpanded = () => useAppSlice(selToolCallsExpanded);
+export const useAppPlanTasks = () => useAppSlice(selPlanTasks);
+export const useAppPdcaPhase = () => useAppSlice(selPdcaPhase);
+export const useAppDegradation = () => useAppSlice(selDegradation);
 
 /** @deprecated Use specific hooks (useAppMessages, useAppConnected, etc.) */
 export function useAppState(): AppState {
