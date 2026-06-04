@@ -385,6 +385,20 @@ export function useStreamHandlers(
       }
     });
 
+    client.on('compaction_progress', (_m: WSMessage) => {
+      let d: Record<string, unknown> = {};
+      if (typeof _m.data === 'string') { try { d = JSON.parse(_m.data); } catch {} }
+      else if (_m.data && typeof _m.data === 'object') { d = _m.data as Record<string, unknown>; }
+      updateAppState(prev => ({
+        ...prev,
+        compactionProgress: {
+          stage: String(d.stage || ''),
+          percent: Number(d.percent) || 0,
+          message: String(d.message || ''),
+        },
+      }));
+    });
+
     client.on('context_compressed', (_m: WSMessage) => {
       let d: Record<string, unknown> = {};
       if (typeof _m.data === 'string') { try { d = JSON.parse(_m.data); } catch {} }
@@ -397,6 +411,7 @@ export function useStreamHandlers(
         ...prev,
         statusText: 'Context compressed ' + orig + ' to ' + comp + ' messages, freed ' + tokensStr + ' tokens',
         usage: { ...prev.usage, usageRatio: Math.max(0, prev.usage.usageRatio - 0.15) },
+        compactionProgress: null,
       }));
     });
 

@@ -319,12 +319,16 @@ public class WebServer {
         
         private synchronized String getHtmlContent() {
             if (cachedHtml == null) {
-                try (var inputStream = getClass().getResourceAsStream("/web/index.html")) {
+                var resourceUrl = getClass().getResource("/web/index.html");
+                logger.info("[IndexHandler] Loading HTML from: " + resourceUrl);
+                try (var inputStream = resourceUrl != null ? resourceUrl.openStream() : null) {
                     if (inputStream == null) {
                         logger.warning("无法找到 HTML 资源文件 /web/index.html");
                         return "<html><body><h1>Error: HTML resource not found</h1></body></html>";
                     }
                     cachedHtml = new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
+                    logger.info("[IndexHandler] HTML loaded (" + cachedHtml.length() + " bytes), script: " +
+                        (cachedHtml.contains("index-") ? cachedHtml.replaceAll("(?s).*?(index-[A-Za-z0-9]+\\.js).*", "$1") : "none"));
                 } catch (IOException e) {
                     logger.severe("读取 HTML 资源文件失败: " + e.getMessage());
                     return "<html><body><h1>Error loading page</h1></body></html>";

@@ -8,6 +8,7 @@ import { JwCodeClient } from './client.js';
 import { StatusLine } from './components/StatusLine.js';
 import { ChatArea } from './components/ChatArea.js';
 import { CommandPalette } from './components/CommandPalette.js';
+import { FilePalette } from './components/FilePalette.js';
 import { ApprovalModal } from './components/ApprovalModal.js';
 import { updateAppState, useAppSlice } from './hooks/useAppState.js';
 import { createMessage } from './protocol.js';
@@ -23,9 +24,26 @@ interface AppProps {
   onExit: () => void;
 }
 
+/** Find last @ not preceded by a word char (to exclude emails). Returns index or -1. */
+function findAtTrigger(value: string): number {
+  for (let i = value.length - 1; i >= 0; i--) {
+    if (value[i] === '@') {
+      if (i > 0 && /\w/.test(value[i - 1])) continue; // email part, skip
+      return i;
+    }
+  }
+  return -1;
+}
+
 export function App({ backendUrl, wsUrl, onExit }: AppProps) {
   const [input, setInput] = useState('');
   const [showPalette, setShowPalette] = useState(false);
+  // @ file reference state
+  const [showFilePalette, setShowFilePalette] = useState(false);
+  const [fileQuery, setFileQuery] = useState('');
+  const [fileList, setFileList] = useState<string[]>([]);
+  const fileDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const referencedFilesRef = useRef<string[]>([]);
   const [showHelp, setShowHelp] = useState(false);
   const [helpScroll, setHelpScroll] = useState(0);
   const [showApproval, setShowApproval] = useState<{
@@ -139,21 +157,92 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
     }
 
     if (text.startsWith('/') && !(cmd && cmd in SLASH_COMMANDS)) return;
-    saveToHistory(text);
-    const msg = createMessage('user', text);
-    updateAppState(prev => ({ ...prev, messages: [...prev.messages, msg] }));
-    clientRef.current!.chat(text, planMode);
+    // Resolve @ file references
+    resolveAndSend(text, planMode);
   }, [onExit, planMode]);
 
+  // Resolve @-referenced file contents and send message
+  const resolveAndSend = useCallback(async (text: string, planMode: boolean) => {
+    const cl = clientRef.current;
+    if (!cl) return;
+
+    let finalText = text;
+    const files = referencedFilesRef.current;
+    referencedFilesRef.current = [];
+
+    const fileCtxs: string[] = [];
+    for (const filePath of files) {
+      try {
+        const content = await cl.readFileContent(filePath);
+        if (content) {
+          // Remove the raw path reference from the message
+          finalText = finalText.replace(filePath, '').trim();
+          const ext = filePath.split('.').pop() || '';
+          fileCtxs.push(
+            `<context ref="${filePath}">\n\`\`\`${ext}\n${content}\n\`\`\`\n</context>`
+          );
+        }
+      } catch { /* file not readable, leave path in text */ }
+    }
+    if (fileCtxs.length > 0) {
+      finalText = fileCtxs.join('\n\n') + '\n\n' + finalText.trim();
+      finalText = finalText.trim();
+    }
+
+    saveToHistory(finalText);
+    const msg = createMessage('user', finalText);
+    updateAppState(prev => ({ ...prev, messages: [...prev.messages, msg] }));
+    cl.chat(finalText, planMode);
+  }, []);
+
   const handleSubmit = useCallback((value: string) => {
-    if (showPalette) return;
+    if (showPalette || showFilePalette) return;
     executeCommand(value);
-  }, [executeCommand, showPalette]);
+  }, [executeCommand, showPalette, showFilePalette]);
 
   const handleChange = useCallback((value: string) => {
     setInput(value);
     setShowPalette(value.startsWith('/'));
+
+    // @ file reference detection: find last @ not preceded by word char
+    const atIdx = findAtTrigger(value);
+    if (atIdx >= 0) {
+      const query = value.slice(atIdx + 1);
+      // Only trigger if query looks like a file path
+      if (/^[\w.\-\\\/\s]*$/.test(query) && query.length < 200) {
+        setFileQuery(query);
+        setShowFilePalette(true);
+        // Debounced file fetch
+        if (fileDebounceRef.current) clearTimeout(fileDebounceRef.current);
+        fileDebounceRef.current = setTimeout(async () => {
+          const cl = clientRef.current;
+          if (cl) {
+            const files = await cl.listFiles(query.trim() || undefined);
+            setFileList(files);
+          }
+        }, 150);
+        return;
+      }
+    }
+    // Close file palette when no valid @ trigger
+    setShowFilePalette(false);
+    setFileQuery('');
   }, []);
+
+  const handleFileSelect = useCallback((path: string | null) => {
+    if (path) {
+      // Replace @query with file path
+      const atIdx = findAtTrigger(input);
+      if (atIdx >= 0) {
+        const newValue = input.slice(0, atIdx) + path + ' ';
+        setInput(newValue);
+        referencedFilesRef.current.push(path);
+      }
+    }
+    setShowFilePalette(false);
+    setFileQuery('');
+    setFileList([]);
+  }, [input]);
 
   const handlePaletteSelect = useCallback((cmd: string | null) => {
     if (cmd) { setInput(cmd); setShowPalette(false); }
@@ -219,6 +308,9 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
       <Box>
         {showPalette && (
           <CommandPalette filter={input} onSelect={handlePaletteSelect} />
+        )}
+        {showFilePalette && (
+          <FilePalette query={fileQuery} files={fileList} onSelect={handleFileSelect} />
         )}
         {showHelp && (() => {
           const helpLines = HELP_TEXT.split('\\n');

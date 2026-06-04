@@ -223,6 +223,37 @@ export class JwCodeClient {
   config(action: string): void { this.send('config', undefined, { action }); }
   plugin(action: string): void { this.send('plugin', undefined, { action }); }
 
+  // File API for @ file references
+  async listFiles(query?: string): Promise<string[]> {
+    try {
+      const url = query
+        ? `${this.backendUrl}/api/files?path=${encodeURIComponent(query)}`
+        : `${this.backendUrl}/api/files`;
+      const resp = await fetch(url);
+      if (!resp.ok) return [];
+      const data = await resp.json() as any;
+      // Flatten FileNode tree to path list
+      const paths: string[] = [];
+      const walk = (nodes: any[]) => {
+        for (const n of nodes) {
+          if (n.type === 'file') paths.push(n.path);
+          if (n.children) walk(n.children);
+        }
+      };
+      walk(data?.data || data || []);
+      return paths;
+    } catch { return []; }
+  }
+
+  async readFileContent(path: string): Promise<string | null> {
+    try {
+      const resp = await fetch(`${this.backendUrl}/api/files/read?path=${encodeURIComponent(path)}`);
+      if (!resp.ok) return null;
+      const data = await resp.json() as any;
+      return (data?.data || data) as string;
+    } catch { return null; }
+  }
+
   async close(): Promise<void> {
     this._running = false;
     this._reconnecting = false;

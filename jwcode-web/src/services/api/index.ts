@@ -72,6 +72,19 @@ export const api = {
     clearCompleted: () => apiClient.delete<{ deleted: number }>('/api/tasks'),
   },
 
+  // 配置相关
+  config: {
+    provider: {
+      get: () => apiClient.get<{
+        configured: boolean;
+        defaultProvider: string | null;
+        providers: Record<string, { baseUrl?: string; hasApiKey: boolean; modelCount: number; apiType?: string }>;
+      }>('/api/config/provider'),
+      save: (data: Record<string, unknown>) => apiClient.post<{ message: string }>('/api/config/provider', data),
+      delete: (providerName: string) => apiClient.post<{ message: string }>('/api/config/provider', { provider: providerName, apiKeys: [], models: [] }),
+    },
+  },
+
   // 系统状态
   system: {
     status: () => apiClient.get<{

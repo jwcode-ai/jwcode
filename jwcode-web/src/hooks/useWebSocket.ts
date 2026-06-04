@@ -69,7 +69,7 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
     if (rawType === 'todo_progress') return; // no-op
 
     // Stream messages
-    if (['start', 'content', 'thinking', 'tool_call', 'tool_result', 'complete', 'generation_paused', 'generation_resumed', 'error'].includes(rawType)) {
+    if (['start', 'content', 'thinking', 'tool_call', 'tool_result', 'complete', 'generation_paused', 'generation_resumed', 'error', 'context_compressed', 'compaction_progress'].includes(rawType)) {
       handleStreamMessage(rawType, rawData, sessionId);
       return;
     }

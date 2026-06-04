@@ -11,7 +11,7 @@ interface StatusLineProps {
 }
 
 export const StatusLine = memo(function StatusLine(_props: StatusLineProps) {
-  const { currentUsage, maxContextTokens, model, tokenRate, compactingUntil, lastCompactInfo, degradation } = useTokenStore();
+  const { currentUsage, maxContextTokens, model, tokenRate, compactingUntil, lastCompactInfo, degradation, compactionProgress } = useTokenStore();
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const isGenerating = useChatStore((s) => activeSessionId ? s.isGenerating(activeSessionId) : false);
   const [elapsed, setElapsed] = useState(0);
@@ -160,8 +160,31 @@ export const StatusLine = memo(function StatusLine(_props: StatusLineProps) {
 
       <div className="flex-1" />
 
+      {/* Compaction progress bar — shown during active compaction */}
+      {compactionProgress && (
+        <span className="flex items-center gap-2">
+          <span className="text-accent-cyan text-[11px]">
+            {compactionProgress.percent < 100 ? '🗜️' : '✅'}
+          </span>
+          <span className={`text-[11px] ${
+            compactionProgress.percent >= 100 ? 'text-accent-green' : 'text-accent-cyan'
+          }`}>
+            {compactionProgress.message}
+          </span>
+          <div className="relative inline-flex w-24 h-1.5 bg-dark-border rounded-full overflow-hidden">
+            <div
+              className={`h-full transition-all duration-500 rounded-full ${
+                compactionProgress.percent >= 100 ? 'bg-accent-green' : 'bg-accent-cyan'
+              }`}
+              style={{ width: `${Math.min(100, compactionProgress.percent)}%` }}
+            />
+          </div>
+          <span className="text-dark-muted text-[10px] font-mono">{compactionProgress.percent}%</span>
+        </span>
+      )}
+
       {/* Compaction animation */}
-      {Date.now() < compactingUntil && lastCompactInfo && (
+      {!compactionProgress && Date.now() < compactingUntil && lastCompactInfo && (
         <span className="text-accent-cyan animate-pulse flex items-center gap-1">
           <span className="inline-block animate-spin-frame">◎</span>
           <span>{lastCompactInfo.originalCount}→{lastCompactInfo.compressedCount}</span>

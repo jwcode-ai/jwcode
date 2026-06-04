@@ -294,6 +294,7 @@ export type WSMessageType =
   | 'degradation_update'
   | 'doctor_result'
   | 'context_compressed'
+  | 'compaction_progress'
   | 'notification';
 
 

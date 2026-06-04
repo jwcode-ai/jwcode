@@ -17,7 +17,7 @@ interface ChatPanelProps {
   messages: Message[];
   isGenerating: boolean;
   isPaused: boolean;
-  onSend: (content: string) => void;
+  onSend: (content: string, referencedFiles?: string[]) => void;
   onStop: () => void;
   onPause: () => void;
   onResume: () => void;
@@ -44,7 +44,7 @@ async function searchFiles(query: string): Promise<FileNode[]> {
     const flat: FileNode[] = [];
     const walk = (nodes: FileNode[]) => {
       for (const n of nodes) {
-        flat.push(n);
+        if (n.type === 'file') flat.push(n);
         if (n.children) walk(n.children);
       }
     };
@@ -75,6 +75,8 @@ export const ChatPanel = memo(function ChatPanel({
   const [fileMenuIndex, setFileMenuIndex] = useState(0);
   const [fileSearchQuery, setFileSearchQuery] = useState('');
   const fileSearchRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Track @-referenced file paths for content attachment on send
+  const referencedFilesRef = useRef<Set<string>>(new Set());
 
   // Slash commands
   const slashCommands = useSlashCommands({ setActiveTab, createNewSession, clearMessages, setTheme, toggleTerminal, setLogs, setUnreadLogs });
@@ -92,7 +94,9 @@ export const ChatPanel = memo(function ChatPanel({
     if (input.trim()) {
       addToHistory(input);
       resetHistory();
-      onSend(input);
+      const files = Array.from(referencedFilesRef.current);
+      referencedFilesRef.current.clear();
+      onSend(input, files.length > 0 ? files : undefined);
       setInput('');
       resetTextarea();
       closeFileMention();
@@ -144,6 +148,8 @@ export const ChatPanel = memo(function ChatPanel({
     const afterCursor = value.slice(cursorPos);
     const newValue = value.slice(0, atIdx) + file.path + afterCursor;
     setInput(newValue);
+    // Track file for content attachment on send
+    referencedFilesRef.current.add(file.path);
     closeFileMention();
 
     // Restore cursor after inserted path

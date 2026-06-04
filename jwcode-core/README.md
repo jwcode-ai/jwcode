@@ -1,7 +1,7 @@
 # JWCode
 
 > Java AI Coding Tool — v1.0.0-SNAPSHOT | 0 模块 | 0 Agent | 0 Tool
-> 最后自动生成: 2026-06-01
+> 最后自动生成: 2026-06-04
 
 ## 快速开始
 
@@ -23,7 +23,7 @@ jwcode start         # Python CLI 一键启动
 
 ## 统计
 
-- Java 源文件: 3
+- Java 源文件: 0
 - 前端文件: 0
 - Python 文件: 0
 

@@ -22,6 +22,7 @@ export interface AppState {
   planTasks: PlanTask[];
   pdcaPhase: string;
   degradation: import("../protocol.js").DegradationStatus;
+  compactionProgress: { stage: string; percent: number; message: string } | null;
 }
 
 const initialState: AppState = {
@@ -40,6 +41,7 @@ const initialState: AppState = {
   planTasks: [],
   pdcaPhase: '',
   degradation: { active: false, retryCount: 0, maxRetries: 0, mode: "normal", message: "" },
+  compactionProgress: null,
 };
 
 let _store: Store<AppState> | null = null;
@@ -85,6 +87,7 @@ const selStatusLine = (s: AppState) => ({
   statusText: s.statusText,
   messagesLen: s.messages.length,
   tokenRate: s.tokenRate,
+  compactionProgress: s.compactionProgress,
 } as const);
 
 // ---- shallow equality for selector cache ----

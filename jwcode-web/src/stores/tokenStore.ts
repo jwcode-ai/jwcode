@@ -41,6 +41,7 @@ interface TokenState {
 
   compactingUntil: number;
   lastCompactInfo: { originalCount: number; compressedCount: number; tokensSaved: number } | null;
+  compactionProgress: { stage: string; percent: number; message: string } | null;
   updateUsage: (usage: Partial<TokenUsage>) => void;
   setModel: (model: string) => void;
   setMaxContextTokens: (max: number) => void;
@@ -51,6 +52,7 @@ interface TokenState {
   pruneContext: (targetRatio: number) => { cutMessages: number; recoveredTokens: number };
   resetUsage: () => void;
   setCompacting: (info: { originalCount: number; compressedCount: number; tokensSaved: number }) => void;
+  setCompactionProgress: (progress: { stage: string; percent: number; message: string } | null) => void;
 }
 
 // Rough estimation: ~4 chars per token for Chinese, ~6 for mixed
@@ -75,6 +77,7 @@ export const useTokenStore = create<TokenState>((set, get) => ({
   degradation: null,
   compactingUntil: 0,
   lastCompactInfo: null,
+  compactionProgress: null,
   showTokenInfo: false,
   model: '',
   history: [],
@@ -114,6 +117,8 @@ export const useTokenStore = create<TokenState>((set, get) => ({
   setDegradation: (d) => set({ degradation: d }),
 
   setCompacting: (info) => set({ compactingUntil: Date.now() + 3000, lastCompactInfo: info }),
+
+  setCompactionProgress: (progress) => set({ compactionProgress: progress }),
 
   setShowTokenInfo: (show) => set({ showTokenInfo: show }),
 

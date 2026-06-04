@@ -40,6 +40,8 @@ public class ConfigHandler implements HttpHandler {
             handleAdvancedConfig(exchange, method);
         } else if (path.endsWith("/api/config/advanced/toggle")) {
             handleAdvancedToggle(exchange, method);
+        } else if (path.endsWith("/api/config/provider")) {
+            handleProviderConfig(exchange, method);
         } else {
             // 默认配置路由
             switch (method.toUpperCase()) {
@@ -381,5 +383,111 @@ public class ConfigHandler implements HttpHandler {
         error.put("success", false);
         error.put("error", message);
         return error;
+    }
+
+    /**
+     * Handle /api/config/provider — get or update provider configuration.
+     * GET: returns provider summary (API keys masked).
+     * POST: saves provider config to ~/.jwcode/config.yaml.
+     */
+    private void handleProviderConfig(HttpExchange exchange, String method) throws IOException {
+        switch (method.toUpperCase()) {
+            case "GET":
+                getProviderConfig(exchange);
+                break;
+            case "POST":
+            case "PUT":
+                saveProviderConfig(exchange);
+                break;
+            default:
+                sendJsonResponse(exchange, 405, createError("Method not allowed"));
+        }
+    }
+
+    private void getProviderConfig(HttpExchange exchange) throws IOException {
+        try {
+            com.jwcode.core.config.YamlConfigLoader loader =
+                com.jwcode.core.config.YamlConfigLoader.getInstance();
+            Map<String, Object> summary = loader.getProviderSummary();
+            ObjectNode response = objectMapper.createObjectNode();
+            response.put("success", true);
+            response.set("data", objectMapper.valueToTree(summary));
+            sendJsonResponse(exchange, 200, response);
+        } catch (Exception e) {
+            sendJsonResponse(exchange, 500, createError("Failed to read provider config: " + e.getMessage()));
+        }
+    }
+
+    private void saveProviderConfig(HttpExchange exchange) throws IOException {
+        ObjectNode request = parseRequestBody(exchange);
+        if (request == null) {
+            sendJsonResponse(exchange, 400, createError("Request body required"));
+            return;
+        }
+
+        try {
+            com.jwcode.core.config.YamlConfigLoader loader =
+                com.jwcode.core.config.YamlConfigLoader.getInstance();
+            com.jwcode.core.config.JwcodeConfig config = loader.getConfig();
+
+            String providerName = request.has("provider") ? request.get("provider").asText() : null;
+            if (providerName == null || providerName.isBlank()) {
+                sendJsonResponse(exchange, 400, createError("'provider' field is required"));
+                return;
+            }
+
+            // Get or create provider config
+            com.jwcode.core.config.JwcodeConfig.ProviderConfig provider =
+                config.getProviders().computeIfAbsent(providerName,
+                    k -> new com.jwcode.core.config.JwcodeConfig.ProviderConfig());
+
+            if (request.has("baseUrl")) {
+                provider.setBaseUrl(request.get("baseUrl").asText());
+            }
+            if (request.has("apiType")) {
+                provider.setApiType(request.get("apiType").asText());
+            }
+            if (request.has("apiKeys")) {
+                com.fasterxml.jackson.databind.JsonNode keysNode = request.get("apiKeys");
+                java.util.List<String> keys = new java.util.ArrayList<>();
+                if (keysNode.isArray()) {
+                    for (com.fasterxml.jackson.databind.JsonNode k : keysNode) {
+                        keys.add(k.asText());
+                    }
+                }
+                provider.setApiKeys(keys);
+            }
+            if (request.has("apiKey")) {
+                // Single key convenience field
+                java.util.List<String> keys = new java.util.ArrayList<>();
+                keys.add(request.get("apiKey").asText());
+                provider.setApiKeys(keys);
+            }
+            if (request.has("models")) {
+                com.fasterxml.jackson.databind.JsonNode modelsNode = request.get("models");
+                java.util.List<com.jwcode.core.config.JwcodeConfig.ModelDefinition> models =
+                    objectMapper.readValue(modelsNode.toString(),
+                        objectMapper.getTypeFactory().constructCollectionType(
+                            java.util.List.class, com.jwcode.core.config.JwcodeConfig.ModelDefinition.class));
+                provider.setModels(models);
+            }
+
+            // Set as default provider if requested or if it's the only one
+            if (request.has("setDefault") && request.get("setDefault").asBoolean()) {
+                config.setDefaultProvider(providerName);
+            } else if (config.getProviders().size() == 1) {
+                config.setDefaultProvider(providerName);
+            }
+
+            // Save to user config
+            loader.saveConfig(config);
+
+            ObjectNode response = objectMapper.createObjectNode();
+            response.put("success", true);
+            response.put("message", "Provider '" + providerName + "' saved successfully");
+            sendJsonResponse(exchange, 200, response);
+        } catch (Exception e) {
+            sendJsonResponse(exchange, 500, createError("Failed to save provider config: " + e.getMessage()));
+        }
     }
 }

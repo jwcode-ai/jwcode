@@ -307,7 +307,7 @@ function App() {
     if (activeSessionId) clearMessages(activeSessionId);
   }, [activeSessionId, clearMessages]);
 
-  const sendMessage = useCallback((sessionId: string, content: string) => {
+  const sendMessage = useCallback(async (sessionId: string, content: string, referencedFiles?: string[]) => {
     if (!content.trim()) return;
 
     const isGen = useChatStore.getState().isGenerating(sessionId);
@@ -328,10 +328,37 @@ function App() {
       autoNameSession(sessionId, content.trim());
     }
 
+    // Resolve @-referenced file contents
+    let finalContent = content.trim();
+    if (referencedFiles && referencedFiles.length > 0) {
+      const fileContexts: string[] = [];
+      for (const filePath of referencedFiles) {
+        try {
+          const fileResp = await api.files.read(filePath);
+          const fileContent = fileResp.success && fileResp.data ? fileResp.data : null;
+          if (fileContent) {
+            // Remove the raw path from the message text
+            finalContent = finalContent.replace(filePath, '');
+            // Build structured context block
+            const ext = filePath.split('.').pop() || '';
+            fileContexts.push(
+              `<context ref="${filePath}">\n\`\`\`${ext}\n${fileContent}\n\`\`\`\n</context>`
+            );
+          }
+        } catch (e) {
+          console.warn(`Failed to read @-referenced file: ${filePath}`, e);
+        }
+      }
+      if (fileContexts.length > 0) {
+        finalContent = fileContexts.join('\n\n') + '\n\n' + finalContent.trim();
+        finalContent = finalContent.trim();
+      }
+    }
+
     useChatStore.getState().addMessage(sessionId, {
       id: `msg-${Date.now()}`,
       type: 'user',
-      content: content.trim(),
+      content: finalContent,
       timestamp: Date.now(),
     });
 
@@ -342,14 +369,14 @@ function App() {
       wsService.send({
         type: 'plan',
         sessionId,
-        message: content.trim(),
+        message: finalContent,
       });
     } else {
       // Act/Chat 模式：直接发送 chat 消息
       wsService.send({
         type: 'chat',
         sessionId,
-        message: content.trim(),
+        message: finalContent,
       });
     }
   }, [autoNameSession]);

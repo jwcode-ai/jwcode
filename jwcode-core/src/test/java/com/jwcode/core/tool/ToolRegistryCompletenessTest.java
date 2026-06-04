@@ -170,7 +170,7 @@ class ToolRegistryCompletenessTest {
         PHASE_TOOLS.put("Phase3_REPL_Notebook", Arrays.asList("REPL", "NotebookEdit"));
         PHASE_TOOLS.put("Phase4_LSP", Arrays.asList("LSP"));
         PHASE_TOOLS.put("Phase5_搜索", Arrays.asList("WebSearch", "WebFetch", "GrepTool", "GlobTool"));
-        PHASE_TOOLS.put("Phase6_工具定义", Arrays.asList("BashTool", "PowerShell", "Git", "FileReadTool", "FileWriteTool", "FileEditTool", "BatchReadTool"));
+        PHASE_TOOLS.put("Phase6_工具定义", Arrays.asList("BashTool", "PowerShell", "GitTool", "FileReadTool", "FileWriteTool", "FileEditTool", "BatchReadTool"));
         PHASE_TOOLS.put("Phase7_配置_计划", Arrays.asList("Config", "Pattern", "Sleep"));
         PHASE_TOOLS.put("Phase8_通信_远程", Arrays.asList("SendMessage"));
     }

@@ -30,6 +30,8 @@ import com.jwcode.core.service.ContextWindowManager;
 import com.jwcode.core.service.SimpleCompactionStrategy;
 import com.jwcode.core.aicl.AICLPromptBuilder;
 import com.jwcode.core.agent.BudgetExhaustedHandler;
+import com.jwcode.core.config.ConfigManager;
+import com.jwcode.core.advanced.compression.ContextCompressor;
 import com.jwcode.core.permission.PermissionManagerChecker;
 import com.jwcode.core.task.TaskLifecycleManager;
 
@@ -344,6 +346,10 @@ public class LLMQueryEngine {
         
         // 注入 AICL 上下文解析规则（让 AI 理解优先级和生命周期）
         prompt.append(AICLPromptBuilder.buildCompactPrompt()).append("\n\n");
+        // [THINKING_MODE] if enabled, inject deep reasoning prompt
+        if (Boolean.parseBoolean(ConfigManager.getInstance().get("thinking.enabled"))) {
+            prompt.append("[Thinking Mode] Please perform deep reasoning before responding.\n\n");
+        }
 
         // 显式列出可用工具（增强约束感）
         List<Tool<?, ?, ?>> allowedTools = toolExecutor.getEnabledTools().stream()
@@ -1442,7 +1448,7 @@ public class LLMQueryEngine {
         List<Message> messages = session.getMessages();
         
         // 根据当前模型动态创建 ContextWindowManager 并执行压缩
-        ContextWindowManager windowManager = createContextWindowManager();
+            ContextWindowManager windowManager = createContextWindowManager();
         int originalCount = messages.size();
         messages = windowManager.prepareMessages(messages);
         if (messages.size() < originalCount) {
@@ -1697,7 +1703,7 @@ public class LLMQueryEngine {
                 : "usage=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100);
             logger.info("[LLMQueryEngine] Auto-compacting context, reason=" + compactReason + "...");
             int beforeCount = session.getMessages().size();
-            ContextWindowManager windowManager = createContextWindowManager();
+                                    ContextWindowManager windowManager = createContextWindowManager();
             List<Message> compacted = windowManager.prepareMessages(session.getMessages(), budgetExhausted);
             if (compacted != null && compacted.size() < beforeCount) {
                 session.setMessages(compacted);

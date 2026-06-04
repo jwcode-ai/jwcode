@@ -96,7 +96,7 @@ export const EVENT_TYPES = [
   'plan_complete', 'plan_error', 'plan_mode_change',
   'workspace_changed',
   'generation_paused', 'generation_resumed',
-  'token_update', 'context_compressed',
+  'token_update', 'context_compressed', 'compaction_progress',
   'hook_ask',
   'doctor_result',
   'degradation_update',

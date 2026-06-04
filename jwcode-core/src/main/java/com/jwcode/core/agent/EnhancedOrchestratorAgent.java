@@ -18,6 +18,10 @@ import com.jwcode.core.planner.IntentAnalyzer.AnalysisResult;
 import com.jwcode.core.planner.IntentAnalyzer.TaskType;
 import com.jwcode.core.planner.IntentAnalyzer.Complexity;
 import com.jwcode.core.planner.SemanticIntentAnalyzer;
+import com.jwcode.core.advanced.swarm.AutoSwarmTrigger;
+import com.jwcode.core.advanced.swarm.AgentSwarm;
+import com.jwcode.core.advanced.ai.AutoAIManager;
+import com.jwcode.core.config.ConfigManager;
 import com.jwcode.core.planner.checkpoint.CheckpointManager;
 import com.jwcode.core.planner.checkpoint.CheckpointManager.Checkpoint;
 import com.jwcode.core.planner.checkpoint.SharedContextBus;
@@ -91,6 +95,9 @@ public class EnhancedOrchestratorAgent {
 
     // 工作目录记忆 Agent（按工作目录主动记忆项目信息）
     private MemoryAgent memoryAgent;
+
+    private AutoSwarmTrigger autoSwarmTrigger;
+    private AutoAIManager autoAIManager;
 
     // GAN 迭代执行器（Generator ⇄ Evaluator）
     private GanExecutor ganExecutor;
@@ -210,6 +217,24 @@ public class EnhancedOrchestratorAgent {
                 "timestamp", java.time.Instant.now().toString()
             ));
             
+            // 初始化 AutoSwarmTrigger
+            try {
+                this.autoSwarmTrigger = new AutoSwarmTrigger(new AgentSwarm());
+                logger.info("[Orchestrator] AutoSwarmTrigger initialized");
+            } catch (Exception e) {
+                logger.warning("[Orchestrator] AutoSwarmTrigger init failed: " + e.getMessage());
+                this.autoSwarmTrigger = null;
+            }
+
+            // 初始化 AutoAIManager
+            try {
+                this.autoAIManager = new AutoAIManager();
+                logger.info("[Orchestrator] AutoAIManager initialized");
+            } catch (Exception e) {
+                logger.warning("[Orchestrator] AutoAIManager init failed: " + e.getMessage());
+                this.autoAIManager = null;
+            }
+
             // 初始化 Hook 系统（仅首次创建时初始化，避免重复接线）
             try {
                 if (!HookSystemInitializer.isInitialized()) {
@@ -246,7 +271,19 @@ public class EnhancedOrchestratorAgent {
             return handleInterruption(analysis);
         }
 
-        // Step 3: 根据任务类型分发
+        // Step 3: Auto AI - if enabled and task is not CHAT, auto Plan+Act
+        if (autoAIManager != null && autoAIManager.isEnabled() && analysis.getTaskType() != com.jwcode.core.planner.IntentAnalyzer.TaskType.CHAT) {
+            logger.info("[Orchestrator] Auto AI enabled, auto Plan+Act for: " + analysis.getTaskType());
+            return processPlanOnly(userInput);
+        }
+
+        // Step 4: Auto Swarm - if enabled and complex, use AgentSwarm
+        if (autoSwarmTrigger != null && autoSwarmTrigger.isAutoSwarmEnabled() && analysis.getComplexity() == com.jwcode.core.planner.IntentAnalyzer.Complexity.COMPLEX) {
+            logger.info("[Orchestrator] Auto Swarm enabled, delegating complex task");
+            autoSwarmTrigger.autoExecute(userInput, null);
+        }
+
+        // Step 5: dispatch by task type
         switch (analysis.getTaskType()) {
             case CHAT:
                 return handleChat(userInput);

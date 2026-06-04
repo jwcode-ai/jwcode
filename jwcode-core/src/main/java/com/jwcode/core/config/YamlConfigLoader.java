@@ -709,50 +709,91 @@ public class YamlConfigLoader {
     
     public static String getDefaultConfigExample() {
         return """
-# JWCode 配置文件
-# 配置文件位置: ~/.jwcode/config.yaml
+# JWCode Configuration
+# Run 'jwcode' and follow the interactive setup, or configure manually below.
+# Config file location: ~/.jwcode/config.yaml
 
-# 默认使用的提供商
-default-provider: moonshot
+# Default provider name (must match a key in providers below)
+default-provider: ""
 
-# 提供商配置
-providers:
-  moonshot:
-    base-url: https://api.moonshot.cn
-    api-type: openai-completions
-    api-keys:
-      - sk-your-api-key-here
-    key-rotation:
-      strategy: round_robin
-      failover-enabled: true
-      max-retries: 3
-      cooldown-ms: 60000
-    models:
-      - id: kimi-k2.5
-        name: kimi-k2.5
-        enabled: true
-        priority: 10
-        reasoning: false
-        context-window: 2048000
-        max-tokens: 32768
-        temperature: 1
-        cost:
-          input: 0.0
-          output: 0.0
-        input:
-          - text
-          - image
-        supports-vision: true
+# Fallback provider when primary hits hard rate limits (optional)
+# fallback-provider: ""
 
-# 全局设置
+# Provider configurations
+# Examples:
+#   OpenAI:
+#     base-url: https://api.openai.com/v1
+#     api-type: openai-completions
+#     api-keys: [sk-...]
+#   Anthropic:
+#     base-url: https://api.anthropic.com/v1
+#     api-type: anthropic-messages
+#     api-keys: [sk-ant-...]
+#   Moonshot (Kimi):
+#     base-url: https://api.moonshot.cn
+#     api-type: openai-completions
+#     api-keys: [sk-...]
+#   DeepSeek:
+#     base-url: https://api.deepseek.com/v1
+#     api-type: openai-completions
+#     api-keys: [sk-...]
+providers: {}
+
+# Global settings
 settings:
-  timeout-seconds: 60
+  timeout-seconds: 120
   max-retries: 3
   debug: false
   log-level: INFO
 """;
     }
     
+    /**
+     * Check whether at least one provider is properly configured with a valid API key.
+     * Returns false if no config file exists, or if all providers have placeholder keys.
+     */
+    public boolean isProviderConfigured() {
+        JwcodeConfig config = getConfig();
+        if (config.getProviders().isEmpty()) return false;
+        for (JwcodeConfig.ProviderConfig p : config.getProviders().values()) {
+            if (!p.getApiKeys().isEmpty()) {
+                for (String key : p.getApiKeys()) {
+                    if (key != null && !key.isBlank()
+                        && !key.contains("your-api-key")
+                        && !key.equals("sk-your-api-key-here")
+                        && key.length() >= 20) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Get a summary of configured providers with API keys masked.
+     * Safe to expose via API.
+     */
+    public Map<String, Object> getProviderSummary() {
+        Map<String, Object> result = new HashMap<>();
+        JwcodeConfig config = getConfig();
+        result.put("configured", isProviderConfigured());
+        result.put("defaultProvider", config.getDefaultProviderName());
+        Map<String, Object> providers = new HashMap<>();
+        for (var entry : config.getProviders().entrySet()) {
+            Map<String, Object> info = new HashMap<>();
+            JwcodeConfig.ProviderConfig p = entry.getValue();
+            info.put("baseUrl", p.getBaseUrl());
+            info.put("hasApiKey", !p.getApiKeys().isEmpty()
+                && p.getApiKeys().stream().anyMatch(k -> k != null && !k.isBlank() && k.length() >= 20));
+            info.put("modelCount", p.getModels().size());
+            info.put("apiType", p.getApiType());
+            providers.put(entry.getKey(), info);
+        }
+        result.put("providers", providers);
+        return result;
+    }
+
     /**
      * 创建新配置文件
      */

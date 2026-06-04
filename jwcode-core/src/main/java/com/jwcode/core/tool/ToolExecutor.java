@@ -2,6 +2,7 @@ package com.jwcode.core.tool;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.jwcode.core.hook.HookApprovalManager;
+import com.jwcode.core.config.ConfigManager;
 import com.jwcode.core.hook.HookChain;
 import com.jwcode.core.hook.HookContext;
 import com.jwcode.core.hook.HookDecision;

@@ -27,7 +27,7 @@ function formatElapsed(sec: number): string {
 
 export const StatusLine = memo(function StatusLine() {
   const { usage, modelName, planMode, autoMode, connected, statusText, messagesLen,
-          tokenRate } = useAppStatusLine();
+          tokenRate, compactionProgress } = useAppStatusLine();
   const degradation = useAppDegradation();
   const pdcaPhase = useAppPdcaPhase();
   const planTasks = useAppPlanTasks();
@@ -140,6 +140,17 @@ export const StatusLine = memo(function StatusLine() {
             [{degradation.mode.toUpperCase()}] {degradation.message}
             {degradation.retryCount > 0 ? ` (${degradation.retryCount}/${degradation.maxRetries})` : ''}
           </Text>
+        </Box>
+      )}
+      {/* Compaction progress bar */}
+      {compactionProgress && (
+        <Box height={1}>
+          <Text color={compactionProgress.percent >= 100 ? 'green' : 'cyan'}>
+            {compactionProgress.percent >= 100 ? '✓' : '🗜'} {compactionProgress.message}
+          </Text>
+          <Text> </Text>
+          <Text color="yellow">{'█'.repeat(Math.round(compactionProgress.percent / 10))}{'░'.repeat(10 - Math.round(compactionProgress.percent / 10))}</Text>
+          <Text dimColor> {compactionProgress.percent}%</Text>
         </Box>
       )}
       {statusText && statusText !== 'connecting...' && (

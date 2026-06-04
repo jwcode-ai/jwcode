@@ -14,6 +14,7 @@ import com.jwcode.core.index.CodebaseIndexer;
 import com.jwcode.core.permission.PermissionManager;
 import com.jwcode.core.plan.PlanModeManager;
 import com.jwcode.core.session.Session;
+import com.jwcode.core.service.ContextWindowManager;
 import com.jwcode.core.tool.Tool;
 import com.jwcode.core.tool.ToolExecutor;
 import com.jwcode.core.tool.ToolRegistry;
@@ -21,6 +22,8 @@ import com.jwcode.core.tool.ToolRegistry;
 import org.java_websocket.WebSocket;
 import org.java_websocket.handshake.ClientHandshake;
 import org.java_websocket.server.WebSocketServer;
+
+import com.fasterxml.jackson.databind.JsonNode;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
@@ -675,11 +678,17 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                 case "agents":
                     handleAgentsCommand(conn, clientMsg);
                     break;
+                case "model_change":
+                    handleModelChange(conn, clientMsg);
+                    break;
                 case "config":
                     handleConfigCommand(conn, clientMsg);
                     break;
                 case "plugin":
                     handlePluginCommand(conn, clientMsg);
+                    break;
+                case "compact":
+                    handleCompact(conn, clientMsg);
                     break;
                 case "toggle_workspace_guard":
                     handleToggleWorkspaceGuard(conn, clientMsg);
@@ -1833,6 +1842,50 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     }
 
     /**
+     * Handle /model command — switch the active LLM model.
+     * Message format: {type: "model_change", data: {"model":"gpt-4o"}}
+     */
+    private void handleModelChange(WebSocket conn, ClientMessage msg) {
+        try {
+            String dataStr = msg.data;
+            String modelId = null;
+            if (dataStr != null && !dataStr.isEmpty()) {
+                dataStr = dataStr.trim();
+                // Parse JSON: {"model":"gpt-4o"} or plain string
+                if (dataStr.startsWith("{")) {
+                    var node = new com.fasterxml.jackson.databind.ObjectMapper().readTree(dataStr);
+                    if (node.has("model")) modelId = node.get("model").asText();
+                } else {
+                    modelId = dataStr.replaceAll("[\"']", "").trim();
+                }
+            }
+            if (modelId == null || modelId.isEmpty()) {
+                sendMessage(conn, MessageType.ERROR, "Usage: /model <model-id>");
+                return;
+            }
+
+            // Reload config and switch model
+            var loader = com.jwcode.core.config.YamlConfigLoader.getInstance();
+            var config = loader.getConfig();
+            LLMFactory factory = LLMFactory.fromConfig(config);
+            factory.switchModel(modelId);
+
+            // Store factory for subsequent queries
+            String sessionId = getOrGenerateSessionId(conn, msg);
+            Session session = sessions.get(sessionId);
+            if (session != null) {
+                session.setMetadata("modelId", modelId);
+            }
+
+            sendMessage(conn, MessageType.NOTIFICATION, "Model switched to: " + modelId);
+            logger.info("Model switched to: " + modelId + " (session=" + sessionId + ")");
+        } catch (Exception e) {
+            logger.warning("handleModelChange error: " + e.getMessage());
+            sendMessage(conn, MessageType.ERROR, "Failed to switch model: " + e.getMessage());
+        }
+    }
+
+    /**
      * Handle workspace guard bypass toggle.
      * Message format: {type: "toggle_workspace_guard", data: "true"|"false"}
      */
@@ -1852,6 +1905,88 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             logger.warning("handleToggleWorkspaceGuard error: " + e.getMessage());
             sendMessage(conn, MessageType.ERROR, "Failed to toggle workspace guard: " + e.getMessage());
         }
+    }
+
+    /**
+     * Handle manual compact request from frontend.
+     * Sends compaction_progress messages during stages, then context_compressed on completion.
+     */
+    private void handleCompact(WebSocket conn, ClientMessage msg) {
+        try {
+            String sessionId = getOrGenerateSessionId(conn, msg);
+            Session session = sessions.get(sessionId);
+            if (session == null || session.getMessages().isEmpty()) {
+                sendMessage(conn, MessageType.NOTIFICATION, "无需压缩：会话为空");
+                return;
+            }
+
+            int beforeCount = session.getMessageCount();
+
+            // Stage 1: analyzing
+            String strategy = "normal";
+            String dataStr = msg.data;
+            if (dataStr != null && !dataStr.isEmpty()) {
+                strategy = dataStr.trim();
+            }
+            sendCompactionProgress(conn, "analyzing", 15, "分析上下文... (" + beforeCount + " 条消息)");
+
+            // Stage 2: compacting
+            sendCompactionProgress(conn, "compact", 50, "压缩中... (策略: " + strategy + ")");
+
+            // Perform compaction using ContextWindowManager
+            ContextWindowManager windowManager;
+            switch (strategy) {
+                case "aggressive" -> windowManager = new ContextWindowManager(
+                    ContextWindowManager.DEFAULT_CONTEXT_LIMIT, 10, 2);
+                case "summary" -> windowManager = new ContextWindowManager(
+                    ContextWindowManager.DEFAULT_CONTEXT_LIMIT, 20, 4);
+                default -> windowManager = new ContextWindowManager(
+                    ContextWindowManager.DEFAULT_CONTEXT_LIMIT, 30, 4);
+            }
+
+            List<com.jwcode.core.model.Message> compacted = windowManager.prepareMessages(
+                session.getMessages(), strategy.equals("aggressive"));
+            int afterCount = compacted != null ? compacted.size() : beforeCount;
+
+            if (compacted != null && afterCount < beforeCount) {
+                session.setMessages(compacted);
+                session.markCompacted();
+                int removed = beforeCount - afterCount;
+                long tokensSaved = removed * 120L; // rough estimate
+
+                // Stage 3: finalizing
+                sendCompactionProgress(conn, "finalize", 90, "完成中...");
+
+                // Final result
+                String summary = "手动压缩完成 (" + strategy + "): " + beforeCount + " → " + afterCount + " 条消息";
+                String json = String.format(
+                    "{\"originalCount\":%d,\"compressedCount\":%d,\"tokensSaved\":%d,\"summary\":\"%s\"}",
+                    beforeCount, afterCount, tokensSaved, escapeJson(summary));
+                sendMessage(conn, MessageType.CONTEXT_COMPRESSED, json);
+
+                sendCompactionProgress(conn, "done", 100, "压缩完成: " + beforeCount + " → " + afterCount + " 条消息");
+
+                WebSocketLogBroadcaster.getInstance().broadcast(
+                    LogEntry.info("Compact", String.format(
+                        "上下文压缩完成 (%s): %d → %d 条消息", strategy, beforeCount, afterCount)));
+            } else {
+                sendCompactionProgress(conn, "done", 100, "无需压缩：消息数量已在安全范围内");
+                sendMessage(conn, MessageType.NOTIFICATION, "无需压缩：消息数量已在安全范围内");
+            }
+        } catch (Exception e) {
+            logger.warning("handleCompact error: " + e.getMessage());
+            sendMessage(conn, MessageType.ERROR, "压缩失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Send a compaction progress update to the client.
+     */
+    private void sendCompactionProgress(WebSocket conn, String stage, int percent, String message) {
+        String json = String.format(
+            "{\"stage\":\"%s\",\"percent\":%d,\"message\":\"%s\"}",
+            escapeJson(stage), percent, escapeJson(message));
+        sendMessage(conn, MessageType.COMPACTION_PROGRESS, json);
     }
 
     /**
@@ -1992,18 +2127,60 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         try {
             String dataStr = msg.data;
             if (dataStr == null || dataStr.isEmpty()) {
-                // List known config items
-                var config = com.jwcode.core.config.YamlConfigLoader.getInstance().getConfig();
-                StringBuilder sb = new StringBuilder();
-                sb.append("Current Config:\n");
-                sb.append("  model: ").append(config.getDefaultModel()).append("\n");
-                sb.append("  working dir: ").append(this.defaultWorkingDirectory).append("\n");
-                sb.append("  use /config get <key> or /config set <key> <value>\n");
-                sendMessage(conn, MessageType.NOTIFICATION, sb.toString());
-                return;
+                dataStr = "list";
             }
-            sendMessage(conn, MessageType.NOTIFICATION,
-                "Config: " + dataStr + " — use /config alone to list, or /config set <key> <value>");
+
+            // Parse JSON data if present
+            String action = dataStr;
+            JsonNode dataNode = null;
+            if (dataStr.startsWith("{")) {
+                try {
+                    dataNode = new com.fasterxml.jackson.databind.ObjectMapper().readTree(dataStr);
+                    if (dataNode.has("action")) action = dataNode.get("action").asText();
+                } catch (Exception ignored) { /* plain text */ }
+            }
+
+            switch (action) {
+                case "list":
+                case "status": {
+                    var loader = com.jwcode.core.config.YamlConfigLoader.getInstance();
+                    var summary = loader.getProviderSummary();
+                    boolean configured = loader.isProviderConfigured();
+                    var config = loader.getConfig();
+                    StringBuilder sb = new StringBuilder();
+                    sb.append("Configuration Status:\n");
+                    sb.append("  Configured: ").append(configured ? "yes" : "no (run setup wizard)").append("\n");
+                    sb.append("  Default provider: ").append(config.getDefaultProviderName() != null ? config.getDefaultProviderName() : "(none)").append("\n");
+                    sb.append("  Providers: ");
+                    if (config.getProviders().isEmpty()) {
+                        sb.append("(none configured)\n");
+                    } else {
+                        sb.append("\n");
+                        for (var entry : config.getProviders().entrySet()) {
+                            sb.append("    - ").append(entry.getKey());
+                            sb.append(" (").append(entry.getValue().getModels().size()).append(" models");
+                            boolean hasKey = entry.getValue().getApiKeys().stream().anyMatch(k -> k != null && !k.isBlank() && k.length() >= 20 && !k.contains("your-api-key"));
+                            sb.append(", API key: ").append(hasKey ? "configured" : "missing").append(")\n");
+                        }
+                    }
+                    sb.append("  Models: ").append(config.getProviders().values().stream().mapToInt(p -> (int) p.getModels().stream().filter(m -> m.isEnabled()).count()).sum()).append(" enabled\n");
+                    sb.append("\nUse /config provider to configure, or open web UI Settings.");
+                    sendMessage(conn, MessageType.NOTIFICATION, sb.toString());
+                    break;
+                }
+                case "provider":
+                case "providers": {
+                    var loader = com.jwcode.core.config.YamlConfigLoader.getInstance();
+                    var summary = loader.getProviderSummary();
+                    String json = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(summary);
+                    sendMessage(conn, MessageType.NOTIFICATION, json);
+                    break;
+                }
+                default:
+                    sendMessage(conn, MessageType.NOTIFICATION,
+                        "Config: " + dataStr + " — use /config to see status, or /config provider for details.");
+                    break;
+            }
         } catch (Exception e) {
             logger.warning("handleConfigCommand error: " + e.getMessage());
             sendMessage(conn, MessageType.ERROR, "Config operation failed: " + e.getMessage());
@@ -2702,7 +2879,8 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         GENERATION_PAUSED,  // 生成已暂停
         GENERATION_RESUMED, // 生成已恢复
         TOKEN_UPDATE,       // Token 用量更新（实时）
-        CONTEXT_COMPRESSED  // 上下文压缩通知（自动压缩时广播到前端）
+        CONTEXT_COMPRESSED, // 上下文压缩通知（自动压缩时广播到前端）
+        COMPACTION_PROGRESS // 压缩进度更新（阶段 + 百分比）
     }
     
     /**

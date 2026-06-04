@@ -9,12 +9,14 @@ export interface JwcodeConfig {
   backend_url: string;
   ws_url: string;
   ws_auth_token: string;
+  workspace_dir: string;
 }
 
 const DEFAULTS: JwcodeConfig = {
   backend_url: 'http://localhost:8080',
   ws_url: 'ws://localhost:8081/ws',
   ws_auth_token: 'default-token',
+  workspace_dir: '',
 };
 
 function parseYaml(content: string): Record<string, unknown> {
@@ -54,6 +56,7 @@ export function loadConfig(): JwcodeConfig {
       backend_url: (parsed.backend_url as string) || DEFAULTS.backend_url,
       ws_url: (parsed.ws_url as string) || DEFAULTS.ws_url,
       ws_auth_token: (parsed.ws_auth_token as string) || DEFAULTS.ws_auth_token,
+      workspace_dir: (parsed.workspace_dir as string) || DEFAULTS.workspace_dir,
     };
   } catch {
     return { ...DEFAULTS };

@@ -106,6 +106,7 @@ SQLite schema: `checkpoints` (id, session, step, ts, source, channel_values) + `
 - **WebSocket handler:** `jwcode-web/.../stream/StreamingWebSocketHandler.java` (3062 lines)
 - **React frontend:** `jwcode-web/src/` — Vite+React SPA, zustand stores, Tailwind CSS
 - **TS CLI:** `ts-cli/src/` — esbuild-bundled Ink/React TUI, `ws` for WebSocket
+- **REST API:** `FilesHandler.java` — `GET /api/files?path=` for directory listing (returns `FileNode[]` tree), `GET /api/files/read?path=` for file content (returns plain text), `POST/PUT/DELETE /api/files` for CRUD
 - **Config:** `~/.jwcode/config.yaml` (backend_url, ws_url, ws_auth_token)
 - **Hooks:** `~/.jwcode/hooks/` — user-defined lifecycle hook scripts
 - **Memory:** `~/.claude/projects/.../memory/` — persistent Claude Code memory
@@ -154,7 +155,7 @@ Registered via `CommandRegistry.createDefault()` — 7 user-facing commands:
 
 ## WebSocket Protocol
 
-Messages: `{type, sessionId, message?, data?}` — 30+ event types (`start`, `content`, `thinking`, `tool_call`, `tool_result`, `step_*`, `plan_*`, `hook_ask`, `token_update`, `error`, etc.)
+Messages: `{type, sessionId, message?, data?}` — 30+ event types (`start`, `content`, `thinking`, `tool_call`, `tool_result`, `step_*`, `plan_*`, `hook_ask`, `token_update`, `compaction_progress`, `error`, etc.)
 
 Auth flow: connect → `auth_required` → client sends `{type:"auth", token:"default-token"}` → `auth_success` → `POST /api/sessions` → message exchange.
 
@@ -171,9 +172,12 @@ Built with Ink 5 (React for terminal), `ws`, esbuild. Source in `src/`, output i
 | `src/components/StatusLine.tsx` | Model, prompt+completion token breakdown, token rate (t/s), generation elapsed, Plan/Act/Auto tags, █░ bar |
 | `src/components/ApprovalModal.tsx` | CRITICAL/HIGH/MEDIUM/LOW risk classification, 15s countdown auto-approval, tool preview panel, y/n/1/2 shortcuts |
 | `src/components/CommandPalette.tsx` | `/` filterable popup with PgUp/PgDn page navigation |
+| `src/components/FilePalette.tsx` | `@` file reference popup: fuzzy search, ↑↓/PgUp/PgDn nav, Enter to insert path, Esc close |
 | `src/theme.ts` | Color constants, `JWCODE_THEME=dark\|light` env var support |
 
 **Text input features:** ↑↓ browses last 30 inputs (sessionStorage). CJK ≈ 1.5 chars/token, English ≈ 4 chars/token. Warning at >100K tokens.
+
+**@ file reference (TS CLI):** Type `@` in the input → `findAtTrigger()` detects the last `@` not preceded by a word char → debounced file list via `GET /api/files` → `FilePalette` renders matching files (files only, not directories) → select inserts path → on send, `resolveAndSend()` reads each file via `GET /api/files/read`, wraps content in `<context ref="path">\n```ext\n...\n```\n</context>` blocks, removes raw paths from message text, and prepends contexts before the user prompt.
 
 ## ttyd Terminal (Web)
 
@@ -222,12 +226,13 @@ The web terminal tab uses [ttyd](https://github.com/tsl0922/ttyd) as a PTY sidec
 | `Chat/HookApprovalCard.tsx` | Risk-level classification (CRITICAL/HIGH/MEDIUM/LOW), 15s countdown auto-approval, command preview, dropdown options |
 | `Chat/DiffPreview.tsx` | Unified + side-by-side diff views, stats footer (+N/-M/hunks), language detection for 20+ languages |
 | `Chat/ExpandableResult.tsx` | Expand/collapse long result text with truncation |
+| `Chat/FileMentionMenu.tsx` | `@` file mention popup: filtered file list, ↑↓ select, Enter/Hover, yellow folder/file icons, path display |
 
 **WebSocket handlers** (`src/hooks/handlers/`): 775-line `useWebSocket.ts` split into category modules:
 | Module | Message types handled |
 |--------|----------------------|
 | `planHandlers.ts` | plan_start, plan_thinking, plan_tasks, plan_task_start/update/result, plan_complete, plan_error, plan_mode_change, step_prompt |
-| `streamHandlers.ts` | start, content, thinking, tool_call, tool_result, complete, error, generation_paused/resumed |
+| `streamHandlers.ts` | start, content, thinking, tool_call, tool_result, complete, error, compaction_progress, context_compressed, generation_paused/resumed |
 | `systemHandlers.ts` | token_update, auth_*, log, commands_list, ping, workspace_changed |
 | `interactionHandlers.ts` | hook_ask, task_update, step_*, todo_update, todo_item_done |
 
@@ -248,3 +253,4 @@ The web terminal tab uses [ttyd](https://github.com/tsl0922/ttyd) as a PTY sidec
 - Diff preview with unified + side-by-side views, stats footer, 20+ language detection
 - CLI StatusLine with token breakdown, rate display, generation elapsed counter
 - CLI ApprovalModal with risk levels, countdown auto-approval, y/n/1/2 shortcuts
+- @ file reference in both web and TS CLI: type `@` to search/filter files, select to insert path, on send file content is read via REST API and attached as `<context>` blocks

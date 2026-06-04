@@ -196,7 +196,7 @@ public class ToolChainIntegrationTest {
                 "应包含 FileReadTool"),
             () -> assertTrue(registry.getAllToolNames().contains("BashTool"),
                 "应包含 BashTool"),
-            () -> assertTrue(registry.getAllToolNames().contains("Git"),
+            () -> assertTrue(registry.getAllToolNames().contains("GitTool"),
                 "应包含 Git")
         );
     }

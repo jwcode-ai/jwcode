@@ -14,6 +14,7 @@
 import { render } from 'ink';
 import { createElement } from 'react';
 import { App } from './App.js';
+import { SetupWizard } from './components/SetupWizard.js';
 
 // EPIPE / ECONNRESET on process streams means the remote end disappeared.
 // Attach no-op error listeners so they never become unhandled crashes.
@@ -40,6 +41,7 @@ import { join } from 'node:path';
 import {
   findInstallDir, findJar, findMvn, buildBackend,
   startBackend, waitForBackend, cleanupBackend,
+  findAvailablePorts, portInUse, killPort,
 } from './launcher.js';
 import { loadConfig } from './config.js';
 import type { ChildProcess } from 'node:child_process';
@@ -56,8 +58,9 @@ function printUsage(): void {
   console.log('  jwcode version                Print version');
   console.log('');
   console.log('Options:');
-  console.log('  -p, --port <port>             HTTP port (default: 8080, WS auto: port+1)');
+  console.log('  -p, --port <port>             HTTP port (default: auto, first available from 8080)');
   console.log('  -w, --workspace <dir>         Workspace directory (default: current directory)');
+  console.log('  -F, --force                   Kill existing process on target port before starting');
   console.log('  -B, --build                   Force rebuild backend (dev mode only)');
   console.log('  -b, --backend <url>           Backend URL (run mode, WS auto-derived)');
   console.log('  --ws <url>                    Override WebSocket URL');
@@ -80,6 +83,7 @@ function parseArgs(): Record<string, string | boolean> {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--build' || arg === '-B') args.build = true;
+    else if (arg === '--force' || arg === '-F') args.force = true;
     else if (arg === '--port' || arg === '-p') args.port = argv[++i];
     else if (arg === '--workspace' || arg === '-w') args.workspace = argv[++i];
     else if (arg === '--backend' || arg === '-b') args.backend = argv[++i];
@@ -90,20 +94,37 @@ function parseArgs(): Record<string, string | boolean> {
 }
 
 async function cmdStart(args: Record<string, string | boolean>): Promise<void> {
-  const port = parseInt(String(args.port || '8080'), 10);
-  const wsPort = port + 1;
+  const forceKill = !!args.force;
   const build = !!args.build;
   const workspaceDir = String(args.workspace || process.cwd());
-
   const installDir = findInstallDir();
+
+  // Determine ports: explicit -p flag, or auto-detect available pair
+  let httpPort: number;
+  let wsPort: number;
+  if (args.port) {
+    httpPort = parseInt(String(args.port), 10);
+    wsPort = httpPort + 1;
+    if (!forceKill && (portInUse(httpPort) || portInUse(wsPort))) {
+      console.error(`[launcher] Port ${httpPort} or ${wsPort} is already in use.`);
+      console.error('[launcher] Use --force to replace the existing process, or omit -p for auto port selection.');
+      process.exit(1);
+    }
+  } else {
+    const ports = findAvailablePorts(8080);
+    httpPort = ports.httpPort;
+    wsPort = ports.wsPort;
+  }
+
   console.log('╔══════════════════════════════════════╗');
   console.log('║   JWCode — Java AI Coding Tool       ║');
   console.log('╚══════════════════════════════════════╝');
   console.log(`  Workspace: ${workspaceDir}`);
+  console.log(`  HTTP API:  http://localhost:${httpPort}`);
+  console.log(`  WebSocket: ws://localhost:${wsPort}/ws`);
 
   // Build if requested or if jar doesn't exist (dev mode)
   if (build || !findJar(installDir)) {
-    // Only Maven-build in dev mode (when pom.xml exists)
     if (existsSync(join(installDir, 'pom.xml'))) {
       buildBackend(installDir);
     } else if (!findJar(installDir)) {
@@ -114,7 +135,7 @@ async function cmdStart(args: Record<string, string | boolean>): Promise<void> {
   }
 
   // Start Java backend
-  const backendProc = startBackend(installDir, workspaceDir, port, wsPort);
+  const backendProc = startBackend({ installDir, workspaceDir, port: httpPort, wsPort, forceKill });
 
   // Cleanup on exit
   let stopping = false;
@@ -136,7 +157,7 @@ async function cmdStart(args: Record<string, string | boolean>): Promise<void> {
     });
   });
 
-  await Promise.race([waitForBackend(port), backendDead]);
+  await Promise.race([waitForBackend(httpPort), backendDead]);
 
   if (backendProc.exitCode !== null && backendProc.exitCode !== 0) {
     console.error('[launcher] Backend failed to start. Exiting.');
@@ -145,8 +166,28 @@ async function cmdStart(args: Record<string, string | boolean>): Promise<void> {
   }
 
   // Start TUI
-  const backendUrl = `http://localhost:${port}`;
+  const backendUrl = `http://localhost:${httpPort}`;
   const wsUrl = `ws://localhost:${wsPort}/ws`;
+
+  // First-run: check if a provider is configured, show setup wizard if not
+  let providerConfigured = false;
+  try {
+    const statusRes = await fetch(`${backendUrl}/api/config/provider`);
+    const status = await statusRes.json() as any;
+    providerConfigured = status?.data?.configured === true;
+  } catch { /* proceed to wizard if status check fails */ }
+
+  if (!providerConfigured) {
+    // Render setup wizard instead of main app
+    await new Promise<void>((resolve) => {
+      const { unmount } = render(
+        createElement(SetupWizard, {
+          backendUrl,
+          onComplete: () => { unmount(); resolve(); },
+        }),
+      );
+    });
+  }
 
   const { unmount } = render(
     createElement(App, { backendUrl, wsUrl, onExit: () => { cleanup(); process.exit(0); } }),

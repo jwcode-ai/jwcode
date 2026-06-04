@@ -6,7 +6,7 @@ import { useChatStore } from '../../stores/chatStore';
 interface SessionGridProps {
   tabs: SessionTab[];
   activeSessionId: string | null;
-  onSend: (sessionId: string, content: string) => void;
+  onSend: (sessionId: string, content: string, referencedFiles?: string[]) => void;
   onStop: (sessionId: string) => void;
   onPause: (sessionId: string) => void;
   onResume: (sessionId: string) => void;
@@ -63,7 +63,7 @@ export const SessionGrid = memo(function SessionGrid({
               messages={messages}
               isGenerating={generating}
               isPaused={paused}
-              onSend={(content) => onSend(tab.id, content)}
+              onSend={(content, files) => onSend(tab.id, content, files)}
               onStop={() => onStop(tab.id)}
               onPause={() => onPause(tab.id)}
               onResume={() => onResume(tab.id)}

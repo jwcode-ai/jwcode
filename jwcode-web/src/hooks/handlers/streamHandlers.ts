@@ -106,6 +106,17 @@ export function handleStreamMessage(rawType: string, rawData: any, sessionId: st
       chatStore.resumeGeneration(sessionId);
       break;
 
+    case 'compaction_progress':
+      try {
+        const cp = JSON.parse(rawData || '{}');
+        useTokenStore.getState().setCompactionProgress({
+          stage: cp.stage || '',
+          percent: cp.percent || 0,
+          message: cp.message || '',
+        });
+      } catch (e) { console.error('Failed to parse compaction_progress:', e); }
+      break;
+
     case 'context_compressed':
       try {
         const cd = JSON.parse(rawData || '{}');
@@ -117,6 +128,8 @@ export function handleStreamMessage(rawType: string, rawData: any, sessionId: st
           compressedCount: cd.compressedCount || 0,
           tokensSaved: cd.tokensSaved || 0,
         });
+        // Clear progress bar on completion
+        useTokenStore.getState().setCompactionProgress(null);
       } catch (e) { console.error('Failed to parse context_compressed:', e); }
       break;
 

@@ -138,6 +138,38 @@ export function buildBackend(projectRoot: string): void {
   }
 }
 
+/**
+ * Check whether a port is currently in use (listening).
+ */
+export function portInUse(port: number): boolean {
+  try {
+    if (process.platform === 'win32') {
+      const out = execSync(`netstat -ano | findstr :${port} | findstr LISTENING`, { encoding: 'utf-8' });
+      return out.trim().length > 0;
+    } else {
+      execSync(`lsof -ti:${port}`, { stdio: 'ignore' });
+      return true;
+    }
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Find a pair of consecutive free ports starting from startPort.
+ * Returns [httpPort, wsPort].
+ */
+export function findAvailablePorts(startPort = 8080, maxAttempts = 20): { httpPort: number; wsPort: number } {
+  for (let port = startPort; port < startPort + maxAttempts; port++) {
+    if (!portInUse(port) && !portInUse(port + 1)) {
+      return { httpPort: port, wsPort: port + 1 };
+    }
+    // Skip the pair if either port is in use
+    if (portInUse(port + 1)) port++;
+  }
+  throw new Error(`No available port pair found in range ${startPort}-${startPort + maxAttempts}`);
+}
+
 export function killPort(port: number): void {
   try {
     if (process.platform === 'win32') {
@@ -186,12 +218,17 @@ export function waitForBackend(port: number, timeout = 60): Promise<void> {
   });
 }
 
-export function startBackend(
-  installDir: string,
-  workspaceDir: string,
-  port: number,
-  wsPort: number,
-): ChildProcess {
+export interface StartOptions {
+  installDir: string;
+  workspaceDir: string;
+  port: number;
+  wsPort: number;
+  /** Kill existing processes on the ports before starting (default: false). */
+  forceKill?: boolean;
+}
+
+export function startBackend(opts: StartOptions): ChildProcess {
+  const { installDir, workspaceDir, port, wsPort, forceKill } = opts;
   const java = findJava();
   const jarPath = findJar(installDir);
   if (!jarPath) {
@@ -199,11 +236,13 @@ export function startBackend(
     process.exit(1);
   }
 
+  if (forceKill) {
+    killPort(port);
+    killPort(wsPort);
+  }
+
   console.log(`[launcher] Starting backend: ${java} -jar ${jarPath}`);
   console.log(`[launcher] Workspace: ${workspaceDir}`);
-
-  killPort(port);
-  killPort(wsPort);
 
   const args = ['-jar', jarPath, String(port), String(wsPort), workspaceDir];
   const proc = spawn(java, args, {
