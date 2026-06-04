@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Root Ink component -- layout, WS connection, and event dispatch.
  * Uses extracted hooks: useStreamHandlers, useCommandHandler, useKeyboardInput.
  */
@@ -162,7 +162,7 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
     if (text.startsWith('/') && !(cmd && cmd in SLASH_COMMANDS)) return;
     saveToHistory(text);
     const msg = createMessage('user', text);
-    updateAppState(prev => ({ ...prev, messages: [...prev.messages, msg] }));
+    updateAppState(prev => ({ ...prev, messages: [...prev.messages, msg], scrollOffset: prev.messages.length + 10 }));
     clientRef.current!.chat(text, planMode);
   }, [onExit, planMode]);
 
@@ -178,12 +178,13 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
 
   const handlePaletteSelect = useCallback((cmd: string | null) => {
     if (cmd) {
-      executeCommand(cmd);
+      setInput(cmd);
+      setShowPalette(false);
     } else {
       setShowPalette(false);
       setInput('');
     }
-  }, [executeCommand]);
+  }, []);
 
   const handleApprovalAllow = useCallback((approvalId: string) => {
     clientRef.current?.approveHook(approvalId);
@@ -221,8 +222,20 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
   const placeholder = 'Type a message or / for commands...';
 
   return (
-    <Box flexDirection="column" width="100%" height="100%">
-      <StatusLine />
+    <Box flexDirection="column" width="100%">
+      {messages.length === 0 && !currentMessage && (
+        <>
+          <Box height={1} paddingLeft={2}>
+            <Text color="cyan">???▌   <Text bold>JWCode</Text> v3.0.0</Text>
+          </Box>
+          <Box height={1} paddingLeft={2}>
+            <Text color="cyan">????  jwcode · Java AI Coding CLI</Text>
+          </Box>
+          <Box height={1} paddingLeft={2}>
+            <Text dimColor>  ??    Type / for commands</Text>
+          </Box>
+        </>
+      )}
       <Box flexGrow={1} flexDirection="column">
         <ChatArea
           messages={messages}
@@ -235,68 +248,60 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
           toolCallsExpanded={toolCallsExpanded}
         />
       </Box>
+      <Box>
+        {showPalette && (
+          <CommandPalette filter={input} onSelect={handlePaletteSelect} />
+        )}
+        {showHelp && (() => {
+          const helpLines = HELP_TEXT.split('\n');
+          const helpMax = Math.max(5, terminalRows - 12);
+          const helpEnd = Math.max(0, helpLines.length - helpScroll);
+          const helpStart = Math.max(0, helpEnd - helpMax);
+          const visibleHelp = helpLines.slice(helpStart, helpEnd);
+          return (
+            <Box flexDirection="column" borderStyle="single" borderColor="cyan" paddingX={1}>
+              {helpLines.length > helpMax && (
+                <Box>
+                  <Text dimColor>{'  ' + (helpStart + 1) + '-' + helpEnd + ' / ' + helpLines.length + '  PgUp/PgDn scroll / Esc close'}</Text>
+                </Box>
+              )}
+              {visibleHelp.map((line, i) => (
+                <Text key={i} color="cyan">{line}</Text>
+              ))}
+            </Box>
+          );
+        })()}
+        {showApproval && (
+          <ApprovalModal
+            toolName={showApproval.toolName}
+            payload={showApproval.payload}
+            onAllow={handleApprovalAllowForModal}
+            onDeny={handleApprovalDenyForModal}
+          />
+        )}
+      </Box>
       <Box flexDirection="row" borderStyle="single" borderColor={connected ? 'cyan' : 'red'} paddingLeft={1}>
         <Text color="green" bold>&gt; </Text>
-        <Box flexGrow={1}>
-          <TextInput
-            value={input}
-            onChange={handleChange}
-            onSubmit={handleSubmit}
-            placeholder={placeholder}
-            disabled={showApproval !== null}
-          />
-        </Box>
-      </Box>
-      <Box paddingLeft={2} height={1}>
-        <Text color={planMode ? 'cyan' : 'grey'} bold={planMode} dimColor={!planMode}>
-          {planMode ? '●Plan' : '○Plan'}
-        </Text>
-        <Text>{'  '}</Text>
-        <Text color={!planMode ? 'green' : 'grey'} bold={!planMode} dimColor={planMode}>
-          {!planMode ? '●Act' : '○Act'}
-        </Text>
-        <Text dimColor>  Tab switch</Text>
-      </Box>
-      {!connected && (
-        <Box>
-          <Text color="red">Backend not connected -- WebSocket reconnecting.</Text>
-        </Box>
-      )}
-      {planWaiting && (
-        <Box>
-          <Text color="yellow" bold>Plan ready -- /confirm to execute, /cancel to discard.</Text>
-        </Box>
-      )}
-      {showPalette && (
-        <CommandPalette filter={input} onSelect={handlePaletteSelect} />
-      )}
-      {showHelp && (() => {
-        const helpLines = HELP_TEXT.split('\n');
-        const helpMax = Math.max(5, terminalRows - 12);
-        const helpEnd = Math.max(0, helpLines.length - helpScroll);
-        const helpStart = Math.max(0, helpEnd - helpMax);
-        const visibleHelp = helpLines.slice(helpStart, helpEnd);
-        return (
-          <Box flexDirection="column" borderStyle="single" borderColor="cyan" paddingX={1}>
-            {helpLines.length > helpMax && (
-              <Box>
-                <Text dimColor>{'  ' + (helpStart + 1) + '-' + helpEnd + ' / ' + helpLines.length + '  PgUp/PgDn scroll / Esc close'}</Text>
-              </Box>
-            )}
-            {visibleHelp.map((line, i) => (
-              <Text key={i} color="cyan">{line}</Text>
-            ))}
-          </Box>
-        );
-      })()}
-      {showApproval && (
-        <ApprovalModal
-          toolName={showApproval.toolName}
-          payload={showApproval.payload}
-          onAllow={handleApprovalAllowForModal}
-          onDeny={handleApprovalDenyForModal}
+        <TextInput
+          value={input}
+          onChange={handleChange}
+          onSubmit={handleSubmit}
+          placeholder={placeholder}
+          disabled={showApproval !== null}
         />
-      )}
+      </Box>
+      <StatusLine />
+      <Box height={1}>
+        {!connected && (
+          <Text color="red">Backend not connected -- WebSocket reconnecting.</Text>
+        )}
+      </Box>
+      <Box height={1}>
+        {planWaiting && (
+          <Text color="yellow" bold>Plan ready -- /confirm to execute, /cancel to discard.</Text>
+        )}
+      </Box>
     </Box>
   );
 }
+

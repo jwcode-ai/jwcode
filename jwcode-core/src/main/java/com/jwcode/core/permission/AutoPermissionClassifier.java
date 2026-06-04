@@ -255,8 +255,12 @@ public class AutoPermissionClassifier {
             || normalized.startsWith("/sys/") || normalized.startsWith("/boot/")
             || normalized.startsWith("/dev/") || normalized.startsWith("c:/windows/system32")
             || normalized.startsWith("c:/windows/system")
+            || normalized.startsWith("c:/windows/") || normalized.startsWith("c:/program files")
+            || normalized.startsWith("c:/program files (x86)")
             || normalized.startsWith("/usr/bin/") || normalized.startsWith("/bin/")
-            || normalized.startsWith("/sbin/") || normalized.startsWith("/usr/sbin/");
+            || normalized.startsWith("/sbin/") || normalized.startsWith("/usr/sbin/")
+            || normalized.startsWith("/root/") || normalized.startsWith("/var/")
+            || normalized.startsWith("/opt/") || normalized.startsWith("/tmp/");
     }
 
     private boolean isSensitiveFile(String path) {

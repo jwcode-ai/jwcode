@@ -284,11 +284,31 @@ public class SqliteCheckpointStorage implements CheckpointStorage {
 
     @Override
     public void clear() {
-        try (Statement stmt = connection.createStatement()) {
-            stmt.execute("DELETE FROM writes WHERE checkpoint_id IN (SELECT id FROM checkpoints WHERE session_id = '" + sessionId + "')");
-            stmt.execute("DELETE FROM versions_seen WHERE checkpoint_id IN (SELECT id FROM checkpoints WHERE session_id = '" + sessionId + "')");
-            stmt.execute("DELETE FROM channel_versions WHERE checkpoint_id IN (SELECT id FROM checkpoints WHERE session_id = '" + sessionId + "')");
-            stmt.execute("DELETE FROM checkpoints WHERE session_id = '" + sessionId + "'");
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM writes WHERE checkpoint_id IN (SELECT id FROM checkpoints WHERE session_id = ?)")) {
+            ps.setString(1, sessionId);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            logger.log(Level.WARNING, "Failed to clear writes", e);
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM versions_seen WHERE checkpoint_id IN (SELECT id FROM checkpoints WHERE session_id = ?)")) {
+            ps.setString(1, sessionId);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            logger.log(Level.WARNING, "Failed to clear versions_seen", e);
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM channel_versions WHERE checkpoint_id IN (SELECT id FROM checkpoints WHERE session_id = ?)")) {
+            ps.setString(1, sessionId);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            logger.log(Level.WARNING, "Failed to clear channel_versions", e);
+        }
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM checkpoints WHERE session_id = ?")) {
+            ps.setString(1, sessionId);
+            ps.executeUpdate();
         } catch (SQLException e) {
             logger.log(Level.WARNING, "Failed to clear checkpoints", e);
         }

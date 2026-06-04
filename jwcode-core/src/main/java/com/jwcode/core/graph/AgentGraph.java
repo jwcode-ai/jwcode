@@ -313,8 +313,9 @@ public class AgentGraph {
         if (!state.getChannels().containsKey("messages")) {
             state.addChannel("messages",
                     new BinaryOpChannel<>(new ArrayList<>(), (a, b) -> {
-                        ((List) a).addAll((List) b);
-                        return a;
+                        ArrayList<Object> merged = new ArrayList<>(a);
+                        merged.addAll(b);
+                        return merged;
                     }));
         }
         // Ensure a "next_node" channel for conditional routing

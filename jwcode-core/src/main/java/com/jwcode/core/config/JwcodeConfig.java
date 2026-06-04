@@ -439,6 +439,9 @@ public class JwcodeConfig {
         
         @JsonProperty("max-message-history")
         private int maxMessageHistory = 0;  // Session 消息 FIFO 硬上限，默认 0 表示不限制
+
+        @JsonProperty("max-consecutive-tool-only-rounds")
+        private int maxConsecutiveToolOnlyRounds = 100;  // 连续仅工具调用无文本回复的轮数上限
     }
     
     /**

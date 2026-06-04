@@ -548,8 +548,7 @@ public class LLMQueryEngine {
     private static final int SYSTEM_PROMPT_DEDUP_WINDOW = 5;
     // 空回复时的引导提示
     private static final String EMPTY_RESPONSE_PROMPT = "你上一条回复为空。请继续完成当前任务，如果已完成请添加 [FINISH] 标记。";
-    // 【优化】无进展检测：连续 N 轮仅工具调用无文本回复则强制终止
-    private static final int MAX_CONSECUTIVE_TOOL_ONLY_ROUNDS = 30;
+    // 【优化】无进展检测阈值已移至 EngineConfig.maxConsecutiveToolOnlyRounds（可通过 config.yaml 配置）
     // 【修复】纯思考无行动检测：连续 N 轮仅有 reasoning 但无文本/无工具调用则强制终止
     private static final int MAX_CONSECUTIVE_THINKING_ONLY_ROUNDS = 10;
     // 【修复】连续失败工具轮数检测：连续 N 轮工具调用全部失败则强制终止
@@ -566,19 +565,13 @@ public class LLMQueryEngine {
      * @param emptyResponseCount 连续空回复次数
      */
     private CompletableFuture<QueryResult> runConversationLoop(int iteration, int emptyResponseCount) {
-        // 迭代限制已移至 QueryConfig.maxIterations 配置
+        // Quick guard: max iterations
         if (config.getMaxIterations() > 0 && iteration >= config.getMaxIterations()) {
             logger.warning("[LLMQueryEngine] Max iterations reached: " + config.getMaxIterations());
             return CompletableFuture.completedFuture(QueryResult.error("Max iterations exceeded"));
         }
-        // 检测会话是否被外部压缩（如 /compact 命令），如果是则重置 TokenBudget
-        if (session.getCompactCount() > lastSeenCompactCount) {
-            resetTokenBudget();
-            lastSeenCompactCount = session.getCompactCount();
-            logger.info("[LLMQueryEngine] Context compacted detected, TokenBudget reset.");
-        }
 
-        // 【任务生命周期】检查当前任务状态
+        // Task lifecycle checks (non-stream only)
         var activeTask = session.getActiveTask();
         if (activeTask != null && activeTask.getStatus() == com.jwcode.core.task.TaskStatus.WAITING_INPUT) {
             logger.info("[LLMQueryEngine] 任务处于 WAITING_INPUT 状态，暂停循环等待用户输入");
@@ -587,169 +580,31 @@ public class LLMQueryEngine {
                     "⏳ 等待用户补充信息：" + activeTask.getWaitingFor()))
             );
         }
-        
-        // 【任务生命周期】如果任务已规划但未开始执行，注入开始执行提示
+
         if (activeTask != null && activeTask.getStatus() == com.jwcode.core.task.TaskStatus.PLANNED && iteration == 0) {
             session.addMessage(Message.createSystemMessage(
                 "任务清单已制定完成，请从第一个待办步骤开始执行。每完成一步请汇报进度。"
             ));
             activeTask.setStatus(com.jwcode.core.task.TaskStatus.EXECUTING);
-            // 使用 TaskLifecycleManager 启动首个步骤，会自动发布步骤提示
             taskLifecycleManager.startFirstStep(session);
         }
 
-        // 【修复】自动触发上下文压缩（优先于耗尽检查，给压缩一次拯救机会）
-        // 使用 ContextWindowManager 统一压缩入口，包含 TokenBudget 释放和事件通知
-        // 注意：预算已耗尽时绕过冷却时间，执行紧急压缩
-        // 【修复】冷却期内若使用率 > 85% 也允许跳过冷却，防止冷却期阻塞紧急压缩
-        long now = System.currentTimeMillis();
-        boolean budgetExhausted = tokenBudget.isExhausted();
-        boolean inCooldown = (now - lastCompactTime) <= COMPACT_COOLDOWN_MS;
-        boolean highUrgency = tokenBudget.usageRatio() > 0.85;
-        if (tokenBudget.usageRatio() > 0.70 && session.getMessages().size() > 10 
-            && (!inCooldown || budgetExhausted || highUrgency)) {
-            String compactReason = budgetExhausted ? "EMERGENCY (budget exhausted)" 
-                : highUrgency ? "HIGH_URGENCY usage=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100)
-                : "usage=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100);
-            logger.info("[LLMQueryEngine] Auto-compacting context, reason=" + compactReason + "...");
-            int beforeCount = session.getMessages().size();
-            // 使用 ContextWindowManager 统一压缩入口
-            // 【修复】budgetExhausted 时传 force=true，绕过 estimateTokens 启发式检查
-            ContextWindowManager windowManager = createContextWindowManager();
-            List<Message> compacted = windowManager.prepareMessages(session.getMessages(), budgetExhausted);
-            if (compacted != null && compacted.size() < beforeCount) {
-                session.setMessages(compacted);
-                session.markCompacted();
-                lastCompactTime = now; // 更新压缩时间
-                
-                int messagesRemoved = beforeCount - compacted.size();
-                long tokensSaved;
-                if (budgetExhausted) {
-                    // 紧急压缩：上下文已从根本上重构，旧 token 计数无意义，应完全重置
-                    tokenBudget.reset();
-                    tokensSaved = (long) messagesRemoved * 100;
-                    logger.info("[LLMQueryEngine] Token 银行: 紧急压缩后重置预算 (移除了 " + messagesRemoved + " 条消息)");
-                } else {
-                    tokensSaved = estimateCompactTokenSavings(compacted, messagesRemoved);
-                    if (tokensSaved > 0) {
-                        tokenBudget.releaseTokens(tokensSaved);
-                        logger.info("[LLMQueryEngine] Token 银行: 自动压缩释放 " + tokensSaved
-                            + " tokens (移除了 " + messagesRemoved + " 条消息)");
-                    }
-                }
+        // Shared pre-flight checks (compact, budget, stagnation, message/tool conversion)
+        PreFlightResult preFlight = runPreFlightChecks(iteration, null);
+        if (preFlight.shouldAbort()) return preFlight.abort;
 
-                String compactSummary = "Token 使用率 " + String.format("%.0f%%", tokenBudget.usageRatio() * 100) + "，自动触发上下文压缩";
-                pipeline.publish(new ObservationEvent.ContextCompressed(
-                    beforeCount, compacted.size(), tokensSaved, compactSummary));
-                if (stepCallback != null) {
-                    stepCallback.onContextCompressed(beforeCount, compacted.size(),
-                        tokensSaved, compactSummary);
-                }
-
-                logger.info("[LLMQueryEngine] Auto-compacted: " + beforeCount + " -> " + session.getMessages().size()
-                    + " messages, budget after compact=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100));
-            } else {
-                logger.warning("[LLMQueryEngine] Auto-compact skipped: result size not reduced (before=" + beforeCount + ")");
-            }
-        } else if (tokenBudget.usageRatio() > 0.70 && inCooldown && !budgetExhausted && !highUrgency) {
-            logger.info("[LLMQueryEngine] Auto-compact skipped: cooldown period active (" 
-                + ((COMPACT_COOLDOWN_MS - (now - lastCompactTime)) / 1000) + "s remaining, usage=" 
-                + String.format("%.0f%%", tokenBudget.usageRatio() * 100) + ")");
-        }
-
-        // 压缩后再次检查 Token 预算（放在压缩之后，给压缩一次拯救机会）
-        if (tokenBudget.isExhausted()) {
-            logger.warning("[LLMQueryEngine] Token budget exhausted: " + tokenBudget);
-            triggerStepComplete("LLM查询", "Token 预算已耗尽");
-            return CompletableFuture.completedFuture(
-                QueryResult.error("Token 预算已耗尽，任务被迫终止。请使用 /compact 压缩上下文后重试。")
-            );
-        }
-
-        // Token 预算紧张时缓存建议（将在 convertSessionMessages 中临时注入，不保存到 session 历史）
-        if (iteration > 0) {
-            String advice = tokenBudget.toPromptAdvice();
-            if (!advice.isEmpty()) {
-                logger.info("[LLMQueryEngine] Token budget advice pending");
-                this.pendingBudgetAdvice = advice;
-            }
-        }
-
-        // 后备：迭代限制检查（Token 预算的兜底安全网）
-        if (config.getMaxIterations() > 0 && iteration >= config.getMaxIterations()) {
-            logger.warning("[LLMQueryEngine] Max iterations reached: " + config.getMaxIterations());
-            triggerStepComplete("LLM查询", "达到最大迭代次数限制");
-            return CompletableFuture.completedFuture(
-                QueryResult.error("达到最大迭代次数限制")
-            );
-        }
-        
-        // 【优化】无进展检测：连续多轮仅工具调用无文本回复时强制终止
-        if (consecutiveToolOnlyRounds >= MAX_CONSECUTIVE_TOOL_ONLY_ROUNDS) {
-            logger.warning("[LLMQueryEngine] Stagnation detected: " + consecutiveToolOnlyRounds
-                + " consecutive tool-only rounds without progress, force terminating");
-            triggerStepComplete("LLM查询", "检测到任务停滞（连续" + consecutiveToolOnlyRounds + "轮仅工具调用无进展）");
-            return CompletableFuture.completedFuture(
-                QueryResult.error("任务停滞：连续" + consecutiveToolOnlyRounds + "轮工具调用无进展，已自动终止")
-            );
-        }
-
-        // 【修复】纯思考无行动检测：连续多轮仅有 reasoning 无文本无工具调用时强制终止
-        if (consecutiveThinkingOnlyRounds >= MAX_CONSECUTIVE_THINKING_ONLY_ROUNDS) {
-            logger.warning("[LLMQueryEngine] Thinking-only stagnation: " + consecutiveThinkingOnlyRounds
-                + " consecutive rounds with only reasoning, no action");
-            triggerStepComplete("LLM查询", "模型持续思考但无行动，已自动终止");
-            return CompletableFuture.completedFuture(
-                QueryResult.error("模型持续思考但无行动，已自动终止")
-            );
-        }
-
-        // 【修复】连续失败工具检测：连续 N 轮工具调用全部失败时强制终止
-        if (consecutiveFailedToolRounds >= MAX_CONSECUTIVE_FAILED_TOOL_ROUNDS) {
-            logger.warning("[LLMQueryEngine] Consecutive failed tool rounds: " + consecutiveFailedToolRounds
-                + " (limit=" + MAX_CONSECUTIVE_FAILED_TOOL_ROUNDS + "), force terminating");
-            triggerStepComplete("LLM查询", "连续" + consecutiveFailedToolRounds + "轮工具调用全部失败，已自动终止");
-            return CompletableFuture.completedFuture(
-                QueryResult.error("连续" + consecutiveFailedToolRounds + "轮工具调用全部失败，已自动终止。请检查工具配置或网络连接后重试。")
-            );
-        }
-
-        // 已移除累计超时检查，由 HTTP 层超时控制（OpenAILLMService 中的 timeoutSeconds）
-        // 单次 LLM 请求的超时由 HTTP 客户端处理，不受工具执行时间影响
-        
-        // 【Phase 5】注入当前 Agent 的系统提示词（仅首次迭代，避免重复）
+        // Event publishing
         if (iteration == 0) {
-            injectAgentSystemPrompt();
-            checkTokenBudget();
-        }
-
-        // 转换会话消息到 LLM 格式
-        List<LLMMessage> llmMessages = convertSessionMessages(session);
-        
-        logger.info("[LLMQueryEngine] Iteration " + iteration + ", messages: " + llmMessages.size());
-        
-        // 获取可用工具（已按 Agent 白名单过滤）
-        List<LLMTool> tools = convertTools(toolExecutor.getEnabledTools());
-        
-        // 【优化】提醒使用 [FINISH] 标记：降低注入频率，每 FINISH_REMINDER_INTERVAL 轮才检查一次
-        if (iteration % FINISH_REMINDER_INTERVAL == 0 && !hasRecentSystemPrompt("[FINISH]")) {
-            session.addMessage(Message.createSystemMessage(
-                "提示：如果任务已完成，请在回复末尾添加 [FINISH] 标记以结束对话。"
-            ));
-        }
-        
-        // 触发事件：发送请求
-        if (iteration == 0) {
-            pipeline.publish(new ObservationEvent.Thinking("思考", "正在构建请求，发送 " + llmMessages.size() + " 条消息给AI模型..."));
+            pipeline.publish(new ObservationEvent.Thinking("思考", "正在构建请求，发送 " + preFlight.llmMessages.size() + " 条消息给AI模型..."));
         } else {
             pipeline.publish(new ObservationEvent.Thinking("分析", "继续对话循环 (第 " + iteration + " 轮)"));
         }
-        
-        // 发送请求
-        CompletableFuture<LLMResponse> future = tools.isEmpty() 
-            ? llmService.chat(llmMessages)
-            : llmService.chatWithTools(llmMessages, tools);
-        
+
+        // Send request
+        CompletableFuture<LLMResponse> future = preFlight.tools.isEmpty()
+            ? llmService.chat(preFlight.llmMessages)
+            : llmService.chatWithTools(preFlight.llmMessages, preFlight.tools);
+
         return future.thenCompose(response -> handleResponse(response, iteration, emptyResponseCount));
     }
     
@@ -806,18 +661,16 @@ public class LLMQueryEngine {
             // 添加到会话
             session.addMessage(assistantMessage);
             
-            // 【优化】无进展检测：检查回复是否仅有工具调用而无实质文本内容
-            // 注意：只要有工具调用就视为有进展，重置计数器（工具调用本身就是进展）
+            // 【优化】无进展检测：有工具调用但无实质文本内容时计数
             String content = response.getContent();
             boolean hasSubstantiveContent = content != null && !content.trim().isEmpty()
                 && content.trim().length() > 10; // 少于10个字符视为无实质内容
-            boolean hasToolCalls = response.hasToolCalls();
-            if (!hasSubstantiveContent && !hasToolCalls) {
+            if (!hasSubstantiveContent) {
                 consecutiveToolOnlyRounds++;
                 logger.info("[LLMQueryEngine] Tool-only round #" + consecutiveToolOnlyRounds
-                    + " (no substantive text content and no tool calls)");
+                    + " (no substantive text content)");
             } else {
-                consecutiveToolOnlyRounds = 0; // 有实质内容或工具调用则重置
+                consecutiveToolOnlyRounds = 0; // 有实质内容则重置
             }
             
             // 【优化】重复工具检测：检查本次工具名列表是否与上次高度重复
@@ -991,200 +844,41 @@ public class LLMQueryEngine {
             Consumer<String> contentConsumer,
             Consumer<String> thinkingConsumer,
             Consumer<LLMService.StreamToolCallEvent> toolCallConsumer) {
-        // 检测会话是否被外部压缩（如 /compact 命令），如果是则重置 TokenBudget
-        if (session.getCompactCount() > lastSeenCompactCount) {
-            resetTokenBudget();
-            lastSeenCompactCount = session.getCompactCount();
-            logger.info("[LLMQueryEngine] Context compacted detected, TokenBudget reset.");
-        }
+        // Shared pre-flight checks (compact, budget, stagnation, message/tool conversion)
+        PreFlightResult preFlight = runPreFlightChecks(iteration, contentConsumer);
+        if (preFlight.shouldAbort()) return preFlight.abort;
 
-        // 自动触发上下文压缩（优先于耗尽检查，给压缩一次拯救机会）
-        // 使用 ContextWindowManager 统一压缩入口，包含 TokenBudget 释放和事件通知
-        // 注意：预算已耗尽时绕过冷却时间，执行紧急压缩
-        // 【修复】冷却期内若使用率 > 85% 也允许跳过冷却，防止冷却期阻塞紧急压缩
-        long now = System.currentTimeMillis();
-        boolean budgetExhausted = tokenBudget.isExhausted();
-        boolean inCooldown = (now - lastCompactTime) <= COMPACT_COOLDOWN_MS;
-        boolean highUrgency = tokenBudget.usageRatio() > 0.85;
-        if (tokenBudget.usageRatio() > 0.70 && session.getMessages().size() > 10
-            && (!inCooldown || budgetExhausted || highUrgency)) {
-            String compactReason = budgetExhausted ? "EMERGENCY (budget exhausted)" 
-                : highUrgency ? "HIGH_URGENCY usage=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100)
-                : "usage=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100);
-            logger.info("[LLMQueryEngine] Auto-compacting context, reason=" + compactReason + "...");
-            int beforeCount = session.getMessages().size();
-            // 使用 ContextWindowManager 统一压缩入口
-            // 【修复】budgetExhausted 时传 force=true，绕过 estimateTokens 启发式检查
-            ContextWindowManager windowManager = createContextWindowManager();
-            List<Message> compacted = windowManager.prepareMessages(session.getMessages(), budgetExhausted);
-            if (compacted != null && compacted.size() < beforeCount) {
-                session.setMessages(compacted);
-                session.markCompacted();
-                lastCompactTime = now; // 更新压缩时间
-                
-                int messagesRemoved = beforeCount - compacted.size();
-                long tokensSaved;
-                if (budgetExhausted) {
-                    // 紧急压缩：上下文已从根本上重构，旧 token 计数无意义，应完全重置
-                    tokenBudget.reset();
-                    tokensSaved = (long) messagesRemoved * 100;
-                    logger.info("[LLMQueryEngine] Token 银行: 紧急压缩后重置预算 (移除了 " + messagesRemoved + " 条消息)");
-                } else {
-                    tokensSaved = estimateCompactTokenSavings(compacted, messagesRemoved);
-                    if (tokensSaved > 0) {
-                        tokenBudget.releaseTokens(tokensSaved);
-                        logger.info("[LLMQueryEngine] Token 银行: 自动压缩释放 " + tokensSaved
-                            + " tokens (移除了 " + messagesRemoved + " 条消息)");
-                    }
-                }
-
-                String compactSummary = "Token 使用率 " + String.format("%.0f%%", tokenBudget.usageRatio() * 100) + "，自动触发上下文压缩";
-                pipeline.publish(new ObservationEvent.ContextCompressed(
-                    beforeCount, compacted.size(), tokensSaved, compactSummary));
-                if (stepCallback != null) {
-                    stepCallback.onContextCompressed(beforeCount, compacted.size(),
-                        tokensSaved, compactSummary);
-                }
-
-                logger.info("[LLMQueryEngine] Auto-compacted: " + beforeCount + " -> " + session.getMessages().size()
-                    + " messages, budget=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100));
-            } else {
-                logger.warning("[LLMQueryEngine] Auto-compact skipped: result size not reduced (before=" + beforeCount + ")");
-            }
-        } else if (tokenBudget.usageRatio() > 0.70 && inCooldown && !budgetExhausted && !highUrgency) {
-            logger.info("[LLMQueryEngine] Auto-compact skipped: cooldown period active ("
-                + ((COMPACT_COOLDOWN_MS - (now - lastCompactTime)) / 1000) + "s remaining, usage="
-                + String.format("%.0f%%", tokenBudget.usageRatio() * 100) + ")");
-        }
-
-        // 压缩后再次检查 Token 预算
-        if (tokenBudget.isExhausted()) {
-            logger.warning("[LLMQueryEngine] Token budget exhausted: " + tokenBudget);
-            triggerStepComplete("LLM查询", "Token 预算已耗尽");
-            // 【修复】Token 耗尽时，通过 contentConsumer 发送结束信号给前端
-            if (contentConsumer != null) {
-                contentConsumer.accept("\n\n---\n⚠️ **Token 预算已耗尽，任务被迫终止。**\n\n请使用 `/compact` 压缩上下文后重试，或开始新会话。\n\n[FINISH]");
-            }
-            return CompletableFuture.completedFuture(
-                QueryResult.error("Token 预算已耗尽，任务被迫终止。请使用 /compact 压缩上下文后重试。")
-            );
-        }
-
-        // Token 预算紧张时缓存建议（将在 convertSessionMessages 中临时注入，不保存到 session 历史）
-        if (iteration > 0) {
-            String advice = tokenBudget.toPromptAdvice();
-            if (!advice.isEmpty()) {
-                this.pendingBudgetAdvice = advice;
-            }
-        }
-
-        // 后备：迭代限制检查
-        if (config.getMaxIterations() > 0 && iteration >= config.getMaxIterations()) {
-            logger.warning("[LLMQueryEngine] Max iterations reached: " + config.getMaxIterations());
-            triggerStepComplete("LLM查询", "达到最大迭代次数限制");
-            return CompletableFuture.completedFuture(
-                QueryResult.error("达到最大迭代次数限制")
-            );
-        }
-        
-        // 【优化】无进展检测：连续多轮仅工具调用无文本回复时强制终止
-        if (consecutiveToolOnlyRounds >= MAX_CONSECUTIVE_TOOL_ONLY_ROUNDS) {
-            logger.warning("[LLMQueryEngine] Stagnation detected: " + consecutiveToolOnlyRounds
-                + " consecutive tool-only rounds without progress, force terminating");
-            triggerStepComplete("LLM查询", "检测到任务停滞（连续" + consecutiveToolOnlyRounds + "轮仅工具调用无进展）");
-            if (contentConsumer != null) {
-                contentConsumer.accept("\n\n---\n⚠️ **任务停滞：连续 " + consecutiveToolOnlyRounds + " 轮工具调用无进展，已自动终止。**\n\n[FINISH]");
-            }
-            return CompletableFuture.completedFuture(
-                QueryResult.error("任务停滞：连续" + consecutiveToolOnlyRounds + "轮工具调用无进展，已自动终止")
-            );
-        }
-
-        // 【修复】纯思考无行动检测：连续多轮仅有 reasoning 无文本无工具调用时强制终止
-        if (consecutiveThinkingOnlyRounds >= MAX_CONSECUTIVE_THINKING_ONLY_ROUNDS) {
-            logger.warning("[LLMQueryEngine] Thinking-only stagnation: " + consecutiveThinkingOnlyRounds
-                + " consecutive rounds with only reasoning, no action");
-            triggerStepComplete("LLM查询", "模型持续思考但无行动，已自动终止");
-            if (contentConsumer != null) {
-                contentConsumer.accept("\n\n---\n⚠️ **模型持续思考但无行动，已自动终止。**\n\n[FINISH]");
-            }
-            return CompletableFuture.completedFuture(
-                QueryResult.error("模型持续思考但无行动，已自动终止")
-            );
-        }
-
-        // 【修复】连续失败工具检测：连续 N 轮工具调用全部失败时强制终止
-        if (consecutiveFailedToolRounds >= MAX_CONSECUTIVE_FAILED_TOOL_ROUNDS) {
-            logger.warning("[LLMQueryEngine] Consecutive failed tool rounds: " + consecutiveFailedToolRounds
-                + " (limit=" + MAX_CONSECUTIVE_FAILED_TOOL_ROUNDS + "), force terminating");
-            triggerStepComplete("LLM查询", "连续" + consecutiveFailedToolRounds + "轮工具调用全部失败，已自动终止");
-            if (contentConsumer != null) {
-                contentConsumer.accept("\n\n---\n⚠️ **连续" + consecutiveFailedToolRounds + "轮工具调用全部失败，已自动终止。**\n\n请检查工具配置或网络连接后重试。\n\n[FINISH]");
-            }
-            return CompletableFuture.completedFuture(
-                QueryResult.error("连续" + consecutiveFailedToolRounds + "轮工具调用全部失败，已自动终止。请检查工具配置或网络连接后重试。")
-            );
-        }
-
-        // 【Phase 5】注入当前 Agent 的系统提示词（仅首次迭代，避免重复）
+        // Event publishing
         if (iteration == 0) {
-            injectAgentSystemPrompt();
-            checkTokenBudget();
-        }
-
-        // 转换会话消息到 LLM 格式
-        List<LLMMessage> llmMessages = convertSessionMessages(session);
-        
-        logger.info("[LLMQueryEngine] Stream Iteration " + iteration + ", messages: " + llmMessages.size());
-        
-        // 获取可用工具
-        List<LLMTool> tools = convertTools(toolExecutor.getEnabledTools());
-        
-        // 【优化】提醒使用 [FINISH] 标记：降低注入频率，每 FINISH_REMINDER_INTERVAL 轮才检查一次
-        if (iteration % FINISH_REMINDER_INTERVAL == 0 && !hasRecentSystemPrompt("[FINISH]")) {
-            session.addMessage(Message.createSystemMessage(
-                "提示：如果任务已完成，请在回复末尾添加 [FINISH] 标记以结束对话。"
-            ));
-        }
-        
-        // 触发事件：发送请求
-        if (iteration == 0) {
-            pipeline.publish(new ObservationEvent.Thinking("思考", "正在构建请求，发送 " + llmMessages.size() + " 条消息给AI模型..."));
+            pipeline.publish(new ObservationEvent.Thinking("思考", "正在构建请求，发送 " + preFlight.llmMessages.size() + " 条消息给AI模型..."));
         } else {
             pipeline.publish(new ObservationEvent.Thinking("分析", "继续对话循环 (第 " + iteration + " 轮)"));
         }
-        
-        // 包装 Consumer，同时发布到管道
+
+        // Wrap consumers to also publish to pipeline
         Consumer<String> wrappedContentConsumer = chunk -> {
-            if (contentConsumer != null) {
-                contentConsumer.accept(chunk);
-            }
+            if (contentConsumer != null) contentConsumer.accept(chunk);
             pipeline.publish(new ObservationEvent.ContentChunk(chunk));
         };
-        
+
         Consumer<String> wrappedThinkingConsumer = chunk -> {
-            if (thinkingConsumer != null) {
-                thinkingConsumer.accept(chunk);
-            }
+            if (thinkingConsumer != null) thinkingConsumer.accept(chunk);
             pipeline.publish(new ObservationEvent.ThinkingChunk(chunk));
         };
-        
+
         Consumer<LLMService.StreamToolCallEvent> wrappedToolCallConsumer = event -> {
-            if (toolCallConsumer != null) {
-                toolCallConsumer.accept(event);
-            }
-            // StreamToolCallEvent 映射为 ToolCall 事件（工具名和参数从事件中提取）
+            if (toolCallConsumer != null) toolCallConsumer.accept(event);
             String toolName = event != null && event.getName() != null ? event.getName() : "unknown";
             String args = event != null && event.getArguments() != null ? event.getArguments() : "";
             pipeline.publish(new ObservationEvent.ToolCall(toolName, args, event != null ? event.getId() : null));
         };
-        
-        // 发送流式请求
-        CompletableFuture<LLMResponse> future = tools.isEmpty()
-            ? llmService.chatStream(llmMessages, wrappedContentConsumer)
-            : llmService.chatStreamWithTools(llmMessages, tools, wrappedContentConsumer,
+
+        // Send stream request
+        CompletableFuture<LLMResponse> future = preFlight.tools.isEmpty()
+            ? llmService.chatStream(preFlight.llmMessages, wrappedContentConsumer)
+            : llmService.chatStreamWithTools(preFlight.llmMessages, preFlight.tools, wrappedContentConsumer,
                                               wrappedThinkingConsumer, wrappedToolCallConsumer);
-        
+
         return future.thenCompose(response -> handleStreamResponse(response, iteration, emptyResponseCount,
             contentConsumer, thinkingConsumer, toolCallConsumer));
     }
@@ -1914,8 +1608,7 @@ public class LLMQueryEngine {
             // 将 JsonNode 转换为 Map
             JsonNode inputSchema = tool.getInputSchema();
             if (inputSchema != null) {
-                ObjectMapper mapper = new ObjectMapper();
-                Map<String, Object> params = mapper.convertValue(inputSchema, Map.class);
+                Map<String, Object> params = MAPPER.convertValue(inputSchema, Map.class);
                 func.setParameters(params);
             } else {
                 func.setParameters(null);
@@ -1943,6 +1636,187 @@ public class LLMQueryEngine {
         return result;
     }
     
+    // ==================== Pre-flight check result ====================
+
+    /**
+     * Result of {@link #runPreFlightChecks}: either proceed with LLM call,
+     * or abort with a terminal result.
+     */
+    private static class PreFlightResult {
+        final CompletableFuture<QueryResult> abort;
+        final List<LLMMessage> llmMessages;
+        final List<LLMTool> tools;
+
+        private PreFlightResult(CompletableFuture<QueryResult> abort,
+                                List<LLMMessage> msgs, List<LLMTool> tools) {
+            this.abort = abort;
+            this.llmMessages = msgs;
+            this.tools = tools;
+        }
+
+        static PreFlightResult abort(CompletableFuture<QueryResult> f) {
+            return new PreFlightResult(f, null, null);
+        }
+
+        static PreFlightResult proceed(List<LLMMessage> msgs, List<LLMTool> tools) {
+            return new PreFlightResult(null, msgs, tools);
+        }
+
+        boolean shouldAbort() { return abort != null; }
+    }
+
+    /**
+     * Shared pre-flight checks for both stream and non-stream conversation loops.
+     * Extracts ~130 lines of duplicated logic: compact detection, auto-compact,
+     * token budget checks, stagnation detection, iteration limits, agent prompt
+     * injection, message conversion, tool conversion, and FINISH reminders.
+     *
+     * @param iteration current loop iteration
+     * @param contentConsumer nullable; if non-null and an error occurs, the error
+     *                        message is pushed to this consumer (for stream mode)
+     * @return {@link PreFlightResult} — call {@link PreFlightResult#shouldAbort()}
+     *         to decide whether to terminate or proceed with the LLM call
+     */
+    private PreFlightResult runPreFlightChecks(int iteration, Consumer<String> contentConsumer) {
+        // 1. Detect external compact (e.g. /compact command) and reset TokenBudget
+        if (session.getCompactCount() > lastSeenCompactCount) {
+            resetTokenBudget();
+            lastSeenCompactCount = session.getCompactCount();
+            logger.info("[LLMQueryEngine] Context compacted detected, TokenBudget reset.");
+        }
+
+        // 2. Auto-compact
+        long now = System.currentTimeMillis();
+        boolean budgetExhausted = tokenBudget.isExhausted();
+        boolean inCooldown = (now - lastCompactTime) <= COMPACT_COOLDOWN_MS;
+        boolean highUrgency = tokenBudget.usageRatio() > 0.85;
+        if (tokenBudget.usageRatio() > 0.70 && session.getMessages().size() > 10
+            && (!inCooldown || budgetExhausted || highUrgency)) {
+            String compactReason = budgetExhausted ? "EMERGENCY (budget exhausted)"
+                : highUrgency ? "HIGH_URGENCY usage=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100)
+                : "usage=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100);
+            logger.info("[LLMQueryEngine] Auto-compacting context, reason=" + compactReason + "...");
+            int beforeCount = session.getMessages().size();
+            ContextWindowManager windowManager = createContextWindowManager();
+            List<Message> compacted = windowManager.prepareMessages(session.getMessages(), budgetExhausted);
+            if (compacted != null && compacted.size() < beforeCount) {
+                session.setMessages(compacted);
+                session.markCompacted();
+                lastCompactTime = now;
+
+                int messagesRemoved = beforeCount - compacted.size();
+                long tokensSaved;
+                if (budgetExhausted) {
+                    tokenBudget.reset();
+                    tokensSaved = (long) messagesRemoved * 100;
+                } else {
+                    tokensSaved = estimateCompactTokenSavings(compacted, messagesRemoved);
+                    if (tokensSaved > 0) {
+                        tokenBudget.releaseTokens(tokensSaved);
+                    }
+                }
+
+                String compactSummary = "Token 使用率 " + String.format("%.0f%%", tokenBudget.usageRatio() * 100) + "，自动触发上下文压缩";
+                pipeline.publish(new ObservationEvent.ContextCompressed(
+                    beforeCount, compacted.size(), tokensSaved, compactSummary));
+                if (stepCallback != null) {
+                    stepCallback.onContextCompressed(beforeCount, compacted.size(),
+                        tokensSaved, compactSummary);
+                }
+
+                logger.info("[LLMQueryEngine] Auto-compacted: " + beforeCount + " -> " + session.getMessages().size()
+                    + " messages, budget=" + String.format("%.0f%%", tokenBudget.usageRatio() * 100));
+            } else {
+                logger.warning("[LLMQueryEngine] Auto-compact skipped: result size not reduced (before=" + beforeCount + ")");
+            }
+        } else if (tokenBudget.usageRatio() > 0.70 && inCooldown && !budgetExhausted && !highUrgency) {
+            logger.info("[LLMQueryEngine] Auto-compact skipped: cooldown period active ("
+                + ((COMPACT_COOLDOWN_MS - (now - lastCompactTime)) / 1000) + "s remaining, usage="
+                + String.format("%.0f%%", tokenBudget.usageRatio() * 100) + ")");
+        }
+
+        // 3. Token budget exhausted check
+        if (tokenBudget.isExhausted()) {
+            logger.warning("[LLMQueryEngine] Token budget exhausted: " + tokenBudget);
+            triggerStepComplete("LLM查询", "Token 预算已耗尽");
+            if (contentConsumer != null) {
+                contentConsumer.accept("\n\n---\n⚠️ **Token 预算已耗尽，任务被迫终止。**\n\n请使用 `/compact` 压缩上下文后重试，或开始新会话。\n\n[FINISH]");
+            }
+            return PreFlightResult.abort(CompletableFuture.completedFuture(
+                QueryResult.error("Token 预算已耗尽，任务被迫终止。请使用 /compact 压缩上下文后重试。")));
+        }
+
+        // 4. Token budget advice
+        if (iteration > 0) {
+            String advice = tokenBudget.toPromptAdvice();
+            if (!advice.isEmpty()) {
+                this.pendingBudgetAdvice = advice;
+            }
+        }
+
+        // 5. Iteration limit (backup safety net for TokenBudget)
+        if (config.getMaxIterations() > 0 && iteration >= config.getMaxIterations()) {
+            logger.warning("[LLMQueryEngine] Max iterations reached: " + config.getMaxIterations());
+            triggerStepComplete("LLM查询", "达到最大迭代次数限制");
+            return PreFlightResult.abort(CompletableFuture.completedFuture(
+                QueryResult.error("达到最大迭代次数限制")));
+        }
+
+        // 6. Tool-only stagnation
+        if (consecutiveToolOnlyRounds >= config.getMaxConsecutiveToolOnlyRounds()) {
+            logger.warning("[LLMQueryEngine] Stagnation: " + consecutiveToolOnlyRounds
+                + " consecutive tool-only rounds, force terminating");
+            triggerStepComplete("LLM查询", "检测到任务停滞（连续" + consecutiveToolOnlyRounds + "轮仅工具调用无进展）");
+            if (contentConsumer != null) {
+                contentConsumer.accept("\n\n---\n⚠️ **任务停滞：连续 " + consecutiveToolOnlyRounds + " 轮工具调用无进展，已自动终止。**\n\n[FINISH]");
+            }
+            return PreFlightResult.abort(CompletableFuture.completedFuture(
+                QueryResult.error("任务停滞：连续" + consecutiveToolOnlyRounds + "轮工具调用无进展，已自动终止")));
+        }
+
+        // 7. Thinking-only stagnation
+        if (consecutiveThinkingOnlyRounds >= MAX_CONSECUTIVE_THINKING_ONLY_ROUNDS) {
+            logger.warning("[LLMQueryEngine] Thinking-only stagnation: " + consecutiveThinkingOnlyRounds);
+            triggerStepComplete("LLM查询", "模型持续思考但无行动，已自动终止");
+            if (contentConsumer != null) {
+                contentConsumer.accept("\n\n---\n⚠️ **模型持续思考但无行动，已自动终止。**\n\n[FINISH]");
+            }
+            return PreFlightResult.abort(CompletableFuture.completedFuture(
+                QueryResult.error("模型持续思考但无行动，已自动终止")));
+        }
+
+        // 8. Consecutive failed tool rounds
+        if (consecutiveFailedToolRounds >= MAX_CONSECUTIVE_FAILED_TOOL_ROUNDS) {
+            logger.warning("[LLMQueryEngine] Consecutive failed tool rounds: " + consecutiveFailedToolRounds);
+            triggerStepComplete("LLM查询", "连续" + consecutiveFailedToolRounds + "轮工具调用全部失败，已自动终止");
+            if (contentConsumer != null) {
+                contentConsumer.accept("\n\n---\n⚠️ **连续" + consecutiveFailedToolRounds + "轮工具调用全部失败，已自动终止。**\n\n请检查工具配置或网络连接后重试。\n\n[FINISH]");
+            }
+            return PreFlightResult.abort(CompletableFuture.completedFuture(
+                QueryResult.error("连续" + consecutiveFailedToolRounds + "轮工具调用全部失败，已自动终止。请检查工具配置或网络连接后重试。")));
+        }
+
+        // 9. Inject agent system prompt (first iteration only)
+        if (iteration == 0) {
+            injectAgentSystemPrompt();
+            checkTokenBudget();
+        }
+
+        // 10. Convert session messages and tools
+        List<LLMMessage> llmMessages = convertSessionMessages(session);
+        List<LLMTool> tools = convertTools(toolExecutor.getEnabledTools());
+
+        logger.info("[LLMQueryEngine] Iteration " + iteration + ", messages: " + llmMessages.size());
+
+        // 11. FINISH reminder
+        if (iteration % FINISH_REMINDER_INTERVAL == 0 && !hasRecentSystemPrompt("[FINISH]")) {
+            session.addMessage(Message.createSystemMessage(
+                "提示：如果任务已完成，请在回复末尾添加 [FINISH] 标记以结束对话。"));
+        }
+
+        return PreFlightResult.proceed(llmMessages, tools);
+    }
+
     // ==================== 数据类 ====================
     
     public static class EngineConfig {
@@ -1952,6 +1826,7 @@ public class LLMQueryEngine {
         private boolean reasoningModel = false;
         private long tokenBudget = 1_000_000; // 默认 1M token 预算
         private int maxMessageHistory = 0; // 默认 0 表示不限制，由 ContextWindowManager 智能压缩
+        private int maxConsecutiveToolOnlyRounds = 100; // 连续仅工具调用无文本回复的轮数上限
         private boolean layeredMode = true; // 默认启用分层多Agent架构
         private boolean fabricationCheckEnabled = true; // 【反编造】默认启用执行前自检
         
@@ -1973,6 +1848,9 @@ public class LLMQueryEngine {
                     engineConfig.setTimeout(Duration.ofMinutes(engine.getTimeoutMinutes()));
                     engineConfig.setTokenBudget(engine.getTokenBudget());
                     engineConfig.setMaxMessageHistory(engine.getMaxMessageHistory());
+                    if (engine.getMaxConsecutiveToolOnlyRounds() > 0) {
+                        engineConfig.setMaxConsecutiveToolOnlyRounds(engine.getMaxConsecutiveToolOnlyRounds());
+                    }
                 }
             }
             return engineConfig;
@@ -2011,6 +1889,9 @@ public class LLMQueryEngine {
 
         public int getMaxMessageHistory() { return maxMessageHistory; }
         public void setMaxMessageHistory(int maxMessageHistory) { this.maxMessageHistory = maxMessageHistory; }
+
+        public int getMaxConsecutiveToolOnlyRounds() { return maxConsecutiveToolOnlyRounds; }
+        public void setMaxConsecutiveToolOnlyRounds(int maxConsecutiveToolOnlyRounds) { this.maxConsecutiveToolOnlyRounds = maxConsecutiveToolOnlyRounds; }
 
         /** 是否启用分层多Agent架构（Orchestrator→Worker→Tool→MCP） */
         public boolean isLayeredMode() { return layeredMode; }

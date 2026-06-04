@@ -54,19 +54,15 @@ public class ResourcePromptLoader {
         String core = loadResource(BASE_PATH + "core.md");
         if (core != null) sb.append(core).append("\n\n");
 
-        // 2. 行为规则
-        String rules = loadResource(BASE_PATH + "rules.md");
-        if (rules != null) sb.append(rules).append("\n\n");
-
-        // 3. 协议定义
+        // 2. 协议定义
         String protocols = loadProtocols();
         if (protocols != null) sb.append(protocols).append("\n\n");
 
-        // 4. 角色定义（作为上下文参考）
+        // 3. 角色定义（作为上下文参考）
         String roles = loadRoles();
         if (roles != null) sb.append(roles).append("\n\n");
 
-        // 5. 任务模板（作为上下文参考）
+        // 4. 任务模板（作为上下文参考）
         String templates = loadTemplates();
         if (templates != null) sb.append(templates).append("\n\n");
 

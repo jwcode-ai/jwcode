@@ -121,7 +121,7 @@ const ToolCallDisplay = memo(function ToolCallDisplay({
       )}
       {tc.result && (
         <Box paddingLeft={4} flexDirection="column">
-          <Text color={tc.status === "error" ? "red" : "green"} dimColor>{tc.result}</Text>
+          <Text color={tc.status === "error" ? "red" : "green"} dimColor>{truncate(tc.result, 500)}</Text>
         </Box>
       )}
     </Box>
@@ -249,19 +249,22 @@ export const ChatArea = memo(function ChatArea({
       : messages,
     [messages, currentMessage && currentMessage.id]);
 
-  const scrollInfo = useMemo(() => {
+    const scrollInfo = useMemo(() => {
     const availableRows = Math.max(10, terminalRows - reservedRows);
     const linesPerMessage = availableRows > 60 ? 3 : availableRows > 30 ? 4 : 5;
     const maxVisible = Math.max(5, Math.floor(availableRows / linesPerMessage));
     const total = allMessages.length;
-    const clampedOffset = Math.min(scrollOffset, Math.max(0, total - 1));
-    const end = total - clampedOffset;
-    const start = Math.max(0, end - maxVisible);
-    const scrollPercent = total > 0 ? Math.round(((total - end) / total) * 100) : 0;
+    const maxFirstIdx = Math.max(0, total - maxVisible);
+    // scrollOffset = first visible message index (0 = oldest, clamped at bottom)
+    const firstIdx = total > 0 ? Math.min(scrollOffset, maxFirstIdx) : 0;
+    const end = Math.min(total, firstIdx + maxVisible);
+    const start = end - maxVisible;
+    const scrollPercent = maxFirstIdx > 0 ? Math.round((firstIdx / maxFirstIdx) * 100) : 0;
+    const isScrolledUp = firstIdx < maxFirstIdx;
     return {
       total, start, end, scrollPercent,
       visibleMessages: allMessages.slice(start, end),
-      isScrolledUp: clampedOffset > 0,
+      isScrolledUp,
       bar: makeScrollbar(scrollPercent, terminalCols),
     };
   }, [allMessages, scrollOffset, terminalRows, reservedRows, terminalCols]);

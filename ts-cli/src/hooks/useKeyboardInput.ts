@@ -43,10 +43,10 @@ export function useKeyboardInput(opts: KeyboardOptions) {
         lastEscRef.current = now;
         if (prev > 0 && (now - prev) < 500) {
           clientRef.current?.stop();
-          updateAppState(prev => ({ ...prev, statusText: '鈴?宸茬粓姝?(ESC脳2)' }));
+          updateAppState(prev => ({ ...prev, statusText: '已终止 (ESC×2)' }));
         } else {
           clientRef.current?.pause();
-          updateAppState(prev => ({ ...prev, statusText: '鈴?宸叉殏鍋?鈥?鍐嶆寜 ESC 缁堟' }));
+          updateAppState(prev => ({ ...prev, statusText: '已暂停 — 再按 ESC 终止' }));
         }
         return;
       }
@@ -75,45 +75,45 @@ export function useKeyboardInput(opts: KeyboardOptions) {
       return;
     }
     // Scroll
+    // scrollOffset = first visible message index (0 = oldest)
+    // ChatArea clamps it to [0, max(0, total - maxVisible)] so no upper bound needed here
     if (key.pageUp) {
-      updateAppState(prev => ({
-        ...prev,
-        scrollOffset: Math.min(prev.scrollOffset + 5, prev.messages.length),
-      }));
-      return;
-    }
-    if (key.upArrow && !showApproval) {
-      updateAppState(prev => ({
-        ...prev,
-        scrollOffset: Math.min(prev.scrollOffset + 1, prev.messages.length),
-      }));
-      return;
-    }
-    if (key.pageDown) {
       updateAppState(prev => ({
         ...prev,
         scrollOffset: Math.max(0, prev.scrollOffset - 5),
       }));
       return;
     }
-    if (key.downArrow && !showApproval) {
+    if (key.upArrow && !showApproval) {
       updateAppState(prev => ({
         ...prev,
         scrollOffset: Math.max(0, prev.scrollOffset - 1),
       }));
       return;
     }
-    if ((key as any).home) {
+    if (key.pageDown) {
       updateAppState(prev => ({
         ...prev,
-        scrollOffset: prev.messages.length,
+        scrollOffset: prev.scrollOffset + 5,
+      }));
+      return;
+    }
+    if (key.downArrow && !showApproval) {
+      updateAppState(prev => ({
+        ...prev,
+        scrollOffset: prev.scrollOffset + 1,
+      }));
+      return;
+    }
+    if ((key as any).home) {
+      updateAppState(prev => ({
+        ...prev, scrollOffset: 0,
       }));
       return;
     }
     if ((key as any).end) {
       updateAppState(prev => ({
-        ...prev,
-        scrollOffset: 0,
+        ...prev, scrollOffset: prev.messages.length,
       }));
       return;
     }

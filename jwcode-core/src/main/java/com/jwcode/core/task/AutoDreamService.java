@@ -210,8 +210,7 @@ public class AutoDreamService {
 
     private void scanFileTypes(Path dir, Map<String, Integer> types, int maxDepth) {
         if (maxDepth <= 0) return;
-        try {
-            var files = java.nio.file.Files.list(dir);
+        try (var files = java.nio.file.Files.list(dir)) {
             files.forEach(f -> {
                 try {
                     if (java.nio.file.Files.isDirectory(f)) {
@@ -231,14 +230,12 @@ public class AutoDreamService {
                     }
                 } catch (Exception ignored) {}
             });
-            files.close();
         } catch (Exception ignored) {}
     }
 
     private void scanTodos(Path dir, List<String> todos, int maxDepth) {
         if (maxDepth <= 0 || todos.size() >= 20) return;
-        try {
-            var files = java.nio.file.Files.list(dir);
+        try (var files = java.nio.file.Files.list(dir)) {
             files.forEach(f -> {
                 try {
                     if (java.nio.file.Files.isDirectory(f)) {
@@ -264,7 +261,6 @@ public class AutoDreamService {
                     }
                 } catch (Exception ignored) {}
             });
-            files.close();
         } catch (Exception ignored) {}
     }
 

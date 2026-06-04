@@ -478,7 +478,7 @@ public class CompiledAgentGraph {
                         source
                 );
 
-                // Store in the existing CheckpointManager if possible
+                checkpointManager.saveGraphCheckpoint(cp);
                 logger.fine("Checkpoint saved: step=" + step + " source=" + source);
             } catch (Exception e) {
                 logger.log(Level.WARNING, "Failed to save checkpoint", e);

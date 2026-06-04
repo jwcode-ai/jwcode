@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+﻿import { useState, useRef, useCallback } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -62,7 +62,8 @@ export function TextInput({ value, onChange, onSubmit, placeholder, disabled }: 
   const historyRef = useRef<string[]>(loadHistory());
   const histIdxRef = useRef(-1);
   const draftRef = useRef('');
-  const cursorRef = useRef<number>(value.length);
+  const cursorRef = useRef(value.length);
+  const [, forceRender] = useState(0);
 
   // Sync cursor when value changes externally
   if (cursorRef.current > value.length) {
@@ -152,21 +153,23 @@ export function TextInput({ value, onChange, onSubmit, placeholder, disabled }: 
 
     if (key.leftArrow) {
       cursorRef.current = Math.max(0, cursorRef.current - 1);
+      forceRender(c => c + 1);
       return;
     }
     if (key.rightArrow) {
       cursorRef.current = Math.min(value.length, cursorRef.current + 1);
+      forceRender(c => c + 1);
       return;
     }
 
     if (key.upArrow) {
       const hist = navigateHistory('up');
-      if (hist !== null) { onChange(hist); cursorRef.current = hist.length; }
+      if (hist !== null) { onChange(hist); cursorRef.current = hist.length; forceRender(c => c + 1); }
       return;
     }
     if (key.downArrow) {
       const hist = navigateHistory('down');
-      if (hist !== null) { onChange(hist); cursorRef.current = hist.length; }
+      if (hist !== null) { onChange(hist); cursorRef.current = hist.length; forceRender(c => c + 1); }
       return;
     }
 
@@ -180,6 +183,7 @@ export function TextInput({ value, onChange, onSubmit, placeholder, disabled }: 
         var p = cursorRef.current;
         onChange(value.slice(0, p-1) + value.slice(p));
         cursorRef.current = p - 1;
+        forceRender(c => c + 1);
         resetHistory();
       }
       return;
@@ -196,6 +200,7 @@ export function TextInput({ value, onChange, onSubmit, placeholder, disabled }: 
       var p = cursorRef.current;
       onChange(value.slice(0, p) + input + value.slice(p));
       cursorRef.current = p + input.length;
+      forceRender(c => c + 1);
       resetHistory();
     }
   });
@@ -204,7 +209,7 @@ export function TextInput({ value, onChange, onSubmit, placeholder, disabled }: 
   const showPlaceholder = !display && placeholder;
   const tokenEstimate = display ? estimateTokens(display) : 0;
   const charCount = display.length;
-  const cursor = cursorRef.current;
+  const cursor = Math.min(cursorRef.current, value.length);
 
   return (
     <Box flexDirection="column">
