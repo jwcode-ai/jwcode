@@ -11,6 +11,7 @@ public class WebLauncher {
     public static void main(String[] args) {
         int httpPort = 8080;
         int wsPort = 8081;
+        String workspaceDir = null;
         if (args.length > 0) {
             try {
                 httpPort = Integer.parseInt(args[0]);
@@ -26,9 +27,13 @@ public class WebLauncher {
                 System.err.println("无效的 WebSocket 端口号");
             }
         }
+        if (args.length > 2) {
+            workspaceDir = args[2];
+            System.setProperty("user.dir", workspaceDir);
+        }
 
         try {
-            WebServer server = new WebServer(httpPort, wsPort, ToolRegistry.createDefault());
+            WebServer server = new WebServer(httpPort, wsPort, ToolRegistry.createDefault(), workspaceDir);
             server.start();
 
             System.out.println("\n═══════════════════════════════════════════════════");

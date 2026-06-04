@@ -1,6 +1,5 @@
-/**
+﻿/**
  * Root Ink component -- layout, WS connection, and event dispatch.
- * Uses extracted hooks: useStreamHandlers, useCommandHandler, useKeyboardInput.
  */
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Box, Text, useStdout } from 'ink';
@@ -40,22 +39,15 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
   const terminalRows = (stdout as any)?.rows || 24;
   const terminalCols = (stdout as any)?.columns || 80;
 
-  // Use selectors for stable re-renders
   const planMode = useAppSlice(s => s.planMode);
   const connected = useAppSlice(s => s.connected);
   const planWaiting = useAppSlice(s => s.planWaiting);
   const messages = useAppSlice(s => s.messages);
   const currentMessage = useAppSlice(s => s.currentMessage);
-  const scrollOffset = useAppSlice(s => s.scrollOffset);
   const toolCallsExpanded = useAppSlice(s => s.toolCallsExpanded);
 
-  // DEBUG: temporarily disable mouse wheel to isolate input issue
-  // useMouseWheel();
-
-  // Wire WS handlers via the extracted hook
   const wireHandlers = useStreamHandlers(setShowApproval);
 
-  // Initialize WebSocket connection
   useEffect(() => {
     const client = new JwCodeClient(backendUrl, wsUrl);
     clientRef.current = client;
@@ -80,7 +72,6 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
     return () => { client.close(); };
   }, [backendUrl, wsUrl, wireHandlers]);
 
-  // Command execution -- shared between input submit and palette select
   const executeCommand = useCallback((value: string) => {
     const text = value.trim();
     if (!text || !clientRef.current) return;
@@ -102,9 +93,7 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
       const { action, needsArg } = def;
       const cl = clientRef.current;
       switch (action) {
-        case '__exit__':
-          onExit();
-          return;
+        case '__exit__': onExit(); return;
         case '__confirm_plan':
           updateAppState(prev => {
             if (!prev.planWaiting) return prev;
@@ -112,21 +101,11 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
             return { ...prev, planWaiting: false };
           });
           return;
-        case '__cancel_plan':
-          updateAppState(prev => ({ ...prev, planWaiting: false }));
-          return;
-        case 'plan_mode':
-          updateAppState(prev => ({ ...prev, planMode: !prev.planMode }));
-          return;
-        case 'auto_mode':
-          updateAppState(prev => ({ ...prev, autoMode: !prev.autoMode }));
-          return;
-        case 'clear':
-          updateAppState(prev => ({ ...prev, messages: [], currentMessage: null }));
-          return;
-        case 'model_change':
-          if (needsArg && cmdArg) cl?.switchModel(cmdArg);
-          return;
+        case '__cancel_plan': updateAppState(prev => ({ ...prev, planWaiting: false })); return;
+        case 'plan_mode': updateAppState(prev => ({ ...prev, planMode: !prev.planMode })); return;
+        case 'auto_mode': updateAppState(prev => ({ ...prev, autoMode: !prev.autoMode })); return;
+        case 'clear': updateAppState(prev => ({ ...prev, messages: [], currentMessage: null })); return;
+        case 'model_change': if (needsArg && cmdArg) cl?.switchModel(cmdArg); return;
         case 'show_context':
           updateAppState(prev => ({
             ...prev,
@@ -162,7 +141,7 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
     if (text.startsWith('/') && !(cmd && cmd in SLASH_COMMANDS)) return;
     saveToHistory(text);
     const msg = createMessage('user', text);
-    updateAppState(prev => ({ ...prev, messages: [...prev.messages, msg], scrollOffset: prev.messages.length + 10 }));
+    updateAppState(prev => ({ ...prev, messages: [...prev.messages, msg] }));
     clientRef.current!.chat(text, planMode);
   }, [onExit, planMode]);
 
@@ -177,13 +156,8 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
   }, []);
 
   const handlePaletteSelect = useCallback((cmd: string | null) => {
-    if (cmd) {
-      setInput(cmd);
-      setShowPalette(false);
-    } else {
-      setShowPalette(false);
-      setInput('');
-    }
+    if (cmd) { setInput(cmd); setShowPalette(false); }
+    else { setShowPalette(false); setInput(''); }
   }, []);
 
   const handleApprovalAllow = useCallback((approvalId: string) => {
@@ -196,7 +170,6 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
     setShowApproval(null);
   }, []);
 
-  // Keyboard: escape + scroll (from the extracted hook)
   const isGenerating = currentMessage !== null;
   useKeyboardInput({
     showApproval: showApproval !== null,
@@ -204,9 +177,7 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
     isGenerating,
     terminalRows,
     clientRef: clientRef as React.MutableRefObject<JwCodeClient | null>,
-    onDenyApproval: () => {
-      if (showApproval) handleApprovalDeny(showApproval.approvalId);
-    },
+    onDenyApproval: () => { if (showApproval) handleApprovalDeny(showApproval.approvalId); },
     onCloseHelp: () => setShowHelp(false),
     setHelpScroll,
   });
@@ -223,29 +194,26 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
 
   return (
     <Box flexDirection="column" width="100%">
-      {messages.length === 0 && !currentMessage && (
-        <>
-          <Box height={1} paddingLeft={2}>
-            <Text color="cyan">???▌   <Text bold>JWCode</Text> v3.0.0</Text>
-          </Box>
-          <Box height={1} paddingLeft={2}>
-            <Text color="cyan">????  jwcode · Java AI Coding CLI</Text>
-          </Box>
-          <Box height={1} paddingLeft={2}>
-            <Text dimColor>  ??    Type / for commands</Text>
-          </Box>
-        </>
-      )}
+      <Box height={1} paddingLeft={2}>
+        <Text color="cyan">JWCode v3.0.0</Text>
+        {messages.length === 0 && !currentMessage && <Text dimColor>  --  Type / for commands</Text>}
+      </Box>
       <Box flexGrow={1} flexDirection="column">
         <ChatArea
           messages={messages}
           currentMessage={currentMessage}
-          scrollOffset={scrollOffset}
-          terminalRows={terminalRows}
-          reservedRows={8}
           terminalCols={terminalCols}
-          wheelEnabled={true}
           toolCallsExpanded={toolCallsExpanded}
+        />
+      </Box>
+      <Box flexDirection="row" borderStyle="single" borderColor={connected ? 'cyan' : 'red'} paddingLeft={1}>
+        <Text color="green" bold>&gt; </Text>
+        <TextInput
+          value={input}
+          onChange={handleChange}
+          onSubmit={handleSubmit}
+          placeholder={placeholder}
+          disabled={showApproval !== null}
         />
       </Box>
       <Box>
@@ -253,8 +221,8 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
           <CommandPalette filter={input} onSelect={handlePaletteSelect} />
         )}
         {showHelp && (() => {
-          const helpLines = HELP_TEXT.split('\n');
-          const helpMax = Math.max(5, terminalRows - 12);
+          const helpLines = HELP_TEXT.split('\\n');
+          const helpMax = Math.max(5, Math.min(terminalRows - 12, 10));
           const helpEnd = Math.max(0, helpLines.length - helpScroll);
           const helpStart = Math.max(0, helpEnd - helpMax);
           const visibleHelp = helpLines.slice(helpStart, helpEnd);
@@ -277,18 +245,8 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
             payload={showApproval.payload}
             onAllow={handleApprovalAllowForModal}
             onDeny={handleApprovalDenyForModal}
-          />
-        )}
-      </Box>
-      <Box flexDirection="row" borderStyle="single" borderColor={connected ? 'cyan' : 'red'} paddingLeft={1}>
-        <Text color="green" bold>&gt; </Text>
-        <TextInput
-          value={input}
-          onChange={handleChange}
-          onSubmit={handleSubmit}
-          placeholder={placeholder}
-          disabled={showApproval !== null}
-        />
+            />
+          )}
       </Box>
       <StatusLine />
       <Box height={1}>
@@ -304,4 +262,3 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
     </Box>
   );
 }
-

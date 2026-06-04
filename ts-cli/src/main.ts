@@ -3,9 +3,13 @@
  * JWCode TypeScript CLI — entry point.
  *
  * Commands:
- *   jwcode start [-p <port>] [-B]
- *   jwcode run [-b <url>]
+ *   jwcode start [-p <port>] [-B] [-w <dir>]
+ *   jwcode run [-b <url>] [--ws <url>]
  *   jwcode version
+ *
+ * jwcode (no subcommand) defaults to 'start' — launches backend
+ * and opens the interactive TUI. The current working directory
+ * becomes the workspace directory.
  */
 import { render } from 'ink';
 import { createElement } from 'react';
@@ -31,8 +35,10 @@ process.on('uncaughtException', (err: NodeJS.ErrnoException) => {
   console.error('Fatal error:', err);
   process.exit(1);
 });
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import {
-  findProjectRoot, findMvn, jarExists, buildBackend,
+  findInstallDir, findJar, findMvn, buildBackend,
   startBackend, waitForBackend, cleanupBackend,
 } from './launcher.js';
 import { loadConfig } from './config.js';
@@ -44,18 +50,20 @@ function printUsage(): void {
   console.log(`JWCode CLI v${VERSION}`);
   console.log('');
   console.log('Usage:');
-  console.log('  jwcode start [options]    Start backend + interactive terminal');
-  console.log('  jwcode run [options]      Connect to existing backend');
-  console.log('  jwcode version            Print version');
+  console.log('  jwcode [options]              Start backend + interactive terminal (default)');
+  console.log('  jwcode start [options]        Start backend + interactive terminal');
+  console.log('  jwcode run [options]          Connect to existing backend');
+  console.log('  jwcode version                Print version');
   console.log('');
   console.log('Options:');
-  console.log('  -p, --port <port>         HTTP port (default: 8080, WS auto: port+1)');
-  console.log('  -B, --build               Force rebuild backend');
-  console.log('  -b, --backend <url>       Backend URL (run mode, WS auto-derived)');
-  console.log('  --ws <url>                Override WebSocket URL');
+  console.log('  -p, --port <port>             HTTP port (default: 8080, WS auto: port+1)');
+  console.log('  -w, --workspace <dir>         Workspace directory (default: current directory)');
+  console.log('  -B, --build                   Force rebuild backend (dev mode only)');
+  console.log('  -b, --backend <url>           Backend URL (run mode, WS auto-derived)');
+  console.log('  --ws <url>                    Override WebSocket URL');
   console.log('');
   console.log('Environment:');
-  console.log('  JWCODE_THEME=dark|light   Color theme (default: dark)');
+  console.log('  JWCODE_THEME=dark|light       Color theme (default: dark)');
   console.log('');
   console.log('Keyboard shortcuts (in TUI):');
   console.log('  /             Open command palette');
@@ -73,6 +81,7 @@ function parseArgs(): Record<string, string | boolean> {
     const arg = argv[i];
     if (arg === '--build' || arg === '-B') args.build = true;
     else if (arg === '--port' || arg === '-p') args.port = argv[++i];
+    else if (arg === '--workspace' || arg === '-w') args.workspace = argv[++i];
     else if (arg === '--backend' || arg === '-b') args.backend = argv[++i];
     else if (arg === '--ws') args.ws = argv[++i];
     else if (!arg.startsWith('-')) args._cmd = arg;
@@ -82,22 +91,30 @@ function parseArgs(): Record<string, string | boolean> {
 
 async function cmdStart(args: Record<string, string | boolean>): Promise<void> {
   const port = parseInt(String(args.port || '8080'), 10);
-  const wsPort = port + 1; // WS port auto-derived from HTTP port
+  const wsPort = port + 1;
   const build = !!args.build;
+  const workspaceDir = String(args.workspace || process.cwd());
 
-  const root = findProjectRoot();
+  const installDir = findInstallDir();
   console.log('╔══════════════════════════════════════╗');
   console.log('║   JWCode — Java AI Coding Tool       ║');
   console.log('╚══════════════════════════════════════╝');
-  console.log('');
+  console.log(`  Workspace: ${workspaceDir}`);
 
-  // Build if requested or if jar doesn't exist
-  if (build || !jarExists(root)) {
-    buildBackend(root);
+  // Build if requested or if jar doesn't exist (dev mode)
+  if (build || !findJar(installDir)) {
+    // Only Maven-build in dev mode (when pom.xml exists)
+    if (existsSync(join(installDir, 'pom.xml'))) {
+      buildBackend(installDir);
+    } else if (!findJar(installDir)) {
+      console.error('[launcher] Backend JAR not found and no pom.xml for build.');
+      console.error('[launcher] Install via: npm install -g @jwcode/cli');
+      process.exit(1);
+    }
   }
 
   // Start Java backend
-  const backendProc = startBackend(root, port, wsPort);
+  const backendProc = startBackend(installDir, workspaceDir, port, wsPort);
 
   // Cleanup on exit
   let stopping = false;
@@ -185,7 +202,7 @@ async function main(): Promise<void> {
   }
 
   const args = parseArgs();
-  const cmd = (args._cmd as string) || 'run';
+  const cmd = (args._cmd as string) || 'start';
 
   switch (cmd) {
     case 'start':

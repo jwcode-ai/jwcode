@@ -1,5 +1,13 @@
 /**
  * Java backend launcher.
+ *
+ * Production mode (npm global install):
+ *   Uses bundled fat JAR at <installDir>/backend/jwcode-web.jar,
+ *   launched via `java -jar`.
+ *
+ * Development mode (repo clone):
+ *   Walks up from script dir to find pom.xml, builds with Maven,
+ *   launches via `java -jar` from target/.
  */
 import { spawn, spawnSync, execSync, type ChildProcess } from 'node:child_process';
 import { existsSync, readdirSync, statSync } from 'node:fs';
@@ -9,13 +17,58 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-export function findProjectRoot(): string {
+/**
+ * Find the installation directory where jwcode's backend JAR lives.
+ *
+ * Looks for backend/jwcode-web.jar relative to the script (npm global install).
+ * Falls back to the dev repo root (contains pom.xml).
+ * Final fallback is process.cwd().
+ */
+export function findInstallDir(): string {
+  // Production: look for bundled JAR relative to dist/cli.js
+  // dist/cli.js → ../backend/jwcode-web.jar
+  const bundledJar = join(__dirname, '..', 'backend', 'jwcode-web.jar');
+  if (existsSync(bundledJar)) {
+    return join(__dirname, '..');
+  }
+
+  // Development: walk up from script looking for pom.xml (monorepo root)
   let dir = join(__dirname, '..', '..');
   while (dir !== dirname(dir)) {
     if (existsSync(join(dir, 'pom.xml'))) return dir;
     dir = dirname(dir);
   }
+
   return process.cwd();
+}
+
+/**
+ * Find the backend JAR path.
+ * Returns the fat JAR if it exists (production or pre-built dev),
+ * otherwise null (caller should build first).
+ */
+export function findJar(installDir: string): string | null {
+  // Production: bundled JAR
+  const bundledJar = join(installDir, 'backend', 'jwcode-web.jar');
+  if (existsSync(bundledJar)) return bundledJar;
+
+  // Development: Maven-built JAR in target/
+  const devJar = join(installDir, 'jwcode-web', 'target', 'jwcode-web.jar');
+  if (existsSync(devJar)) return devJar;
+
+  // Also check for classifier variant from maven-assembly-plugin
+  const targetDir = join(installDir, 'jwcode-web', 'target');
+  if (existsSync(targetDir)) {
+    try {
+      const jars = readdirSync(targetDir)
+        .filter(f => f.startsWith('jwcode-web') && f.endsWith('.jar'))
+        .map(f => ({ name: f, mtime: statSync(join(targetDir, f)).mtimeMs }))
+        .sort((a, b) => b.mtime - a.mtime);
+      if (jars.length > 0) return join(targetDir, jars[0].name);
+    } catch { /* ignore */ }
+  }
+
+  return null;
 }
 
 export function findMvn(): string {
@@ -39,16 +92,26 @@ export function findMvn(): string {
   return 'mvn';
 }
 
-export function jarExists(projectRoot: string): string | null {
-  const targetDir = join(projectRoot, 'jwcode-web', 'target');
-  if (!existsSync(targetDir)) return null;
-  try {
-    const jars = readdirSync(targetDir)
-      .filter(f => f.startsWith('jwcode-web-') && f.endsWith('.jar'))
-      .map(f => ({ name: f, mtime: statSync(join(targetDir, f)).mtimeMs }))
-      .sort((a, b) => b.mtime - a.mtime);
-    return jars.length > 0 ? join(targetDir, jars[0].name) : null;
-  } catch { return null; }
+export function findJava(): string {
+  const paths = process.env.PATH?.split(';') || [];
+  for (const dir of paths) {
+    for (const name of ['java.exe', 'java']) {
+      const full = join(dir, name);
+      if (existsSync(full)) return full;
+    }
+  }
+  // Common install locations
+  for (const root of ['C:\\Program Files\\Java', 'C:\\Program Files (x86)\\Java', homedir()]) {
+    try {
+      for (const entry of readdirSync(root, { withFileTypes: true })) {
+        if (entry.isDirectory() && (entry.name.startsWith('jdk') || entry.name.startsWith('openjdk'))) {
+          const java = join(root, entry.name, 'bin', 'java.exe');
+          if (existsSync(java)) return java;
+        }
+      }
+    } catch {}
+  }
+  return 'java';
 }
 
 export function buildBackend(projectRoot: string): void {
@@ -69,7 +132,7 @@ export function buildBackend(projectRoot: string): void {
     console.error('[launcher] Build failed:', String(e));
     process.exit(1);
   }
-  if (!jarExists(projectRoot)) {
+  if (!findJar(projectRoot)) {
     console.error('[launcher] Build succeeded but jar not found');
     process.exit(1);
   }
@@ -104,13 +167,12 @@ export function waitForBackend(port: number, timeout = 60): Promise<void> {
     function check() {
       if (Date.now() - start > timeout * 1000) {
         console.log(`[launcher] WARNING: Backend not responding after ${timeout}s`);
-        resolve(); // Don't reject, let the TUI show the error
+        resolve();
         return;
       }
       fetch(url, { signal: AbortSignal.timeout(2000) })
         .then(async r => {
           const text = await r.text();
-          // Backend returns {"status":"running",...}
           if (r.status === 200 && (text.includes('running') || text.includes('status'))) {
             console.log(`[launcher] Backend ready on port ${port}`);
             resolve();
@@ -125,28 +187,32 @@ export function waitForBackend(port: number, timeout = 60): Promise<void> {
 }
 
 export function startBackend(
-  projectRoot: string,
+  installDir: string,
+  workspaceDir: string,
   port: number,
   wsPort: number,
 ): ChildProcess {
-  const mvn = findMvn();
-  console.log(`[launcher] Starting backend: ${mvn} exec:java ...`);
+  const java = findJava();
+  const jarPath = findJar(installDir);
+  if (!jarPath) {
+    console.error('[launcher] Backend JAR not found. Run with --build first, or ensure backend/jwcode-web.jar exists.');
+    process.exit(1);
+  }
 
-  // Kill any stale process on the port first
+  console.log(`[launcher] Starting backend: ${java} -jar ${jarPath}`);
+  console.log(`[launcher] Workspace: ${workspaceDir}`);
+
   killPort(port);
   killPort(wsPort);
 
-  const cmd = `"${mvn}" exec:java -pl jwcode-web -Dexec.mainClass=com.jwcode.web.WebLauncher "-Dexec.args=${port} ${wsPort}" -q`;
-  const proc = spawn(cmd, [], {
-    cwd: projectRoot,
+  const args = ['-jar', jarPath, String(port), String(wsPort), workspaceDir];
+  const proc = spawn(java, args, {
+    cwd: workspaceDir,
     env: { ...process.env, JWCODE_WS_PORT: String(wsPort) },
     stdio: ['ignore', 'pipe', 'pipe'],
-    shell: true,
     windowsHide: true,
   });
 
-  // Suppress all output — backend readiness is detected via HTTP health check.
-  // stdout must be consumed to prevent the pipe from blocking the process.
   proc.stdout?.on('data', () => {});
   proc.stderr?.on('data', (data: Buffer) => {
     const msg = data.toString('utf-8').trim();
@@ -169,11 +235,9 @@ export function cleanupBackend(proc: ChildProcess | null): void {
   if (!proc) return;
   console.log('\n[jwcode] Shutting down...');
   if (process.platform === 'win32') {
-    // Windows: use taskkill /T to kill the entire process tree (cmd.exe → java)
     try {
       execSync(`taskkill /F /T /PID ${proc.pid}`, { stdio: 'ignore' });
     } catch {
-      // Fallback: try direct termination
       try { proc.kill(); } catch {}
     }
   } else {

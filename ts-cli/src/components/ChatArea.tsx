@@ -1,8 +1,4 @@
-﻿/**
- * ChatArea -- enhanced virtual-scroll message list with markdown, tool calls, steps, thinking.
- * Uses memo"d MessageItem to prevent re-rendering unchanged messages during streaming.
- */
-import { Box, Text } from "ink";
+﻿import { Box, Text } from "ink";
 import { useState, useMemo, memo } from "react";
 import { type Message, type ToolCall, type Step } from "../protocol.js";
 
@@ -12,11 +8,7 @@ const MAX_THINKING = 200;
 interface Props {
   messages: Message[];
   currentMessage: Message | null;
-  scrollOffset: number;
-  terminalRows: number;
-  reservedRows: number;
   terminalCols: number;
-  wheelEnabled?: boolean;
   toolCallsExpanded: boolean;
 }
 
@@ -44,19 +36,6 @@ function shouldStartCollapsed(toolCalls: ToolCall[], index: number): boolean {
   return index !== lastFinishedIdx;
 }
 
-/** Unicode block-based scrollbar */
-function makeScrollbar(pct: number, cols: number): string {
-  const barWidth = Math.min(Math.max(8, Math.floor(cols * 0.3)), 40);
-  const thumbPos = Math.round((pct / 100) * (barWidth - 1));
-  const bar: string[] = [];
-  for (let i = 0; i < barWidth; i++) {
-    bar.push(i === thumbPos ? "#" : "-");
-  }
-  return "[" + bar.join("") + "]";
-}
-
-// ---- Memo"d sub-components ----
-
 const StepDisplay = memo(function StepDisplay({ step }: { step: Step }) {
   const icon = step.status === "success" ? "[ok]" : step.status === "error" ? "[!!]"
     : step.status === "running" ? "[..]" : "[--]";
@@ -73,10 +52,7 @@ const StepDisplay = memo(function StepDisplay({ step }: { step: Step }) {
         <Text color={color}>  {icon} </Text>
         <Text bold color={color}>{step.title}</Text>
         {durStr && (
-          <>
-            <Text dimColor>  </Text>
-            <Text color="grey" dimColor>{durStr}</Text>
-          </>
+          <><Text dimColor>  </Text><Text color="grey" dimColor>{durStr}</Text></>
         )}
       </Box>
       {step.thought && <Text color="blue" dimColor>    {truncate(step.thought, 200)}</Text>}
@@ -105,19 +81,12 @@ const ToolCallDisplay = memo(function ToolCallDisplay({
       <Box>
         <Text color={statusColor}>  {statusIcon} </Text>
         <Text bold color="magenta">{tc.name}</Text>
-        {durStr && (
-          <>
-            <Text dimColor>  </Text>
-            <Text color="grey" dimColor>{durStr}</Text>
-          </>
-        )}
+        {durStr && (<><Text dimColor>  </Text><Text color="grey" dimColor>{durStr}</Text></>)}
         <Text dimColor>  </Text>
         <Text color="blue" dimColor>[{collapsed ? "+" : "-"}]</Text>
       </Box>
       {!collapsed && tc.args && (
-        <Box paddingLeft={4}>
-          <Text dimColor>{truncate(formatJson(tc.args), 200)}</Text>
-        </Box>
+        <Box paddingLeft={4}><Text dimColor>{truncate(formatJson(tc.args), 200)}</Text></Box>
       )}
       {tc.result && (
         <Box paddingLeft={4} flexDirection="column">
@@ -128,7 +97,6 @@ const ToolCallDisplay = memo(function ToolCallDisplay({
   );
 });
 
-/** Memo"d MessageItem -- only re-renders when this message"s content actually changes. */
 const MessageItem = memo(function MessageItem({
   msg, expandedMessages, expandedTools, toolCallsExpanded,
   onToggleTool, onToggleMessage,
@@ -145,7 +113,7 @@ const MessageItem = memo(function MessageItem({
       {msg.type === "user" && (
         <Box flexDirection="column">
           <Text dimColor>{SEP}</Text>
-          <Text color="green" bold>&gt; {msg.content}</Text>
+          <Text color="green" bold>{">"} {msg.content}</Text>
         </Box>
       )}
       {msg.type === "assistant" && (
@@ -164,9 +132,7 @@ const MessageItem = memo(function MessageItem({
               {msg.thinking.length > MAX_THINKING && (
                 <Text color="blue" dimColor>
                   [{msg.thinking.length - MAX_THINKING} more chars]
-                  <Text color="cyan" dimColor>
-                    {" "}{'-> to expand'}
-                  </Text>
+                  <Text color="cyan" dimColor> {"-> to expand"}</Text>
                 </Text>
               )}
             </Box>
@@ -189,9 +155,7 @@ const MessageItem = memo(function MessageItem({
         </Box>
       )}
       {msg.type === "system" && (
-        <Box>
-          <Text color="red">Error: {msg.content}</Text>
-        </Box>
+        <Box><Text color="red">Error: {msg.content}</Text></Box>
       )}
     </Box>
   );
@@ -204,7 +168,6 @@ const MessageItem = memo(function MessageItem({
     && prev.toolCallsExpanded === next.toolCallsExpanded;
 });
 
-/** StreamingMessage -- isolated from finalized messages to limit streaming re-renders. */
 const StreamingMessage = memo(function StreamingMessage({
   msg, expandedTools, toolCallsExpanded, onToggleTool,
 }: {
@@ -237,8 +200,7 @@ const StreamingMessage = memo(function StreamingMessage({
 });
 
 export const ChatArea = memo(function ChatArea({
-  messages, currentMessage, scrollOffset, terminalRows, reservedRows,
-  terminalCols, wheelEnabled, toolCallsExpanded,
+  messages, currentMessage, terminalCols, toolCallsExpanded,
 }: Props) {
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(new Set());
@@ -249,59 +211,17 @@ export const ChatArea = memo(function ChatArea({
       : messages,
     [messages, currentMessage && currentMessage.id]);
 
-    const scrollInfo = useMemo(() => {
-    const availableRows = Math.max(10, terminalRows - reservedRows);
-    const linesPerMessage = availableRows > 60 ? 3 : availableRows > 30 ? 4 : 5;
-    const maxVisible = Math.max(5, Math.floor(availableRows / linesPerMessage));
-    const total = allMessages.length;
-    const maxFirstIdx = Math.max(0, total - maxVisible);
-    // scrollOffset = first visible message index (0 = oldest, clamped at bottom)
-    const firstIdx = total > 0 ? Math.min(scrollOffset, maxFirstIdx) : 0;
-    const end = Math.min(total, firstIdx + maxVisible);
-    const start = end - maxVisible;
-    const scrollPercent = maxFirstIdx > 0 ? Math.round((firstIdx / maxFirstIdx) * 100) : 0;
-    const isScrolledUp = firstIdx < maxFirstIdx;
-    return {
-      total, start, end, scrollPercent,
-      visibleMessages: allMessages.slice(start, end),
-      isScrolledUp,
-      bar: makeScrollbar(scrollPercent, terminalCols),
-    };
-  }, [allMessages, scrollOffset, terminalRows, reservedRows, terminalCols]);
-
-  const { total, start, end, scrollPercent, visibleMessages, isScrolledUp, bar } = scrollInfo;
-
   const toggleExpandTool = (id: string) => {
-    setExpandedTools(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
+    setExpandedTools(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   };
 
   const toggleExpandMessage = (id: string) => {
-    setExpandedMessages(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
+    setExpandedMessages(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   };
-
-  const scrollHint = isScrolledUp
-    ? " ^ PgUp/PgDn.Home.End"
-    : (wheelEnabled ? " ^^ scroll up" : " ^/PgUp browse");
 
   return (
     <Box flexDirection="column" width="100%">
-      {total > 0 && (
-        <Box>
-          <Text color="grey" dimColor>
-            {bar} [{start + 1}-{end}/{total}] {scrollPercent}%
-            {scrollHint}
-          </Text>
-        </Box>
-      )}
-      {visibleMessages.map(msg => (
+      {allMessages.map(msg => (
         <MessageItem
           key={msg.id}
           msg={msg}
@@ -327,11 +247,8 @@ export const ChatArea = memo(function ChatArea({
 
 function formatJson(s: unknown): string {
   if (typeof s !== "string") return JSON.stringify(s, null, 2);
-  try {
-    return JSON.stringify(JSON.parse(s as string), null, 2);
-  } catch {
-    return s as string;
-  }
+  try { return JSON.stringify(JSON.parse(s as string), null, 2); }
+  catch { return s as string; }
 }
 
 function truncate(s: unknown, max: number): string {

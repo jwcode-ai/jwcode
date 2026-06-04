@@ -42,25 +42,31 @@ public class WebServer {
     private final int wsPort;
     private final WebSessionManager sessionManager;
     private final ToolRegistry toolRegistry;
+    private final String workspaceDir;
     private CodebaseIndexer codebaseIndexer;
-    
-    public WebServer(int port, int wsPort, ToolRegistry toolRegistry) {
+
+    public WebServer(int port, int wsPort, ToolRegistry toolRegistry, String workspaceDir) {
         this.port = port;
         this.wsPort = wsPort;
         this.sessionManager = new WebSessionManager();
         this.toolRegistry = toolRegistry;
+        this.workspaceDir = workspaceDir != null ? workspaceDir : System.getProperty("user.dir");
     }
-    
+
+    public WebServer(int port, int wsPort, ToolRegistry toolRegistry) {
+        this(port, wsPort, toolRegistry, null);
+    }
+
     public WebServer(int port, ToolRegistry toolRegistry) {
-        this(port, port + 1, toolRegistry);
+        this(port, port + 1, toolRegistry, null);
     }
-    
+
     public WebServer(int port) {
-        this(port, port + 1, ToolRegistry.createDefault());
+        this(port, port + 1, ToolRegistry.createDefault(), null);
     }
-    
+
     public WebServer() {
-        this(8080, 8081, ToolRegistry.createDefault());
+        this(8080, 8081, ToolRegistry.createDefault(), null);
     }
     
     /**
@@ -71,7 +77,7 @@ public class WebServer {
         try {
             com.jwcode.core.tool.BashTool.setBackgroundExecutor(
                 new com.jwcode.core.tool.shell.DockerSandboxExecutor(
-                    java.nio.file.Path.of(System.getProperty("user.dir", "."))));
+                    java.nio.file.Path.of(this.workspaceDir)));
             System.out.println("[WebServer] Docker sandbox initialized");
         } catch (Exception e) {
             System.err.println("[WebServer] Sandbox init failed (non-fatal): " + e.getMessage());
@@ -100,7 +106,7 @@ public class WebServer {
         // Terminal — ttyd sidecar for web-based terminal access
         {
             String tsCliPath = java.nio.file.Paths.get(
-                System.getProperty("user.dir"), "ts-cli", "dist", "cli.js"
+                this.workspaceDir, "ts-cli", "dist", "cli.js"
             ).toAbsolutePath().normalize().toString();
 
             String ttydPath = TerminalSession.findTtyd();
@@ -179,8 +185,7 @@ public class WebServer {
      */
     private void initializeCodebaseIndexer() {
         try {
-            String workingDir = System.getProperty("user.dir");
-            java.nio.file.Path workspaceRoot = java.nio.file.Path.of(workingDir).toAbsolutePath().normalize();
+            java.nio.file.Path workspaceRoot = java.nio.file.Path.of(this.workspaceDir).toAbsolutePath().normalize();
             IndexConfig indexConfig = IndexConfig.forWorkspace(workspaceRoot);
 
             // 从 YAML 配置读取 provider，构建 EmbeddingService（模型池模式）

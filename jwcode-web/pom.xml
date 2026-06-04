@@ -99,6 +99,30 @@
                 <artifactId>maven-surefire-plugin</artifactId>
             </plugin>
 
+            <!-- Build fat JAR with all dependencies for standalone distribution -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-assembly-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals><goal>single</goal></goals>
+                        <configuration>
+                            <archive>
+                                <manifest>
+                                    <mainClass>com.jwcode.web.WebLauncher</mainClass>
+                                </manifest>
+                            </archive>
+                            <descriptorRefs>
+                                <descriptorRef>jar-with-dependencies</descriptorRef>
+                            </descriptorRefs>
+                            <finalName>jwcode-web</finalName>
+                            <appendAssemblyId>false</appendAssemblyId>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
             <!-- Copy built frontend dist into classpath -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
