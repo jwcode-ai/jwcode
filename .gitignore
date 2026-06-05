@@ -30,6 +30,8 @@ Thumbs.db
 logs/
 eval-results/
 session_*/
+integration-test-*/
+auto-*/
 *.pyc
 nul
 *.lst
