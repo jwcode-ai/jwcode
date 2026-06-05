@@ -699,6 +699,15 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                 case "hook_deny":
                     handleHookApprovalResponse(clientMsg, false);
                     break;
+                case "exit":
+                    logger.info("收到 exit 消息，正在关闭后端服务...");
+                    sendMessage(conn, MessageType.EXIT, "Server shutting down...");
+                    // 异步关闭，先让响应发出去
+                    new Thread(() -> {
+                        try { Thread.sleep(500); } catch (InterruptedException ignored) {}
+                        System.exit(0);
+                    }).start();
+                    break;
                 default:
                     logger.warning("未知消息类型: " + clientMsg.type);
                     sendMessage(conn, MessageType.ERROR, "Unknown message type: " + clientMsg.type);
@@ -2880,7 +2889,8 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         GENERATION_RESUMED, // 生成已恢复
         TOKEN_UPDATE,       // Token 用量更新（实时）
         CONTEXT_COMPRESSED, // 上下文压缩通知（自动压缩时广播到前端）
-        COMPACTION_PROGRESS // 压缩进度更新（阶段 + 百分比）
+        COMPACTION_PROGRESS, // 压缩进度更新（阶段 + 百分比）
+        EXIT                // 退出后端服务
     }
     
     /**

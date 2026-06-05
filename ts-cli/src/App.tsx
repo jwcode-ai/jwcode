@@ -111,7 +111,7 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
       const { action, needsArg } = def;
       const cl = clientRef.current;
       switch (action) {
-        case '__exit__': onExit(); return;
+        case '__exit__': cl?.exit(); onExit(); return;
         case '__confirm_plan':
           updateAppState(prev => {
             if (!prev.planWaiting) return prev;

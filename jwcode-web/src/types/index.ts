@@ -292,7 +292,8 @@ export type WSMessageType =
   | 'doctor_result'
   | 'context_compressed'
   | 'compaction_progress'
-  | 'agent_flow_event';
+  | 'agent_flow_event'
+  | 'exit';
 
 
 export interface WSMessage {

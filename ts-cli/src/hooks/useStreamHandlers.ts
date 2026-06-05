@@ -35,6 +35,7 @@ export function useStreamHandlers(
     let _pendingContent = '';
     let _pendingThinking = '';
     let _pendingToolFns: Array<(msg: Message) => Message> = [];
+    let _pendingStepFns: Array<(msg: Message) => Message> = [];
     let _flushTimer: ReturnType<typeof setTimeout> | null = null;
     let _flushScheduled = false;
 
@@ -43,13 +44,15 @@ export function useStreamHandlers(
       const c = _pendingContent; _pendingContent = '';
       const t = _pendingThinking; _pendingThinking = '';
       const fns = _pendingToolFns; _pendingToolFns = [];
-      if (!c && !t && fns.length === 0) return;
+      const sFns = _pendingStepFns; _pendingStepFns = [];
+      if (!c && !t && fns.length === 0 && sFns.length === 0) return;
       updateAppState(prev => {
         if (!prev.currentMessage) return prev;
         let msg = prev.currentMessage;
         if (c) msg = { ...msg, content: msg.content + c };
         if (t) msg = { ...msg, thinking: msg.thinking + t };
         for (const fn of fns) msg = fn(msg);
+        for (const fn of sFns) msg = fn(msg);
         return { ...prev, currentMessage: msg };
       });
     }
@@ -200,13 +203,12 @@ export function useStreamHandlers(
       }));
     });
 
-    // ---- step events ----
+    // ---- step events (batched into 32ms flush) ----
     client.on('step_start', (_m: WSMessage) => {
       let d: Record<string, unknown> = {};
       if (typeof _m.data === 'string') { try { d = JSON.parse(_m.data); } catch {} }
       else if (_m.data && typeof _m.data === 'object') { d = _m.data as Record<string, unknown>; }
-      updateAppState(prev => {
-        if (!prev.currentMessage) return prev;
+      _pendingStepFns.push((msg: Message): Message => {
         const step: Step = {
           id: (d.id as string) || 'step-' + Date.now(),
           title: (d.title as string) || (d.description as string) || '',
@@ -216,54 +218,55 @@ export function useStreamHandlers(
           tools: [],
           timestamp: Date.now(),
         };
-        return { ...prev, currentMessage: { ...prev.currentMessage, steps: [...prev.currentMessage.steps, step] } };
+        return { ...msg, steps: [...msg.steps, step] };
       });
+      scheduleStreamFlush();
     });
 
     client.on('step_thinking', (_m: WSMessage) => {
       let d: Record<string, unknown> = {};
       if (typeof _m.data === 'string') { try { d = JSON.parse(_m.data); } catch {} }
       else if (_m.data && typeof _m.data === 'object') { d = _m.data as Record<string, unknown>; }
-      updateAppState(prev => {
-        if (!prev.currentMessage) return prev;
-        const steps = [...prev.currentMessage.steps];
+      _pendingStepFns.push((msg: Message): Message => {
+        const steps = [...msg.steps];
         const idx = d.id ? steps.findIndex(s => s.id === d.id) : steps.length - 1;
         if (idx >= 0) {
           steps[idx] = { ...steps[idx], status: 'thinking', thought: (d.thought as string) || steps[idx].thought };
         }
-        return { ...prev, currentMessage: { ...prev.currentMessage, steps } };
+        return { ...msg, steps };
       });
+      scheduleStreamFlush();
     });
 
     client.on('step_action', (_m: WSMessage) => {
       let d: Record<string, unknown> = {};
       if (typeof _m.data === 'string') { try { d = JSON.parse(_m.data); } catch {} }
       else if (_m.data && typeof _m.data === 'object') { d = _m.data as Record<string, unknown>; }
-      updateAppState(prev => {
-        if (!prev.currentMessage) return prev;
-        const steps = [...prev.currentMessage.steps];
+      _pendingStepFns.push((msg: Message): Message => {
+        const steps = [...msg.steps];
         const idx = d.id ? steps.findIndex(s => s.id === d.id) : steps.length - 1;
         if (idx >= 0) {
           steps[idx] = { ...steps[idx], status: 'action', action: (d.action as string) || steps[idx].action };
         }
-        return { ...prev, currentMessage: { ...prev.currentMessage, steps } };
+        return { ...msg, steps };
       });
+      scheduleStreamFlush();
     });
 
     client.on('step_complete', (_m: WSMessage) => {
       let d: Record<string, unknown> = {};
       if (typeof _m.data === 'string') { try { d = JSON.parse(_m.data); } catch {} }
       else if (_m.data && typeof _m.data === 'object') { d = _m.data as Record<string, unknown>; }
-      updateAppState(prev => {
-        if (!prev.currentMessage) return prev;
-        const steps = [...prev.currentMessage.steps];
+      _pendingStepFns.push((msg: Message): Message => {
+        const steps = [...msg.steps];
         const idx = d.id ? steps.findIndex(s => s.id === d.id) : steps.length - 1;
         if (idx >= 0) {
           const dur = d.duration ? Number(d.duration) : (steps[idx].timestamp ? Math.floor((Date.now() - steps[idx].timestamp!) / 1000) : undefined);
           steps[idx] = { ...steps[idx], status: (d.status as string) === 'error' ? 'error' as const : 'success' as const, result: d.result as string, duration: dur };
         }
-        return { ...prev, currentMessage: { ...prev.currentMessage, steps } };
+        return { ...msg, steps };
       });
+      scheduleStreamFlush();
     });
 
     // ---- plan events ----

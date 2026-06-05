@@ -1,0 +1,42 @@
+# === Dependencies ===
+node_modules/
+.pnp
+.pnp.js
+
+# === Build output ===
+dist/
+*.js.map
+
+# === Backend build artifacts ===
+backend/target/
+backend/*.jar
+
+# === OS files ===
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# === Editor / IDE ===
+.vscode/settings.json
+.idea/
+*.iml
+*.suo
+
+# === Environment ===
+.env
+.env.local
+.env.*.local
+
+# === Logs ===
+*.log
+npm-debug.log*
+
+# === Runtime ===
+.jwcode/*
+!.jwcode/hooks.json
+
+# === Session / Temp ===
+session_*/
+*.session/

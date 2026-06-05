@@ -214,6 +214,7 @@ export class JwCodeClient {
   switchModel(model: string): void { this.send('model_change', undefined, { model }); }
   approveHook(approvalId: string): void { this.send('hook_allow', undefined, { approvalId }); }
   denyHook(approvalId: string): void { this.send('hook_deny', undefined, { approvalId }); }
+  exit(): void { this.send('exit'); }
   init(): void { this.send('init'); }
   effort(level: string): void { this.send('effort', undefined, { level }); }
   branch(name: string): void { this.send('branch', undefined, { name }); }

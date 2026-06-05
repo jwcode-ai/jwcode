@@ -142,6 +142,8 @@ async function cmdStart(args: Record<string, string | boolean>): Promise<void> {
   const cleanup = () => {
     if (stopping) return;
     stopping = true;
+    // Restore main screen buffer before printing shutdown message
+    process.stdout.write('\x1b[?1049l');
     console.log('\n[jwcode] Shutting down...');
     cleanupBackend(backendProc);
   };
@@ -170,9 +172,12 @@ async function cmdStart(args: Record<string, string | boolean>): Promise<void> {
   const wsUrl = `ws://localhost:${wsPort}/ws`;
 
 
-  // Clear launcher console output before Ink TUI starts, so Ink's
-  // cursor-based frame update doesn't collide with prior console.log lines.
-  process.stdout.write('[2J[H');
+  // Enter alternate screen buffer so Ink renders in an isolated buffer.
+  // This eliminates terminal-level flicker caused by frequent re-renders
+  // (content flush @31Hz + token updates @10Hz) colliding with scrollback.
+  process.stdout.write('\x1b[?1049h');
+  // Clear the alternate screen for a clean start.
+  process.stdout.write('\x1b[2J\x1b[H');
 
   // First-run: check if a provider is configured, show setup wizard if not
   let providerConfigured = false;
@@ -195,7 +200,16 @@ async function cmdStart(args: Record<string, string | boolean>): Promise<void> {
   }
 
   const { unmount } = render(
-    createElement(App, { backendUrl, wsUrl, onExit: () => { cleanup(); process.exit(0); } }),
+    createElement(App, {
+      backendUrl,
+      wsUrl,
+      onExit: () => {
+        // Restore main screen before exit
+        process.stdout.write('\x1b[?1049l');
+        cleanup();
+        process.exit(0);
+      },
+    }),
   );
 
   // Keep alive
@@ -203,6 +217,8 @@ async function cmdStart(args: Record<string, string | boolean>): Promise<void> {
     process.on('SIGINT', () => resolve());
     process.on('SIGTERM', () => resolve());
   });
+  // Restore main screen on normal exit
+  process.stdout.write('\x1b[?1049l');
 }
 
 async function cmdRun(args: Record<string, string | boolean>): Promise<void> {
@@ -225,15 +241,24 @@ async function cmdRun(args: Record<string, string | boolean>): Promise<void> {
   // Derive WS URL from backend URL (port+1), or explicit override, or config
   const wsUrl = String(args.ws || backendUrl.replace(/^http/, 'ws').replace(/:(\d+)/, (_, p) => ':' + (parseInt(p) + 1)) + '/ws' || config.ws_url);
 
+  // Enter alternate screen buffer for flicker-free rendering
+  process.stdout.write('\x1b[?1049h');
+  process.stdout.write('\x1b[2J\x1b[H');
+
   const { unmount, waitUntilExit } = render(
     createElement(App, {
       backendUrl,
       wsUrl,
-      onExit: () => process.exit(0),
+      onExit: () => {
+        process.stdout.write('\x1b[?1049l');
+        process.exit(0);
+      },
     }),
   );
 
   await waitUntilExit();
+  // Restore main screen on normal exit
+  process.stdout.write('\x1b[?1049l');
 }
 
 async function main(): Promise<void> {

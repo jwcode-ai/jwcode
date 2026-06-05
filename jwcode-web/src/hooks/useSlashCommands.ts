@@ -323,10 +323,17 @@ export function useSlashCommands(options: UseSlashCommandsOptions) {
     {
       id: 'exit',
       name: 'exit',
-      description: '退出当前会话',
+      description: '退出应用',
       icon: '🚪',
       local: false,
-      action: () => sendToBackend('exit'),
+      action: () => {
+        const sessionId = useSessionStore.getState().activeSessionId;
+        if (sessionId) {
+          wsService.setSessionId(sessionId);
+          wsService.send({ type: 'exit', sessionId });
+        }
+        return { success: true, message: '正在关闭服务...' };
+      },
     },
     {
       id: 'test',

@@ -251,6 +251,11 @@ public class FileWriteTool implements Tool<FileWriteTool.Input, FileWriteTool.Ou
         }
         return false;
     }
+
+    @Override
+    public boolean requiresApproval(Input input) {
+        return false;
+    }
     
     public static class Input {
         // 支持两种字段名：path 和 file_path（兼容不同工具的命名约定）

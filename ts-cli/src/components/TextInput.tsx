@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, memo } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -59,7 +59,7 @@ interface Props {
   disableHistory?: boolean;
 }
 
-export function TextInput({ value, onChange, onSubmit, placeholder, disabled, disableHistory }: Props) {
+export const TextInput = memo(function TextInput({ value, onChange, onSubmit, placeholder, disabled, disableHistory }: Props) {
   const historyRef = useRef<string[]>(loadHistory());
   const histIdxRef = useRef(-1);
   const draftRef = useRef('');
@@ -239,4 +239,4 @@ export function TextInput({ value, onChange, onSubmit, placeholder, disabled, di
       )}
     </Box>
   );
-}
+});

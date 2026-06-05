@@ -148,39 +148,56 @@ function App() {
 
   const { clearMessages } = useChatStore();
 
-  // 修复主题切换：同步到 DOM
+  // 修复主题切换：同步到 DOM + meta 标签
   useEffect(() => {
     const root = document.documentElement;
+    const metaThemeColor = document.querySelector('meta[name="theme-color"]');
+    const metaColorScheme = document.querySelector('meta[name="color-scheme"]');
+
+    const applyTheme = (mode: 'dark' | 'light') => {
+      root.classList.toggle('dark', mode === 'dark');
+      root.classList.toggle('light', mode === 'light');
+      if (metaThemeColor) metaThemeColor.setAttribute('content', mode === 'dark' ? '#0d1117' : '#ffffff');
+      if (metaColorScheme) metaColorScheme.setAttribute('content', mode);
+    };
+
     if (theme === 'dark') {
-      root.classList.add('dark');
-      root.classList.remove('light');
+      applyTheme('dark');
     } else if (theme === 'light') {
-      root.classList.add('light');
-      root.classList.remove('dark');
+      applyTheme('light');
     } else {
       const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      root.classList.toggle('dark', prefersDark);
-      root.classList.toggle('light', !prefersDark);
+      applyTheme(prefersDark ? 'dark' : 'light');
+
+      const mqListener = (e: MediaQueryListEvent) => applyTheme(e.matches ? 'dark' : 'light');
+      const mq = window.matchMedia('(prefers-color-scheme: dark)');
+      mq.addEventListener('change', mqListener);
+      return () => mq.removeEventListener('change', mqListener);
     }
   }, [theme]);
 
-  // 自定义主题颜色：注入 CSS 变量
+  // 自定义主题颜色：注入 CSS 变量（hex → RGB）
   const { customTheme, customThemeEnabled } = useSettingsStore();
   useEffect(() => {
     const root = document.documentElement;
+    const hexToRgb = (hex: string) => {
+      const r = parseInt(hex.slice(1, 3), 16);
+      const g = parseInt(hex.slice(3, 5), 16);
+      const b = parseInt(hex.slice(5, 7), 16);
+      return `${r} ${g} ${b}`;
+    };
     if (customThemeEnabled) {
-      root.style.setProperty('--color-bg', customTheme.bg);
-      root.style.setProperty('--color-surface', customTheme.surface);
-      root.style.setProperty('--color-border', customTheme.border);
-      root.style.setProperty('--color-text', customTheme.text);
-      root.style.setProperty('--color-muted', customTheme.muted);
-      root.style.setProperty('--color-accent-blue', customTheme.accentBlue);
-      root.style.setProperty('--color-accent-green', customTheme.accentGreen);
-      root.style.setProperty('--color-accent-red', customTheme.accentRed);
-      root.style.setProperty('--color-accent-yellow', customTheme.accentYellow);
-      root.style.setProperty('--color-accent-purple', customTheme.accentPurple);
+      root.style.setProperty('--color-bg', hexToRgb(customTheme.bg));
+      root.style.setProperty('--color-surface', hexToRgb(customTheme.surface));
+      root.style.setProperty('--color-border', hexToRgb(customTheme.border));
+      root.style.setProperty('--color-text', hexToRgb(customTheme.text));
+      root.style.setProperty('--color-muted', hexToRgb(customTheme.muted));
+      root.style.setProperty('--color-accent-blue', hexToRgb(customTheme.accentBlue));
+      root.style.setProperty('--color-accent-green', hexToRgb(customTheme.accentGreen));
+      root.style.setProperty('--color-accent-red', hexToRgb(customTheme.accentRed));
+      root.style.setProperty('--color-accent-yellow', hexToRgb(customTheme.accentYellow));
+      root.style.setProperty('--color-accent-purple', hexToRgb(customTheme.accentPurple));
     } else {
-      // Remove overrides to fall back to default CSS variables
       const vars = ['--color-bg', '--color-surface', '--color-border', '--color-text',
         '--color-muted', '--color-accent-blue', '--color-accent-green', '--color-accent-red',
         '--color-accent-yellow', '--color-accent-purple'];
