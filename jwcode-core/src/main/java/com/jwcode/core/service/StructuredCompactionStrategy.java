@@ -14,31 +14,33 @@ import java.util.regex.Pattern;
 /**
  * StructuredCompactionStrategy — 强制 XML 结构化输出的上下文压缩策略。
  *
- * <p>当对话过长时触发压缩，要求 LLM 按固定 XML 标签输出摘要。
- * 输出格式对标 KimiCode 的 compaction prompt：</p>
+ * <p>对标 Claude Code 9 段结构化摘要 + drafting scratchpad 模式。
+ * 两阶段输出：&lt;analysis&gt; 草稿纸（后处理删除）+ &lt;summary&gt; 正式摘要。</p>
  *
  * <pre>
- * &lt;current_focus&gt;[正在做什么]&lt;/current_focus&gt;
- * &lt;environment&gt;[关键配置]&lt;/environment&gt;
- * &lt;completed_tasks&gt;
- *   &lt;task&gt;[描述]: [结果]&lt;/task&gt;
- * &lt;/completed_tasks&gt;
- * &lt;active_issues&gt;
- *   &lt;issue&gt;[问题]: [状态]&lt;/issue&gt;
- * &lt;/active_issues&gt;
- * &lt;code_state&gt;...&lt;/code_state&gt;
- * &lt;design_decisions&gt;...&lt;/design_decisions&gt;
- * &lt;todo_items&gt;...&lt;/todo_items&gt;
+ * &lt;analysis&gt;[草稿纸 — 将被删除]&lt;/analysis&gt;
+ * &lt;summary&gt;
+ *   &lt;primary_request&gt;...&lt;/primary_request&gt;
+ *   &lt;technical_concepts&gt;...&lt;/technical_concepts&gt;
+ *   &lt;files_and_code&gt;...&lt;/files_and_code&gt;
+ *   &lt;errors_and_fixes&gt;...&lt;/errors_and_fixes&gt;
+ *   &lt;problem_solving&gt;...&lt;/problem_solving&gt;
+ *   &lt;all_user_messages&gt;...&lt;/all_user_messages&gt;
+ *   &lt;pending_tasks&gt;...&lt;/pending_tasks&gt;
+ *   &lt;current_work&gt;...&lt;/current_work&gt;
+ *   &lt;optional_next_step&gt;...&lt;/optional_next_step&gt;
+ * &lt;/summary&gt;
  * </pre>
  *
  * <p><b>优先级体系（从高到低）</b>：</p>
  * <ol>
- *   <li>当前任务状态 (current_focus) — 最高优先级，不可丢失</li>
- *   <li>错误与解决方案 (active_issues) — 避免重复犯错</li>
- *   <li>代码最终版本 (code_state) — 已修改的文件和关键代码</li>
- *   <li>系统上下文 (environment) — 项目配置、依赖版本</li>
- *   <li>设计决策 (design_decisions) — 架构选择及理由</li>
- *   <li>TODO 项 (todo_items) — 最低优先级，可截断</li>
+ *   <li>primary_request (6) — 用户核心需求，不可丢失</li>
+ *   <li>errors_and_fixes (5) — 错误与修复方案，避免重复犯错</li>
+ *   <li>files_and_code (4) — 文件修改和代码变更</li>
+ *   <li>current_work (3) — 压缩前正在做什么</li>
+ *   <li>technical_concepts (2) — 技术概念和框架</li>
+ *   <li>all_user_messages (2) — 用户反馈和意图变化</li>
+ *   <li>pending_tasks (1) — 待办事项</li>
  * </ol>
  */
 public class StructuredCompactionStrategy {
@@ -49,21 +51,36 @@ public class StructuredCompactionStrategy {
     private static final int DEFAULT_TAIL_SIZE = 8;
     // 摘要 Prompt 最大消息数
     private static final int MAX_HEAD_MESSAGES = 40;
-    // 摘要目标长度（结构化 XML 需要更多空间）
-    private static final int SUMMARY_TARGET_CHARS = 1200;
+    // 摘要目标长度（9 段结构化 XML 需要更多空间）
+    private static final int SUMMARY_TARGET_CHARS = 3000;
     // 预留 token 安全余量
     private static final int RESERVED_TOKENS = 4096;
 
-    // XML 标签的优先级（数值越高优先级越高）
+    // 禁止工具调用声明 — 防止压缩 agent 尝试调用工具
+    private static final String NO_TOOLS_PREAMBLE =
+        "CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.\n\n" +
+        "- Do NOT use Read, Bash, Grep, Glob, Edit, Write, or ANY other tool.\n" +
+        "- You already have all the context you need in the conversation above.\n" +
+        "- Tool calls will be REJECTED and will waste your only turn — you will fail the task.\n" +
+        "- Your entire response must be plain text: an <analysis> block followed by a <summary> block.\n";
+
+    private static final String NO_TOOLS_TRAILER =
+        "\n\nREMINDER: Do NOT call any tools. Respond with plain text only — " +
+        "an <analysis> block followed by a <summary> block. " +
+        "Tool calls will be rejected and you will fail the task.";
+
+    // XML 标签的优先级（数值越高优先级越高）— 对标 Claude Code 9 段结构
     private static final Map<String, Integer> TAG_PRIORITY = new LinkedHashMap<>();
     static {
-        TAG_PRIORITY.put("current_focus", 6);
-        TAG_PRIORITY.put("active_issues", 5);
-        TAG_PRIORITY.put("code_state", 4);
-        TAG_PRIORITY.put("environment", 3);
-        TAG_PRIORITY.put("design_decisions", 2);
-        TAG_PRIORITY.put("completed_tasks", 2);
-        TAG_PRIORITY.put("todo_items", 1);
+        TAG_PRIORITY.put("primary_request", 6);
+        TAG_PRIORITY.put("errors_and_fixes", 5);
+        TAG_PRIORITY.put("files_and_code", 4);
+        TAG_PRIORITY.put("current_work", 3);
+        TAG_PRIORITY.put("technical_concepts", 2);
+        TAG_PRIORITY.put("all_user_messages", 2);
+        TAG_PRIORITY.put("problem_solving", 2);
+        TAG_PRIORITY.put("pending_tasks", 1);
+        TAG_PRIORITY.put("optional_next_step", 1);
     }
 
     private static final List<String> GREETING_PATTERNS = List.of(
@@ -158,6 +175,8 @@ public class StructuredCompactionStrategy {
                 if (summary == null || summary.isBlank()) {
                     summary = generateFallbackSummary(head, taskGoal);
                 } else {
+                    // 后处理：删除 <analysis> 草稿纸块
+                    summary = formatCompactSummary(summary);
                     // 验证并修复 XML 格式
                     summary = validateAndFixXml(summary, head, taskGoal);
                 }
@@ -171,9 +190,9 @@ public class StructuredCompactionStrategy {
             // 5. 组装结果
             List<Message> result = new ArrayList<>(preserved);
             result.add(Message.createSystemMessage(
-                "[结构化压缩摘要]\n" + summary.trim() + "\n\n"
-                    + "[注意] 以上为此前 " + head.size() + " 轮对话的结构化摘要，"
-                    + "请基于摘要和最近对话继续。"
+                "[历史对话摘要] 此次对话来自之前超出上下文的延续会话：\n\n" + summary.trim() + "\n\n"
+                    + "[注意] 以上为此前 " + head.size()
+                    + " 轮对话的压缩摘要，后续请基于摘要和最近对话继续。"
             ));
             result.addAll(tail);
 
@@ -184,8 +203,10 @@ public class StructuredCompactionStrategy {
             logger.warning("[StructuredCompaction] 压缩异常: " + e.getMessage());
             List<Message> result = new ArrayList<>(preserved);
             result.add(Message.createSystemMessage(
-                "[结构化压缩摘要]\n" + generateFallbackSummary(head, taskGoal) + "\n\n"
-                    + "[注意] 压缩异常，使用 fallback 摘要。"
+                "[历史对话摘要] 此次对话来自之前超出上下文的延续会话。\n\n"
+                    + generateFallbackSummary(head, taskGoal) + "\n\n"
+                    + "[注意] 以上为此前 " + head.size()
+                    + " 轮对话的压缩摘要（fallback），后续请基于摘要和最近对话继续。"
             ));
             result.addAll(tail);
             return result;
@@ -195,71 +216,88 @@ public class StructuredCompactionStrategy {
     // ==================== Prompt 构建 ====================
 
     /**
-     * 构建强制 XML 结构化输出的压缩 Prompt。
+     * 构建强制 XML 结构化输出的压缩 Prompt — 对标 Claude Code 9 段结构 + drafting scratchpad。
      */
     private String buildStructuredPrompt(List<Message> headMessages, String taskGoal) {
         StringBuilder sb = new StringBuilder();
 
-        // ====== 系统指令：强制 XML 格式 ======
-        sb.append("你是JWCode的上下文压缩专家。请将以下对话历史压缩为严格的结构化XML摘要。\n\n");
+        // NO_TOOLS_PREAMBLE
+        sb.append(NO_TOOLS_PREAMBLE).append("\n");
 
-        sb.append("## 输出格式要求（必须严格遵守）\n\n");
-        sb.append("你必须输出以下XML结构，不允许省略任何标签，不允许使用Markdown代码块包裹：\n\n");
-        sb.append("<compaction_summary>\n");
-        sb.append("  <current_focus>[当前正在执行的最高优先级任务，一句话概括]</current_focus>\n");
-        sb.append("  <environment>\n");
-        sb.append("    <project>[项目名称和类型]</project>\n");
-        sb.append("    <language>[使用的编程语言]</language>\n");
-        sb.append("    <dependencies>[关键依赖或框架]</dependencies>\n");
-        sb.append("  </environment>\n");
-        sb.append("  <completed_tasks>\n");
-        sb.append("    <task status=\"success|failed\">[任务描述]: [结果摘要]</task>\n");
-        sb.append("    <!-- 每个已完成任务一个task标签 -->\n");
-        sb.append("  </completed_tasks>\n");
-        sb.append("  <active_issues>\n");
-        sb.append("    <issue severity=\"critical|major|minor\" status=\"open|in-progress|resolved\">[问题描述]: [当前状态]</issue>\n");
-        sb.append("  </active_issues>\n");
-        sb.append("  <code_state>\n");
-        sb.append("    <file path=\"...\">[文件修改摘要]</file>\n");
-        sb.append("  </code_state>\n");
-        sb.append("  <design_decisions>\n");
-        sb.append("    <decision>[设计决策]: [理由]</decision>\n");
-        sb.append("  </design_decisions>\n");
-        sb.append("  <todo_items>\n");
-        sb.append("    <todo priority=\"high|medium|low\">[待办事项]</todo>\n");
-        sb.append("  </todo_items>\n");
-        sb.append("</compaction_summary>\n\n");
+        // 压缩任务说明
+        sb.append("You are summarizing a conversation between an AI agent and a user.\n");
+        sb.append("All tasks described below are already completed.\n");
+        sb.append("**DO NOT re-run, re-do or re-execute any of the tasks mentioned!**\n");
+        sb.append("Use this summary only for context understanding.\n\n");
 
-        // ====== 优先级约束 ======
-        sb.append("## 优先级约束\n\n");
-        sb.append("按以下优先级保留信息（高优先级信息必须详实，低优先级可简略）：\n");
-        sb.append("1. **current_focus** — 当前任务状态（最高优先级，不可丢失）\n");
-        sb.append("2. **active_issues** — 错误与解决方案（避免重复犯错）\n");
-        sb.append("3. **code_state** — 代码最终版本（已修改的文件和关键代码变更）\n");
-        sb.append("4. **environment** — 系统上下文（项目配置、依赖版本）\n");
-        sb.append("5. **design_decisions** — 设计决策（架构选择及理由）\n");
-        sb.append("6. **completed_tasks** — 已完成任务（只保留结果，不保留过程）\n");
-        sb.append("7. **todo_items** — 待办事项（最低优先级，可截断）\n\n");
-
-        // ====== 内容约束 ======
-        sb.append("## 内容约束\n\n");
-        sb.append("- 中文输出\n");
-        sb.append("- current_focus 必须从最近的ASSISTANT消息中准确提取\n");
-        sb.append("- environment 从项目配置文件和用户消息中提取\n");
-        sb.append("- 不要编造信息，没有的内容写\"无\"\n");
-        sb.append("- 不要解释XML结构，直接输出XML即可\n");
-        sb.append("- 确保XML标签正确闭合\n\n");
-
-        // ====== 任务目标注入 ======
+        // 用户任务目标
         if (taskGoal != null && !taskGoal.isBlank()) {
-            sb.append("## 用户原始任务目标\n\n");
-            sb.append("```\n").append(truncate(taskGoal, 300)).append("\n```\n\n");
-            sb.append("current_focus 必须准确反映此目标及其当前进度。\n\n");
+            sb.append("The user's primary request was: ").append(truncate(taskGoal, 300)).append("\n\n");
         }
 
-        // ====== 待压缩消息 ======
-        sb.append("## 对话历史\n\n");
-        sb.append("以下是需要压缩的 ").append(headMessages.size()).append(" 轮对话：\n\n");
+        // 两阶段输出格式
+        sb.append("Your response MUST consist of exactly two blocks:\n\n");
+        sb.append("1. <analysis> — Scratchpad. Analyze each message chronologically:\n");
+        sb.append("   - User intent and any shifts in requirements\n");
+        sb.append("   - Technical decisions and rationale\n");
+        sb.append("   - Code changes and file modifications\n");
+        sb.append("   - Errors encountered and fixes applied\n");
+        sb.append("   This block will be DISCARDED after processing.\n\n");
+        sb.append("2. <summary> — The structured summary with these 9 sections:\n\n");
+
+        sb.append("   <primary_request>\n");
+        sb.append("   The user's core request. If intent shifted, note each shift.\n");
+        sb.append("   Quote key phrases from the user.\n");
+        sb.append("   </primary_request>\n\n");
+
+        sb.append("   <technical_concepts>\n");
+        sb.append("   Frameworks, libraries, APIs, patterns. Include version numbers.\n");
+        sb.append("   </technical_concepts>\n\n");
+
+        sb.append("   <files_and_code>\n");
+        sb.append("   All files examined/modified/created with full paths.\n");
+        sb.append("   What was changed and why. Key function signatures.\n");
+        sb.append("   </files_and_code>\n\n");
+
+        sb.append("   <errors_and_fixes>\n");
+        sb.append("   Every error: exact message, root cause, fix, rejected approaches.\n");
+        sb.append("   </errors_and_fixes>\n\n");
+
+        sb.append("   <problem_solving>\n");
+        sb.append("   Problems solved and those under investigation. Reasoning for decisions.\n");
+        sb.append("   </problem_solving>\n\n");
+
+        sb.append("   <all_user_messages>\n");
+        sb.append("   ALL user messages that are not tool results, VERBATIM.\n");
+        sb.append("   Do NOT paraphrase or omit any. Format: [Msg N] user: text\n");
+        sb.append("   This is CRITICAL for preserving the user's feedback and changing intent.\n");
+        sb.append("   </all_user_messages>\n\n");
+
+        sb.append("   <pending_tasks>\n");
+        sb.append("   All tasks not yet completed. TODO items, planned work.\n");
+        sb.append("   </pending_tasks>\n\n");
+
+        sb.append("   <current_work>\n");
+        sb.append("   What was being worked on immediately before this summary.\n");
+        sb.append("   Provide enough detail that work can continue seamlessly.\n");
+        sb.append("   </current_work>\n\n");
+
+        sb.append("   <optional_next_step>\n");
+        sb.append("   Obvious next action if any. Include verbatim quotes from the\n");
+        sb.append("   original conversation to prevent task drift. If none: 'No specific next step.'\n");
+        sb.append("   </optional_next_step>\n\n");
+
+        // 内容约束
+        sb.append("--- CONTENT RULES ---\n");
+        sb.append("- Primary language: Match the conversation language preference\n");
+        sb.append("- Do NOT fabricate information — if unknown write \"无\" or \"N/A\"\n");
+        sb.append("- Do NOT explain the XML structure, output XML directly\n");
+        sb.append("- Ensure all XML tags are properly closed\n");
+        sb.append("- all_user_messages MUST contain verbatim user messages\n\n");
+
+        // 对话历史
+        sb.append("--- CONVERSATION HISTORY TO SUMMARIZE ---\n\n");
+        sb.append("(").append(headMessages.size()).append(" messages)\n\n");
 
         int validCount = 0;
         for (int i = 0; i < headMessages.size(); i++) {
@@ -271,7 +309,7 @@ public class StructuredCompactionStrategy {
             validCount++;
             String role = msg.getRole().name().toLowerCase();
             if (content.length() > 600) {
-                content = content.substring(0, 600) + "\n...[截断]";
+                content = content.substring(0, 600) + "\n...[truncated]";
             }
             sb.append("[").append(role).append("] ").append(content).append("\n\n");
         }
@@ -280,7 +318,7 @@ public class StructuredCompactionStrategy {
             return null;
         }
 
-        sb.append("请输出结构化XML摘要：");
+        sb.append(NO_TOOLS_TRAILER);
         return sb.toString();
     }
 
@@ -288,6 +326,7 @@ public class StructuredCompactionStrategy {
 
     /**
      * 验证 LLM 输出的 XML 结构，修复常见问题。
+     * 对标 Claude Code 9 段标签体系。
      */
     private String validateAndFixXml(String raw, List<Message> headMessages, String taskGoal) {
         // 去除 Markdown 代码块包裹
@@ -296,31 +335,32 @@ public class StructuredCompactionStrategy {
             .replaceAll("```\\s*", "")
             .trim();
 
-        // 检查是否包含 compaction_summary 根标签
-        if (!cleaned.contains("<compaction_summary>")) {
-            // LLM 没有按格式输出，尝试提取有用内容
-            logger.warning("[StructuredCompaction] LLM未输出XML格式，尝试包装");
+        // 检查是否包含 summary 根标签
+        if (!cleaned.contains("<summary>")) {
+            logger.warning("[StructuredCompaction] LLM未输出summary标签，尝试包装");
             StringBuilder wrapped = new StringBuilder();
-            wrapped.append("<compaction_summary>\n");
-            wrapped.append("  <current_focus>").append(escapeXml(extractFirstSentence(cleaned))).append("</current_focus>\n");
-            wrapped.append("  <environment><project>未知</project></environment>\n");
-            wrapped.append("  <completed_tasks></completed_tasks>\n");
-            wrapped.append("  <active_issues></active_issues>\n");
-            wrapped.append("  <code_state></code_state>\n");
-            wrapped.append("  <design_decisions></design_decisions>\n");
-            wrapped.append("  <todo_items></todo_items>\n");
-            wrapped.append("  <raw_summary>").append(escapeXml(truncate(cleaned, 500))).append("</raw_summary>\n");
-            wrapped.append("</compaction_summary>");
+            wrapped.append("<summary>\n");
+            wrapped.append("  <primary_request>").append(escapeXml(extractFirstSentence(cleaned))).append("</primary_request>\n");
+            wrapped.append("  <technical_concepts>N/A</technical_concepts>\n");
+            wrapped.append("  <files_and_code></files_and_code>\n");
+            wrapped.append("  <errors_and_fixes></errors_and_fixes>\n");
+            wrapped.append("  <problem_solving></problem_solving>\n");
+            wrapped.append("  <all_user_messages>").append(escapeXml(truncate(cleaned, 300))).append("</all_user_messages>\n");
+            wrapped.append("  <pending_tasks></pending_tasks>\n");
+            wrapped.append("  <current_work></current_work>\n");
+            wrapped.append("  <optional_next_step></optional_next_step>\n");
+            wrapped.append("</summary>");
             return wrapped.toString();
         }
 
         // 确保必要的子标签存在
-        String[] requiredTags = {"current_focus", "environment", "completed_tasks",
-            "active_issues", "code_state", "design_decisions", "todo_items"};
+        String[] requiredTags = {"primary_request", "technical_concepts", "files_and_code",
+            "errors_and_fixes", "problem_solving", "all_user_messages",
+            "pending_tasks", "current_work", "optional_next_step"};
         for (String tag : requiredTags) {
             if (!cleaned.contains("<" + tag + ">") && !cleaned.contains("<" + tag + " ")) {
-                cleaned = cleaned.replace("</compaction_summary>",
-                    "  <" + tag + "></" + tag + ">\n</compaction_summary>");
+                cleaned = cleaned.replace("</summary>",
+                    "  <" + tag + "></" + tag + ">\n</summary>");
             }
         }
 
@@ -338,10 +378,10 @@ public class StructuredCompactionStrategy {
             return xml;
         }
 
-        // 按优先级从低到高截断
+        // 按优先级从低到高截断 (对标 9 段优先级)
         List<String> truncationOrder = List.of(
-            "todo_items", "completed_tasks", "design_decisions",
-            "code_state", "environment"
+            "optional_next_step", "pending_tasks", "problem_solving",
+            "technical_concepts", "all_user_messages", "current_work"
         );
 
         String result = xml;
@@ -353,7 +393,7 @@ public class StructuredCompactionStrategy {
 
         // 仍超长：全局截断
         if (result.length() > SUMMARY_TARGET_CHARS * 2) {
-            result = result.substring(0, SUMMARY_TARGET_CHARS * 2) + "\n<!-- [摘要被截断，低优先级内容已省略] -->\n</compaction_summary>";
+            result = result.substring(0, SUMMARY_TARGET_CHARS * 2) + "\n<!-- [摘要被截断，低优先级内容已省略] -->\n</summary>";
         }
 
         return result;
@@ -398,42 +438,56 @@ public class StructuredCompactionStrategy {
     // ==================== Fallback 摘要 ====================
 
     /**
-     * 当 LLM 调用失败时，生成降级的结构化摘要。
+     * 当 LLM 调用失败时，生成降级的结构化摘要 — 9 段对齐。
      */
     private String generateFallbackSummary(List<Message> headMessages, String taskGoal) {
         StringBuilder xml = new StringBuilder();
-        xml.append("<compaction_summary>\n");
+        xml.append("<summary>\n");
 
-        // current_focus
-        xml.append("  <current_focus>")
-           .append(escapeXml(taskGoal != null ? truncate(taskGoal, 100) : "未知任务"))
-           .append("</current_focus>\n");
+        xml.append("  <primary_request>")
+           .append(escapeXml(taskGoal != null ? truncate(taskGoal, 200) : "未知任务"))
+           .append("</primary_request>\n");
 
-        // environment
-        xml.append("  <environment><project>未知</project></environment>\n");
+        xml.append("  <technical_concepts>N/A</technical_concepts>\n");
 
-        // completed_tasks
-        xml.append("  <completed_tasks>\n");
+        // files_and_code — 从 assistant 消息中提取文件路径
+        xml.append("  <files_and_code>\n");
         for (Message msg : headMessages) {
             if (msg.getRole() == Message.Role.ASSISTANT) {
                 String text = msg.getTextContent();
                 if (text != null && !text.isBlank()) {
-                    xml.append("    <task status=\"unknown\">")
-                       .append(escapeXml(truncate(text, 80)))
-                       .append("</task>\n");
+                    xml.append("    <file path=\"unknown\">")
+                       .append(escapeXml(truncate(text, 100)))
+                       .append("</file>\n");
                 }
             }
         }
-        xml.append("  </completed_tasks>\n");
+        xml.append("  </files_and_code>\n");
 
-        // 其余空标签
-        xml.append("  <active_issues></active_issues>\n");
-        xml.append("  <code_state></code_state>\n");
-        xml.append("  <design_decisions></design_decisions>\n");
-        xml.append("  <todo_items></todo_items>\n");
+        xml.append("  <errors_and_fixes></errors_and_fixes>\n");
+        xml.append("  <problem_solving></problem_solving>\n");
+
+        // all_user_messages — 从 head 中提取用户消息原文
+        xml.append("  <all_user_messages>\n");
+        int msgIdx = 1;
+        for (Message msg : headMessages) {
+            if (msg.getRole() == Message.Role.USER) {
+                String text = msg.getTextContent();
+                if (text != null && !text.isBlank()) {
+                    xml.append("    [Msg ").append(msgIdx).append("] user: ")
+                       .append(escapeXml(truncate(text, 150))).append("\n");
+                    msgIdx++;
+                }
+            }
+        }
+        xml.append("  </all_user_messages>\n");
+
+        xml.append("  <pending_tasks>请检查最近对话中未完成的任务</pending_tasks>\n");
+        xml.append("  <current_work>压缩失败，请参考最近消息中的工作内容</current_work>\n");
+        xml.append("  <optional_next_step></optional_next_step>\n");
 
         xml.append("  <!-- 此摘要由 fallback 机制自动生成，LLM 压缩失败 -->\n");
-        xml.append("</compaction_summary>");
+        xml.append("</summary>");
         return xml.toString();
     }
 
@@ -518,6 +572,19 @@ public class StructuredCompactionStrategy {
             }
         }
         return sb.toString().trim();
+    }
+
+    /**
+     * 后处理压缩摘要 — 删除 &lt;analysis&gt; 草稿纸块（drafting scratchpad pattern）。
+     */
+    private String formatCompactSummary(String rawSummary) {
+        if (rawSummary == null || rawSummary.isBlank()) {
+            return rawSummary;
+        }
+        String formatted = rawSummary.replaceAll(
+            "(?i)<analysis>[\\s\\S]*?</analysis>", "");
+        formatted = formatted.replaceAll("\\n{3,}", "\n\n");
+        return formatted.trim();
     }
 
     private String extractFirstSentence(String text) {

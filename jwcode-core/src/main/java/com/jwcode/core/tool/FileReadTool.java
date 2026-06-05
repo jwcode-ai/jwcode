@@ -2,6 +2,7 @@ package com.jwcode.core.tool;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.jwcode.core.compact.PostCompactRecoveryService;
 import com.jwcode.core.tool.context.ToolExecutionContext;
 import com.jwcode.core.tool.input.FileReadInput;
 import com.jwcode.core.tool.output.FileReadOutput;
@@ -129,9 +130,12 @@ public class FileReadTool implements Tool<FileReadInput, FileReadOutput, FileRea
                     return ToolResult.error("文件太大（" + fileSize + " 字节），最大支持 " + MAX_FILE_SIZE + " 字节");
                 }
                 
+                // 记录文件访问（用于压缩后自动恢复）— 使用解析后的绝对路径
+                PostCompactRecoveryService.getInstance().recordFileAccess(filePath.toAbsolutePath().toString());
+
                 // 根据文件类型处理
                 String fileName = filePath.getFileName().toString().toLowerCase();
-                
+
                 if (isImageFile(fileName)) {
                     return readImageFile(filePath, input);
                 } else if (isDocumentFile(fileName)) {
@@ -139,7 +143,7 @@ public class FileReadTool implements Tool<FileReadInput, FileReadOutput, FileRea
                 } else {
                     return readTextFile(filePath, input);
                 }
-                
+
             } catch (Exception e) {
                 logger.severe("读取文件失败: " + e.getMessage());
                 return ToolResult.error("读取文件失败: " + e.getMessage());

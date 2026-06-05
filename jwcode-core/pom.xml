@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="UTF-8"?>
+﻿<?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
@@ -13,10 +13,10 @@
 
     <artifactId>jwcode-core</artifactId>
     <name>JWCode Core</name>
-    <description>JWCode 核心引擎 - 包含查询引擎、工具系统、会话管理和任务管理</description>
+    <description>JWCode 鏍稿績寮曟搸 - 鍖呭惈鏌ヨ寮曟搸銆佸伐鍏风郴缁熴€佷細璇濈鐞嗗拰浠诲姟绠＄悊</description>
 
     <dependencies>
-        <!-- 内部依赖 -->
+        <!-- 鍐呴儴渚濊禆 -->
         <dependency>
             <groupId>com.jwcode</groupId>
             <artifactId>jwcode-common</artifactId>
@@ -28,13 +28,13 @@
             <artifactId>slf4j-api</artifactId>
         </dependency>
 
-        <!-- Logback 实现 -->
+        <!-- Logback 瀹炵幇 -->
         <dependency>
             <groupId>ch.qos.logback</groupId>
             <artifactId>logback-classic</artifactId>
         </dependency>
 
-        <!-- JUL to SLF4J 桥接 -->
+        <!-- JUL to SLF4J 妗ユ帴 -->
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>jul-to-slf4j</artifactId>
@@ -51,7 +51,7 @@
             <artifactId>jackson-datatype-jsr310</artifactId>
         </dependency>
 
-        <!-- OkHttp HTTP 客户端 -->
+        <!-- OkHttp HTTP 瀹㈡埛绔?-->
         <dependency>
             <groupId>com.squareup.okhttp3</groupId>
             <artifactId>okhttp</artifactId>
@@ -63,7 +63,7 @@
             <version>${okhttp.version}</version>
         </dependency>
 
-        <!-- Reactor 响应式编程 -->
+        <!-- Reactor 鍝嶅簲寮忕紪绋?-->
         <dependency>
             <groupId>io.projectreactor</groupId>
             <artifactId>reactor-core</artifactId>
@@ -104,7 +104,7 @@
             <version>3.0.2</version>
         </dependency>
         
-        <!-- Hibernate Validator 实现 -->
+        <!-- Hibernate Validator 瀹炵幇 -->
         <dependency>
             <groupId>org.hibernate.validator</groupId>
             <artifactId>hibernate-validator</artifactId>
@@ -116,7 +116,7 @@
             <version>5.0.0</version>
         </dependency>
 
-        <!-- JSON Schema 生成 -->
+        <!-- JSON Schema 鐢熸垚 -->
         <dependency>
             <groupId>com.github.victools</groupId>
             <artifactId>jsonschema-generator</artifactId>
@@ -128,7 +128,7 @@
             <version>${jsonschema.version}</version>
         </dependency>
 
-        <!-- JLine3 终端库 -->
+        <!-- JLine3 缁堢搴?-->
         <dependency>
             <groupId>org.jline</groupId>
             <artifactId>jline</artifactId>
@@ -142,14 +142,14 @@
             <version>3.26.3</version>
         </dependency>
 
-        <!-- Jackson YAML 支持 -->
+        <!-- Jackson YAML 鏀寔 -->
         <dependency>
             <groupId>com.fasterxml.jackson.dataformat</groupId>
             <artifactId>jackson-dataformat-yaml</artifactId>
             <version>${jackson.version}</version>
         </dependency>
 
-        <!-- jsoup HTML 解析 -->
+        <!-- jsoup HTML 瑙ｆ瀽 -->
         <dependency>
             <groupId>org.jsoup</groupId>
             <artifactId>jsoup</artifactId>
@@ -178,7 +178,7 @@
             <version>3.46.1.0</version>
         </dependency>
 
-        <!-- 测试依赖 -->
+        <!-- 娴嬭瘯渚濊禆 -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
@@ -227,7 +227,7 @@
                     <excludes>
                         <exclude>**/eval/CapabilityEvalSuite.java</exclude>
                     </excludes>
-                    <argLine>-Dfile.encoding=UTF-8</argLine>
+                    <argLine>-Dfile.encoding=UTF-8 -Dmockito.mock-maker=inline -Djava.io.tmpdir=${project.build.directory}/tmp</argLine>
                 </configuration>
             </plugin>
         </plugins>
@@ -251,7 +251,7 @@
                                 <exclude>**/*Tests.java</exclude>
                                 <exclude>**/*TestCase.java</exclude>
                             </excludes>
-                            <argLine>-Dfile.encoding=UTF-8</argLine>
+                            <argLine>-Dfile.encoding=UTF-8 -Dmockito.mock-maker=inline -Djava.io.tmpdir=${project.build.directory}/tmp</argLine>
                             <systemPropertyVariables>
                                 <eval.output.dir>${project.basedir}/../eval-results</eval.output.dir>
                             </systemPropertyVariables>
@@ -278,7 +278,7 @@
                                 <exclude>**/*Tests.java</exclude>
                                 <exclude>**/*TestCase.java</exclude>
                             </excludes>
-                            <argLine>-Dfile.encoding=UTF-8</argLine>
+                            <argLine>-Dfile.encoding=UTF-8 -Dmockito.mock-maker=inline -Djava.io.tmpdir=${project.build.directory}/tmp</argLine>
                             <systemPropertyVariables>
                                 <eval.output.dir>${project.basedir}/../eval-results</eval.output.dir>
                                 <eval.skip.complex>true</eval.skip.complex>
@@ -306,7 +306,7 @@
                                 <exclude>**/*Tests.java</exclude>
                                 <exclude>**/*TestCase.java</exclude>
                             </excludes>
-                            <argLine>-Dfile.encoding=UTF-8</argLine>
+                            <argLine>-Dfile.encoding=UTF-8 -Dmockito.mock-maker=inline -Djava.io.tmpdir=${project.build.directory}/tmp</argLine>
                             <systemPropertyVariables>
                                 <eval.output.dir>${project.basedir}/../eval-results</eval.output.dir>
                                 <eval.full.mode>true</eval.full.mode>
@@ -320,3 +320,4 @@
     </profiles>
 
 </project>
+

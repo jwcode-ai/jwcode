@@ -1,7 +1,7 @@
 {
   "name": "@jwcode/cli",
   "version": "3.0.0",
-  "description": "JWCode — Java AI Coding Tool TypeScript CLI",
+  "description": "JWCode \u2014 Java AI Coding Tool TypeScript CLI",
   "type": "module",
   "main": "dist/cli.js",
   "bin": {
@@ -12,7 +12,8 @@
     "test:watch": "vitest",
     "build": "node build.mjs",
     "go": "node build.mjs && node dist/cli.js run",
-    "start": "node build.mjs && node dist/cli.js start"
+    "start": "node build.mjs && node dist/cli.js start",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "ink": "^5.0.0",

@@ -1,5 +1,5 @@
-﻿/**
- * Keyboard input handler 鈥?escape, scroll, mode toggle.
+/**
+ * Keyboard input handler — escape, scroll, mode toggle.
  * Extracted from App.tsx to keep the root component focused on layout.
  */
 import { useRef } from 'react';
@@ -13,6 +13,7 @@ interface KeyboardOptions {
   showHelp: boolean;
   isGenerating: boolean;
   terminalRows: number;
+  paletteOpen: boolean;
   clientRef: React.MutableRefObject<JwCodeClient | null>;
   onDenyApproval: () => void;
   onCloseHelp: () => void;
@@ -21,7 +22,7 @@ interface KeyboardOptions {
 
 export function useKeyboardInput(opts: KeyboardOptions) {
   const {
-    showApproval, showHelp, isGenerating, terminalRows,
+    showApproval, showHelp, isGenerating, terminalRows, paletteOpen,
     clientRef, onDenyApproval, onCloseHelp, setHelpScroll,
   } = opts;
 
@@ -84,7 +85,7 @@ export function useKeyboardInput(opts: KeyboardOptions) {
       }));
       return;
     }
-    if (key.upArrow && !showApproval) {
+    if (key.upArrow && !showApproval && !paletteOpen) {
       updateAppState(prev => ({
         ...prev,
         scrollOffset: Math.max(0, prev.scrollOffset - 1),
@@ -98,7 +99,7 @@ export function useKeyboardInput(opts: KeyboardOptions) {
       }));
       return;
     }
-    if (key.downArrow && !showApproval) {
+    if (key.downArrow && !showApproval && !paletteOpen) {
       updateAppState(prev => ({
         ...prev,
         scrollOffset: prev.scrollOffset + 1,

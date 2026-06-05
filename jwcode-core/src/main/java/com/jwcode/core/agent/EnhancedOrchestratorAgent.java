@@ -6,6 +6,7 @@ import com.jwcode.core.a2a.model.A2ATask;
 import com.jwcode.core.a2a.model.AgentCard;
 import com.jwcode.core.a2a.model.TaskOutput;
 import com.jwcode.core.api.PlanTaskBroadcaster;
+import com.jwcode.core.api.AgentFlowBroadcaster;
 import com.jwcode.core.config.SystemPromptAssembler;
 import com.jwcode.core.hook.HookSystemInitializer;
 import com.jwcode.core.agent.AgentMessageBus;
@@ -80,6 +81,7 @@ public class EnhancedOrchestratorAgent {
 
     // Plan 模式广播器（用于向前端推送任务状态）
     private PlanTaskBroadcaster planTaskBroadcaster;
+    private AgentFlowBroadcaster agentFlowBroadcaster;
 
     // 当前会话 ID（用于 WebSocket 消息路由）
     private String sessionId;

@@ -260,11 +260,13 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
   }, []);
 
   const isGenerating = currentMessage !== null;
+  const paletteActive = showPalette || showFilePalette;
   useKeyboardInput({
     showApproval: showApproval !== null,
     showHelp,
     isGenerating,
     terminalRows,
+    paletteOpen: paletteActive,
     clientRef: clientRef as React.MutableRefObject<JwCodeClient | null>,
     onDenyApproval: () => { if (showApproval) handleApprovalDeny(showApproval.approvalId); },
     onCloseHelp: () => setShowHelp(false),
@@ -303,6 +305,7 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
           onSubmit={handleSubmit}
           placeholder={placeholder}
           disabled={showApproval !== null}
+          disableHistory={paletteActive}
         />
       </Box>
       <Box>

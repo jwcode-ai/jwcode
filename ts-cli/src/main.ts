@@ -169,6 +169,11 @@ async function cmdStart(args: Record<string, string | boolean>): Promise<void> {
   const backendUrl = `http://localhost:${httpPort}`;
   const wsUrl = `ws://localhost:${wsPort}/ws`;
 
+
+  // Clear launcher console output before Ink TUI starts, so Ink's
+  // cursor-based frame update doesn't collide with prior console.log lines.
+  process.stdout.write('[2J[H');
+
   // First-run: check if a provider is configured, show setup wizard if not
   let providerConfigured = false;
   try {

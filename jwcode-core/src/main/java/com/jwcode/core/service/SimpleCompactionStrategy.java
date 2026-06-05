@@ -50,10 +50,24 @@ public class SimpleCompactionStrategy {
     private static final int DEFAULT_TAIL_SIZE = 8;
     // 摘要 Prompt 最大消息数（防止 Prompt 本身过大）
     private static final int MAX_HEAD_MESSAGES = 40;
-    // 摘要目标长度（字符）- 【修复】从 400 增加到 800，确保保留关键任务信息
-    private static final int SUMMARY_TARGET_CHARS = 800;
+    // 摘要目标长度（字符）— 9 段结构化摘要需要更大空间
+    private static final int SUMMARY_TARGET_CHARS = 2500;
     // 预留 token 安全余量
     private static final int RESERVED_TOKENS = 4096;
+
+    // 禁止工具调用声明 — 首尾双重强调，防止压缩 agent 尝试调用工具
+    // Sonnet 4.6 上无此声明时工具调用失败率 2.79%（vs Sonnet 4.5 的 0.01%）
+    private static final String NO_TOOLS_PREAMBLE =
+        "CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.\n\n" +
+        "- Do NOT use Read, Bash, Grep, Glob, Edit, Write, or ANY other tool.\n" +
+        "- You already have all the context you need in the conversation above.\n" +
+        "- Tool calls will be REJECTED and will waste your only turn — you will fail the task.\n" +
+        "- Your entire response must be plain text: an <analysis> block followed by a <summary> block.\n";
+
+    private static final String NO_TOOLS_TRAILER =
+        "\n\nREMINDER: Do NOT call any tools. Respond with plain text only — " +
+        "an <analysis> block followed by a <summary> block. " +
+        "Tool calls will be rejected and you will fail the task.";
 
     private static final List<String> GREETING_PATTERNS = List.of(
         "你好", "hi", "hello", "在吗", "请问", "谢谢", "感谢"
@@ -157,6 +171,9 @@ public class SimpleCompactionStrategy {
                 }
             }
 
+            // 后处理：删除 <analysis> 草稿纸块，仅保留 <summary> 正式内容
+            summary = formatCompactSummary(summary);
+
             // 截断过长的摘要
             if (summary.length() > SUMMARY_TARGET_CHARS * 2) {
                 summary = summary.substring(0, SUMMARY_TARGET_CHARS * 2) + "\n...[摘要已截断]";
@@ -165,8 +182,9 @@ public class SimpleCompactionStrategy {
             // 4. 组装结果：保护消息 + 摘要(system) + 尾部
             List<Message> result = new ArrayList<>(preserved);
             Message summaryMsg = Message.createSystemMessage(
-                "[历史对话摘要] " + summary.trim() + "\n\n[注意] 以上为此前 "
-                    + head.size() + " 轮对话的压缩摘要，后续请基于摘要和最近对话继续。"
+                "[历史对话摘要] 此次对话来自之前超出上下文的延续会话：\n\n" + summary.trim()
+                    + "\n\n[注意] 以上为此前 " + head.size()
+                    + " 轮对话的压缩摘要，后续请基于摘要和最近对话继续。"
             );
             // 压缩代际追踪：标记此消息为压缩产物，记录来源
             int maxGen = head.stream().mapToInt(Message::getCompactionGeneration).max().orElse(0);
@@ -183,8 +201,12 @@ public class SimpleCompactionStrategy {
             logger.warning("[SimpleCompaction] 压缩异常: " + e.getMessage() + "，使用 fallback 摘要");
             List<Message> result = new ArrayList<>(preserved);
             result.add(Message.createSystemMessage(
-                "[历史对话摘要] 压缩异常，仅保留最近对话。\n\n[注意] 以上为此前 "
-                    + head.size() + " 轮对话的压缩摘要，后续请基于摘要和最近对话继续。"
+                "[历史对话摘要] 此次对话来自之前超出上下文的延续会话。\n\n"
+                    + "<summary>\n<primary_request>压缩异常，无法生成摘要。</primary_request>\n"
+                    + "<pending_tasks>未知。请检查最近对话中未完成的任务。</pending_tasks>\n"
+                    + "<current_work>压缩前最后的工作内容请参阅下方的最近消息。</current_work>\n</summary>\n\n"
+                    + "[注意] 以上为此前 " + head.size()
+                    + " 轮对话的压缩摘要，后续请基于摘要和最近对话继续。"
             ));
             result.addAll(tail);
             return result;
@@ -319,7 +341,10 @@ public class SimpleCompactionStrategy {
     }
 
     /**
-     * 构建压缩 Prompt。
+     * 构建压缩 Prompt — 对标 Claude Code 9 段结构化摘要 + drafting scratchpad 模式。
+     *
+     * <p>两阶段输出：&lt;analysis&gt; 草稿纸（后处理删除，不占上下文）
+     * + &lt;summary&gt; 正式摘要（9 个固定章节）。</p>
      *
      * @param headMessages 待压缩的头部消息（已排除被保护消息）
      * @param taskGoal     从全部消息中识别的任务目标文本
@@ -327,19 +352,78 @@ public class SimpleCompactionStrategy {
     private String buildCompactionPrompt(List<Message> headMessages, String taskGoal) {
         StringBuilder sb = new StringBuilder();
 
-        // 【修复】强制注入用户真实任务目标，防止压缩后丢失
+        // NO_TOOLS_PREAMBLE — 首部禁止工具调用声明
+        sb.append(NO_TOOLS_PREAMBLE).append("\n");
+
+        // 压缩任务说明
+        sb.append("You are summarizing a conversation between an AI agent and a user.\n");
+        sb.append("All tasks described below are already completed.\n");
+        sb.append("**DO NOT re-run, re-do or re-execute any of the tasks mentioned!**\n");
+        sb.append("Use this summary only for context understanding.\n\n");
+
+        // 强制注入用户真实任务目标
         if (taskGoal != null && !taskGoal.isBlank()) {
-            sb.append("【强制约束】用户真实任务目标：").append(truncate(taskGoal, 200)).append("\n");
-            sb.append("注意：如果上述目标看起来只是问候语/寒暄，请从完整对话历史中重新识别真正的任务目标。\n");
-            sb.append("真正的任务目标通常是：包含具体动作（修复/添加/实现/优化）、涉及具体模块/文件、有明确验收标准的消息。\n");
-            sb.append("你必须在摘要开头用一句话准确复述用户真实任务目标，禁止篡改、遗漏或臆测。\n\n");
+            sb.append("The user's primary request was: ").append(truncate(taskGoal, 300)).append("\n\n");
         }
 
-        sb.append("请用 200 字以内总结以下对话历史，保留关键信息：\n");
-        sb.append("- 当前任务目标（必须从用户消息中准确提取，禁止臆测或篡改）\n");
-        sb.append("- 已做出的设计决策\n");
-        sb.append("- 遇到的错误及解决方案\n");
-        sb.append("- 尚未完成的待办事项\n\n");
+        // 两阶段输出格式
+        sb.append("Your response MUST consist of exactly two blocks:\n\n");
+        sb.append("1. <analysis> — Your scratchpad. Analyze each message chronologically:\n");
+        sb.append("   - What the user asked for and how their intent may have shifted\n");
+        sb.append("   - What technical decisions were made and why\n");
+        sb.append("   - What code was written, modified, or read\n");
+        sb.append("   - What errors occurred and how they were fixed\n");
+        sb.append("   - What remains incomplete\n");
+        sb.append("   This block will be DISCARDED — it is a scratchpad only.\n\n");
+        sb.append("2. <summary> — The final structured summary with these 9 sections:\n\n");
+        sb.append("   <primary_request>\n");
+        sb.append("   The user's core request and intent. If the intent shifted mid-conversation,\n");
+        sb.append("   note each shift chronologically. Be specific — quote key phrases.\n");
+        sb.append("   </primary_request>\n\n");
+        sb.append("   <technical_concepts>\n");
+        sb.append("   Key technical concepts, frameworks, libraries, APIs, and patterns discussed.\n");
+        sb.append("   Include version numbers and configuration details where relevant.\n");
+        sb.append("   </technical_concepts>\n\n");
+        sb.append("   <files_and_code>\n");
+        sb.append("   All files examined, modified, or created. For each file include:\n");
+        sb.append("   - Full path relative to workspace root\n");
+        sb.append("   - What was changed and why (for modifications)\n");
+        sb.append("   - Key code snippets or function signatures where relevant\n");
+        sb.append("   </files_and_code>\n\n");
+        sb.append("   <errors_and_fixes>\n");
+        sb.append("   Every error encountered and how it was resolved. Include:\n");
+        sb.append("   - The exact error message or symptom\n");
+        sb.append("   - The root cause\n");
+        sb.append("   - The fix applied and why it worked\n");
+        sb.append("   - Any approaches that were tried and failed\n");
+        sb.append("   </errors_and_fixes>\n\n");
+        sb.append("   <problem_solving>\n");
+        sb.append("   Problems that were solved and those still under investigation.\n");
+        sb.append("   Describe the reasoning process for key decisions.\n");
+        sb.append("   </problem_solving>\n\n");
+        sb.append("   <all_user_messages>\n");
+        sb.append("   List ALL user messages that are not tool results, VERBATIM.\n");
+        sb.append("   These are critical for understanding the user's feedback and changing intent.\n");
+        sb.append("   Do NOT paraphrase, summarize, or omit any user message.\n");
+        sb.append("   Format: [Msg N] user: <exact text>\n");
+        sb.append("   </all_user_messages>\n\n");
+        sb.append("   <pending_tasks>\n");
+        sb.append("   All tasks that were requested but not yet completed.\n");
+        sb.append("   Include TODO items, planned work, and follow-up actions.\n");
+        sb.append("   </pending_tasks>\n\n");
+        sb.append("   <current_work>\n");
+        sb.append("   What was being worked on immediately before this summary.\n");
+        sb.append("   The model reading this summary should be able to continue seamlessly.\n");
+        sb.append("   </current_work>\n\n");
+        sb.append("   <optional_next_step>\n");
+        sb.append("   If there is an obvious next action, describe it.\n");
+        sb.append("   Include verbatim quotes from the original conversation where relevant\n");
+        sb.append("   to prevent task drift across compaction boundaries.\n");
+        sb.append("   If nothing is pending, state 'No specific next step.'\n");
+        sb.append("   </optional_next_step>\n\n");
+
+        // 对话历史
+        sb.append("--- CONVERSATION HISTORY TO SUMMARIZE ---\n\n");
 
         int msgIndex = 1;
         int validCount = 0;
@@ -350,23 +434,42 @@ public class SimpleCompactionStrategy {
                 continue;
             }
             validCount++;
-            // 单条消息内容截断，防止单条消息占满 Prompt
             if (content.length() > 800) {
-                content = content.substring(0, 800) + "\n...[内容截断]";
+                content = content.substring(0, 800) + "\n...[content truncated]";
             }
             sb.append("## Message ").append(msgIndex++).append("\n");
             sb.append("Role: ").append(role).append("\n");
             sb.append("Content: ").append(content).append("\n\n");
         }
 
-        // 无可压缩的实质内容，返回 null 触发 fallback 截断
         if (validCount == 0) {
             logger.info("[SimpleCompaction] 头部无可压缩的实质内容（全是工具结果/监控消息），跳过 LLM 压缩");
             return null;
         }
 
-        sb.append("[请用中文总结，控制在 200 字以内]");
+        // NO_TOOLS_TRAILER — 尾部再次提醒
+        sb.append(NO_TOOLS_TRAILER);
         return sb.toString();
+    }
+
+    /**
+     * 后处理压缩摘要 — 删除 &lt;analysis&gt; 草稿纸块（drafting scratchpad pattern）。
+     *
+     * <p>草稿纸帮助模型理清思路，提高最终摘要质量，但不占用压缩后的上下文空间。</p>
+     *
+     * @param rawSummary LLM 原始输出
+     * @return 去除 analysis 块后的摘要
+     */
+    private String formatCompactSummary(String rawSummary) {
+        if (rawSummary == null || rawSummary.isBlank()) {
+            return rawSummary;
+        }
+        // 删除 <analysis>...</analysis> 块（含多行内容）
+        String formatted = rawSummary.replaceAll(
+            "(?i)<analysis>[\\s\\S]*?</analysis>", "");
+        // 清理多余的空行
+        formatted = formatted.replaceAll("\\n{3,}", "\n\n");
+        return formatted.trim();
     }
 
     private String truncate(String text, int maxLength) {

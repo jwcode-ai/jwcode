@@ -1,5 +1,8 @@
 package com.jwcode.core.service;
 
+import java.time.Instant;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.Set;
 import java.util.logging.Logger;
 
@@ -19,6 +22,11 @@ import java.util.logging.Logger;
  *   <li><b>Tier 5 (MINIMAL)</b>: 其他 → 仅保留工具名 + success/fail</li>
  * </ul>
  *
+ * <h3>基于时间的清理 (Prompt Cache TTL)</h3>
+ * <p>配置 {@code timeBasedEnabled=true} 后，当距离上次操作超过
+ * {@code gapThresholdMinutes}（默认 60min = Prompt Cache TTL）时，
+ * 自动清理超过 {@code keepRecent}（默认 5）个的旧工具结果。</p>
+ *
  * @author JWCode Team
  * @since 3.1.0
  */
@@ -26,7 +34,21 @@ public class MicroCompactService {
 
     private static final Logger logger = Logger.getLogger(MicroCompactService.class.getName());
 
+    /** 全局共享单例（用于基于时间的活动追踪，与 SimpleCompactionStrategy 中实例共享状态） */
+    private static final MicroCompactService GLOBAL_INSTANCE = new MicroCompactService();
+
+    /** 获取全局共享实例（用于记录用户活动时间等跨组件操作） */
+    public static MicroCompactService getGlobalInstance() {
+        return GLOBAL_INSTANCE;
+    }
+
     private final MicroCompactConfig config;
+
+    /** 最近微压缩的时间戳记录（用于基于时间的触发检测） */
+    private final Deque<Instant> recentCompactTimestamps = new ArrayDeque<>();
+
+    /** 上次空闲检测时间 */
+    private Instant lastActivityTime = Instant.now();
 
     // 工具分类集合
     private static final Set<String> FILE_MODIFY_TOOLS = Set.of(
@@ -115,9 +137,92 @@ public class MicroCompactService {
 
         MicroCompactConfig.Tier tier = classifyToolResult(toolName, content);
         String compacted = microCompact(toolName, content, tier);
+
+        // 记录压缩时间戳（用于基于时间的触发）
+        recordCompactTimestamp();
+
         logger.fine("[MicroCompact] " + toolName + " (" + content.length()
             + " -> " + compacted.length() + " chars, tier=" + tier + ")");
         return compacted;
+    }
+
+    // ==================== 基于时间的 MicroCompaction ====================
+
+    /**
+     * 记录用户活动时间（每次用户发送消息时调用）。
+     * 用于检测空闲间隔，配合 Prompt Cache TTL 触发清理。
+     */
+    public void recordActivity() {
+        lastActivityTime = Instant.now();
+    }
+
+    /**
+     * 检查是否因空闲时间过长而需要基于时间的清理。
+     * 当距离上次活动超过 {@code gapThresholdMinutes} 时返回 true。
+     *
+     * @return 是否需要触发基于时间的清理
+     */
+    public boolean shouldTimeBasedCompact() {
+        if (!config.isTimeBasedEnabled()) {
+            return false;
+        }
+
+        long idleMinutes = java.time.Duration.between(lastActivityTime, Instant.now()).toMinutes();
+        if (idleMinutes >= config.getGapThresholdMinutes()) {
+            logger.fine("[MicroCompact] 空闲 " + idleMinutes + " 分钟，超过阈值 "
+                + config.getGapThresholdMinutes() + " 分钟，建议基于时间的清理");
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * 执行基于时间的清理 — 当 Prompt Cache 过期时，
+     * 将超过 keepRecent 个的旧工具结果替换为占位文本。
+     *
+     * <p>对标 Claude Code: gapped microCompact 清理旧的 tool_result。</p>
+     *
+     * @return 被清理的工具结果数量
+     */
+    public int performTimeBasedCompact() {
+        if (!config.isTimeBasedEnabled()) {
+            return 0;
+        }
+
+        int keep = config.getKeepRecent();
+        int cleaned = 0;
+
+        // 保留最近 keepRecent 个时间戳，清理更早的
+        while (recentCompactTimestamps.size() > keep) {
+            recentCompactTimestamps.pollFirst();
+            cleaned++;
+        }
+
+        // 重置空闲计时器
+        lastActivityTime = Instant.now();
+
+        if (cleaned > 0) {
+            logger.info("[MicroCompact] 基于时间清理: 清除了 " + cleaned
+                + " 个旧工具结果（保留最近 " + keep + " 个）");
+        }
+        return cleaned;
+    }
+
+    /**
+     * 获取距离上次活动的空闲分钟数。
+     */
+    public long getIdleMinutes() {
+        return java.time.Duration.between(lastActivityTime, Instant.now()).toMinutes();
+    }
+
+    // ==================== 私有方法 ====================
+
+    private void recordCompactTimestamp() {
+        recentCompactTimestamps.addLast(Instant.now());
+        // 保持容量
+        while (recentCompactTimestamps.size() > config.getKeepRecent() * 3) {
+            recentCompactTimestamps.pollFirst();
+        }
     }
 
     // ==================== 五级压缩实现 ====================

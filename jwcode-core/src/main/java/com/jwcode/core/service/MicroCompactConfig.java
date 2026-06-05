@@ -22,6 +22,17 @@ public class MicroCompactConfig {
     /** 最大保留字符数 */
     private int maxRetainedChars = 500;
 
+    // ==================== 基于时间的 MicroCompaction (Prompt Cache TTL) ====================
+
+    /** 是否启用基于时间间隔的清理（默认关闭，对标 Claude Code timeBasedMC） */
+    private boolean timeBasedEnabled = false;
+
+    /** 时间间隔阈值（分钟），默认 60min = Prompt Cache TTL */
+    private int gapThresholdMinutes = 60;
+
+    /** 保留最近的 N 个可压缩工具结果，更早的全部替换 */
+    private int keepRecent = 5;
+
     public enum Tier {
         /** 错误/异常 — 完整保留 */
         CRITICAL,
@@ -52,4 +63,11 @@ public class MicroCompactConfig {
     public void setMaxTier(Tier maxTier) { this.maxTier = maxTier; }
     public int getMaxRetainedChars() { return maxRetainedChars; }
     public void setMaxRetainedChars(int maxRetainedChars) { this.maxRetainedChars = maxRetainedChars; }
+
+    public boolean isTimeBasedEnabled() { return timeBasedEnabled; }
+    public void setTimeBasedEnabled(boolean timeBasedEnabled) { this.timeBasedEnabled = timeBasedEnabled; }
+    public int getGapThresholdMinutes() { return gapThresholdMinutes; }
+    public void setGapThresholdMinutes(int gapThresholdMinutes) { this.gapThresholdMinutes = gapThresholdMinutes; }
+    public int getKeepRecent() { return keepRecent; }
+    public void setKeepRecent(int keepRecent) { this.keepRecent = keepRecent; }
 }

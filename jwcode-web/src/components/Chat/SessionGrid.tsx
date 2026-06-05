@@ -48,7 +48,7 @@ export const SessionGrid = memo(function SessionGrid({
   const getSessionInput = useChatStore((s) => s.getSessionInput);
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden min-h-0">
+    <div className="flex-1 flex flex-col min-h-0">
       {tabs
         .filter((tab) => tab.id === activeSessionId)
         .map((tab) => {

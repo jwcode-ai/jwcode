@@ -3,7 +3,9 @@ package com.jwcode.core.agent;
 import com.jwcode.core.compact.CompactService;
 import com.jwcode.core.compact.CompactResult;
 import com.jwcode.core.compact.CompactStrategy;
+import com.jwcode.core.compact.PostCompactRecoveryService;
 import com.jwcode.core.llm.TokenBudget;
+import com.jwcode.core.model.Message;
 import com.jwcode.core.session.Session;
 import com.jwcode.core.task.ActiveTask;
 import org.slf4j.Logger;
@@ -49,6 +51,8 @@ public class BudgetExhaustedHandler {
 
     private final CompactService compactService;
     private final SubTaskSplitter subTaskSplitter;
+    private final PostCompactRecoveryService recoveryService;
+    private final String workspaceDir;
 
     // ==================== 状态 ====================
 
@@ -59,21 +63,36 @@ public class BudgetExhaustedHandler {
     // ==================== 构造函数 ====================
 
     public BudgetExhaustedHandler(CompactService compactService, SubTaskSplitter subTaskSplitter) {
-        this(lowThreshold(), criticalThreshold(), exhaustedThreshold(), compactService, subTaskSplitter);
+        this(lowThreshold(), criticalThreshold(), exhaustedThreshold(), compactService, subTaskSplitter,
+             PostCompactRecoveryService.getInstance(), System.getProperty("user.dir"));
     }
 
     public BudgetExhaustedHandler(
-            double lowThreshold, 
-            double criticalThreshold, 
+            double lowThreshold,
+            double criticalThreshold,
             double exhaustedThreshold,
-            CompactService compactService, 
+            CompactService compactService,
             SubTaskSplitter subTaskSplitter) {
-        
+        this(lowThreshold, criticalThreshold, exhaustedThreshold, compactService, subTaskSplitter,
+             PostCompactRecoveryService.getInstance(), System.getProperty("user.dir"));
+    }
+
+    public BudgetExhaustedHandler(
+            double lowThreshold,
+            double criticalThreshold,
+            double exhaustedThreshold,
+            CompactService compactService,
+            SubTaskSplitter subTaskSplitter,
+            PostCompactRecoveryService recoveryService,
+            String workspaceDir) {
+
         this.lowThreshold = lowThreshold;
         this.criticalThreshold = criticalThreshold;
         this.exhaustedThreshold = exhaustedThreshold;
         this.compactService = compactService;
         this.subTaskSplitter = subTaskSplitter;
+        this.recoveryService = recoveryService;
+        this.workspaceDir = workspaceDir != null ? workspaceDir : System.getProperty("user.dir");
         this.sessionBudgetStates = new HashMap<>();
         this.listeners = new CopyOnWriteArrayList<>();
         this.autoCompactEnabled = new AtomicBoolean(true);
@@ -240,7 +259,22 @@ public class BudgetExhaustedHandler {
                 // 重置 Token 预算
                 budget.reset();
                 session.markCompacted();
-                
+
+                // 压缩后自动恢复：重新读取最近访问的文件
+                // 注意：我们不清除 SkillRegistry 中的已加载技能内容。
+                // Skill 是用户主动加载的专业知识包，必须在多次 compaction 之间保持可用，
+                // 确保后续对话不会丢失专业指导。
+                try {
+                    String recoveryContext = recoveryService.recoverAfterCompact(workspaceDir);
+                    if (recoveryContext != null && !recoveryContext.isBlank()) {
+                        session.addMessage(Message.createSystemMessage(recoveryContext));
+                        logger.info("[BudgetHandler] 压缩后恢复: 已重读 {} 个文件",
+                            recoveryService.getRecentFileCount());
+                    }
+                } catch (Exception e) {
+                    logger.warn("[BudgetHandler] 压缩后恢复失败: {}", e.getMessage());
+                }
+
                 logger.info("[BudgetHandler] 压缩成功 | 节省 {} tokens | 保留 {} 条消息",
                     result.getTokensSaved(), result.getMessagesCompacted());
             }

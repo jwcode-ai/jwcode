@@ -54,13 +54,13 @@ JwCode 是一个用 **Java 17+** 重构的终端 AI 编码工具，对标 TypeSc
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                       JWCode (CLI)                          │
+│                       JWCode 部署架构                          │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐  │
-│  │  jwcode-cli  │  │  jwcode-ui   │  │   jwcode-web     │  │
-│  │  (终端交互)  │  │  (显示层)    │  │  (Web 管理界面)  │  │
-│  └──────┬───────┘  └──────┬───────┘  └────────┬─────────┘  │
-│         └─────────────────┼───────────────────┘             │
-│                            ▼                                │
+│  │   ts-cli     │               │   jwcode-web     │               │
+│  │  (CLI 入口)  │               │  (Web 管理界面)  │               │
+│  └──────┬───────┘               └────────┬─────────┘               │
+│         └───────────────┬──────────────────┘                        │
+│                ▼                     ▼                                │
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │                    jwcode-core                       │   │
 │  │  ┌──────────┐ ┌──────────┐ ┌────────────────────┐   │   │
@@ -80,31 +80,21 @@ JwCode 是一个用 **Java 17+** 重构的终端 AI 编码工具，对标 TypeSc
 
 | 层级 | 模块 | 职责 |
 |------|------|------|
-| **应用层** | `jwcode-cli` | 命令行交互界面，命令解析、REPL 循环 |
 | **应用层** | `jwcode-web` | 内置 Web 服务器，提供模型状态查看等 API |
-| **显示层** | `jwcode-ui` | UI 渲染组件，活动日志显示 |
 | **核心层** | `jwcode-core` | AI 客户端、工具系统、模型池、会话管理 |
 | **基础层** | `jwcode-common` | 公共工具类、常量、枚举 |
 | **扩展层** | `jwcode-mcp` | MCP (Model Context Protocol) 桥接 |
 | **扩展层** | `jwcode-parser` | 代码解析与分析 |
-| **运行时** | `jwcode-repl` | REPL (Read-Eval-Print-Loop) 交互式会话管理 |
-| **分发** | `jwcode-distribution` | 打包和分发的 Maven 配置 |
-| **父 POM** | `jwcode-parent` | 公共 Maven 依赖和插件管理 |
 
 ### 2.3 Maven 模块结构
 
 ```
 jwcode/                      # 根 POM (pom)
-├── jwcode-parent/           # 父 POM，统一依赖和插件版本
 ├── jwcode-common/           # 公共模块
 ├── jwcode-core/             # 核心业务逻辑
-├── jwcode-cli/              # CLI 终端界面
-├── jwcode-ui/               # UI 显示组件
 ├── jwcode-web/              # Web 管理界面
 ├── jwcode-mcp/              # MCP 协议扩展
-├── jwcode-parser/           # 代码解析
-├── jwcode-repl/             # REPL 会话
-└── jwcode-distribution/     # 打包分发
+└── jwcode-parser/           # 代码解析
 ```
 
 ---
@@ -138,43 +128,9 @@ com.jwcode.core/
     └── Conversation.java     # 对话记录
 ```
 
-### 3.2 jwcode-cli（CLI 模块）
 
-CLI 模块提供终端交互界面，支持 50+ 命令。
 
-**主要组件：**
-- `JwCodeRepl.java` - 主 REPL 循环
-- `CommandRegistry.java` - 命令注册
-- `CommandExecutor.java` - 命令执行
-- `completer/` - 自动补全
-- `highlight/` - 语法高亮
-- `log/` - 日志显示（含活动日志 ActivityLogger）
-
-**关键特性：**
-- JLine 驱动的交互式终端
-- Tab 键自动补全
-- 命令历史记录
-- 流式响应实时显示
-- 活动日志实时追踪 AI 操作
-
-### 3.3 jwcode-ui（UI 模块）
-
-提供终端 UI 渲染组件。
-
-**主要组件：**
-- `ActivityLogger.java` - AI 活动实时日志（类似 KimiCode 体验）
-- `ProgressBar.java` - 进度条显示
-- `ColorFormatter.java` - 颜色格式化
-- `StatusBar.java` - 状态栏
-
-**活动日志示例：**
-```
-[14:32:10] ▶️ 📄 读取文件 读取 src/main/java 256 行 (45ms)
-[14:32:11] ▶️ 🔍 搜索代码 搜索: class ActivityLogger 5 个匹配 (23ms)
-[14:32:12] ▶️ ⚡ 执行命令 执行: mvn clean compile BUILD SUCCESS (1.2s)
-```
-
-### 3.4 jwcode-web（Web 模块）
+### 3.2 jwcode-web（Web 模块）
 
 内置 Web 管理界面，基于 Spring Boot。
 
@@ -193,11 +149,11 @@ CLI 模块提供终端交互界面，支持 50+ 命令。
 - 模型启停控制
 - 实时统计信息
 
-### 3.5 jwcode-mcp（MCP 模块）
+### 3.3 jwcode-mcp（MCP 模块）
 
 MCP (Model Context Protocol) 桥接模块，支持标准化工具协议，用于与外部 AI 系统集成。
 
-### 3.6 jwcode-parser（解析模块）
+### 3.4 jwcode-parser（解析模块）
 
 代码解析与分析模块，用于对 Java 源码进行 AST 解析和语义分析。
 
@@ -532,7 +488,7 @@ EnhancedTerminal.renderFrame() → stdout.write() → 终端屏幕更新
 
 **核心文件：**
 ```
-jwcode-ui/src/main/java/com/jwcode/ui/
+
 ├── InkPipeline.java              # 渲染管线总控制器
 ├── layout/
 │   ├── FlexLayout.java           # Flexbox 布局引擎
@@ -583,7 +539,7 @@ jwcode-ui/src/main/java/com/jwcode/ui/
 
 **组件结构：**
 ```
-jwcode-cli/src/main/java/com/jwcode/cli/log/
+
 ├── ActivityType.java         # 活动类型枚举（文件操作、代码操作、API 调用等）
 ├── ActivityLogger.java       # 活动日志记录器
 ├── ActivityEvent.java        # 活动事件
@@ -659,16 +615,11 @@ jwcode/
 │   ├── todos.txt                    # 待办事项
 │   └── workspace/                   # 工作空间文件
 │
-├── jwcode-parent/                   # 父 POM
 ├── jwcode-common/                   # 公共模块
 ├── jwcode-core/                     # 核心模块
-├── jwcode-cli/                      # CLI 模块
-├── jwcode-ui/                       # UI 模块
 ├── jwcode-web/                      # Web 模块
 ├── jwcode-mcp/                      # MCP 模块
-├── jwcode-parser/                   # 解析模块
-├── jwcode-repl/                     # REPL 模块
-├── jwcode-distribution/             # 分发模块
+└── jwcode-parser/                   # 解析模块
 │
 ├── docs/                            # 开发文档
 ├── md/                              # 归档文档

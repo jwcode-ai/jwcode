@@ -307,12 +307,22 @@ public class LLMQueryEngine {
         // 触发事件：开始查询
         pipeline.publish(new ObservationEvent.StepStart("LLM查询", "正在分析问题并制定解决方案..."));
         
+        // 记录用户活动 + 检查基于时间的 MicroCompact（Prompt Cache TTL 60min）
+        var mcService = com.jwcode.core.service.MicroCompactService.getGlobalInstance();
+        mcService.recordActivity();
+        if (mcService.shouldTimeBasedCompact()) {
+            int cleaned = mcService.performTimeBasedCompact();
+            if (cleaned > 0) {
+                logger.info("[LLMQueryEngine] 基于时间清理: " + cleaned + " 个旧工具结果已标记");
+            }
+        }
+
         // 添加用户消息到会话
         session.addMessage(Message.createUserMessage(prompt));
-        
+
         // 添加系统提示，强调文件编辑前必须先读取
         addFileEditGuidelines();
-        
+
         // 注入环境信息（操作系统、工作目录、系统时间等），让 AI 了解当前环境
         injectEnvironmentInfo();
         

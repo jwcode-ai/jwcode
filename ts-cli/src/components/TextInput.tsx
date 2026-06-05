@@ -1,4 +1,4 @@
-﻿import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -56,9 +56,10 @@ interface Props {
   onSubmit: (value: string) => void;
   placeholder?: string;
   disabled?: boolean;
+  disableHistory?: boolean;
 }
 
-export function TextInput({ value, onChange, onSubmit, placeholder, disabled }: Props) {
+export function TextInput({ value, onChange, onSubmit, placeholder, disabled, disableHistory }: Props) {
   const historyRef = useRef<string[]>(loadHistory());
   const histIdxRef = useRef(-1);
   const draftRef = useRef('');
@@ -162,12 +163,12 @@ export function TextInput({ value, onChange, onSubmit, placeholder, disabled }: 
       return;
     }
 
-    if (key.upArrow) {
+    if (key.upArrow && !disableHistory) {
       const hist = navigateHistory('up');
       if (hist !== null) { onChange(hist); cursorRef.current = hist.length; forceRender(c => c + 1); }
       return;
     }
-    if (key.downArrow) {
+    if (key.downArrow && !disableHistory) {
       const hist = navigateHistory('down');
       if (hist !== null) { onChange(hist); cursorRef.current = hist.length; forceRender(c => c + 1); }
       return;

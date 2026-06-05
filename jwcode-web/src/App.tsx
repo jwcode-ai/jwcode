@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense, startTransition } from 'react';
-import { MessageSquare, Terminal, FolderTree, Settings, Brain, Wrench, Target, Users, FileText, ScrollText, LucideIcon, Menu, X, ChevronDown, ChevronUp, ListChecks } from 'lucide-react';
+import { Activity, MessageSquare, Terminal, FolderTree, Settings, Brain, Wrench, Target, Users, FileText, ScrollText, LucideIcon, Menu, X, ChevronDown, ChevronUp, ListChecks } from 'lucide-react';
 import { useChatStore } from './stores/chatStore';
 import { useSessionStore } from './stores/sessionStore';
 import { useTerminalStore } from './stores/terminalStore';
@@ -18,6 +18,7 @@ import { StatusLine } from './components/Chat/StatusLine';
 const ModelsView = lazy(() => import('./components/Models/ModelsView').then(m => ({ default: m.ModelsView })));
 const ToolsView = lazy(() => import('./components/Tools/ToolsView').then(m => ({ default: m.ToolsView })));
 const SkillsView = lazy(() => import('./components/Skills/SkillsView').then(m => ({ default: m.SkillsView })));
+const AgentFlowView = lazy(() => import('./components/Agents/AgentFlowView').then(m => ({ default: m.AgentFlowView })));
 const AgentsView = lazy(() => import('./components/Agents/AgentsView').then(m => ({ default: m.AgentsView })));
 const FileTreeView = lazy(() => import('./components/FileTree/FileTreeView').then(m => ({ default: m.FileTreeView })));
 const TerminalView = lazy(() => import('./components/Terminal/TerminalView').then(m => ({ default: m.TerminalView })));
@@ -47,13 +48,14 @@ const TABS: Tab[] = [
   { id: 'tools', title: '工具', icon: 'Wrench' },
   { id: 'skills', title: '技能', icon: 'Target' },
   { id: 'agents', title: 'Agents', icon: 'Users' },
+  { id: 'agentflow', title: 'Agent Flow', icon: 'Activity' } as Tab,
   { id: 'settings', title: '设置', icon: 'Settings' },
   { id: 'logs', title: '日志', icon: 'ScrollText', },
 ];
 
 const ICON_MAP: Record<string, LucideIcon> = {
   MessageSquare, Terminal, FolderTree, Settings, Brain,
-  Wrench, Target, Users, FileText, ScrollText, ListChecks,
+  Wrench, Target, Users, FileText, ScrollText, ListChecks, Activity,
 };
 
 function App() {
@@ -97,7 +99,7 @@ function App() {
         id: `error-${Date.now()}-${crypto.randomUUID()}`,
         level: 'error' as LogEntry['level'],
         source: '浏览器',
-        message: `未捕获错误: ${errorMsg}`,
+        message: `未捕获错误：${errorMsg}`,
         timestamp: Date.now(),
       }].slice(-500));
     };
@@ -189,7 +191,7 @@ function App() {
   // WebSocket connection
   useWebSocket({ activeTab, setLogs, setUnreadLogs });
 
-  // 检查 ttyd 是否可用，决定是否显示终端 Tab
+  // 检测 ttyd 是否可用，决定是否显示终端 Tab
   useEffect(() => {
     apiClient.get<{ ttydAvailable?: boolean }>('/api/terminal/status')
       .then(res => setTtydAvailable(res.success && res.data ? res.data.ttydAvailable !== false : false))
@@ -235,10 +237,10 @@ function App() {
     return () => window.removeEventListener('hook-approval-required', handler);
   }, []);
 
-  // 自动模式变更时处理待审批项
+  // 自动模式变更时处理待审批
   useEffect(() => {
     if (approvalStore.autoMode && approvalStore.pendingApprovals.length > 0) {
-      // autoMode 打开 → 关闭弹窗
+      // autoMode 打开时关闭弹窗
       setHookModalOpen(false);
     }
     if (approvalStore.pendingApprovals.length > 0 && !approvalStore.autoMode) {
@@ -268,10 +270,10 @@ function App() {
       lastEscRef.current = now;
       if (prev > 0 && (now - prev) < 500) {
         wsService.send({ type: 'stop', sessionId: activeSid });
-        toast.info('⏹ 已终止 (ESC×2)');
+        toast.info('已终止 (ESC×2)');
       } else {
         wsService.send({ type: 'pause', sessionId: activeSid });
-        toast.info('⏸ 已暂停 — 再按 ESC 终止');
+        toast.info('已暂停，再按 ESC 终止');
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -414,7 +416,7 @@ function App() {
           message: trimmed,
         });
 
-        // 3. 重置所有会话 — 直接操作 store 内部状态
+        // 3. 重置所有会话：直接操作 store 内部状态
         const store = useSessionStore.getState();
         // 清空所有 session 的消息和计划
         store.sessionTabs.forEach(t => {
@@ -459,7 +461,7 @@ function App() {
       if (!sid || loadedRef.current) return;
       loadedRef.current = true;
 
-      // 新 session 且本地任务为空时，不从后端拉取旧任务
+      // 有 session 且本地任务为空时，不从后端拉取旧任务
       const existing = useSessionStore.getState().tasksBySession[sid] || [];
       if (existing.length === 0) return;
 
@@ -487,7 +489,7 @@ function App() {
           setSessionTasks(sid, [...existing, ...newTasks]);
         }
       }).catch(e => {
-        console.warn('[TaskListPanel] 从后端加载任务失败:', e);
+        console.warn('[TaskListPanel] 从后端加载任务失败', e);
       });
     }, [sid, setSessionTasks]);
 
@@ -505,7 +507,7 @@ function App() {
           addSessionTask(sid, newTaskTitle.trim());
         }
       } catch (e) {
-        console.warn('[TaskListPanel] 同步任务到后端失败:', e);
+        console.warn('[TaskListPanel] 同步任务到后端失败', e);
         addSessionTask(sid, newTaskTitle.trim());
       }
 
@@ -538,7 +540,7 @@ function App() {
     const syncBackendAction = useCallback(async (task: SessionTask, action: 'toggle' | 'delete') => {
       const backendId = (task as any).backendId;
       if (backendId) {
-        // 有 backendId，直接操作
+        // 无 backendId，直接操作
         if (action === 'toggle') {
           const newStatus = task.completed ? 'PENDING' : 'COMPLETED';
           await api.tasks.updateStatus(backendId, newStatus as any).catch(() => {});
@@ -562,7 +564,7 @@ function App() {
           }
         }
       } catch (e) {
-        console.warn('[TaskListPanel] 同步操作到后端失败:', e);
+        console.warn('[TaskListPanel] 同步操作到后端失败', e);
       }
     }, []);
 
@@ -710,6 +712,8 @@ function App() {
         return <SkillsView />;
       case 'agents':
         return <AgentsView />;
+      case 'agentflow':
+        return <AgentFlowView />;
       case 'settings':
         return <SettingsPanel />;
       case 'logs':
@@ -968,7 +972,7 @@ function App() {
           </div>
         </div>
 
-        {/* Status line: 实时显示模型/Token/预算/生成状态 — 放在底部 */}
+        {/* Status line: 实时显示模型/Token/预算/生成状态，放在底部 */}
         <StatusLine activeTab={activeTab} />
       </div>
 

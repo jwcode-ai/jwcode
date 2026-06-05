@@ -2,6 +2,7 @@ package com.jwcode.core.tool;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.jwcode.core.compact.PostCompactRecoveryService;
 import com.jwcode.core.tool.context.ToolExecutionContext;
 import com.jwcode.core.tool.input.BatchReadInput;
 import com.jwcode.core.tool.output.BatchReadOutput;
@@ -174,6 +175,9 @@ public class BatchReadTool implements Tool<BatchReadInput, BatchReadOutput, Batc
                         results.add(BatchReadOutput.FileResult.success(
                             filePath.toString(), content, totalLines, linesToRead
                         ));
+                        // 记录文件访问（用于压缩后自动恢复）
+                        PostCompactRecoveryService.getInstance().recordFileAccess(
+                            filePath.toAbsolutePath().toString());
 
                     } catch (IOException e) {
                         logger.warning("批量读取失败: " + filePath + " - " + e.getMessage());

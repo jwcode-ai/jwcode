@@ -36,7 +36,6 @@ interface ChatPanelProps {
 }
 
 async function searchFiles(query: string): Promise<FileNode[]> {
-  if (!query) return [];
   try {
     const result = await api.files.list('.');
     if (!result.success || !result.data) return [];
@@ -49,6 +48,7 @@ async function searchFiles(query: string): Promise<FileNode[]> {
       }
     };
     walk(result.data);
+    if (!query) return flat.slice(0, 15);
     const q = query.toLowerCase();
     return flat.filter(f => f.name.toLowerCase().includes(q)).slice(0, 15);
   } catch { return []; }
@@ -289,9 +289,9 @@ export const ChatPanel = memo(function ChatPanel({
   const charCount = input.length;
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden min-h-0">
+    <div className="flex-1 flex flex-col min-h-0">
       {/* Messages */}
-      <div className="flex-1 min-h-0">
+      <div className="flex-1 min-h-0 overflow-hidden">
         <Virtuoso ref={virtuosoRef} data={messages} itemContent={renderMessage} followOutput="smooth"
           components={{ Footer: GeneratingFooter, EmptyPlaceholder }} style={{ height: '100%' }} />
       </div>
@@ -327,7 +327,7 @@ export const ChatPanel = memo(function ChatPanel({
             <textarea
               ref={textareaRef} value={input} onChange={handleChange} onKeyDown={handleKeyDown}
               placeholder={planMode === "plan" ? "Plan Mode -- analysis only, switch to Act to execute" : "输入消息... Shift+Enter 换行，/ 命令，@ 引用文件，↑ 历史"}
-              rows={1} disabled={isGenerating || planMode === "plan"} className={`flex-1 bg-dark-bg border border-dark-border rounded-lg px-3 sm:px-4 py-2.5 sm:py-3 text-dark-text placeholder-dark-muted resize-none focus:outline-none focus:border-accent-green text-sm min-h-[40px] max-h-[40vh] transition-colors ${planMode === "plan" ? "opacity-60 cursor-not-allowed" : ""}`}
+              rows={1} disabled={isGenerating} className={`flex-1 bg-dark-bg border rounded-lg px-3 sm:px-4 py-2.5 sm:py-3 text-dark-text placeholder-dark-muted resize-none focus:outline-none focus:border-accent-green text-sm min-h-[40px] max-h-[40vh] transition-colors ${planMode === "plan" ? "border-accent-purple/50" : "border-dark-border"}`}
               onCompositionStart={() => { isComposingRef.current = true; }}
               onCompositionEnd={(e) => {
                 isComposingRef.current = false;

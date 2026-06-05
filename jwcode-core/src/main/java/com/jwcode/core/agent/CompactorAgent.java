@@ -3,11 +3,13 @@ package com.jwcode.core.agent;
 import com.jwcode.core.a2a.model.AgentCard;
 import com.jwcode.core.a2a.model.Capabilities;
 import com.jwcode.core.a2a.model.Skill;
+import com.jwcode.core.compact.PostCompactRecoveryService;
 import com.jwcode.core.llm.LLMService;
 import com.jwcode.core.model.Message;
 import com.jwcode.core.service.SimpleCompactionStrategy;
 import com.jwcode.core.service.StructuredCompactionStrategy;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -60,6 +62,7 @@ public class CompactorAgent {
     private final StructuredCompactionStrategy structuredStrategy;
     private final LLMService llmService;
     private final CompactorTrigger trigger;
+    private final PostCompactRecoveryService recoveryService;
     private String compactionModelId;
     private static final long ESTIMATED_TOKENS_PER_MESSAGE = 500;
 
@@ -68,6 +71,7 @@ public class CompactorAgent {
         this.simpleStrategy = new SimpleCompactionStrategy(llmService);
         this.structuredStrategy = new StructuredCompactionStrategy(llmService);
         this.trigger = new CompactorTrigger();
+        this.recoveryService = PostCompactRecoveryService.getInstance();
     }
 
     public CompactorAgent(LLMService llmService, SimpleCompactionStrategy s) {
@@ -75,6 +79,7 @@ public class CompactorAgent {
         this.simpleStrategy = s;
         this.structuredStrategy = new StructuredCompactionStrategy(llmService);
         this.trigger = new CompactorTrigger();
+        this.recoveryService = PostCompactRecoveryService.getInstance();
     }
 
     public void setCompactionModel(String modelId) { this.compactionModelId = modelId; }
@@ -104,6 +109,19 @@ public class CompactorAgent {
                 case RESET -> request.getMessages();
                 default -> structuredStrategy.compact(request.getMessages());
             };
+            // 压缩后自动恢复：重新读取最近访问的文件
+            try {
+                String recoveryContext = recoveryService.recoverAfterCompact(
+                    System.getProperty("user.dir"));
+                if (recoveryContext != null && !recoveryContext.isBlank()) {
+                    List<Message> withRecovery = new ArrayList<>(compacted);
+                    withRecovery.add(Message.createSystemMessage(recoveryContext));
+                    compacted = withRecovery;
+                }
+            } catch (Exception e) {
+                logger.fine("[CompactorAgent] 压缩后恢复跳过: " + e.getMessage());
+            }
+
             int compactedSize = compacted.size();
             long tokensSaved = Math.max(0, (long) (originalSize - compactedSize) * ESTIMATED_TOKENS_PER_MESSAGE);
             String summary = String.format("Compaction: %d -> %d messages, ~%d tokens saved, strategy=%s",

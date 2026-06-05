@@ -9,16 +9,14 @@ export interface Message {
   thinking?: string;
   steps?: Step[];
   toolCalls?: ToolCall[];
-  /** Hook 审批信息 — 当此消息为权限申请时存在 */
+  /** Hook 审批信息 �?当此消息为权限申请时存在 */
   hookApproval?: HookApprovalInfo;
 }
 
 /**
- * HookApprovalInfo — 嵌入对话的权限申请信息。
- *
- * 当后端 Hook 返回 ASK 决策时，前端在对话中插入一条包含此信息的消息，
- * 用户可以直接在对话中点击"允许"/"拒绝"或通过下拉菜单选择更细粒度的控制。
- */
+ * HookApprovalInfo �?嵌入对话的权限申请信息�? *
+ * 当后�?Hook 返回 ASK 决策时，前端在对话中插入一条包含此信息的消息，
+ * 用户可以直接在对话中点击"允许"/"拒绝"或通过下拉菜单选择更细粒度的控制�? */
 export interface HookApprovalInfo {
   /** 审批 ID */
   approvalId: string;
@@ -26,9 +24,9 @@ export interface HookApprovalInfo {
   toolName: string;
   /** ASK 载荷（展示给用户的提示信息） */
   askPayload: string;
-  /** 审批状态：pending=待审批, approved=已批准, denied=已拒绝 */
+  /** 审批状态：pending=待审�? approved=已批�? denied=已拒�?*/
   status: 'pending' | 'approved' | 'denied';
-  /** 时间戳 */
+  /** 时间�?*/
   timestamp: number;
 }
 
@@ -286,8 +284,7 @@ export type WSMessageType =
   | 'hook_allow'
   | 'hook_deny'
   | 'hook_response_ack'
-  // 工作区守卫控制
-  | 'toggle_workspace_guard'
+    | 'toggle_workspace_guard'
   // Token 用量
   | 'token_update'
   // Infrastructure & diagnostics
@@ -295,7 +292,7 @@ export type WSMessageType =
   | 'doctor_result'
   | 'context_compressed'
   | 'compaction_progress'
-  | 'notification';
+  | 'agent_flow_event';
 
 
 export interface WSMessage {
@@ -386,7 +383,7 @@ export interface SessionTask {
 }
 
 // Tab types
-export type TabId = 'chat' | 'plan' | 'terminal' | 'files' | 'models' | 'tools' | 'skills' | 'agents' | 'settings' | 'logs';
+export type TabId = 'chat' | 'plan' | 'terminal' | 'files' | 'models' | 'tools' | 'skills' | 'agents' | 'settings' | 'logs' | 'agentflow' | 'agentflow';
 
 export interface Tab {
   id: TabId;

@@ -1,0 +1,12 @@
+src/
+node_modules/
+__tests__/
+tsconfig.json
+build.mjs
+*.ts
+*.tsx
+*.map
+*.tsbuildinfo
+*.conf
+proguard.map
+

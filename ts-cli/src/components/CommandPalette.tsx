@@ -1,5 +1,5 @@
 ﻿/**
- * CommandPalette 鈥?/ filterable popup.
+ * CommandPalette — / filterable popup.
  * Character input is handled by TextInput; this only handles navigation.
  */
 import { useState, useMemo, useEffect } from 'react';
@@ -57,7 +57,7 @@ export function CommandPalette({ filter, onSelect }: Props) {
 
   return (
     <Box flexDirection="column" borderStyle="single" borderColor="cyan" paddingX={1} width={52}>
-      <Box><Text bold color="cyan">命令列表</Text><Text dimColor>  鈫戔啌閫夋嫨 / PgUp/PgDn缈婚〉 / 鍥炶溅纭 / Esc鍙栨秷</Text></Box>
+      <Box><Text bold color="cyan">命令列表</Text><Text dimColor>  ↑↓选择 / PgUp/PgDn翻页 / 回车确认 / Esc取消</Text></Box>
       {sliced.map((cmd, i) => {
         const idx = scrollOffset + i;
         return (
@@ -68,7 +68,7 @@ export function CommandPalette({ filter, onSelect }: Props) {
             <Text color="green">{cmd.cmd}</Text>
             <Text dimColor>  {cmd.desc}</Text>
             <Text color={cmd.via === 'ws' ? 'yellow' : 'blue'} dimColor={idx !== selected}>
-              ({cmd.via === 'ws' ? '鍚庣' : '鏈湴'})
+              ({cmd.via === 'ws' ? '后端' : '本地'})
             </Text>
           </Box>
         );
