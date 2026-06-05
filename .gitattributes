@@ -1,0 +1,31 @@
+# Auto-detect text files and normalize line endings
+* text=auto
+
+# Java / XML
+*.java text eol=lf
+*.xml text eol=lf
+*.properties text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+
+# Web / TypeScript
+*.ts text eol=lf
+*.tsx text eol=lf
+*.js text eol=lf
+*.mjs text eol=lf
+*.css text eol=lf
+*.json text eol=lf
+*.html text eol=lf
+
+# Scripts
+*.sh text eol=lf
+*.bat text eol=crlf
+
+# Markdown
+*.md text eol=lf
+
+# Binary
+*.jar binary
+*.png binary
+*.jpg binary
+*.ico binary

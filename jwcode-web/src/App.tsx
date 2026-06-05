@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense, startTransition } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Activity, MessageSquare, Terminal, FolderTree, Settings, Brain, Wrench, Target, Users, FileText, ScrollText, LucideIcon, Menu, X, ChevronDown, ChevronUp, ListChecks } from 'lucide-react';
 import { useChatStore } from './stores/chatStore';
 import { useSessionStore } from './stores/sessionStore';
@@ -13,7 +14,7 @@ import { Tab, TabId, LogEntry, SessionTask } from './types';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { api } from './services/api';
 
-// 懒加载非首屏组件
+// Lazy-loaded non-primary components
 import { StatusLine } from './components/Chat/StatusLine';
 const ModelsView = lazy(() => import('./components/Models/ModelsView').then(m => ({ default: m.ModelsView })));
 const ToolsView = lazy(() => import('./components/Tools/ToolsView').then(m => ({ default: m.ToolsView })));
@@ -31,17 +32,26 @@ const HookApprovalModal = lazy(() => import('./components/Hook/HookApprovalModal
 import { ToastContainer } from './components/Toast/ToastContainer';
 import { toast } from './stores/toastStore';
 
-// 懒加载组件的加载占位
 const PanelFallback = () => (
   <div className="flex-1 flex items-center justify-center bg-dark-bg">
     <div className="w-5 h-5 border-2 border-accent-blue border-t-transparent rounded-full animate-spin" />
   </div>
 );
 
-// Tab configuration
+// Tab configuration — titles resolved via i18n keys in component
+const TAB_KEYS: Record<string, string> = {
+  chat: 'nav.chat',
+  terminal: 'nav.terminal',
+  files: 'nav.files',
+  models: 'nav.models',
+  tools: 'nav.tools',
+  skills: 'nav.skills',
+  settings: 'nav.settings',
+  logs: 'nav.logs',
+};
+
 const TABS: Tab[] = [
   { id: 'chat', title: '对话', icon: 'MessageSquare' },
-
   { id: 'terminal', title: '终端', icon: 'Terminal' },
   { id: 'files', title: '文件', icon: 'FolderTree' },
   { id: 'models', title: '模型', icon: 'Brain' },
@@ -50,7 +60,7 @@ const TABS: Tab[] = [
   { id: 'agents', title: 'Agents', icon: 'Users' },
   { id: 'agentflow', title: 'Agent Flow', icon: 'Activity' } as Tab,
   { id: 'settings', title: '设置', icon: 'Settings' },
-  { id: 'logs', title: '日志', icon: 'ScrollText', },
+  { id: 'logs', title: '日志', icon: 'ScrollText' },
 ];
 
 const ICON_MAP: Record<string, LucideIcon> = {
@@ -68,49 +78,55 @@ function App() {
   const [hookModalOpen, setHookModalOpen] = useState(false);
   const [isTaskListOpen, setIsTaskListOpen] = useState(true);
   const [isHistoryOpen, setIsHistoryOpen] = useState(true);
-  const [ttydAvailable, setTtydAvailable] = useState<boolean | null>(null); // null = checking
+  const [ttydAvailable, setTtydAvailable] = useState<boolean | null>(null);
 
+  const { t, i18n } = useTranslation();
   const { toggleTerminal } = useTerminalStore();
-  const { theme, setTheme, workspaceDir, setWorkspaceDir } = useSettingsStore();
+  const { theme, setTheme, language, workspaceDir, setWorkspaceDir } = useSettingsStore();
   const approvalStore = useHookApprovalStore();
 
-  // 过滤可见 Tab：ttyd 不可用时隐藏终端
+  // Sync language from store to i18n
+  useEffect(() => {
+    if (language && i18n.language !== language) {
+      i18n.changeLanguage(language);
+    }
+  }, [language, i18n]);
+
+  // Filter visible tabs: hide terminal when ttyd unavailable
   const filteredTabs = useMemo(() =>
     TABS.filter(tab => !(tab.id === 'terminal' && ttydAvailable === false)),
   [ttydAvailable]);
 
-  // 使用 startTransition 包裹 Tab 切换，避免懒加载组件在同步事件中 suspend
   const handleTabChange = useCallback((tabId: TabId) => {
     startTransition(() => {
       setActiveTab(tabId);
     });
   }, []);
 
-  // 全局错误捕获：将未捕获的错误显示到日志面板
+  // Global error capture
   useEffect(() => {
     const handleGlobalError = (event: ErrorEvent) => {
-      const errorMsg = event.message || '未知错误';
+      const errorMsg = event.message || t('common.unknownError');
       const source = event.filename || 'global';
-      // 过滤掉 Chrome 扩展相关的错误，避免刷屏
       if (source.includes('chrome-extension://') || source.includes('moz-extension://')) {
         return;
       }
       setLogs(prev => [...prev, {
         id: `error-${Date.now()}-${crypto.randomUUID()}`,
         level: 'error' as LogEntry['level'],
-        source: '浏览器',
-        message: `未捕获错误：${errorMsg}`,
+        source: 'Browser',
+        message: `${t('toast.uncaughtError')}${errorMsg}`,
         timestamp: Date.now(),
       }].slice(-500));
     };
 
     const handleRejection = (event: PromiseRejectionEvent) => {
-      const reason = event.reason?.message || event.reason || '未知原因';
+      const reason = event.reason?.message || event.reason || t('toast.unknownReason');
       setLogs(prev => [...prev, {
         id: `rejection-${Date.now()}-${crypto.randomUUID()}`,
         level: 'error' as LogEntry['level'],
         source: 'Promise',
-        message: `未捕获的 Promise 拒绝: ${reason}`,
+        message: `${t('toast.uncaughtRejection')}${reason}`,
         timestamp: Date.now(),
       }].slice(-500));
     };
@@ -122,9 +138,9 @@ function App() {
       window.removeEventListener('error', handleGlobalError);
       window.removeEventListener('unhandledrejection', handleRejection);
     };
-  }, []);
+  }, [t]);
 
-  // 多会话状态
+  // Multi-session state
   const {
     sessionTabs,
     activeSessionId,
@@ -148,7 +164,7 @@ function App() {
 
   const { clearMessages } = useChatStore();
 
-  // 修复主题切换：同步到 DOM + meta 标签
+  // Theme switching: sync to DOM + meta tags
   useEffect(() => {
     const root = document.documentElement;
     const metaThemeColor = document.querySelector('meta[name="theme-color"]');
@@ -176,7 +192,7 @@ function App() {
     }
   }, [theme]);
 
-  // 自定义主题颜色：注入 CSS 变量（hex → RGB）
+  // Custom theme colors: inject CSS variables (hex → RGB)
   const { customTheme, customThemeEnabled } = useSettingsStore();
   useEffect(() => {
     const root = document.documentElement;
@@ -208,14 +224,14 @@ function App() {
   // WebSocket connection
   useWebSocket({ activeTab, setLogs, setUnreadLogs });
 
-  // 检测 ttyd 是否可用，决定是否显示终端 Tab
+  // Check ttyd availability
   useEffect(() => {
     apiClient.get<{ ttydAvailable?: boolean }>('/api/terminal/status')
       .then(res => setTtydAvailable(res.success && res.data ? res.data.ttydAvailable !== false : false))
       .catch(() => setTtydAvailable(false));
   }, []);
 
-  // 监听 switch-tab 自定义事件（用于 Plan 模式自动切换到 Plan 面板）
+  // Listen for switch-tab custom event
   useEffect(() => {
     const handler = (e: CustomEvent) => {
       const tabId = e.detail as TabId;
@@ -231,33 +247,32 @@ function App() {
   useEffect(() => {
     const unsubOpen = wsService.onOpen(() => {
       setIsConnected(true);
-      toast.success('后端已连接');
+      toast.success(t('toast.backendConnected'));
     });
     const unsubClose = wsService.onClose(() => {
-      if (isConnected) toast.warning('后端连接断开，正在重连...');
+      if (isConnected) toast.warning(t('toast.backendDisconnected'));
       setIsConnected(false);
     });
     return () => { unsubOpen(); unsubClose(); };
-  }, [isConnected]);
+  }, [isConnected, t]);
 
-  // 初始化默认会话 Tab（如果没有）
+  // Initialize default session tab
   useEffect(() => {
     if (sessionTabs.length === 0) {
-      addSessionTab('对话 1');
+      addSessionTab(t('chat.defaultSessionTitle', { n: 1 }));
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Hook 审批弹窗事件监听
+  // Hook approval modal event listener
   useEffect(() => {
     const handler = () => setHookModalOpen(true);
     window.addEventListener('hook-approval-required', handler);
     return () => window.removeEventListener('hook-approval-required', handler);
   }, []);
 
-  // 自动模式变更时处理待审批
+  // Handle pending approvals on auto mode change
   useEffect(() => {
     if (approvalStore.autoMode && approvalStore.pendingApprovals.length > 0) {
-      // autoMode 打开时关闭弹窗
       setHookModalOpen(false);
     }
     if (approvalStore.pendingApprovals.length > 0 && !approvalStore.autoMode) {
@@ -265,14 +280,12 @@ function App() {
     }
   }, [approvalStore.autoMode, approvalStore.pendingApprovals.length]);
 
-  // ESC 暂停/终止生成：单次 ESC 暂停，500ms 内双击 ESC 终止
-  // ChatPanel 内的 ESC 由 ChatPanel.handleKeyDown 优先处理
-  // Modal 会设置 e.defaultPrevented，此处跳过
+  // ESC pause/stop: single ESC pauses, double ESC within 500ms stops
   const lastEscRef = useRef(0);
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      if (e.defaultPrevented) return; // Modal 等组件已消费
+      if (e.defaultPrevented) return;
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable) return;
 
@@ -287,23 +300,20 @@ function App() {
       lastEscRef.current = now;
       if (prev > 0 && (now - prev) < 500) {
         wsService.send({ type: 'stop', sessionId: activeSid });
-        toast.info('已终止 (ESC×2)');
+        toast.info(t('toast.terminated'));
       } else {
         wsService.send({ type: 'pause', sessionId: activeSid });
-        toast.info('已暂停，再按 ESC 终止');
+        toast.info(t('toast.paused'));
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [t]);
 
   const handleNewSession = useCallback(() => {
     startTransition(() => {
-      // 新建会话继承当前工作目录
       const newId = addSessionTab(undefined, workspaceDir);
       wsService.setSessionId(newId);
-
-      // 重置 planStore 全局状态，避免模式/确认状态残留
       usePlanStore.getState().setMode('act');
     });
   }, [addSessionTab, workspaceDir]);
@@ -315,7 +325,6 @@ function App() {
 
   const handleCloseSession = useCallback((sessionId: string) => {
     closeSessionTab(sessionId);
-    // 不清除消息（保留在 localStorage 以便恢复）
   }, [closeSessionTab]);
 
   const handleRenameSession = useCallback((sessionId: string, title: string) => {
@@ -330,17 +339,12 @@ function App() {
     if (!content.trim()) return;
 
     const isGen = useChatStore.getState().isGenerating(sessionId);
-
     if (isGen) return;
 
     const planStore = usePlanStore.getState();
-
-    // 发送新消息时清除暂停状态
     useChatStore.getState().resumeGeneration(sessionId);
-
     wsService.setSessionId(sessionId);
 
-    // 首条用户消息自动命名会话
     const msgs = useChatStore.getState().getMessages(sessionId);
     const hasUserMsg = msgs.some((m) => m.type === 'user');
     if (!hasUserMsg) {
@@ -356,9 +360,7 @@ function App() {
           const fileResp = await api.files.read(filePath);
           const fileContent = fileResp.success && fileResp.data ? fileResp.data : null;
           if (fileContent) {
-            // Remove the raw path from the message text
             finalContent = finalContent.replace(filePath, '');
-            // Build structured context block
             const ext = filePath.split('.').pop() || '';
             fileContexts.push(
               `<context ref="${filePath}">\n\`\`\`${ext}\n${fileContent}\n\`\`\`\n</context>`
@@ -381,65 +383,42 @@ function App() {
       timestamp: Date.now(),
     });
 
-    // 根据 Plan/Act 模式决定消息类型
     const currentMode = planStore.mode;
     if (currentMode === 'plan') {
-      // Plan 模式：发送 plan 消息（只读分析）
-      wsService.send({
-        type: 'plan',
-        sessionId,
-        message: finalContent,
-      });
+      wsService.send({ type: 'plan', sessionId, message: finalContent });
     } else {
-      // Act/Chat 模式：直接发送 chat 消息
-      wsService.send({
-        type: 'chat',
-        sessionId,
-        message: finalContent,
-      });
+      wsService.send({ type: 'chat', sessionId, message: finalContent });
     }
   }, [autoNameSession]);
 
-  // 停止生成
   const stopGeneration = useCallback((sessionId: string) => {
     wsService.send({ type: 'stop', sessionId });
     useChatStore.getState().endGeneration(sessionId);
   }, []);
 
-  // 暂停生成
   const pauseGeneration = useCallback((sessionId: string) => {
     wsService.send({ type: 'pause', sessionId });
     useChatStore.getState().pauseGeneration(sessionId);
   }, []);
 
-  // 恢复生成
   const resumeGeneration = useCallback((sessionId: string) => {
     wsService.send({ type: 'resume', sessionId });
     useChatStore.getState().resumeGeneration(sessionId);
   }, []);
 
-  // 切换工作目录：用户输入新路径后重置所有会话
+  // Switch workspace directory
   const handleWorkspaceChange = useCallback(() => {
     startTransition(() => {
-      const newDir = window.prompt('请输入新的工作目录路径：', workspaceDir);
+      const newDir = window.prompt(t('chat.switchDirPrompt'), workspaceDir);
       if (newDir && newDir.trim() && newDir.trim() !== workspaceDir) {
         const trimmed = newDir.trim();
-        // 1. 保存新目录到前端 store
         setWorkspaceDir(trimmed);
+        wsService.send({ type: 'workspace', message: trimmed });
 
-        // 2. 通过 WebSocket 通知后端切换工作目录
-        wsService.send({
-          type: 'workspace',
-          message: trimmed,
-        });
-
-        // 3. 重置所有会话：直接操作 store 内部状态
         const store = useSessionStore.getState();
-        // 清空所有 session 的消息和计划
         store.sessionTabs.forEach(t => {
           useChatStore.getState().clearMessages(t.id);
         });
-        // 直接重置 sessionTabs 和 sessions 为空
         useSessionStore.setState({
           sessionTabs: [],
           sessions: [],
@@ -447,23 +426,19 @@ function App() {
           activeSessionId: null,
         });
 
-        // 4. 创建新会话（携带新工作目录）
         setTimeout(() => {
-          useSessionStore.getState().addSessionTab('对话 1', trimmed);
+          useSessionStore.getState().addSessionTab(t('chat.defaultSessionTitle', { n: 1 }), trimmed);
         }, 0);
       }
     });
-  }, [workspaceDir, setWorkspaceDir]);
-
+  }, [workspaceDir, setWorkspaceDir, t]);
 
   const handleClearLogs = () => {
     setLogs([]);
     setUnreadLogs(0);
   };
 
-
-  // 任务列表组件（右侧面板）- 每个会话维护独立任务列表，支持增删改
-  // 挂载时自动从后端 /api/tasks 拉取任务，实现与 MCP TaskCreate 的双向同步
+  // TaskListPanel - per-session task list with backend sync
   function TaskListPanel() {
     const sid = useSessionStore((s) => s.activeSessionId);
     const tasks = sid ? (useSessionStore((s) => s.tasksBySession[sid]) || []) : [];
@@ -473,12 +448,10 @@ function App() {
     const inputRef = useRef<HTMLInputElement>(null);
     const loadedRef = useRef(false);
 
-    // 挂载时从后端加载任务列表（只执行一次）
     useEffect(() => {
       if (!sid || loadedRef.current) return;
       loadedRef.current = true;
 
-      // 有 session 且本地任务为空时，不从后端拉取旧任务
       const existing = useSessionStore.getState().tasksBySession[sid] || [];
       if (existing.length === 0) return;
 
@@ -488,8 +461,6 @@ function App() {
         if (backendTasks.length === 0) return;
 
         const existingTitles = new Set(existing.map(t => t.title));
-
-        // 将后端任务中尚未在本地存在的任务添加进来
         const newTasks = backendTasks
           .filter((bt: any) => !existingTitles.has(bt.title))
           .map((bt: any) => ({
@@ -506,28 +477,24 @@ function App() {
           setSessionTasks(sid, [...existing, ...newTasks]);
         }
       }).catch(e => {
-        console.warn('[TaskListPanel] 从后端加载任务失败', e);
+        console.warn('[TaskListPanel] Failed to load tasks from backend', e);
       });
     }, [sid, setSessionTasks]);
 
     const handleAdd = useCallback(async () => {
       if (!newTaskTitle.trim() || !sid) return;
-
-      // 先在后端创建，获取 backendId
       try {
         const result = await api.tasks.create({ title: newTaskTitle.trim(), description: '' });
         if (result.success && result.data) {
           const backendTask = result.data as any;
           addSessionTask(sid, newTaskTitle.trim(), backendTask.id, '');
         } else {
-          // 后端创建失败，仅本地添加
           addSessionTask(sid, newTaskTitle.trim());
         }
       } catch (e) {
-        console.warn('[TaskListPanel] 同步任务到后端失败', e);
+        console.warn('[TaskListPanel] Failed to sync task to backend', e);
         addSessionTask(sid, newTaskTitle.trim());
       }
-
       setNewTaskTitle('');
       setTimeout(() => inputRef.current?.focus(), 0);
     }, [newTaskTitle, sid, addSessionTask]);
@@ -553,11 +520,9 @@ function App() {
       else if (e.key === 'Escape') setEditingTaskId(null);
     }, [handleEditConfirm]);
 
-    // 根据 backendId 或 title 查找后端任务并执行操作
     const syncBackendAction = useCallback(async (task: SessionTask, action: 'toggle' | 'delete') => {
       const backendId = (task as any).backendId;
       if (backendId) {
-        // 无 backendId，直接操作
         if (action === 'toggle') {
           const newStatus = task.completed ? 'PENDING' : 'COMPLETED';
           await api.tasks.updateStatus(backendId, newStatus as any).catch(() => {});
@@ -566,7 +531,6 @@ function App() {
         }
         return;
       }
-      // 降级：按 title 匹配
       try {
         const res = await api.tasks.list();
         if (res.success && res.data) {
@@ -581,20 +545,19 @@ function App() {
           }
         }
       } catch (e) {
-        console.warn('[TaskListPanel] 同步操作到后端失败', e);
+        console.warn('[TaskListPanel] Failed to sync action to backend', e);
       }
     }, []);
 
     return (
       <div className="px-3 pb-2">
-        {/* 添加新任务 */}
         <div className="flex items-center gap-1 mb-2">
           <input
             ref={inputRef}
             value={newTaskTitle}
             onChange={(e) => setNewTaskTitle(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="添加任务..."
+            placeholder={t('chat.addTaskPlaceholder')}
             className="flex-1 bg-dark-bg border border-dark-border rounded px-2 py-1 text-[11px] text-dark-text placeholder-dark-muted outline-none focus:border-accent-blue/50 transition-colors"
           />
           <button
@@ -602,14 +565,13 @@ function App() {
             disabled={!newTaskTitle.trim()}
             className="px-2 py-1 text-[10px] bg-accent-blue text-white rounded hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            添加
+            {t('chat.addTask')}
           </button>
         </div>
 
-        {/* 任务列表 */}
         {tasks.length === 0 ? (
           <div className="text-[11px] text-dark-muted text-center py-2">
-            暂无任务，在上方输入添加
+            {t('chat.noTasks')}
           </div>
         ) : (
           <div className="max-h-[180px] overflow-y-auto custom-scrollbar space-y-0.5">
@@ -620,7 +582,6 @@ function App() {
                   key={task.id}
                   className="flex items-center gap-1.5 px-2 py-1 rounded text-[11px] transition-colors hover:bg-dark-hover/50 group"
                 >
-                  {/* 勾选框 */}
                   <button
                     onClick={() => {
                       if (!sid) return;
@@ -640,7 +601,6 @@ function App() {
                     )}
                   </button>
 
-                  {/* 标题（编辑模式或显示模式） */}
                   {isEditing ? (
                     <input
                       value={editValue}
@@ -655,13 +615,12 @@ function App() {
                     <span
                       className={`flex-1 truncate cursor-pointer ${task.completed ? 'text-dark-muted line-through' : 'text-dark-text'}`}
                       onDoubleClick={() => handleEditStart(task)}
-                      title="双击编辑"
+                      title={t('chat.doubleClickEdit')}
                     >
                       {task.title}
                     </span>
                   )}
 
-                  {/* 删除按钮 */}
                   <button
                     onClick={() => {
                       if (!sid) return;
@@ -669,7 +628,7 @@ function App() {
                       syncBackendAction(task, 'delete');
                     }}
                     className="opacity-0 group-hover:opacity-100 hover:bg-dark-hover rounded p-0.5 transition-all shrink-0"
-                    title="删除任务"
+                    title={t('chat.deleteTask')}
                   >
                     <X size={10} />
                   </button>
@@ -681,6 +640,16 @@ function App() {
       </div>
     );
   }
+
+  // Resolve tab title for display
+  const getTabTitle = (tabId: string, fallback: string) =>
+    TAB_KEYS[tabId] ? t(TAB_KEYS[tabId]) : fallback;
+
+  // Date formatter using current language
+  const formatDate = (ts: number) => {
+    const locale = i18n.language === 'en' ? 'en-US' : 'zh-CN';
+    return new Date(ts).toLocaleDateString(locale, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  };
 
   // Render tab content
   const renderTabContent = (tabId: TabId) => {
@@ -745,7 +714,6 @@ function App() {
       <div className="h-screen w-screen flex flex-col bg-dark-bg text-dark-text overflow-hidden">
         {/* Top Navigation Bar */}
         <header className="h-12 bg-dark-surface border-b border-dark-border flex items-center px-4 shrink-0 z-50">
-          {/* Mobile menu toggle */}
           <button
             className="md:hidden p-2 mr-2 rounded-lg hover:bg-dark-hover transition-colors"
             onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
@@ -753,7 +721,6 @@ function App() {
             {isMobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
           </button>
 
-          {/* Logo */}
           <div className="flex items-center gap-2 mr-6">
             <div className="w-7 h-7 rounded-lg bg-accent-blue flex items-center justify-center">
               <span className="text-white font-bold text-sm">JW</span>
@@ -761,7 +728,6 @@ function App() {
             <span className="font-semibold hidden sm:inline">JwCode</span>
           </div>
 
-          {/* Tab Navigation */}
           <nav className="flex-1 flex items-center gap-1 overflow-x-auto">
             {filteredTabs.map(tab => {
               const Icon = ICON_MAP[tab.icon || 'MessageSquare'] as LucideIcon;
@@ -782,7 +748,7 @@ function App() {
                   }`}
                 >
                   <Icon size={16} />
-                  <span className="hidden lg:inline">{tab.title}</span>
+                  <span className="hidden lg:inline">{getTabTitle(tab.id, tab.title)}</span>
                   {isLogTab && unreadLogs > 0 && (
                     <span className="bg-accent-red text-white text-[10px] px-1.5 py-0.5 rounded-full min-w-[18px] text-center">
                       {unreadLogs > 99 ? '99+' : unreadLogs}
@@ -793,18 +759,17 @@ function App() {
             })}
           </nav>
 
-          {/* Right side: Connection status + New session */}
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-1.5 text-xs text-dark-muted">
               <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-accent-green' : 'bg-accent-red'}`} />
-              <span className="hidden sm:inline">{isConnected ? '已连接' : '未连接'}</span>
+              <span className="hidden sm:inline">{isConnected ? t('chat.connected') : t('chat.disconnected')}</span>
             </div>
             {activeTab === 'chat' && (
               <button
                 onClick={handleNewSession}
                 className="px-3 py-1.5 text-sm bg-accent-blue text-white rounded-lg hover:opacity-90 transition-opacity"
               >
-                新建会话
+                {t('chat.newSession')}
               </button>
             )}
           </div>
@@ -829,7 +794,7 @@ function App() {
                     }`}
                   >
                     <Icon size={20} />
-                    <span>{tab.title}</span>
+                    <span>{getTabTitle(tab.id, tab.title)}</span>
                   </button>
                 );
               })}
@@ -847,25 +812,24 @@ function App() {
             </Suspense>
           </div>
 
-          {/* 右侧面板 - 响应式宽度，小屏隐藏 */}
+          {/* Right sidebar panel */}
           <div className="hidden lg:flex flex-col bg-dark-surface border-l border-dark-border overflow-hidden shrink-0 min-h-0 w-80 xl:w-80 2xl:w-96">
 
-            {/* Working Directory Section - 点击可切换 */}
+            {/* Working Directory Section */}
             <div
               className="shrink-0 border-b border-dark-border px-4 py-2.5 cursor-pointer hover:bg-dark-hover transition-colors"
               onClick={handleWorkspaceChange}
-              title="点击切换工作目录"
+              title={t('chat.clickToSwitchDir')}
             >
               <div className="flex items-center gap-1.5 mb-1">
                 <FolderTree size={14} className="text-accent-blue shrink-0" />
-                <span className="text-xs font-semibold text-dark-text">工作目录</span>
-                <span className="text-[10px] text-accent-blue ml-auto">切换</span>
+                <span className="text-xs font-semibold text-dark-text">{t('chat.workingDir')}</span>
+                <span className="text-[10px] text-accent-blue ml-auto">{t('chat.switchDir')}</span>
               </div>
               <div className="text-[11px] text-dark-muted truncate font-mono pl-5">
                 {workspaceDir}
               </div>
             </div>
-
 
             {/* Session History Section (collapsible) */}
             <div className="shrink-0 border-b border-dark-border">
@@ -875,7 +839,7 @@ function App() {
               >
                 <h3 className="text-xs font-semibold flex items-center gap-1.5 text-dark-text">
                   <MessageSquare size={14} className="text-accent-blue" />
-                  会话历史
+                  {t('chat.sessionHistory')}
                   <span className="text-[10px] font-normal text-dark-muted">({historySessions.length})</span>
                 </h3>
                 <div className="flex items-center gap-2">
@@ -887,9 +851,9 @@ function App() {
                         clearHistorySessions();
                       }}
                       className="px-2 py-0.5 text-[10px] bg-dark-hover rounded hover:bg-dark-border transition-colors"
-                      title="清空历史"
+                      title={t('chat.clearHistoryTitle')}
                     >
-                      清空
+                      {t('common.clear')}
                     </button>
                   )}
                 </div>
@@ -905,12 +869,12 @@ function App() {
                           restoreHistorySession(h.id);
                           wsService.setSessionId(h.id);
                         }}
-                        title={`点击恢复「${h.title}」`}
+                        title={t('chat.restoreSession', { title: h.title })}
                       >
                         <MessageSquare size={12} className="text-dark-muted shrink-0" />
                         <span className="truncate flex-1 text-dark-text">{h.title}</span>
                         <span className="text-[9px] text-dark-muted shrink-0">
-                          {new Date(h.createdAt).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                          {formatDate(h.createdAt)}
                         </span>
                         <button
                           onClick={(e) => {
@@ -918,7 +882,7 @@ function App() {
                             removeHistorySession(h.id);
                           }}
                           className="opacity-0 group-hover:opacity-100 hover:bg-dark-hover rounded p-0.5 transition-all shrink-0"
-                          title="从历史移除"
+                          title={t('chat.removeFromHistory')}
                         >
                           <X size={10} />
                         </button>
@@ -929,12 +893,12 @@ function App() {
               )}
               {isHistoryOpen && historySessions.length === 0 && (
                 <div className="px-4 pb-3 text-[11px] text-dark-muted">
-                  暂无历史会话
+                  {t('chat.noHistory')}
                 </div>
               )}
             </div>
 
-            {/* Task List Section (collapsible) - 每个会话维护独立任务列表 */}
+            {/* Task List Section (collapsible) */}
             <div className="shrink-0 border-b border-dark-border">
               <div
                 className="flex items-center justify-between px-4 py-2 cursor-pointer hover:bg-dark-hover transition-colors"
@@ -942,7 +906,7 @@ function App() {
               >
                 <h3 className="text-xs font-semibold flex items-center gap-1.5 text-dark-text">
                   <ListChecks size={14} className="text-accent-blue" />
-                  任务列表
+                  {t('chat.taskList')}
                   {activeSessionId && tasksBySession[activeSessionId] && (
                     <span className="text-[10px] font-normal text-dark-muted">
                       ({tasksBySession[activeSessionId].filter(t => !t.completed).length}/{tasksBySession[activeSessionId].length})
@@ -963,7 +927,7 @@ function App() {
             >
               <h2 className="text-xs font-semibold flex items-center gap-1.5 text-dark-text">
                 <ScrollText size={14} className="text-accent-blue" />
-                后台日志
+                {t('chat.backgroundLogs')}
                 <span className="text-[10px] font-normal text-dark-muted">({logs.length})</span>
               </h2>
               <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
@@ -971,13 +935,13 @@ function App() {
                   onClick={handleClearLogs}
                   className="px-2 py-0.5 text-[10px] bg-dark-hover rounded hover:bg-dark-border transition-colors"
                 >
-                  清空
+                  {t('common.clear')}
                 </button>
                 {isLogDrawerOpen ? <ChevronDown size={14} className="text-dark-muted" /> : <ChevronUp size={14} className="text-dark-muted" />}
               </div>
             </div>
 
-            {/* Log Content (collapsible) - 展开时占满剩余空间，折叠时完全隐藏 */}
+            {/* Log Content (collapsible) */}
             {isLogDrawerOpen && (
               <div className="flex-1 flex flex-col overflow-hidden min-h-0">
                 <Suspense fallback={<PanelFallback />}>
@@ -989,11 +953,9 @@ function App() {
           </div>
         </div>
 
-        {/* Status line: 实时显示模型/Token/预算/生成状态，放在底部 */}
         <StatusLine activeTab={activeTab} />
       </div>
 
-      {/* Hook 审批弹窗 */}
       <Suspense fallback={null}>
         <HookApprovalModal
           isOpen={hookModalOpen}
@@ -1001,7 +963,6 @@ function App() {
         />
       </Suspense>
 
-      {/* Toast notifications */}
       <ToastContainer />
     </ErrorBoundary>
   );

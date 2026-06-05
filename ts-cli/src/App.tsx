@@ -10,12 +10,14 @@ import { ChatArea } from './components/ChatArea.js';
 import { CommandPalette } from './components/CommandPalette.js';
 import { FilePalette } from './components/FilePalette.js';
 import { ApprovalModal } from './components/ApprovalModal.js';
+import { SetupWizard } from './components/SetupWizard.js';
+import { ModelPicker, type ModelInfo } from './components/ModelPicker.js';
 import { updateAppState, useAppSlice } from './hooks/useAppState.js';
 import { createMessage } from './protocol.js';
 import { SLASH_COMMANDS, HELP_TEXT } from './commands/index.js';
 import { useStreamHandlers } from './hooks/useStreamHandlers.js';
 import { useKeyboardInput } from './hooks/useKeyboardInput.js';
-// import { useMouseWheel } from './hooks/useMouseWheel.js';
+import { useMouseWheel } from './hooks/useMouseWheel.js';
 import { setClient } from './hooks/useWebSocket.js';
 
 interface AppProps {
@@ -51,6 +53,8 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
     toolName: string;
     payload: string;
   } | null>(null);
+  const [showModelConfig, setShowModelConfig] = useState(false);
+  const [showModelPicker, setShowModelPicker] = useState(false);
 
   const clientRef = useRef<JwCodeClient | null>(null);
   const { stdout } = useStdout();
@@ -62,6 +66,7 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
   const planWaiting = useAppSlice(s => s.planWaiting);
   const messages = useAppSlice(s => s.messages);
   const currentMessage = useAppSlice(s => s.currentMessage);
+  const scrollOffset = useAppSlice(s => s.scrollOffset);
   const toolCallsExpanded = useAppSlice(s => s.toolCallsExpanded);
 
   const wireHandlers = useStreamHandlers(setShowApproval);
@@ -123,7 +128,16 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
         case 'plan_mode': updateAppState(prev => ({ ...prev, planMode: !prev.planMode })); return;
         case 'auto_mode': updateAppState(prev => ({ ...prev, autoMode: !prev.autoMode })); return;
         case 'clear': updateAppState(prev => ({ ...prev, messages: [], currentMessage: null })); return;
-        case 'model_change': if (needsArg && cmdArg) cl?.switchModel(cmdArg); return;
+        case 'model_change':
+          if (cmdArg) {
+            cl?.switchModel(cmdArg);
+          } else {
+            setShowModelPicker(true);
+          }
+          return;
+        case 'setup_wizard':
+          setShowModelConfig(true);
+          return;
         case 'show_context':
           updateAppState(prev => ({
             ...prev,
@@ -196,9 +210,9 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
   }, []);
 
   const handleSubmit = useCallback((value: string) => {
-    if (showPalette || showFilePalette) return;
+    if (showPalette || showFilePalette || showModelConfig || showModelPicker) return;
     executeCommand(value);
-  }, [executeCommand, showPalette, showFilePalette]);
+  }, [executeCommand, showPalette, showFilePalette, showModelConfig, showModelPicker]);
 
   const handleChange = useCallback((value: string) => {
     setInput(value);
@@ -259,8 +273,37 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
     setShowApproval(null);
   }, []);
 
+  const handleModelSelect = useCallback((model: ModelInfo) => {
+    setShowModelPicker(false);
+    clientRef.current?.switchModel(model.name || model.id || '');
+    updateAppState(s => ({ ...s, modelName: model.name || model.id || '' }));
+  }, []);
+
+  const handleModelPickerCancel = useCallback(() => {
+    setShowModelPicker(false);
+  }, []);
+
+  const handleModelConfigComplete = useCallback(() => {
+    setShowModelConfig(false);
+    // Refresh model list after configuring a new provider
+    fetch(backendUrl + '/api/models')
+      .then(r => r.json())
+      .then(d => {
+        const models = (d as any).data?.models;
+        if (models?.length) {
+          updateAppState(s => ({ ...s, modelName: models[0].name || s.modelName }));
+        }
+      })
+      .catch(() => {});
+  }, [backendUrl]);
+
+  const handleModelConfigCancel = useCallback(() => {
+    setShowModelConfig(false);
+  }, []);
+
   const isGenerating = currentMessage !== null;
-  const paletteActive = showPalette || showFilePalette;
+  const paletteActive = showPalette || showFilePalette || showModelConfig || showModelPicker;
+  useMouseWheel();
   useKeyboardInput({
     showApproval: showApproval !== null,
     showHelp,
@@ -294,6 +337,8 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
           messages={messages}
           currentMessage={currentMessage}
           terminalCols={terminalCols}
+          terminalRows={terminalRows}
+          scrollOffset={scrollOffset}
           toolCallsExpanded={toolCallsExpanded}
         />
       </Box>
@@ -314,6 +359,21 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
         )}
         {showFilePalette && (
           <FilePalette query={fileQuery} files={fileList} onSelect={handleFileSelect} />
+        )}
+        {showModelConfig && (
+          <SetupWizard
+            backendUrl={backendUrl}
+            onComplete={handleModelConfigComplete}
+            onCancel={handleModelConfigCancel}
+            mode="modal"
+          />
+        )}
+        {showModelPicker && (
+          <ModelPicker
+            backendUrl={backendUrl}
+            onSelect={handleModelSelect}
+            onCancel={handleModelPickerCancel}
+          />
         )}
         {showHelp && (() => {
           const helpLines = HELP_TEXT.split('\\n');

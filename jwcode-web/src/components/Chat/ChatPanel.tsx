@@ -1,4 +1,5 @@
 import { memo, useRef, useCallback, useState, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
 import { MessageSquare, Zap, Square, Pause, Play } from 'lucide-react';
 import { Message, TabId, LogEntry, FileNode } from '../../types';
@@ -58,6 +59,7 @@ export const ChatPanel = memo(function ChatPanel({
   messages, isGenerating, isPaused, onSend, onStop, onPause, onResume, input, setInput, sessionId,
   setActiveTab, createNewSession, clearMessages, setTheme, toggleTerminal, setLogs, setUnreadLogs,
 }: ChatPanelProps) {
+  const { t } = useTranslation();
   const planMode = usePlanStore((s) => s.mode);
   const toggleMode = usePlanStore((s) => s.toggleMode);
 
@@ -270,16 +272,16 @@ export const ChatPanel = memo(function ChatPanel({
         <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-accent-blue/10 flex items-center justify-center">
           <MessageSquare size={32} className="text-accent-blue" />
         </div>
-        <h2 className="text-xl font-semibold mb-2">欢迎使用 JwCode</h2>
-        <p className="text-dark-muted text-sm">我可以帮你编写代码、分析项目、自动化任务。试试发送一条消息吧！</p>
+        <h2 className="text-xl font-semibold mb-2">{t('chat.welcome')}</h2>
+        <p className="text-dark-muted text-sm">{t('chat.welcomeDesc')}</p>
         <div className="mt-6 flex flex-wrap justify-center gap-2">
-          <span className="text-xs px-3 py-1.5 bg-dark-surface rounded-full text-dark-muted">💡 代码编写</span>
-          <span className="text-xs px-3 py-1.5 bg-dark-surface rounded-full text-dark-muted">🔍 代码分析</span>
-          <span className="text-xs px-3 py-1.5 bg-dark-surface rounded-full text-dark-muted">⚡ 自动化任务</span>
+          <span className="text-xs px-3 py-1.5 bg-dark-surface rounded-full text-dark-muted">💡 {t('chat.suggestionCode')}</span>
+          <span className="text-xs px-3 py-1.5 bg-dark-surface rounded-full text-dark-muted">🔍 {t('chat.suggestionAnalyze')}</span>
+          <span className="text-xs px-3 py-1.5 bg-dark-surface rounded-full text-dark-muted">⚡ {t('chat.suggestionAutomate')}</span>
         </div>
         <div className="mt-4 text-xs text-dark-muted space-y-1">
-          <div>输入 <kbd className="px-1 py-0.5 bg-dark-bg rounded border border-dark-border">/</kbd> 查看快捷命令</div>
-          <div>输入 <kbd className="px-1 py-0.5 bg-dark-bg rounded border border-dark-border">@</kbd> 引用文件</div>
+          <div>{t('chat.quickCommands')} <kbd className="px-1 py-0.5 bg-dark-bg rounded border border-dark-border">/</kbd></div>
+          <div>{t('chat.refFiles')} <kbd className="px-1 py-0.5 bg-dark-bg rounded border border-dark-border">@</kbd></div>
         </div>
       </div>
     </div>
@@ -306,9 +308,9 @@ export const ChatPanel = memo(function ChatPanel({
       {/* Plan Mode Banner */}
       {planMode === "plan" && (
         <div className="px-3 pt-1 pb-0.5 bg-accent-purple/10 border-b border-accent-purple/20 flex items-center gap-2 text-xs">
-          <span className="text-accent-purple font-bold">Plan Mode - Read-only</span>
-          <span className="text-dark-muted">Files wont&#39;t be modified</span>
-          <button onClick={toggleMode} className="ml-auto px-2 py-0.5 text-[10px] bg-accent-green text-white rounded">Switch to Act</button>
+          <span className="text-accent-purple font-bold">{t('plan.readOnlyMode')}</span>
+          <span className="text-dark-muted">{t('plan.planModeHint')}</span>
+          <button onClick={toggleMode} className="ml-auto px-2 py-0.5 text-[10px] bg-accent-green text-white rounded">{t('plan.switchToAct')}</button>
         </div>
       )}
 
@@ -326,7 +328,7 @@ export const ChatPanel = memo(function ChatPanel({
           <div className="flex-1 flex flex-col gap-1">
             <textarea
               ref={textareaRef} value={input} onChange={handleChange} onKeyDown={handleKeyDown}
-              placeholder={planMode === "plan" ? "Plan Mode -- analysis only, switch to Act to execute" : "输入消息... Shift+Enter 换行，/ 命令，@ 引用文件，↑ 历史"}
+              placeholder={planMode === "plan" ? "Plan Mode — analysis only, switch to Act to execute" : t('chat.inputPlaceholder')}
               rows={1} disabled={isGenerating} className={`flex-1 bg-dark-bg border rounded-lg px-3 sm:px-4 py-2.5 sm:py-3 text-dark-text placeholder-dark-muted resize-none focus:outline-none focus:border-accent-green text-sm min-h-[40px] max-h-[40vh] transition-colors ${planMode === "plan" ? "border-accent-purple/50" : "border-dark-border"}`}
               onCompositionStart={() => { isComposingRef.current = true; }}
               onCompositionEnd={(e) => {
@@ -345,10 +347,10 @@ export const ChatPanel = memo(function ChatPanel({
             {/* Input info row */}
             <div className="flex items-center gap-3 px-1">
               <span className={`text-[10px] ${tokenWarn ? 'text-accent-red' : 'text-dark-muted'}`}>
-                {charCount > 0 && <>{charCount} 字符 · ~{tokenEstimate} tokens</>}
+                {charCount > 0 && <>{t('chat.charTokens', { chars: charCount, tokens: tokenEstimate })}</>}
               </span>
-              {tokenWarn && <span className="text-[10px] text-accent-red font-medium">接近上限</span>}
-              <span className="text-[10px] text-dark-muted opacity-60">Shift+Enter 换行</span>
+              {tokenWarn && <span className="text-[10px] text-accent-red font-medium">{t('chat.nearLimit')}</span>}
+              <span className="text-[10px] text-dark-muted opacity-60">{t('chat.shiftEnter')}</span>
             </div>
           </div>
 
@@ -357,13 +359,13 @@ export const ChatPanel = memo(function ChatPanel({
             <div className="flex gap-1.5 shrink-0">
               {isPaused ? (
                 <>
-                  <button onClick={onResume} className="px-3 py-3 bg-accent-green text-white rounded-lg hover:opacity-90 transition-all flex items-center gap-1.5" title="恢复生成"><Play size={16} /><span className="hidden sm:inline">恢复</span></button>
-                  <button onClick={onStop} className="px-3 py-3 bg-accent-red text-white rounded-lg hover:opacity-90 transition-all flex items-center gap-1.5" title="终止生成"><Square size={16} /><span className="hidden sm:inline">终止</span></button>
+                  <button onClick={onResume} className="px-3 py-3 bg-accent-green text-white rounded-lg hover:opacity-90 transition-all flex items-center gap-1.5" title={t('chat.resumeGen')}><Play size={16} /><span className="hidden sm:inline">{t('chat.resume')}</span></button>
+                  <button onClick={onStop} className="px-3 py-3 bg-accent-red text-white rounded-lg hover:opacity-90 transition-all flex items-center gap-1.5" title={t('chat.stopGen')}><Square size={16} /><span className="hidden sm:inline">{t('chat.stop')}</span></button>
                 </>
               ) : (
                 <>
-                  <button onClick={onPause} className="px-3 py-3 bg-accent-yellow text-white rounded-lg hover:opacity-90 transition-all flex items-center gap-1.5" title="暂停生成"><Pause size={16} /><span className="hidden sm:inline">暂停</span></button>
-                  <button onClick={onStop} className="px-3 py-3 bg-accent-red text-white rounded-lg hover:opacity-90 transition-all flex items-center gap-1.5" title="终止生成"><Square size={16} /><span className="hidden sm:inline">终止</span></button>
+                  <button onClick={onPause} className="px-3 py-3 bg-accent-yellow text-white rounded-lg hover:opacity-90 transition-all flex items-center gap-1.5" title={t('chat.pauseGen')}><Pause size={16} /><span className="hidden sm:inline">{t('chat.pause')}</span></button>
+                  <button onClick={onStop} className="px-3 py-3 bg-accent-red text-white rounded-lg hover:opacity-90 transition-all flex items-center gap-1.5" title={t('chat.stopGen')}><Square size={16} /><span className="hidden sm:inline">{t('chat.stop')}</span></button>
                 </>
               )}
             </div>
@@ -371,7 +373,7 @@ export const ChatPanel = memo(function ChatPanel({
             <button onClick={handleSend} disabled={!input.trim()}
               className="px-4 py-3 text-white rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2 bg-accent-green">
               <Zap size={16} />
-              <span className="hidden sm:inline">发送</span>
+              <span className="hidden sm:inline">{t('chat.sendBtn')}</span>
             </button>
           )}
         </div>

@@ -29,7 +29,8 @@ export const WS_COMMANDS: CmdEntry[] = [
   { cmd: '/doctor', desc: '运行系统自诊断', via: 'ws', action: 'doctor' },
   { cmd: '/rewind', desc: '回滚到最近的检查点', via: 'ws', action: 'rewind' },
   { cmd: '/compact', desc: '压缩会话上下文 (释放 token)', via: 'ws', action: 'compact' },
-  { cmd: '/model', desc: '切换 AI 模型 (用法: /model <模型名>)', via: 'ws', action: 'model_change' },
+  { cmd: '/model', desc: '切换 AI 模型 (用法: /model <模型名> 或 /model 打开选择器)', via: 'ws', action: 'model_change' },
+  { cmd: '/setup', desc: '配置 AI 提供商和 API Key', via: 'local', action: 'setup_wizard' },
   { cmd: '/init', desc: '分析项目并生成 JWCODE.md 项目记忆文件', via: 'ws', action: 'init' },
   { cmd: '/effort', desc: '设置任务努力级别 (low/medium/high)', via: 'ws', action: 'effort' },
   { cmd: '/branch', desc: '创建分支会话 (用法: /branch <名称>)', via: 'ws', action: 'branch' },
@@ -67,7 +68,8 @@ export const SLASH_COMMANDS: Record<string, { action: string; needsArg?: boolean
   '/doctor': { action: 'doctor' },
   '/rewind': { action: 'rewind' },
   '/compact': { action: 'compact' },
-  '/model': { action: 'model_change', needsArg: true },
+  '/model': { action: 'model_change', needsArg: false },
+  '/setup': { action: 'setup_wizard' },
   '/init': { action: 'init' },
   '/effort': { action: 'effort', needsArg: true },
   '/branch': { action: 'branch', needsArg: true },
@@ -104,7 +106,8 @@ export const HELP_TEXT = `
 ║  /pause       暂停当前 AI 生成            ║
 ║  /resume      恢复暂停的生成              ║
 ║  /clear       清除当前会话消息            ║
-║  /model <名>  切换 AI 模型                ║
+║  /model [名]  切换/选择 AI 模型            ║
+║  /setup       配置 AI 提供商和 API Key      ║
 ║  /compact     压缩会话上下文              ║
 ║  /doctor      系统自诊断                  ║
 ║  /rewind      回滚到最近检查点            ║

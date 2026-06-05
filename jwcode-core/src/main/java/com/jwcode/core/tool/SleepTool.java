@@ -69,14 +69,6 @@ public class SleepTool implements Tool<SleepTool.Input, SleepTool.Output, SleepT
         });
     }
     
-    /**
-     * 保留旧版签名兼容
-     */
-    @Deprecated
-    public CompletableFuture<ToolResult<Output>> call(Input args, ToolContext context, CanUseToolFn canUseTool, Object parentMessage, java.util.function.Consumer<ToolProgress<Progress>> onProgress) {
-        return call(args, new ToolExecutionContext(null, null, null), onProgress);
-    }
-    
     public static class Input { public int seconds; }
     public static class Output { public boolean success; }
     public static class Progress {}

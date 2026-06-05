@@ -67,15 +67,6 @@ public class TodoWriteBroadcaster {
     }
 
     /**
-     * 设置 WebSocket 服务器（已废弃，优先使用 setBroadcastAdapter）
-     */
-    @Deprecated
-    public static void setWebSocketServer(TaskWebSocketServer server) {
-        wsServer = server;
-        logger.info("TodoWriteBroadcaster: WebSocket server configured");
-    }
-
-    /**
      * 设置广播适配器 — 用于主 WebSocket 集成
      * @param adapter 广播适配器
      */

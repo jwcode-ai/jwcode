@@ -75,46 +75,47 @@ export function useKeyboardInput(opts: KeyboardOptions) {
       }));
       return;
     }
-    // Scroll
-    // scrollOffset = first visible message index (0 = oldest)
-    // ChatArea clamps it to [0, max(0, total - maxVisible)] so no upper bound needed here
+    // Scroll message list
+    // scrollOffset: 0 = bottom (newest messages), higher = scrolled back to older
+    const maxVisible = Math.max(5, terminalRows - 10);
     if (key.pageUp) {
+      updateAppState(prev => {
+        const maxScroll = Math.max(0, prev.messages.length - maxVisible);
+        return { ...prev, scrollOffset: Math.min(maxScroll, prev.scrollOffset + 5) };
+      });
+      return;
+    }
+    if (key.upArrow && !showApproval && !paletteOpen) {
+      updateAppState(prev => {
+        const maxScroll = Math.max(0, prev.messages.length - maxVisible);
+        return { ...prev, scrollOffset: Math.min(maxScroll, prev.scrollOffset + 1) };
+      });
+      return;
+    }
+    if (key.pageDown) {
       updateAppState(prev => ({
         ...prev,
         scrollOffset: Math.max(0, prev.scrollOffset - 5),
       }));
       return;
     }
-    if (key.upArrow && !showApproval && !paletteOpen) {
+    if (key.downArrow && !showApproval && !paletteOpen) {
       updateAppState(prev => ({
         ...prev,
         scrollOffset: Math.max(0, prev.scrollOffset - 1),
       }));
       return;
     }
-    if (key.pageDown) {
-      updateAppState(prev => ({
-        ...prev,
-        scrollOffset: prev.scrollOffset + 5,
-      }));
-      return;
-    }
-    if (key.downArrow && !showApproval && !paletteOpen) {
-      updateAppState(prev => ({
-        ...prev,
-        scrollOffset: prev.scrollOffset + 1,
-      }));
-      return;
-    }
     if ((key as any).home) {
-      updateAppState(prev => ({
-        ...prev, scrollOffset: 0,
-      }));
+      updateAppState(prev => {
+        const maxScroll = Math.max(0, prev.messages.length - maxVisible);
+        return { ...prev, scrollOffset: maxScroll };
+      });
       return;
     }
     if ((key as any).end) {
       updateAppState(prev => ({
-        ...prev, scrollOffset: prev.messages.length,
+        ...prev, scrollOffset: 0,
       }));
       return;
     }

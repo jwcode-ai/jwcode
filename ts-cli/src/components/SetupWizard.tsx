@@ -1,8 +1,11 @@
 /**
- * First-run setup wizard — interactive provider configuration in the TUI.
+ * Setup wizard — interactive provider configuration in the TUI.
  *
- * Shown when ~/.jwcode/config.yaml has no valid provider configured.
- * Guides user through: provider type → API key → model name → save.
+ * Supports two modes:
+ *   fullscreen – first-run setup (no cancel, full border)
+ *   modal – runtime reconfiguration (cancel available, compact)
+ *
+ * Flow: select_provider → enter_key → enter_model (custom only) → save → done
  */
 import React, { useState, useCallback, useEffect } from 'react';
 import { Box, Text, useInput } from 'ink';
@@ -10,6 +13,8 @@ import { Box, Text, useInput } from 'ink';
 interface Props {
   backendUrl: string;
   onComplete: () => void;
+  onCancel?: () => void;
+  mode?: 'fullscreen' | 'modal';
 }
 
 const PROVIDER_TEMPLATES: Record<string, { name: string; baseUrl: string; apiType: string; defaultModel: string }> = {
@@ -31,7 +36,7 @@ const PROVIDER_KEYS = Object.keys(PROVIDER_TEMPLATES);
 
 type Step = 'select_provider' | 'enter_key' | 'enter_model' | 'saving' | 'done' | 'error';
 
-export const SetupWizard: React.FC<Props> = ({ backendUrl, onComplete }) => {
+export const SetupWizard: React.FC<Props> = ({ backendUrl, onComplete, onCancel, mode = 'fullscreen' }) => {
   const [step, setStep] = useState<Step>('select_provider');
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [providerKey, setProviderKey] = useState('');
@@ -40,6 +45,8 @@ export const SetupWizard: React.FC<Props> = ({ backendUrl, onComplete }) => {
   const [modelId, setModelId] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [keyVisible, setKeyVisible] = useState(false);
+
+  const isModal = mode === 'modal';
 
   const saveConfig = useCallback(async () => {
     setStep('saving');
@@ -68,14 +75,14 @@ export const SetupWizard: React.FC<Props> = ({ backendUrl, onComplete }) => {
         throw new Error(err || `HTTP ${res.status}`);
       }
       setStep('done');
-      // Auto-dismiss after short delay to show success
-      setTimeout(onComplete, 1500);
+      setTimeout(onComplete, 1200);
     } catch (e: unknown) {
       setErrorMsg(String(e));
       setStep('error');
     }
   }, [backendUrl, providerKey, baseUrl, apiKey, modelId, onComplete]);
 
+  // Poll for backend-side config changes (e.g. another client configured it)
   useEffect(() => {
     if (step === 'done') return;
     const check = async () => {
@@ -91,6 +98,11 @@ export const SetupWizard: React.FC<Props> = ({ backendUrl, onComplete }) => {
   }, [step, backendUrl, onComplete]);
 
   useInput((input, key) => {
+    if (key.escape && isModal && onCancel) {
+      onCancel();
+      return;
+    }
+
     if (step === 'select_provider') {
       if (key.upArrow || input === 'k') {
         setSelectedIdx(s => (s - 1 + PROVIDER_KEYS.length) % PROVIDER_KEYS.length);
@@ -108,6 +120,10 @@ export const SetupWizard: React.FC<Props> = ({ backendUrl, onComplete }) => {
     }
 
     if (step === 'enter_key') {
+      if (key.escape && isModal && onCancel) {
+        onCancel();
+        return;
+      }
       if (key.return) {
         if (apiKey.trim().length < 10) {
           setErrorMsg('API key too short (min 10 characters).');
@@ -130,6 +146,10 @@ export const SetupWizard: React.FC<Props> = ({ backendUrl, onComplete }) => {
     }
 
     if (step === 'enter_model') {
+      if (key.escape && isModal && onCancel) {
+        onCancel();
+        return;
+      }
       if (key.return) {
         if (modelId.trim().length === 0) {
           setErrorMsg('Model name is required.');
@@ -138,8 +158,6 @@ export const SetupWizard: React.FC<Props> = ({ backendUrl, onComplete }) => {
         saveConfig();
       } else if (key.backspace || key.delete) {
         setModelId(s => s.slice(0, -1));
-      } else if (input === '\t') {
-        // toggle base URL editing
       } else if (input && input.length === 1 && !key.ctrl) {
         setModelId(s => s + input);
       }
@@ -147,29 +165,44 @@ export const SetupWizard: React.FC<Props> = ({ backendUrl, onComplete }) => {
     }
 
     if (step === 'error') {
-      if (key.return || key.escape) {
+      if (key.escape && isModal && onCancel) {
+        onCancel();
+        return;
+      }
+      if (key.return) {
         setStep('enter_key');
         setErrorMsg('');
       }
-      return;
     }
   });
 
   if (step === 'done') {
     return (
       <Box flexDirection="column" padding={1}>
-        <Text color="green">✓ Configuration saved! Starting JWCode...</Text>
+        <Text color="green">✓ Configuration saved!</Text>
+        {mode === 'fullscreen' && <Text dimColor>Starting JWCode...</Text>}
       </Box>
     );
   }
 
+  const borderStyle = isModal ? 'single' : 'round';
+  const borderColor = isModal ? 'yellow' : 'cyan';
+  const title = isModal ? 'Add Provider' : 'JWCode — First Run Setup';
+
   return (
-    <Box flexDirection="column" padding={1} borderStyle="round" borderColor="cyan">
+    <Box flexDirection="column" padding={1} borderStyle={borderStyle as any} borderColor={borderColor}>
       <Box marginBottom={1}>
-        <Text bold color="cyan">JWCode — First Run Setup</Text>
+        <Text bold color="cyan">{title}</Text>
       </Box>
-      <Text>Configure your AI provider to get started.</Text>
-      <Text> </Text>
+      {mode === 'fullscreen' && (
+        <>
+          <Text>Configure your AI provider to get started.</Text>
+          <Text> </Text>
+        </>
+      )}
+      {isModal && onCancel && (
+        <Text dimColor>Esc to close</Text>
+      )}
 
       {step === 'select_provider' && (
         <Box flexDirection="column">
@@ -183,12 +216,6 @@ export const SetupWizard: React.FC<Props> = ({ backendUrl, onComplete }) => {
               {i === selectedIdx ? ' ◀' : ''}
             </Text>
           ))}
-          {providerKey === 'custom' && (
-            <Box flexDirection="column" marginTop={1}>
-              <Text>Base URL:</Text>
-              <Text color="yellow">{'> '}{baseUrl || '(enter after selecting Custom)'}</Text>
-            </Box>
-          )}
         </Box>
       )}
 
@@ -235,7 +262,7 @@ export const SetupWizard: React.FC<Props> = ({ backendUrl, onComplete }) => {
       {step === 'error' && (
         <Box flexDirection="column">
           <Text color="red">Failed to save: {errorMsg}</Text>
-          <Text>Press Enter to retry, Esc to go back.</Text>
+          <Text>Press Enter to retry{isModal ? ', Esc to cancel' : ''}.</Text>
         </Box>
       )}
     </Box>

@@ -15,11 +15,11 @@ jwcode start         # Python CLI 一键启动
 
 | 模块 | 说明 |
 |------|------|
-| `jwcode-common` | |
-| `jwcode-core` | |
-| `jwcode-web` | |
-| `jwcode-mcp` | |
-| `jwcode-parser` | |
+| `jwcode-common` | 共享工具：认证、配置、辅助工具 |
+| `jwcode-core` | 核心引擎：47 工具、17 Agent、LLM 编排、规划器、Hook |
+| `jwcode-web` | HTTP/WS 服务器 + React SPA 前端 |
+| `jwcode-mcp` | MCP 客户端接口 |
+| `jwcode-parser` | Tree-sitter 代码分析 |
 
 ## Agent 清单
 

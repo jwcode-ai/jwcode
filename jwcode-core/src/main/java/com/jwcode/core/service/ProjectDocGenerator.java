@@ -1,6 +1,7 @@
 package com.jwcode.core.service;
 
 import java.io.*;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.time.LocalDate;
 import java.util.*;
@@ -49,7 +50,7 @@ public class ProjectDocGenerator {
         // 1. 模块列表 (从 jwcode-parent/pom.xml)
         Path parentPom = projectRoot.resolve("jwcode-parent/pom.xml");
         if (Files.exists(parentPom)) {
-            String pom = Files.readString(parentPom);
+            String pom = Files.readString(parentPom, StandardCharsets.UTF_8);
             Matcher m = Pattern.compile("<module>\\.\\./([^<]+)</module>").matcher(pom);
             while (m.find()) info.modules.add(m.group(1));
             // 版本
@@ -130,8 +131,8 @@ public class ProjectDocGenerator {
     boolean updateReadme(ProjectInfo info) throws IOException {
         Path readme = projectRoot.resolve("README.md");
         String content = buildReadme(info);
-        if (!Files.exists(readme) || !Files.readString(readme).equals(content)) {
-            Files.writeString(readme, content);
+        if (!Files.exists(readme) || !Files.readString(readme, StandardCharsets.UTF_8).equals(content)) {
+            Files.writeString(readme, content, StandardCharsets.UTF_8);
             return true;
         }
         return false;
@@ -140,7 +141,7 @@ public class ProjectDocGenerator {
     boolean updateAgentsMd(ProjectInfo info) throws IOException {
         Path agentsMd = projectRoot.resolve("AGENTS.md");
         if (!Files.exists(agentsMd)) return false;
-        String existing = Files.readString(agentsMd);
+        String existing = Files.readString(agentsMd, StandardCharsets.UTF_8);
 
         // 追加/更新版本信息到文件头部
         String versionLine = "> 最后自动更新：" + info.date + " | 版本 " + info.version
@@ -151,17 +152,17 @@ public class ProjectDocGenerator {
             int i = existing.indexOf("\n---\n");
             if (i > 0) existing = existing.substring(0, i) + "\n" + versionLine + existing.substring(i);
         }
-        Files.writeString(agentsMd, existing);
+        Files.writeString(agentsMd, existing, StandardCharsets.UTF_8);
         return true;
     }
 
     boolean updateArchitectureDoc(ProjectInfo info) throws IOException {
         Path archDoc = projectRoot.resolve("docs/ARCHITECTURE_V2.md");
         if (!Files.exists(archDoc)) return false;
-        String existing = Files.readString(archDoc);
+        String existing = Files.readString(archDoc, StandardCharsets.UTF_8);
         String header = "> 最后更新：" + info.date + " | 模块: " + String.join(", ", info.modules);
         existing = existing.replaceAll("> 最后更新：.*", header);
-        Files.writeString(archDoc, existing);
+        Files.writeString(archDoc, existing, StandardCharsets.UTF_8);
         return true;
     }
 

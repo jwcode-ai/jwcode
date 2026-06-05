@@ -95,7 +95,15 @@ public class SystemPromptLoader {
         }
         
         // 使用默认提示词
-        cachedPrompt = getDefaultPrompt();
+        cachedPrompt = """
+            # System
+
+            You are JWCode, an AI coding agent with senior engineering judgment.
+            You and the user share one workspace. Read before writing, follow existing
+            patterns, and verify your work before claiming it is done.
+
+            Use Github-flavored markdown for formatting.
+            """;
         logger.info("使用内置默认系统提示词 (" + cachedPrompt.length() + " 字符)");
         return cachedPrompt;
     }
@@ -192,24 +200,6 @@ public class SystemPromptLoader {
      * 
      * @return 默认提示词内容
      */
-    /**
-     * @deprecated Use {@link SystemPromptAssembler#assemble()} instead.
-     *             This fallback is a minimal stub; the real prompt is assembled from
-     *             {@code ~/.jwcode/system-prompt/core.md} by SystemPromptAssembler.
-     */
-    @Deprecated
-    private static String getDefaultPrompt() {
-        return """
-            # System
-
-            You are JWCode, an AI coding agent with senior engineering judgment.
-            You and the user share one workspace. Read before writing, follow existing
-            patterns, and verify your work before claiming it is done.
-
-            Use Github-flavored markdown for formatting.
-            """;
-    }
-    
     /**
      * 获取系统提示词的简要信息（用于日志显示）
      * 

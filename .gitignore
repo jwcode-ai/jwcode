@@ -29,7 +29,7 @@ Thumbs.db
 .jwcode/
 logs/
 eval-results/
+session_*/
 *.pyc
 nul
 *.lst
-*.json

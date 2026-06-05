@@ -1,6 +1,7 @@
 ﻿import { Box, Text } from "ink";
-import { useState, useMemo, memo } from "react";
+import { useState, useMemo, memo, useEffect } from "react";
 import { type Message, type ToolCall, type Step } from "../protocol.js";
+import { updateAppState } from "../hooks/useAppState.js";
 
 const SEP = "-".repeat(60);
 const MAX_THINKING = 200;
@@ -9,6 +10,8 @@ interface Props {
   messages: Message[];
   currentMessage: Message | null;
   terminalCols: number;
+  terminalRows: number;
+  scrollOffset: number;
   toolCallsExpanded: boolean;
 }
 
@@ -200,7 +203,7 @@ const StreamingMessage = memo(function StreamingMessage({
 });
 
 export const ChatArea = memo(function ChatArea({
-  messages, currentMessage, terminalCols, toolCallsExpanded,
+  messages, currentMessage, terminalCols, terminalRows, scrollOffset, toolCallsExpanded,
 }: Props) {
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(new Set());
@@ -210,6 +213,26 @@ export const ChatArea = memo(function ChatArea({
       ? messages.filter(m => m.id !== currentMessage.id)
       : messages,
     [messages, currentMessage && currentMessage.id]);
+
+  // scrollOffset: 0 = bottom (newest), higher = scrolled back to older messages
+  const maxVisible = Math.max(5, terminalRows - 10);
+  const total = allMessages.length;
+  const maxScroll = Math.max(0, total - maxVisible);
+  const safeOffset = Math.min(scrollOffset, maxScroll);
+
+  // Clamp out-of-bounds scrollOffset (e.g. after /clear)
+  useEffect(() => {
+    if (scrollOffset > maxScroll) {
+      updateAppState(prev => ({ ...prev, scrollOffset: maxScroll }));
+    }
+  }, [scrollOffset, maxScroll]);
+
+  // Show slice from (total - maxVisible - safeOffset) to (total - safeOffset)
+  // safeOffset=0 → newest maxVisible; safeOffset=maxScroll → oldest
+  const startIdx = Math.max(0, total - maxVisible - safeOffset);
+  const endIdx = total - safeOffset;
+  const visibleMessages = allMessages.slice(startIdx, endIdx > 0 ? endIdx : undefined);
+  const visibleCount = visibleMessages.length;
 
   const toggleExpandTool = (id: string) => {
     setExpandedTools(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
@@ -221,7 +244,22 @@ export const ChatArea = memo(function ChatArea({
 
   return (
     <Box flexDirection="column" width="100%">
-      {allMessages.map(msg => (
+      {total > maxVisible && (
+        <Box>
+          <Text dimColor>
+            [{safeOffset + 1}-{safeOffset + visibleCount} / {total}]
+            {'  '}
+          </Text>
+          <Text color="yellow">
+            {"█".repeat(Math.min(10, Math.round((1 - safeOffset / maxScroll) * 10)))}
+          </Text>
+          <Text dimColor>
+            {"░".repeat(10 - Math.min(10, Math.round((1 - safeOffset / maxScroll) * 10)))}
+          </Text>
+          <Text dimColor>  PgUp/PgDn ↑↓  Home/End</Text>
+        </Box>
+      )}
+      {visibleMessages.map(msg => (
         <MessageItem
           key={msg.id}
           msg={msg}

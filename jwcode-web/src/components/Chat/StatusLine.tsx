@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useTokenStore } from '../../stores/tokenStore';
 import { useChatStore } from '../../stores/chatStore';
 import { useSessionStore } from '../../stores/sessionStore';
@@ -18,6 +19,7 @@ export const StatusLine = memo(function StatusLine(_props: StatusLineProps) {
   const startRef = useRef<number>(0);
 
   // Plan/Act mode
+  const { t } = useTranslation();
   const planMode = usePlanStore((s) => s.mode);
   const setPlanMode = usePlanStore((s) => s.setMode);
   const autoMode = useHookApprovalStore((s) => s.autoMode);
@@ -68,7 +70,7 @@ export const StatusLine = memo(function StatusLine(_props: StatusLineProps) {
               ? 'bg-accent-cyan/20 text-accent-cyan border-accent-cyan/30'
               : 'text-dark-muted border-dark-border hover:text-dark-text hover:border-dark-muted'
           }`}
-          title="切换到规划模式"
+          title={t('plan.switchToPlanMode')}
         >
           {planMode === 'plan' ? '●' : '○'} Plan
         </button>
@@ -79,7 +81,7 @@ export const StatusLine = memo(function StatusLine(_props: StatusLineProps) {
               ? 'bg-accent-green/20 text-accent-green border-accent-green/30'
               : 'text-dark-muted border-dark-border hover:text-dark-text hover:border-dark-muted'
           }`}
-          title="切换到执行模式"
+          title={t('plan.switchToActMode')}
         >
           {planMode !== 'plan' ? '●' : '○'} Act
         </button>
@@ -93,7 +95,7 @@ export const StatusLine = memo(function StatusLine(_props: StatusLineProps) {
             ? 'bg-accent-purple/20 text-accent-purple border-accent-purple/30'
             : 'text-dark-muted border-dark-border hover:text-dark-text'
         }`}
-        title="自动模式：自动批准工具调用"
+        title={t('plan.autoMode')}
       >
         {autoMode ? '⚡ Auto' : '○ Auto'}
       </button>

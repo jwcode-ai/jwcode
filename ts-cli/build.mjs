@@ -44,7 +44,7 @@ if (existsSync(fatJarSource)) {
         '-jar', proguardJar,
         '-injars', fatJarSource,
         '-outjars', obfJar,
-        '-libraryjars', ${process.env.JAVA_HOME || ''}/jre/lib/rt.jar,
+        '-libraryjars', `${process.env.JAVA_HOME || ''}/jre/lib/rt.jar`,
         '@' + proguardConf,
         '-printmapping', join(backendDir, 'proguard.map')
       ], { stdio: 'inherit' });
