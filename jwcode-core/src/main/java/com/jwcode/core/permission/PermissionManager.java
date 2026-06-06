@@ -271,6 +271,17 @@ public class PermissionManager {
         return autoMode;
     }
 
+    /**
+     * YOLO Mode — 全自动模式，所有操作无需确认。
+     * 设置所有 autoApprove 标志为 enabled 状态。
+     */
+    public void setYoloMode(boolean enabled) {
+        this.autoApproveWrite = enabled;
+        this.autoApproveDelete = enabled;
+        this.autoApproveDestructive = enabled;
+        this.autoMode = enabled;
+    }
+
     /** 获取自动分类器（用于记录学习反馈） */
     public AutoPermissionClassifier getAutoClassifier() {
         return autoClassifier;

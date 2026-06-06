@@ -65,3 +65,90 @@ if (existsSync(fatJarSource)) {
 } else {
   console.log('[build] JAR not found (skip Maven build first, or use --build flag).');
 }
+
+// ── JLink: bundle minimal JRE ──────────────────────────────────
+function getJavaHome() {
+  return process.env.JAVA_HOME || process.env.JDK_HOME || '';
+}
+
+function getJlinkPath() {
+  const home = getJavaHome();
+  const ext = process.platform === 'win32' ? '.exe' : '';
+  if (home) {
+    const p = join(home, 'bin', 'jlink' + ext);
+    if (existsSync(p)) return p;
+  }
+  // Try PATH
+  try {
+    const which = execFileSync(process.platform === 'win32' ? 'where' : 'which', ['jlink'], { encoding: 'utf-8' }).trim();
+    if (which) return which;
+  } catch {}
+  return null;
+}
+
+function getJmodsPath() {
+  const home = getJavaHome();
+  const candidates = [
+    join(home, 'jmods'),
+    join(home, 'lib', 'jmods'),
+  ];
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
+
+const jlinkPath = getJlinkPath();
+const jmodsPath = getJmodsPath();
+const jreDir = join(backendDir, 'jre');
+
+if (jlinkPath && jmodsPath) {
+  // Only build JRE if the JAR step succeeded
+  const jarExists = existsSync(join(backendDir, 'jwcode-web.jar'));
+  if (!jarExists) {
+    console.log('[build] JAR not found, skipping JRE bundle.');
+  } else if (!existsSync(jreDir) || !existsSync(join(jreDir, 'release'))) {
+    console.log('[build] Bundling minimal JRE with jlink...');
+    try {
+      execFileSync(jlinkPath, [
+        '--module-path', jmodsPath,
+        '--add-modules', 'java.base,java.net.http,java.logging,java.sql,java.xml,java.management,java.naming,jdk.unsupported,java.compiler,java.instrument',
+        '--output', jreDir,
+        '--strip-debug',
+        '--compress', '2',
+        '--no-header-files',
+        '--no-man-pages',
+        '--vm', 'server',
+      ], { stdio: 'inherit' });
+      // Verify
+      const javaExe = join(jreDir, 'bin', process.platform === 'win32' ? 'java.exe' : 'java');
+      if (existsSync(javaExe)) {
+        const ver = execFileSync(javaExe, ['-version'], { encoding: 'utf-8', stderr: 'pipe' });
+        console.log('[build] JRE bundled successfully at backend/jre/');
+        console.log('[build]   ' + ver.replace('\n', ' ').trim());
+        // Strip the jmods from the output to save space
+        console.log('[build]   Size: ~' + Math.round(getDirSize(jreDir) / 1024 / 1024) + ' MB');
+      }
+    } catch (err) {
+      console.error('[build] jlink failed, system Java will be required at runtime:', err.message);
+    }
+  } else {
+    console.log('[build] JRE already exists at backend/jre/, skipping.');
+  }
+} else {
+  const note = !jlinkPath ? 'jlink not found' : 'jmods not found';
+  console.log('[build] ' + note + ' — system Java will be required at runtime.');
+}
+
+function getDirSize(dir) {
+  let size = 0;
+  try {
+    const entries = readdirSync(dir, { recursive: true, withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isFile()) {
+        size += statSync(join(entry.parentPath || entry.path, entry.name)).size;
+      }
+    }
+  } catch {}
+  return size;
+}

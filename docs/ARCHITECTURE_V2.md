@@ -36,6 +36,63 @@ L1 安全:   DockerSandbox + WorkspaceGuard + HookChain + 审计
 
 ## 模块结构
 
+
+## LLM 服务层（v3.2 新增 — 双格式 base_url 支持）
+
+```
+LLMFactory (通过 Registry 路由)
+    |
+ServiceRegistry
+    |-- OpenAIServiceProvider  (api-type = "openai-completions")
+    |-- AnthropicServiceProvider (api-type = "anthropic-messages")
+            |                          |
+        OpenAILLMService         AnthropicLLMService
+            |                          |
+            +------- AbstractHttpLLMService --------+
+    (共享：HttpClient 连接池、60s 超时、HTTP/1.1)
+    (重试：指数退避 2s→4s→8s，最多 3 次，支持换 API key)
+    (错误码映射：429→rate_limit, 5xx→server_error, 超时→timeout)
+    (SSE 行读取、日志打标 [Provider=name])
+```
+
+### 新增文件一览
+
+| 文件 | 职责 |
+|------|------|
+| `AbstractHttpLLMService.java` | 共享 HTTP 基类：5 个 hook 方法供子类实现协议适配 |
+| `ServiceConfig.java` | 独立配置类：apiType + anthropicVersion + 通用字段 |
+| `ServiceProvider.java` | Provider 接口：getApiType() + createService() |
+| `ServiceRegistry.java` | 注册表：register() / createService() / getSupportedTypes() |
+| `OpenAIServiceProvider.java` | api-type="openai-completions" → OpenAILLMService |
+| `AnthropicServiceProvider.java` | api-type="anthropic-messages" → AnthropicLLMService |
+| `AnthropicMessageConverter.java` | 纯转换：内部消息 ↔ Anthropic Messages API 格式 |
+| `AnthropicLLMService.java` | Anthropic 协议实现（非流式 + 流式 SSE） |
+
+### AnthropicMessageConverter 核心转换
+
+| 内部格式 → | Anthropic 格式 |
+|-----------|---------------|
+| `SYSTEM` role | 提取到顶层 `system` 字段 |
+| `USER` role | `{"role":"user","content":[{"type":"text","text":...}]}` |
+| `TOOL` role | `{"type":"tool_result","tool_use_id":"...","content":"..."}`（合并到 user 消息中） |
+| `ASSISTANT` role | `{"role":"assistant","content":[text?, thinking?, tool_use*]}` |
+| Tool definition | `{"name":"...","description":"...","input_schema":{...}}`（input_schema 替代 OpenAI 的 parameters） |
+
+### SSE 流式事件状态机
+
+```
+message_start          → 初始化 accumulator（model, input_tokens）
+content_block_start    → 根据 type 进入 text / tool_use / thinking 子状态
+content_block_delta    → text_delta: 追加 content
+                         input_json_delta: 追加 tool input StringBuilder
+                         thinking_delta: 追加 thinking
+content_block_stop     → 收尾 block：tool_use 完成时从 buffer 反序列化为完整 JSON
+message_delta          → 更新 stop_reason / output_tokens
+message_stop           → 流结束
+ping                   → 心跳，无操作
+```
+
+
 ```
 jwcode/
 ├── jwcode-core/          # 核心引擎 (LLM / Agent / Tool / Session)

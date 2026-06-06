@@ -23,13 +23,13 @@ import java.util.function.Consumer;
 import java.util.logging.Level;
 
 /**
- * OpenAI 兼容的 LLM 服务实现
+ * OpenAI 鍏煎鐨?LLM 鏈嶅姟瀹炵幇
  * 
- * 支持：
+ * 鏀寔锛?
  * - OpenAI
  * - Moonshot (Kimi)
  * - MiniMax
- * - 任何 OpenAI 兼容的 API
+ * - 浠讳綍 OpenAI 鍏煎鐨?API
  */
 @Log
 public class OpenAILLMService implements LLMService {
@@ -39,12 +39,12 @@ public class OpenAILLMService implements LLMService {
     private final ServiceConfig config;
     private int currentKeyIndex = 0;
     
-    // 消息数量限制：不限制数量，由上下文窗口管理器处理 token 超限
+    // 娑堟伅鏁伴噺闄愬埗锛氫笉闄愬埗鏁伴噺锛岀敱涓婁笅鏂囩獥鍙ｇ鐞嗗櫒澶勭悊 token 瓒呴檺
     private static final int MAX_MESSAGE_COUNT = Integer.MAX_VALUE;
     
     public OpenAILLMService(ServiceConfig config) {
         this.config = config;
-        // 增加连接超时到60秒
+        // 澧炲姞杩炴帴瓒呮椂鍒?0绉?
         this.httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(60))
             .version(HttpClient.Version.HTTP_1_1)
@@ -74,22 +74,22 @@ public class OpenAILLMService implements LLMService {
             log.info("[OpenAI] Model: " + config.getModel());
             log.info("[OpenAI] Message count: " + messages.size());
             
-            int maxRetries = 3;  // 增加重试次数到 3
+            int maxRetries = 3;  // 澧炲姞閲嶈瘯娆℃暟鍒?3
             int attempt = 0;
-            int retryDelay = 2000; // 初始重试延迟 2 秒
+            int retryDelay = 2000; // 鍒濆閲嶈瘯寤惰繜 2 绉?
             
             while (attempt <= maxRetries) {
                 try {
-                    // 构建请求体
+                    // 鏋勫缓璇锋眰浣?
                     ObjectNode requestBody = buildRequestBody(messages, tools);
                     String requestJson = mapper.writeValueAsString(requestBody);
                     
-                    // 打印请求参数（INFO 级别，开启 debug 模式）
+                    // 鎵撳嵃璇锋眰鍙傛暟锛圛NFO 绾у埆锛屽紑鍚?debug 妯″紡锛?
                     log.info("[OpenAI] ---------- Request Body ----------");
                     log.info("[OpenAI] " + requestJson);
                     log.info("[OpenAI] ---------- End Request Body ----------");
                     
-                    // 发送请求
+                    // 鍙戦€佽姹?
                     HttpRequest request = HttpRequest.newBuilder()
                         .uri(URI.create(url))
                         .header("Content-Type", "application/json")
@@ -103,7 +103,7 @@ public class OpenAILLMService implements LLMService {
                     log.info("[OpenAI] Response status: " + response.statusCode());
                     
                     if (response.statusCode() == 200) {
-                        // 打印响应内容
+                        // 鎵撳嵃鍝嶅簲鍐呭
                         String responseBody = response.body();
                         log.info("[OpenAI] ---------- Response Body ----------");
                         log.info("[OpenAI] " + responseBody);
@@ -128,22 +128,22 @@ public class OpenAILLMService implements LLMService {
                         if (attempt <= maxRetries) {
                             log.warning("[OpenAI] Rate limited (" + errorType + "), retrying (" + attempt + "/" + maxRetries + ") after " + retryDelay + "ms...");
                             Thread.sleep(retryDelay);
-                            retryDelay *= 2; // 指数退避
-                            // 切换 API key
+                            retryDelay *= 2; // 鎸囨暟閫€閬?
+                            // 鍒囨崲 API key
                             apiKey = getNextApiKey();
                             continue;
                         }
                         return LLMResponse.error("RATE_LIMIT_RETRYABLE", "Rate limited. Please try again later.");
                     } else if (response.statusCode() >= 500) {
-                        // 服务器错误 (500, 502, 503, 504)，重试
+                        // 鏈嶅姟鍣ㄩ敊璇?(500, 502, 503, 504)锛岄噸璇?
                         attempt++;
                         if (attempt <= maxRetries) {
                             log.warning("[OpenAI] Server error " + response.statusCode() + ", retrying (" + attempt + "/" + maxRetries + ") after " + retryDelay + "ms...");
                             String errorBody = response.body();
                             log.info("[OpenAI] Server error body: " + errorBody);
                             Thread.sleep(retryDelay);
-                            retryDelay *= 2; // 指数退避
-                            // 切换 API key
+                            retryDelay *= 2; // 鎸囨暟閫€閬?
+                            // 鍒囨崲 API key
                             apiKey = getNextApiKey();
                             continue;
                         }
@@ -169,8 +169,8 @@ public class OpenAILLMService implements LLMService {
                     if (attempt <= maxRetries) {
                         log.warning("[OpenAI] Request timeout, retrying (" + attempt + "/" + maxRetries + ") after " + retryDelay + "ms...");
                         try { Thread.sleep(retryDelay); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
-                        retryDelay *= 2; // 指数退避
-                        // 切换 API key
+                        retryDelay *= 2; // 鎸囨暟閫€閬?
+                        // 鍒囨崲 API key
                         apiKey = getNextApiKey();
                     } else {
                         log.severe("[OpenAI] Request timeout after " + (maxRetries + 1) + " attempts");
@@ -256,17 +256,17 @@ public class OpenAILLMService implements LLMService {
             
             while (attempt <= maxRetries) {
                 try {
-                    // 构建流式请求体
+                    // 鏋勫缓娴佸紡璇锋眰浣?
                     ObjectNode requestBody = buildRequestBody(messages, tools);
                     requestBody.put("stream", true);
                     String requestJson = mapper.writeValueAsString(requestBody);
                     
-                    // 打印请求参数（INFO 级别，开启 debug 模式）
+                    // 鎵撳嵃璇锋眰鍙傛暟锛圛NFO 绾у埆锛屽紑鍚?debug 妯″紡锛?
                     log.info("[OpenAI Stream] ---------- Request Body ----------");
                     log.info("[OpenAI Stream] " + requestJson);
                     log.info("[OpenAI Stream] ---------- End Request Body ----------");
                     
-                    // 发送请求
+                    // 鍙戦€佽姹?
                     HttpRequest request = HttpRequest.newBuilder()
                         .uri(URI.create(url))
                         .header("Content-Type", "application/json")
@@ -275,7 +275,7 @@ public class OpenAILLMService implements LLMService {
                         .timeout(Duration.ofSeconds(config.getTimeoutSeconds()))
                         .build();
                     
-                    // 使用 InputStream 获取流式响应
+                    // 浣跨敤 InputStream 鑾峰彇娴佸紡鍝嶅簲
                     HttpResponse<InputStream> response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
                     
                     if (response.statusCode() != 200) {
@@ -294,7 +294,7 @@ public class OpenAILLMService implements LLMService {
                                 " [Provider: " + config.getModel() + "]");
                         }
                         
-                        // 对可重试错误执行退避重试（与 chatWithTools 保持一致）
+                        // 瀵瑰彲閲嶈瘯閿欒鎵ц閫€閬块噸璇曪紙涓?chatWithTools 淇濇寔涓€鑷达級
                         if (response.statusCode() == 429 || response.statusCode() >= 500) {
                             attempt++;
                             if (attempt <= maxRetries) {
@@ -314,7 +314,7 @@ public class OpenAILLMService implements LLMService {
                         return LLMResponse.error(code, "HTTP " + response.statusCode() + ": " + errorBody);
                     }
                     
-                    // 处理流式响应
+                    // 澶勭悊娴佸紡鍝嶅簲
                     return processStreamResponse(
                         response.body(), 
                         contentConsumer, 
@@ -354,7 +354,7 @@ public class OpenAILLMService implements LLMService {
     }
     
     /**
-     * 处理流式响应
+     * 澶勭悊娴佸紡鍝嶅簲
      */
     private LLMResponse processStreamResponse(
             InputStream inputStream,
@@ -373,35 +373,35 @@ public class OpenAILLMService implements LLMService {
         int totalTokens = 0;
         boolean inThinkingTag = false;
         
-        // 工具调用缓冲区（用于累积流式工具调用）
+        // 宸ュ叿璋冪敤缂撳啿鍖猴紙鐢ㄤ簬绱Н娴佸紡宸ュ叿璋冪敤锛?
         java.util.Map<String, StreamToolCallAccumulator> toolCallAccumulators = new java.util.HashMap<>();
         
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
             
-            // SSE 事件累积缓冲区：一个 SSE 事件可能跨多个 data: 行
+            // SSE 浜嬩欢绱Н缂撳啿鍖猴細涓€涓?SSE 浜嬩欢鍙兘璺ㄥ涓?data: 琛?
             StringBuilder eventBuffer = new StringBuilder();
             String line;
             
             while ((line = reader.readLine()) != null) {
-                // SSE 格式: data: {...}
+                // SSE 鏍煎紡: data: {...}
                 if (line.startsWith("data: ")) {
-                    // 累积 data: 后面的内容，保留换行以支持多行事件
+                    // 绱Н data: 鍚庨潰鐨勫唴瀹癸紝淇濈暀鎹㈣浠ユ敮鎸佸琛屼簨浠?
                     eventBuffer.append(line.substring(6)).append("\n");
                     continue;
                 }
                 
-                // 空行或非 data: 行表示一个 SSE 事件结束
+                // 绌鸿鎴栭潪 data: 琛岃〃绀轰竴涓?SSE 浜嬩欢缁撴潫
                 if (eventBuffer.length() > 0) {
                     String eventData = eventBuffer.toString().trim();
                     eventBuffer.setLength(0);
                     
-                    // 流结束标记
+                    // 娴佺粨鏉熸爣璁?
                     if ("[DONE]".equals(eventData)) {
                         break;
                     }
                     
-                    // 检查是否为 JSON 格式（以 { 或 [ 开头）
+                    // 妫€鏌ユ槸鍚︿负 JSON 鏍煎紡锛堜互 { 鎴?[ 寮€澶达級
                     if (!eventData.startsWith("{") && !eventData.startsWith("[")) {
                         log.warning("[OpenAI Stream] Non-JSON event received (treating as stream termination): " + eventData);
                         break;
@@ -410,12 +410,12 @@ public class OpenAILLMService implements LLMService {
                     try {
                         JsonNode json = mapper.readTree(eventData);
                         
-                        // 提取模型信息
+                        // 鎻愬彇妯″瀷淇℃伅
                         if (json.has("model") && responseModel == null) {
                             responseModel = json.get("model").asText();
                         }
                         
-                        // 提取用量（通常在最后一个 chunk）
+                        // 鎻愬彇鐢ㄩ噺锛堥€氬父鍦ㄦ渶鍚庝竴涓?chunk锛?
                         if (json.has("usage")) {
                             JsonNode usage = json.get("usage");
                             if (usage.has("prompt_tokens")) {
@@ -429,7 +429,7 @@ public class OpenAILLMService implements LLMService {
                             }
                         }
                         
-                        // 处理 choices
+                        // 澶勭悊 choices
                         JsonNode choices = json.get("choices");
                         if (choices == null || !choices.isArray() || choices.size() == 0) {
                             continue;
@@ -442,12 +442,12 @@ public class OpenAILLMService implements LLMService {
                             continue;
                         }
                         
-                        // 提取完成原因
+                        // 鎻愬彇瀹屾垚鍘熷洜
                         if (choice.has("finish_reason") && !choice.get("finish_reason").isNull()) {
                             finishReason = choice.get("finish_reason").asText();
                         }
                         
-                        // 处理思考过程 (reasoning_content)
+                        // 澶勭悊鎬濊€冭繃绋?(reasoning_content)
                         JsonNode reasoningContent = delta.get("reasoning_content");
                         if (reasoningContent != null && !reasoningContent.isNull()) {
                             String thinking = reasoningContent.asText();
@@ -460,7 +460,7 @@ public class OpenAILLMService implements LLMService {
                             }
                         }
                         
-                        // 处理普通内容（含 <think> 标签提取）
+                        // 澶勭悊鏅€氬唴瀹癸紙鍚?<think> 鏍囩鎻愬彇锛?
                         JsonNode content = delta.get("content");
                         if (content != null && !content.isNull()) {
                             String text = content.asText();
@@ -469,14 +469,14 @@ public class OpenAILLMService implements LLMService {
                                 contentConsumer, thinkingConsumer);
                         }
                         
-                        // 处理工具调用
+                        // 澶勭悊宸ュ叿璋冪敤
                         JsonNode toolCallsDelta = delta.get("tool_calls");
                         if (toolCallsDelta != null && toolCallsDelta.isArray()) {
                             processStreamToolCalls(toolCallsDelta, toolCallAccumulators, toolCallConsumer);
                         }
                         
                     } catch (java.util.concurrent.CancellationException e) {
-                        // 流消费被取消（如 WebSocket 断开），立即终止
+                        // 娴佹秷璐硅鍙栨秷锛堝 WebSocket 鏂紑锛夛紝绔嬪嵆缁堟
                         log.info("[OpenAI Stream] Stream cancelled: " + e.getMessage());
                         break;
                     } catch (Exception e) {
@@ -485,12 +485,12 @@ public class OpenAILLMService implements LLMService {
                 }
             }
             
-            // 处理缓冲区中残留的事件（流可能没有尾随空行）
+            // 澶勭悊缂撳啿鍖轰腑娈嬬暀鐨勪簨浠讹紙娴佸彲鑳芥病鏈夊熬闅忕┖琛岋級
             if (eventBuffer.length() > 0) {
                 String eventData = eventBuffer.toString().trim();
                 if (!eventData.isEmpty()) {
                     if ("[DONE]".equals(eventData)) {
-                        // 正常结束，不做处理
+                        // 姝ｅ父缁撴潫锛屼笉鍋氬鐞?
                     } else if (eventData.startsWith("{") || eventData.startsWith("[")) {
                         try {
                             mapper.readTree(eventData);
@@ -504,7 +504,7 @@ public class OpenAILLMService implements LLMService {
             }
         }
         
-        // 转换累积的工具调用为最终格式
+        // 杞崲绱Н鐨勫伐鍏疯皟鐢ㄤ负鏈€缁堟牸寮?
         for (StreamToolCallAccumulator acc : toolCallAccumulators.values()) {
             if (acc.isComplete()) {
                 toolCalls.add(LLMMessage.ToolCall.builder()
@@ -518,7 +518,7 @@ public class OpenAILLMService implements LLMService {
         log.info("[OpenAI Stream] Completed. Content length: " + contentBuffer.length());
         log.info("[OpenAI Stream] Finish reason: " + finishReason);
         
-        // 构建响应
+        // 鏋勫缓鍝嶅簲
         LLMResponse.Builder builder = LLMResponse.builder()
             .content(contentBuffer.toString())
             .rawResponse(contentBuffer.toString());
@@ -544,7 +544,7 @@ public class OpenAILLMService implements LLMService {
     }
     
     /**
-     * 处理流式工具调用
+     * 澶勭悊娴佸紡宸ュ叿璋冪敤
      */
     private void processStreamToolCalls(
             JsonNode toolCallsDelta,
@@ -555,7 +555,7 @@ public class OpenAILLMService implements LLMService {
             String id = toolCall.has("id") ? toolCall.get("id").asText() : null;
             int index = toolCall.has("index") ? toolCall.get("index").asInt() : 0;
             
-            // FIX: 始终使用 index 作为 key，避免同一 tool call 因 id 从无到有而被拆成两个 accumulator
+            // FIX: 濮嬬粓浣跨敤 index 浣滀负 key锛岄伩鍏嶅悓涓€ tool call 鍥?id 浠庢棤鍒版湁鑰岃鎷嗘垚涓や釜 accumulator
             String key = String.valueOf(index);
             
             StreamToolCallAccumulator acc = accumulators.computeIfAbsent(
@@ -563,17 +563,17 @@ public class OpenAILLMService implements LLMService {
                 k -> new StreamToolCallAccumulator(id, index)
             );
             
-            // 如果后续 delta 提供了真实 id，更新 accumulator
+            // 濡傛灉鍚庣画 delta 鎻愪緵浜嗙湡瀹?id锛屾洿鏂?accumulator
             if (id != null && acc.getRawId() == null) {
                 acc.setId(id);
             }
             
-            // 更新类型
+            // 鏇存柊绫诲瀷
             if (toolCall.has("type")) {
                 acc.setType(toolCall.get("type").asText());
             }
             
-            // 更新函数信息
+            // 鏇存柊鍑芥暟淇℃伅
             JsonNode function = toolCall.get("function");
             if (function != null) {
                 if (function.has("name")) {
@@ -584,7 +584,7 @@ public class OpenAILLMService implements LLMService {
                 }
             }
             
-            // 通知消费者（isComplete 反映当前 accumulator 的完整度）
+            // 閫氱煡娑堣垂鑰咃紙isComplete 鍙嶆槧褰撳墠 accumulator 鐨勫畬鏁村害锛?
             if (toolCallConsumer != null) {
                 toolCallConsumer.accept(new StreamToolCallEvent(
                     acc.getId(),
@@ -599,7 +599,7 @@ public class OpenAILLMService implements LLMService {
     }
     
     /**
-     * 工具调用累积器（用于流式工具调用）
+     * 宸ュ叿璋冪敤绱Н鍣紙鐢ㄤ簬娴佸紡宸ュ叿璋冪敤锛?
      */
     private static class StreamToolCallAccumulator {
         private String id;
@@ -625,7 +625,7 @@ public class OpenAILLMService implements LLMService {
         String getName() { return nameBuilder.toString(); }
         String getArguments() { return argumentsBuilder.toString(); }
         boolean isComplete() { 
-            // FIX: 放宽完成条件，不强制要求 id 非空（某些 provider 可能不给 id）
+            // FIX: 鏀惧瀹屾垚鏉′欢锛屼笉寮哄埗瑕佹眰 id 闈炵┖锛堟煇浜?provider 鍙兘涓嶇粰 id锛?
             return nameBuilder.length() > 0 && argumentsBuilder.length() > 0; 
         }
     }
@@ -707,10 +707,10 @@ public class OpenAILLMService implements LLMService {
         // HTTP client doesn't need explicit close
     }
     
-    // ==================== 错误解析辅助方法 ====================
+    // ==================== 閿欒瑙ｆ瀽杈呭姪鏂规硶 ====================
     
     /**
-     * 从错误响应 JSON 中提取 error.type
+     * 浠庨敊璇搷搴?JSON 涓彁鍙?error.type
      */
     private String extractErrorType(String errorBody) {
         try {
@@ -725,7 +725,7 @@ public class OpenAILLMService implements LLMService {
     }
     
     /**
-     * 从错误响应 JSON 中提取 error.message，失败时返回原始 body
+     * 浠庨敊璇搷搴?JSON 涓彁鍙?error.message锛屽け璐ユ椂杩斿洖鍘熷 body
      */
     private String extractErrorMessage(String errorBody) {
         try {
@@ -740,7 +740,7 @@ public class OpenAILLMService implements LLMService {
     }
     
     /**
-     * 判断是否为硬性配额限制（不可通过重试恢复）
+     * 鍒ゆ柇鏄惁涓虹‖鎬ч厤棰濋檺鍒讹紙涓嶅彲閫氳繃閲嶈瘯鎭㈠锛?
      */
     private boolean isHardRateLimit(String errorType) {
         return "rate_limit_reached_error".equals(errorType)
@@ -748,42 +748,42 @@ public class OpenAILLMService implements LLMService {
     }
     
     /**
-     * 美化速率限制错误消息
+     * 缇庡寲閫熺巼闄愬埗閿欒娑堟伅
      */
     private String cleanRateLimitMessage(String rawMessage) {
         if (rawMessage == null) return "Unknown quota limit";
-        // 移除敏感信息（API key 等）
+        // 绉婚櫎鏁忔劅淇℃伅锛圓PI key 绛夛級
         String cleaned = rawMessage.replaceAll("<ak-[a-zA-Z0-9]+>", "<api-key>");
         return cleaned;
     }
     
     /**
-     * 构建请求体 - 使用标准的 OpenAIRequestBuilder
+     * 鏋勫缓璇锋眰浣?- 浣跨敤鏍囧噯鐨?OpenAIRequestBuilder
      * 
-     * 消息截断策略（修复 TOOL -> USER 无效序列问题）：
-     * - 按组截断：USER -> ASSISTANT -> TOOL* 为一组，不可拆分
-     * - TOOL 消息必须保留其对应的 ASSISTANT 消息（包含 tool_calls）
-     * - 如果截断会破坏序列，则整组丢弃
-     * - 保留系统消息（总是在最前面）
+     * 娑堟伅鎴柇绛栫暐锛堜慨澶?TOOL -> USER 鏃犳晥搴忓垪闂锛夛細
+     * - 鎸夌粍鎴柇锛歎SER -> ASSISTANT -> TOOL* 涓轰竴缁勶紝涓嶅彲鎷嗗垎
+     * - TOOL 娑堟伅蹇呴』淇濈暀鍏跺搴旂殑 ASSISTANT 娑堟伅锛堝寘鍚?tool_calls锛?
+     * - 濡傛灉鎴柇浼氱牬鍧忓簭鍒楋紝鍒欐暣缁勪涪寮?
+     * - 淇濈暀绯荤粺娑堟伅锛堟€绘槸鍦ㄦ渶鍓嶉潰锛?
      * 
-     * 这样确保消息序列总是 valid 的，不会出现 TOOL -> USER 无效序列
+     * 杩欐牱纭繚娑堟伅搴忓垪鎬绘槸 valid 鐨勶紝涓嶄細鍑虹幇 TOOL -> USER 鏃犳晥搴忓垪
      */
     private ObjectNode buildRequestBody(List<LLMMessage> messages, List<LLMTool> tools) {
         List<LLMMessage> filteredMessages = messages;
         
-        // 主动验证并修复 tool_calls 配对完整性
+        // 涓诲姩楠岃瘉骞朵慨澶?tool_calls 閰嶅瀹屾暣鎬?
         filteredMessages = preValidateToolCalls(messages);
         
         OpenAIRequestBuilder builder = new OpenAIRequestBuilder(config.getModel())
             .temperature(config.getTemperature())
             .maxTokens(config.getMaxTokens());
         
-        // 添加过滤后的消息
+        // 娣诲姞杩囨护鍚庣殑娑堟伅
         for (LLMMessage msg : filteredMessages) {
             builder.addMessage(msg);
         }
         
-        // 添加工具
+        // 娣诲姞宸ュ叿
         if (tools != null) {
             builder.addTools(tools);
         }
@@ -792,13 +792,13 @@ public class OpenAILLMService implements LLMService {
     }
     
     /**
-     * 修复工具消息序列：确保每个 tool 消息都有对应的 assistant 消息（包含 tool_calls）
+     * 淇宸ュ叿娑堟伅搴忓垪锛氱‘淇濇瘡涓?tool 娑堟伅閮芥湁瀵瑰簲鐨?assistant 娑堟伅锛堝寘鍚?tool_calls锛?
      * 
-     * 如果截断后的消息以 tool 开头，需要向前查找对应的 assistant 消息
+     * 濡傛灉鎴柇鍚庣殑娑堟伅浠?tool 寮€澶达紝闇€瑕佸悜鍓嶆煡鎵惧搴旂殑 assistant 娑堟伅
      */
     /**
-     * 发送前主动验证工具调用配对完整性
-     * 双向验证：移除孤立的TOOL消息，以及移除ASSISTANT中没有对应TOOL的tool_calls
+     * 鍙戦€佸墠涓诲姩楠岃瘉宸ュ叿璋冪敤閰嶅瀹屾暣鎬?
+     * 鍙屽悜楠岃瘉锛氱Щ闄ゅ绔嬬殑TOOL娑堟伅锛屼互鍙婄Щ闄SSISTANT涓病鏈夊搴擳OOL鐨則ool_calls
      */
     private List<LLMMessage> preValidateToolCalls(List<LLMMessage> messages) {
         if (messages == null || messages.isEmpty()) return messages;
@@ -873,7 +873,7 @@ public class OpenAILLMService implements LLMService {
             return truncatedMessages;
         }
         
-        // 收集所有需要保留的 tool_call_id
+        // 鏀堕泦鎵€鏈夐渶瑕佷繚鐣欑殑 tool_call_id
         java.util.Set<String> requiredToolCallIds = new java.util.HashSet<>();
         for (LLMMessage msg : truncatedMessages) {
             if (msg.getRole() == LLMMessage.Role.TOOL && msg.getToolCallId() != null) {
@@ -881,7 +881,7 @@ public class OpenAILLMService implements LLMService {
             }
         }
         
-        // 向前查找包含这些 tool_calls 的 assistant 消息
+        // 鍚戝墠鏌ユ壘鍖呭惈杩欎簺 tool_calls 鐨?assistant 娑堟伅
         List<LLMMessage> additionalMessages = new ArrayList<>();
         int searchIndex = originalStartIndex - 1;
         java.util.Set<String> foundToolCallIds = new java.util.HashSet<>();
@@ -889,7 +889,7 @@ public class OpenAILLMService implements LLMService {
         while (searchIndex >= 0 && !requiredToolCallIds.isEmpty()) {
             LLMMessage msg = allMessages.get(searchIndex);
             
-            // 如果是 assistant 消息且有 tool_calls，检查是否包含我们需要的 id
+            // 濡傛灉鏄?assistant 娑堟伅涓旀湁 tool_calls锛屾鏌ユ槸鍚﹀寘鍚垜浠渶瑕佺殑 id
             if (msg.getRole() == LLMMessage.Role.ASSISTANT && msg.hasToolCalls()) {
                 boolean hasMatchingToolCall = false;
                 for (LLMMessage.ToolCall tc : msg.getToolCalls()) {
@@ -900,7 +900,7 @@ public class OpenAILLMService implements LLMService {
                 }
                 
                 if (hasMatchingToolCall) {
-                    // 插入到最前面（保持原有顺序）
+                    // 鎻掑叆鍒版渶鍓嶉潰锛堜繚鎸佸師鏈夐『搴忥級
                     additionalMessages.add(0, msg);
                     requiredToolCallIds.removeAll(foundToolCallIds);
                 }
@@ -909,7 +909,7 @@ public class OpenAILLMService implements LLMService {
             searchIndex--;
         }
         
-        // 如果有未找到的 tool_call_id，需要移除对应的 tool 消息
+        // 濡傛灉鏈夋湭鎵惧埌鐨?tool_call_id锛岄渶瑕佺Щ闄ゅ搴旂殑 tool 娑堟伅
         if (!requiredToolCallIds.isEmpty()) {
             log.warning("[OpenAI] Some tool_call_ids not found in history: " + requiredToolCallIds);
             truncatedMessages.removeIf(msg -> 
@@ -918,7 +918,7 @@ public class OpenAILLMService implements LLMService {
             );
         }
         
-        // 合并：additionalMessages 插入到 truncatedMessages 前面
+        // 鍚堝苟锛歛dditionalMessages 鎻掑叆鍒?truncatedMessages 鍓嶉潰
         if (!additionalMessages.isEmpty()) {
             log.info("[OpenAI] Added " + additionalMessages.size() + " assistant messages for tool context");
             List<LLMMessage> result = new ArrayList<>(additionalMessages);
@@ -930,17 +930,17 @@ public class OpenAILLMService implements LLMService {
     }
     
     /**
-     * 智能过滤消息 - 确保不会出现 TOOL -> USER 无效序列
+     * 鏅鸿兘杩囨护娑堟伅 - 纭繚涓嶄細鍑虹幇 TOOL -> USER 鏃犳晥搴忓垪
      * 
-     * 策略：按组截断，每组 USER -> ASSISTANT -> TOOL* 为一组
-     * 从后向前保留最近的消息
+     * 绛栫暐锛氭寜缁勬埅鏂紝姣忕粍 USER -> ASSISTANT -> TOOL* 涓轰竴缁?
+     * 浠庡悗鍚戝墠淇濈暀鏈€杩戠殑娑堟伅
      */
     private List<LLMMessage> smartFilterMessages(List<LLMMessage> messages, int maxCount) {
         if (messages.size() <= maxCount) {
             return messages;
         }
         
-        // 提取系统消息
+        // 鎻愬彇绯荤粺娑堟伅
         LLMMessage systemMsg = null;
         List<LLMMessage> nonSystemMessages = new ArrayList<>();
         
@@ -952,13 +952,13 @@ public class OpenAILLMService implements LLMService {
             }
         }
         
-        // 按组划分消息
+        // 鎸夌粍鍒掑垎娑堟伅
         List<List<LLMMessage>> groups = new ArrayList<>();
         List<LLMMessage> currentGroup = new ArrayList<>();
         LLMMessage.Role lastRole = null;
         
         for (LLMMessage msg : nonSystemMessages) {
-            // 新的 USER 消息开始新组
+            // 鏂扮殑 USER 娑堟伅寮€濮嬫柊缁?
             if (msg.getRole() == LLMMessage.Role.USER && lastRole != LLMMessage.Role.USER) {
                 if (!currentGroup.isEmpty()) {
                     groups.add(currentGroup);
@@ -973,24 +973,24 @@ public class OpenAILLMService implements LLMService {
             groups.add(currentGroup);
         }
         
-        // 从后向前选择要保留的组
+        // 浠庡悗鍚戝墠閫夋嫨瑕佷繚鐣欑殑缁?
         List<LLMMessage> result = new ArrayList<>();
         java.util.Set<String> validToolCallIds = new java.util.HashSet<>();
         
-        // 收集所有有效的 tool_call_ids（来自保留的 ASSISTANT 消息）
+        // 鏀堕泦鎵€鏈夋湁鏁堢殑 tool_call_ids锛堟潵鑷繚鐣欑殑 ASSISTANT 娑堟伅锛?
         for (int i = groups.size() - 1; i >= 0 && result.size() < maxCount; i--) {
             List<LLMMessage> group = groups.get(i);
             
-            // 检查这组是否会导致消息数量超限
+            // 妫€鏌ヨ繖缁勬槸鍚︿細瀵艰嚧娑堟伅鏁伴噺瓒呴檺
             int neededSlots = group.size();
             int availableSlots = maxCount - result.size();
             
             if (neededSlots <= availableSlots) {
-                // 可以完整添加这组
+                // 鍙互瀹屾暣娣诲姞杩欑粍
                 List<LLMMessage> groupToAdd = new ArrayList<>();
                 for (LLMMessage msg : group) {
                     groupToAdd.add(msg);
-                    // 更新有效的 tool_call_ids
+                    // 鏇存柊鏈夋晥鐨?tool_call_ids
                     if (msg.getRole() == LLMMessage.Role.ASSISTANT && msg.hasToolCalls()) {
                         for (LLMMessage.ToolCall tc : msg.getToolCalls()) {
                             if (tc.getId() != null) {
@@ -1001,12 +1001,12 @@ public class OpenAILLMService implements LLMService {
                 }
                 result.addAll(0, groupToAdd);
             } else {
-                // 需要部分添加 - 优先保留 USER + ASSISTANT
+                // 闇€瑕侀儴鍒嗘坊鍔?- 浼樺厛淇濈暀 USER + ASSISTANT
                 List<LLMMessage> groupToAdd = new ArrayList<>();
                 for (LLMMessage msg : group) {
                     if (result.size() + groupToAdd.size() >= maxCount) break;
                     
-                    // 跳过孤立的 TOOL 消息
+                    // 璺宠繃瀛ょ珛鐨?TOOL 娑堟伅
                     if (msg.getRole() == LLMMessage.Role.TOOL) {
                         String toolCallId = msg.getToolCallId();
                         if (toolCallId == null || !validToolCallIds.contains(toolCallId)) {
@@ -1017,7 +1017,7 @@ public class OpenAILLMService implements LLMService {
                     
                     groupToAdd.add(msg);
                     
-                    // 更新有效的 tool_call_ids
+                    // 鏇存柊鏈夋晥鐨?tool_call_ids
                     if (msg.getRole() == LLMMessage.Role.ASSISTANT && msg.hasToolCalls()) {
                         for (LLMMessage.ToolCall tc : msg.getToolCalls()) {
                             if (tc.getId() != null) {
@@ -1030,13 +1030,13 @@ public class OpenAILLMService implements LLMService {
             }
         }
         
-        // 验证最终序列：如果以 TOOL 开头，需要移除
+        // 楠岃瘉鏈€缁堝簭鍒楋細濡傛灉浠?TOOL 寮€澶达紝闇€瑕佺Щ闄?
         while (!result.isEmpty() && result.get(0).getRole() == LLMMessage.Role.TOOL) {
             log.warning("[OpenAI] Removing leading TOOL message to fix sequence");
             result.remove(0);
         }
         
-        // 添加系统消息到最前面
+        // 娣诲姞绯荤粺娑堟伅鍒版渶鍓嶉潰
         if (systemMsg != null) {
             result.add(0, systemMsg);
         }
@@ -1045,7 +1045,7 @@ public class OpenAILLMService implements LLMService {
     }
     
     /**
-     * 解析响应
+     * 瑙ｆ瀽鍝嶅簲
      */
     private LLMResponse parseResponse(String responseBody) throws Exception {
         JsonNode json = mapper.readTree(responseBody);
@@ -1057,7 +1057,7 @@ public class OpenAILLMService implements LLMService {
             JsonNode choice = json.get("choices").get(0);
             JsonNode message = choice.get("message");
             
-            // 内容（含 <think> 标签提取）
+            // 鍐呭锛堝惈 <think> 鏍囩鎻愬彇锛?
             String reasoningContentFromTag = null;
             if (message.has("content") && !message.get("content").isNull()) {
                 String content = message.get("content").asText();
@@ -1072,7 +1072,7 @@ public class OpenAILLMService implements LLMService {
                 log.info("[OpenAI] No content in response");
             }
             
-            // 思考内容 (reasoning_content)
+            // 鎬濊€冨唴瀹?(reasoning_content)
             if (message.has("reasoning_content") && !message.get("reasoning_content").isNull()) {
                 String reasoningContent = message.get("reasoning_content").asText();
                 builder.reasoningContent(reasoningContent);
@@ -1082,7 +1082,7 @@ public class OpenAILLMService implements LLMService {
                 log.info("[OpenAI] Parsed thinking from <think> tag length: " + reasoningContentFromTag.length());
             }
             
-            // 工具调用
+            // 宸ュ叿璋冪敤
             if (message.has("tool_calls") && message.get("tool_calls").isArray()) {
                 List<LLMMessage.ToolCall> toolCalls = new ArrayList<>();
                 log.info("[OpenAI] Tool calls found: " + message.get("tool_calls").size());
@@ -1099,7 +1099,7 @@ public class OpenAILLMService implements LLMService {
                 builder.toolCalls(toolCalls);
             }
             
-            // 完成原因
+            // 瀹屾垚鍘熷洜
             if (choice.has("finish_reason")) {
                 String finishReason = choice.get("finish_reason").asText();
                 builder.finishReason(finishReason);
@@ -1107,12 +1107,12 @@ public class OpenAILLMService implements LLMService {
             }
         }
         
-        // 模型
+        // 妯″瀷
         if (json.has("model")) {
             builder.model(json.get("model").asText());
         }
         
-        // 用量
+        // 鐢ㄩ噺
         if (json.has("usage")) {
             JsonNode usage = json.get("usage");
             int promptTokens = usage.get("prompt_tokens").asInt();
@@ -1132,7 +1132,7 @@ public class OpenAILLMService implements LLMService {
     }
     
     /**
-     * 从 content 中提取 <think> 标签内的思考内容（非流式）
+     * 浠?content 涓彁鍙?<think> 鏍囩鍐呯殑鎬濊€冨唴瀹癸紙闈炴祦寮忥級
      */
     private String extractThinkingFromContent(String content) {
         if (content == null) return null;
@@ -1145,8 +1145,8 @@ public class OpenAILLMService implements LLMService {
     }
     
     /**
-     * 处理流式 content chunk 中的 <think> 标签提取
-     * 返回更新后的 inThinkingTag 状态
+     * 澶勭悊娴佸紡 content chunk 涓殑 <think> 鏍囩鎻愬彇
+     * 杩斿洖鏇存柊鍚庣殑 inThinkingTag 鐘舵€?
      */
     private boolean processThinkTagChunk(String text, boolean inThinkingTag,
             StringBuilder contentBuffer, StringBuilder thinkingBuffer, StringBuilder reasoningBuffer,
@@ -1217,7 +1217,7 @@ public class OpenAILLMService implements LLMService {
     }
     
     /**
-     * 获取下一个 API Key（轮询）
+     * 鑾峰彇涓嬩竴涓?API Key锛堣疆璇級
      */
     private String getNextApiKey() {
         List<String> keys = config.getApiKeys();
@@ -1230,7 +1230,7 @@ public class OpenAILLMService implements LLMService {
     }
     
     /**
-     * 规范化 URL
+     * 瑙勮寖鍖?URL
      */
     private String normalizeUrl(String url) {
         if (url == null || url.isEmpty()) {
@@ -1251,7 +1251,7 @@ public class OpenAILLMService implements LLMService {
             return url + "/chat/completions";
         }
         
-        // 处理特定提供商的 URL 格式
+        // 澶勭悊鐗瑰畾鎻愪緵鍟嗙殑 URL 鏍煎紡
         if (url.contains("moonshot.cn")) {
             return url + "/chat/completions";
         }
@@ -1260,17 +1260,6 @@ public class OpenAILLMService implements LLMService {
     }
     
     /**
-     * 服务配置
+     * 鏈嶅姟閰嶇疆
      */
-    @lombok.Data
-    @lombok.Builder
-    public static class ServiceConfig {
-        private String baseUrl;
-        private String model;
-        private List<String> apiKeys;
-        private Double temperature;
-        private Integer maxTokens;
-        private int timeoutSeconds = 300;  // 默认5分钟超时
-        private int contextWindow = 1000000; // 默认上下文窗口 1M tokens
-    }
 }

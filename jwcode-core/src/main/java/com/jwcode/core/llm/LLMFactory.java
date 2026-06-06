@@ -8,18 +8,18 @@ import java.util.logging.Logger;
 
 /**
  * LLM 组件工厂
- * 
- * 用于创建和管理 LLM 相关组件
+ * 用于创建和管理 LLM 相关组件。
+ * 支持通过 ServiceRegistry 路由到不同的服务实现。
  */
 public class LLMFactory {
     
     private static final Logger logger = Logger.getLogger(LLMFactory.class.getName());
     private static final String DEFAULT_CONFIG_PATH = ".jwcode/config.yaml";
     
+    private final ServiceRegistry registry;
     private JwcodeConfig config;
     private LLMService llmService;
     
-    // 缓存的重型组件（跨 LLMQueryEngine 实例共享）
     private com.jwcode.core.agent.CompactorAgent sharedCompactorAgent;
     private com.jwcode.core.agent.BudgetExhaustedHandler sharedBudgetHandler;
     private ModelRouter modelRouter;
@@ -29,6 +29,7 @@ public class LLMFactory {
     }
     
     public LLMFactory(JwcodeConfig config) {
+        this.registry = createDefaultRegistry();
         if (config != null) {
             this.config = config;
         } else {
@@ -37,9 +38,14 @@ public class LLMFactory {
         this.modelRouter = new ModelRouter(this.config);
     }
     
-    /**
-     * 加载默认配置
-     */
+    private ServiceRegistry createDefaultRegistry() {
+        ServiceRegistry reg = new ServiceRegistry();
+        reg.register(new OpenAIServiceProvider());
+        reg.register(new AnthropicServiceProvider());
+        logger.info("[LLMFactory] Initialized ServiceRegistry with default providers");
+        return reg;
+    }
+    
     private void loadDefaultConfig() {
         try {
             Path configPath = Paths.get(System.getProperty("user.home"), DEFAULT_CONFIG_PATH);
@@ -56,39 +62,26 @@ public class LLMFactory {
         }
     }
     
-    /**
-     * 创建默认配置
-     */
     private JwcodeConfig createDefaultConfig() {
         logger.info("[LLMFactory] Creating default config");
-        
         JwcodeConfig config = new JwcodeConfig();
         config.setDefaultProvider("moonshot");
-        
-        // 创建默认 provider
         JwcodeConfig.ProviderConfig provider = new JwcodeConfig.ProviderConfig();
         provider.setBaseUrl("https://api.moonshot.cn/v1");
-        provider.setApiKeys(java.util.Collections.singletonList("your-api-key-here"));
-        
-        // 创建默认模型
+        provider.setApiType("openai-completions");
+        provider.setApiKeys(new java.util.ArrayList<>(java.util.Collections.singletonList("your-api-key-here")));
         JwcodeConfig.ModelConfig model = new JwcodeConfig.ModelConfig();
         model.setId("kimi-k2.5");
-        model.setTemperature(1.0);  // kimi-k2.5 要求 temperature 必须为 1
-        model.setMaxTokens(null);  // 不限制输出，让模型用自己的最大值
-        
+        model.setTemperature(1.0);
+        model.setMaxTokens(null);
         provider.setModels(java.util.Collections.singletonList(model));
-        config.setProviders(java.util.Map.of("moonshot", provider));
-        
+        config.setProviders(new java.util.HashMap<>(java.util.Map.of("moonshot", provider)));
         return config;
     }
     
-    /**
-     * 获取或创建 LLMService
-     */
     public synchronized LLMService getLLMService() {
         if (llmService == null) {
             LLMService primary = createLLMService(config.getDefaultProviderName());
-            
             String fallbackName = config.getFallbackProvider();
             if (fallbackName != null && !fallbackName.isEmpty() && !fallbackName.equals(config.getDefaultProviderName())) {
                 JwcodeConfig.ProviderConfig fallbackProvider = config.getProvider(fallbackName);
@@ -97,7 +90,7 @@ public class LLMFactory {
                     llmService = new FallbackLLMService(primary, config.getDefaultProviderName(), fallback, fallbackName);
                     logger.info("[LLMFactory] Created FallbackLLMService with primary=" + config.getDefaultProviderName() + ", fallback=" + fallbackName);
                 } else {
-                    logger.warning("[LLMFactory] Fallback provider '" + fallbackName + "' not found in config. Using primary only.");
+                    logger.warning("[LLMFactory] Fallback provider not found. Using primary only.");
                     llmService = primary;
                 }
             } else {
@@ -107,40 +100,27 @@ public class LLMFactory {
         return llmService;
     }
     
-    /**
-     * 为指定 Provider 创建 LLMService
-     */
     private LLMService createLLMService(String providerName) {
         JwcodeConfig.ProviderConfig provider = config.getProvider(providerName);
         if (provider == null) {
             throw new IllegalStateException("Provider not found: " + providerName);
         }
-        OpenAILLMService.ServiceConfig serviceConfig = createServiceConfig(providerName, provider);
-        return new OpenAILLMService(serviceConfig);
+        ServiceConfig serviceConfig = createServiceConfig(providerName, provider);
+        return registry.createService(provider.getApiType(), serviceConfig);
     }
     
-    /**
-     * 从 Provider 配置创建 ServiceConfig
-     */
-    private OpenAILLMService.ServiceConfig createServiceConfig(String providerName, JwcodeConfig.ProviderConfig provider) {
+    private ServiceConfig createServiceConfig(String providerName, JwcodeConfig.ProviderConfig provider) {
         if (provider == null) {
             throw new IllegalStateException("No provider configured: " + providerName);
         }
-        
         String baseUrl = provider.getBaseUrl();
         if (baseUrl == null || baseUrl.isEmpty()) {
             baseUrl = "https://api.moonshot.cn/v1";
         }
-        
-        // 清理 URL 末尾的斜杠
         baseUrl = baseUrl.replaceAll("/+$", "");
-        
-        // 对于 moonshot，确保 URL 格式正确
         if (baseUrl.contains("moonshot.cn") && !baseUrl.endsWith("/v1")) {
             baseUrl = baseUrl + "/v1";
         }
-        
-        // 使用 Provider 自身的第一个模型，若无则回退到默认模型
         JwcodeConfig.ModelDefinition model = null;
         if (!provider.getModels().isEmpty()) {
             model = provider.getModels().get(0);
@@ -148,16 +128,12 @@ public class LLMFactory {
         if (model == null) {
             model = config.getDefaultModel();
         }
-        
         String modelId = model != null ? model.getId() : "kimi-k2.5";
-        
-        // reasoning 模型需要更长的 HTTP 超时
         int timeoutSeconds = 300;
         if (modelId.toLowerCase().contains("deepseek-v4") || modelId.toLowerCase().contains("deepseek-r1")) {
-            timeoutSeconds = 900; // 15 分钟
+            timeoutSeconds = 900;
         }
-        
-        return OpenAILLMService.ServiceConfig.builder()
+        return ServiceConfig.builder()
             .baseUrl(baseUrl)
             .model(modelId)
             .apiKeys(provider.getApiKeys())
@@ -165,21 +141,18 @@ public class LLMFactory {
             .maxTokens(model != null ? model.getMaxTokens() : null)
             .timeoutSeconds(timeoutSeconds)
             .contextWindow(model != null ? model.getContextWindow() : 1000000)
+            .apiType(provider.getApiType())
+            .anthropicVersion(provider.getAnthropicVersion())
             .build();
     }
     
-    /**
-     * 创建新的 LLMQueryEngine
-     */
     public LLMQueryEngine createQueryEngine(com.jwcode.core.session.Session session) {
         LLMQueryEngine.EngineConfig engineConfig = LLMQueryEngine.EngineConfig.fromJwcodeConfig(config);
-        // 根据模型特性自动调整空回复阈值等参数
         String modelId = session.getModel();
         if (modelId == null || modelId.isEmpty()) {
             modelId = config != null && config.getDefaultModel() != null ? config.getDefaultModel().getId() : null;
         }
         engineConfig.applyModelTraits(modelId);
-        
         return LLMQueryEngine.builder()
             .session(session)
             .llmService(getLLMService())
@@ -187,9 +160,6 @@ public class LLMFactory {
             .build();
     }
     
-    /**
-     * 创建新的 LLMQueryEngine，带完整配置
-     */
     public LLMQueryEngine createQueryEngine(
             com.jwcode.core.session.Session session,
             com.jwcode.core.tool.ToolRegistry toolRegistry,
@@ -201,10 +171,7 @@ public class LLMFactory {
             .toolExecutor(toolExecutor)
             .build();
     }
-
-    /**
-     * 创建新的 LLMQueryEngine，带 AgentRegistry（Phase 5 分层架构）
-     */
+    
     public LLMQueryEngine createQueryEngine(
             com.jwcode.core.session.Session session,
             com.jwcode.core.tool.ToolRegistry toolRegistry,
@@ -216,7 +183,6 @@ public class LLMFactory {
             modelId = config != null && config.getDefaultModel() != null ? config.getDefaultModel().getId() : null;
         }
         engineConfig.applyModelTraits(modelId);
-
         return LLMQueryEngine.builder()
             .session(session)
             .llmService(getLLMService())
@@ -227,27 +193,19 @@ public class LLMFactory {
             .build();
     }
     
-    /** 压缩专用低成本模型 ID（null = 使用主模型）。可配置以降低压缩 token 费用。 */
     private String compactionModelId;
-
-    /**
-     * 设置压缩专用模型（如 "haiku"）。
-     * <p>压缩不需要强推理能力，使用低成本模型可显著降低 token 费用。</p>
-     */
+    
     public void setCompactionModelId(String modelId) {
         this.compactionModelId = modelId;
         if (sharedCompactorAgent != null) {
             sharedCompactorAgent.setCompactionModel(modelId);
         }
     }
-
+    
     public String getCompactionModelId() {
         return compactionModelId;
     }
-
-    /**
-     * 获取或创建共享的 CompactorAgent（跨 LLMQueryEngine 实例复用）
-     */
+    
     public synchronized com.jwcode.core.agent.CompactorAgent getSharedCompactorAgent() {
         if (sharedCompactorAgent == null) {
             sharedCompactorAgent = new com.jwcode.core.agent.CompactorAgent(
@@ -261,9 +219,6 @@ public class LLMFactory {
         return sharedCompactorAgent;
     }
     
-    /**
-     * 获取或创建共享的 BudgetExhaustedHandler（跨 LLMQueryEngine 实例复用）
-     */
     public synchronized com.jwcode.core.agent.BudgetExhaustedHandler getSharedBudgetHandler() {
         if (sharedBudgetHandler == null) {
             sharedBudgetHandler = com.jwcode.core.agent.BudgetExhaustedHandler.createDefault();
@@ -272,28 +227,19 @@ public class LLMFactory {
         return sharedBudgetHandler;
     }
     
-    /**
-     * 获取配置
-     */
     public JwcodeConfig getConfig() { return config; }
     public ModelRouter getModelRouter() { return modelRouter; }
     
-    /** 全局共享实例，用于运行时模型切换 */
     private static volatile LLMFactory globalInstance;
-
+    
     public static void setGlobalInstance(LLMFactory factory) { globalInstance = factory; }
     public static LLMFactory getGlobalInstance() { return globalInstance; }
-
-    /**
-     * 运行时切换模型（无需重启 Session）。
-     * 更新默认模型并重置 LLMService，下次查询自动使用新模型。
-     */
+    
     public synchronized void switchModel(String modelId) {
         if (config == null || config.getDefaultProvider() == null) {
             logger.warning("[LLMFactory] Cannot switch model: no config loaded");
             return;
         }
-        // Update the first model in the default provider
         JwcodeConfig.ProviderConfig provider = config.getDefaultProvider();
         if (provider.getModels().isEmpty()) {
             JwcodeConfig.ModelDefinition newModel = new JwcodeConfig.ModelDefinition();
@@ -302,18 +248,15 @@ public class LLMFactory {
         } else {
             provider.getModels().get(0).setId(modelId);
         }
-        this.llmService = null; // 强制下次 getLLMService() 重建
+        this.llmService = null;
         logger.info("[LLMFactory] Model switched to: " + modelId + " (service will be recreated on next query)");
         setGlobalInstance(this);
     }
-
-    /**
-     * 重新加载配置
-     */
+    
     public void reloadConfig(String configPath) {
         try {
             this.config = JwcodeConfig.load(configPath);
-            this.llmService = null;  // 重置服务，下次获取时重新创建
+            this.llmService = null;
             logger.info("[LLMFactory] Config reloaded from: " + configPath);
         } catch (Exception e) {
             logger.severe("[LLMFactory] Failed to reload config: " + e.getMessage());
@@ -321,18 +264,10 @@ public class LLMFactory {
         }
     }
     
-    // ==================== 静态工厂方法 ====================
-    
-    /**
-     * 快速创建工厂（使用默认配置）
-     */
     public static LLMFactory createDefault() {
         return new LLMFactory();
     }
     
-    /**
-     * 从配置文件创建工厂
-     */
     public static LLMFactory fromConfig(String configPath) {
         try {
             JwcodeConfig config = JwcodeConfig.load(configPath);
@@ -342,9 +277,6 @@ public class LLMFactory {
         }
     }
     
-    /**
-     * 从配置对象创建工厂
-     */
     public static LLMFactory fromConfig(JwcodeConfig config) {
         return new LLMFactory(config);
     }

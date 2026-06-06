@@ -42,6 +42,8 @@ import {
   findInstallDir, findJar, findMvn, buildBackend,
   startBackend, waitForBackend, cleanupBackend,
   findAvailablePorts, portInUse, killPort,
+  findRunningDaemon, startDaemon, clearDaemonInfo, readDaemonInfo, writeDaemonInfo,
+  isDaemonAlive,
 } from './launcher.js';
 import { loadConfig } from './config.js';
 import type { ChildProcess } from 'node:child_process';
@@ -55,6 +57,7 @@ function printUsage(): void {
   console.log('  jwcode [options]              Start backend + interactive terminal (default)');
   console.log('  jwcode start [options]        Start backend + interactive terminal');
   console.log('  jwcode run [options]          Connect to existing backend');
+  console.log('  jwcode stop                   Stop running daemon');
   console.log('  jwcode version                Print version');
   console.log('');
   console.log('Options:');
@@ -99,6 +102,20 @@ async function cmdStart(args: Record<string, string | boolean>): Promise<void> {
   const workspaceDir = String(args.workspace || process.cwd());
   const installDir = findInstallDir();
 
+  // Try existing daemon first
+  const existingDaemon = findRunningDaemon(workspaceDir);
+  if (existingDaemon) {
+    const httpPort = existingDaemon.httpPort;
+    const wsPort = existingDaemon.wsPort;
+    console.log('[daemon] Reusing existing daemon (PID ' + existingDaemon.pid + ') on ports ' + httpPort + '/' + wsPort);
+    // Update lastActivity
+    writeDaemonInfo(existingDaemon.pid, httpPort, wsPort, workspaceDir);
+    await startTUI(httpPort, wsPort, workspaceDir, installDir);
+    return;
+  }
+
+  // No existing daemon — start new one
+
   // Determine ports: explicit -p flag, or auto-detect available pair
   let httpPort: number;
   let wsPort: number;
@@ -134,49 +151,47 @@ async function cmdStart(args: Record<string, string | boolean>): Promise<void> {
     }
   }
 
-  // Start Java backend
-  const backendProc = startBackend({ installDir, workspaceDir, port: httpPort, wsPort, forceKill });
+  // If --build flag or no JAR, build from source
+  if (build || !findJar(installDir)) {
+    if (existsSync(join(installDir, 'pom.xml'))) {
+      buildBackend(installDir);
+    } else if (!findJar(installDir)) {
+      console.error('[launcher] Backend JAR not found. Run: npm install -g @jwcode/cli');
+      process.exit(1);
+    }
+  }
 
-  // Cleanup on exit
+  // Start backend as daemon
+  const daemonProc = startDaemon({ installDir, workspaceDir, port: httpPort, wsPort, forceKill, idleTimeout: 300 });
+
+  // Cleanup on exit (only stop daemon if we started it fresh)
   let stopping = false;
   const cleanup = () => {
     if (stopping) return;
     stopping = true;
-    // Restore main screen buffer before printing shutdown message
     process.stdout.write('\x1b[?1049l');
-    console.log('\n[jwcode] Shutting down...');
-    cleanupBackend(backendProc);
+    console.log('\n[jwcode] Closing. Daemon continues running in background.');
+    console.log('[daemon] Stop it with: jwcode stop');
   };
 
   process.on('SIGINT', () => { cleanup(); process.exit(0); });
   process.on('SIGTERM', () => { cleanup(); process.exit(0); });
   process.on('exit', cleanup);
 
-  // Wait for backend or detect early exit
-  const backendDead = new Promise<void>((resolve) => {
-    backendProc.on('exit', (code) => {
-      if (code !== 0 && code !== null) resolve();
-    });
-  });
+  // Wait for backend to be ready
+  await waitForBackend(httpPort);
 
-  await Promise.race([waitForBackend(httpPort), backendDead]);
+  await startTUI(httpPort, wsPort, workspaceDir, installDir);
+}
 
-  if (backendProc.exitCode !== null && backendProc.exitCode !== 0) {
-    console.error('[launcher] Backend failed to start. Exiting.');
-    cleanup();
-    process.exit(1);
-  }
-
+async function startTUI(httpPort: number, wsPort: number, workspaceDir: string, installDir: string): Promise<void> {
   // Start TUI
   const backendUrl = `http://localhost:${httpPort}`;
   const wsUrl = `ws://localhost:${wsPort}/ws`;
 
 
   // Enter alternate screen buffer so Ink renders in an isolated buffer.
-  // This eliminates terminal-level flicker caused by frequent re-renders
-  // (content flush @31Hz + token updates @10Hz) colliding with scrollback.
   process.stdout.write('\x1b[?1049h');
-  // Clear the alternate screen for a clean start.
   process.stdout.write('\x1b[2J\x1b[H');
 
   // First-run: check if a provider is configured, show setup wizard if not
@@ -188,7 +203,6 @@ async function cmdStart(args: Record<string, string | boolean>): Promise<void> {
   } catch { /* proceed to wizard if status check fails */ }
 
   if (!providerConfigured) {
-    // Render setup wizard instead of main app
     await new Promise<void>((resolve) => {
       const { unmount } = render(
         createElement(SetupWizard, {
@@ -204,9 +218,7 @@ async function cmdStart(args: Record<string, string | boolean>): Promise<void> {
       backendUrl,
       wsUrl,
       onExit: () => {
-        // Restore main screen before exit
         process.stdout.write('\x1b[?1049l');
-        cleanup();
         process.exit(0);
       },
     }),
@@ -217,7 +229,6 @@ async function cmdStart(args: Record<string, string | boolean>): Promise<void> {
     process.on('SIGINT', () => resolve());
     process.on('SIGTERM', () => resolve());
   });
-  // Restore main screen on normal exit
   process.stdout.write('\x1b[?1049l');
 }
 
@@ -261,6 +272,33 @@ async function cmdRun(args: Record<string, string | boolean>): Promise<void> {
   process.stdout.write('\x1b[?1049l');
 }
 
+async function cmdStop(): Promise<void> {
+  const { execSync } = await import('node:child_process');
+  const { readDaemonInfo, clearDaemonInfo, isDaemonAlive } = await import('./launcher.js');
+  const info = readDaemonInfo();
+  if (!info) {
+    console.log('No daemon is running.');
+    return;
+  }
+  if (!isDaemonAlive(info)) {
+    console.log('Daemon process is already dead. Cleaning up.');
+    clearDaemonInfo();
+    return;
+  }
+  console.log('Stopping JWCode daemon (PID ' + info.pid + ')...');
+  try {
+    if (process.platform === 'win32') {
+      execSync('taskkill /F /T /PID ' + info.pid, { stdio: 'ignore' });
+    } else {
+      process.kill(info.pid, 'SIGTERM');
+    }
+    clearDaemonInfo();
+    console.log('Daemon stopped.');
+  } catch (e) {
+    console.error('Failed to stop daemon:', String(e));
+  }
+}
+
 async function main(): Promise<void> {
   // Handle --help / --version first regardless of command position
   if (process.argv.includes('--help') || process.argv.includes('-h') || process.argv.includes('help')) {
@@ -281,6 +319,9 @@ async function main(): Promise<void> {
       break;
     case 'run':
       await cmdRun(args);
+      break;
+    case 'stop':
+      await cmdStop();
       break;
     default:
       console.error(`Unknown command: ${cmd}`);

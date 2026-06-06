@@ -1,13 +1,8 @@
 package com.jwcode.core.agent;
 
-import com.jwcode.core.compact.CompactService;
-import com.jwcode.core.compact.CompactResult;
-import com.jwcode.core.compact.CompactStrategy;
-import com.jwcode.core.compact.PostCompactRecoveryService;
 import com.jwcode.core.llm.TokenBudget;
 import com.jwcode.core.model.Message;
 import com.jwcode.core.session.Session;
-import com.jwcode.core.task.ActiveTask;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -18,17 +13,17 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 预算耗尽处理器
- * 
+ *
  * <p>实现 Token 预算耗尽时的自动处理机制：
  * - 70% 触发低预算警告
  * - 85% 触发关键预算警告，自动调用压缩
  * - 95% 触发耗尽警告，触发子任务拆分
- * 
+ *
  * <p>核心职责：
  * - 监听 TokenBudget 状态变化
  * - 在适当阈值触发压缩或子任务拆分
  * - 避免预算耗尽导致任务中断
- * 
+ *
  * @author JWCode Team
  * @since 2.0.0
  */
@@ -40,19 +35,16 @@ public class BudgetExhaustedHandler {
 
     /** 低预算阈值（建议提示） */
     private final double lowThreshold;
-    
+
     /** 关键预算阈值（触发压缩） */
     private final double criticalThreshold;
-    
+
     /** 耗尽阈值（触发子任务拆分） */
     private final double exhaustedThreshold;
 
     // ==================== 依赖服务 ====================
 
-    private final CompactService compactService;
     private final SubTaskSplitter subTaskSplitter;
-    private final PostCompactRecoveryService recoveryService;
-    private final String workspaceDir;
 
     // ==================== 状态 ====================
 
@@ -62,37 +54,20 @@ public class BudgetExhaustedHandler {
 
     // ==================== 构造函数 ====================
 
-    public BudgetExhaustedHandler(CompactService compactService, SubTaskSplitter subTaskSplitter) {
-        this(lowThreshold(), criticalThreshold(), exhaustedThreshold(), compactService, subTaskSplitter,
-             PostCompactRecoveryService.getInstance(), System.getProperty("user.dir"));
+    public BudgetExhaustedHandler(SubTaskSplitter subTaskSplitter) {
+        this(lowThreshold(), criticalThreshold(), exhaustedThreshold(), subTaskSplitter);
     }
 
     public BudgetExhaustedHandler(
             double lowThreshold,
             double criticalThreshold,
             double exhaustedThreshold,
-            CompactService compactService,
             SubTaskSplitter subTaskSplitter) {
-        this(lowThreshold, criticalThreshold, exhaustedThreshold, compactService, subTaskSplitter,
-             PostCompactRecoveryService.getInstance(), System.getProperty("user.dir"));
-    }
-
-    public BudgetExhaustedHandler(
-            double lowThreshold,
-            double criticalThreshold,
-            double exhaustedThreshold,
-            CompactService compactService,
-            SubTaskSplitter subTaskSplitter,
-            PostCompactRecoveryService recoveryService,
-            String workspaceDir) {
 
         this.lowThreshold = lowThreshold;
         this.criticalThreshold = criticalThreshold;
         this.exhaustedThreshold = exhaustedThreshold;
-        this.compactService = compactService;
         this.subTaskSplitter = subTaskSplitter;
-        this.recoveryService = recoveryService;
-        this.workspaceDir = workspaceDir != null ? workspaceDir : System.getProperty("user.dir");
         this.sessionBudgetStates = new HashMap<>();
         this.listeners = new CopyOnWriteArrayList<>();
         this.autoCompactEnabled = new AtomicBoolean(true);
@@ -108,7 +83,7 @@ public class BudgetExhaustedHandler {
 
     /**
      * 检查并处理预算状态
-     * 
+     *
      * @param session 当前会话
      * @param budget 当前 Token 预算
      * @return 处理结果
@@ -121,31 +96,22 @@ public class BudgetExhaustedHandler {
         String sessionId = session.getId();
         double usageRatio = budget.usageRatio();
 
-        // 获取或创建会话预算状态
         BudgetState state = sessionBudgetStates.computeIfAbsent(
-            sessionId, 
+            sessionId,
             k -> new BudgetState(sessionId)
         );
 
-        // 检查是否需要处理
         BudgetAction action = determineAction(state, usageRatio);
 
         if (action == BudgetAction.NONE) {
             return action;
         }
 
-        // 更新状态
         state.update(usageRatio);
-
-        // 执行处理
         return executeAction(session, budget, action, state);
     }
 
-    /**
-     * 确定需要执行的动作
-     */
     private BudgetAction determineAction(BudgetState state, double usageRatio) {
-        // 检查是否已经处理过当前阈值
         if (usageRatio >= exhaustedThreshold && !state.exhaustedHandled) {
             return BudgetAction.SPLIT_TASK;
         }
@@ -158,9 +124,6 @@ public class BudgetExhaustedHandler {
         return BudgetAction.NONE;
     }
 
-    /**
-     * 执行处理动作
-     */
     private BudgetAction executeAction(Session session, TokenBudget budget, BudgetAction action, BudgetState state) {
         logger.info("[BudgetHandler] 执行动作: {} | 原因: {}", action, session.getId());
 
@@ -176,31 +139,31 @@ public class BudgetExhaustedHandler {
                 ));
                 return action;
             }
-            
+
             case COMPACT: {
                 if (!autoCompactEnabled.get()) {
                     logger.info("[BudgetHandler] 自动压缩已禁用，跳过");
                     return BudgetAction.NONE;
                 }
-                
+
                 state.criticalHandled = true;
-                CompactResult result = performCompact(session, budget);
-                
+                boolean success = performCompact(session, budget);
+
                 notifyListeners(new BudgetEvent(
                     session.getId(),
                     BudgetLevel.CRITICAL,
                     budget.usageRatio(),
                     budget.getRemaining(),
-                    result.isSuccess() ? "压缩成功" : "压缩失败: " + result.getErrorMessage()
+                    success ? "压缩成功" : "压缩失败"
                 ));
-                
-                return result.isSuccess() ? BudgetAction.COMPACT_SUCCESS : BudgetAction.NONE;
+
+                return success ? BudgetAction.COMPACT_SUCCESS : BudgetAction.NONE;
             }
-            
+
             case SPLIT_TASK: {
                 state.exhaustedHandled = true;
                 List<Session> subSessions = subTaskSplitter.splitAndFork(session);
-                
+
                 notifyListeners(new BudgetEvent(
                     session.getId(),
                     BudgetLevel.EXHAUSTED,
@@ -208,102 +171,42 @@ public class BudgetExhaustedHandler {
                     budget.getRemaining(),
                     "已拆分为 " + subSessions.size() + " 个子任务"
                 ));
-                
+
                 return BudgetAction.SPLIT_TASK;
             }
-            
+
             default:
                 return action;
         }
     }
 
     /**
-     * 执行上下文压缩
+     * 执行上下文压缩 — 保留最近 50% 的消息，截断旧消息。
      */
-    private CompactResult performCompact(Session session, TokenBudget budget) {
+    private boolean performCompact(Session session, TokenBudget budget) {
         logger.info("[BudgetHandler] 开始压缩上下文 | sessionId={}", session.getId());
-        
+
         try {
-            // 构建会话信息
-            CompactService.SessionInfo sessionInfo = new CompactService.SessionInfo(
-                session.getId(),
-                session.getMessages().stream()
-                    .map(m -> new CompactService.SessionMessage(
-                        m.getRole().name().toLowerCase(),
-                        m.getTextContent()
-                    ))
-                    .toList(),
-                (int) budget.getUsedTotal()
-            );
-
-            // 选择压缩策略
-            CompactStrategy strategy = selectStrategy(budget.usageRatio());
-            
-            // 执行压缩
-            CompactResult result = compactService.compact(sessionInfo, strategy);
-            
-            if (result.isSuccess()) {
-                // 更新会话消息
-                session.setMessages(result.getRetainedMessages().stream()
-                    .map(m -> {
-                        if ("user".equals(m.getRole())) {
-                            return com.jwcode.core.model.Message.createUserMessage(m.getContent());
-                        } else if ("assistant".equals(m.getRole())) {
-                            return com.jwcode.core.model.Message.createAssistantMessage(m.getContent());
-                        } else {
-                            return com.jwcode.core.model.Message.createSystemMessage(m.getContent());
-                        }
-                    })
-                    .toList());
-                
-                // 重置 Token 预算
-                budget.reset();
-                session.markCompacted();
-
-                // 压缩后自动恢复：重新读取最近访问的文件
-                // 注意：我们不清除 SkillRegistry 中的已加载技能内容。
-                // Skill 是用户主动加载的专业知识包，必须在多次 compaction 之间保持可用，
-                // 确保后续对话不会丢失专业指导。
-                try {
-                    String recoveryContext = recoveryService.recoverAfterCompact(workspaceDir);
-                    if (recoveryContext != null && !recoveryContext.isBlank()) {
-                        session.addMessage(Message.createSystemMessage(recoveryContext));
-                        logger.info("[BudgetHandler] 压缩后恢复: 已重读 {} 个文件",
-                            recoveryService.getRecentFileCount());
-                    }
-                } catch (Exception e) {
-                    logger.warn("[BudgetHandler] 压缩后恢复失败: {}", e.getMessage());
-                }
-
-                logger.info("[BudgetHandler] 压缩成功 | 节省 {} tokens | 保留 {} 条消息",
-                    result.getTokensSaved(), result.getMessagesCompacted());
+            List<Message> messages = session.getMessages();
+            if (messages.isEmpty()) {
+                return false;
             }
-            
-            return result;
-            
+
+            int keepCount = Math.max(5, messages.size() / 2);
+            List<Message> retained = new ArrayList<>(messages.subList(
+                messages.size() - keepCount, messages.size()));
+
+            session.setMessages(retained);
+            budget.reset();
+            session.markCompacted();
+
+            logger.info("[BudgetHandler] 压缩完成 | 保留 {} 条消息 (原 {} 条)",
+                keepCount, messages.size());
+            return true;
+
         } catch (Exception e) {
             logger.error("[BudgetHandler] 压缩异常", e);
-            CompactResult errorResult = new CompactResult();
-            errorResult.setStrategy(CompactStrategy.SUMMARIZE);
-            errorResult.setSuccess(false);
-            errorResult.setMessagesCompacted(0);
-            errorResult.setTokensSaved(0);
-            errorResult.setDurationMs(System.currentTimeMillis());
-            errorResult.setErrorMessage("压缩异常: " + e.getMessage());
-            return errorResult;
-        }
-    }
-
-    /**
-     * 选择压缩策略
-     */
-    private CompactStrategy selectStrategy(double usageRatio) {
-        if (usageRatio >= 0.90) {
-            return CompactStrategy.TRUNCATE;
-        } else if (usageRatio >= 0.85) {
-            return CompactStrategy.HYBRID;
-        } else {
-            return CompactStrategy.KEY_POINTS;
+            return false;
         }
     }
 
@@ -352,9 +255,6 @@ public class BudgetExhaustedHandler {
 
     // ==================== 内部类 ====================
 
-    /**
-     * 会话预算状态
-     */
     private static class BudgetState {
         final String sessionId;
         double lastUsageRatio = 0.0;
@@ -381,18 +281,12 @@ public class BudgetExhaustedHandler {
 
     // ==================== 事件和枚举 ====================
 
-    /**
-     * 预算级别
-     */
     public enum BudgetLevel {
         LOW,      // 70% - 警告
         CRITICAL, // 85% - 压缩
         EXHAUSTED // 95% - 拆分
     }
 
-    /**
-     * 预算动作
-     */
     public enum BudgetAction {
         NONE,           // 无动作
         WARN,           // 警告
@@ -401,9 +295,6 @@ public class BudgetExhaustedHandler {
         SPLIT_TASK      // 拆分任务
     }
 
-    /**
-     * 预算事件
-     */
     public record BudgetEvent(
         String sessionId,
         BudgetLevel level,
@@ -412,9 +303,6 @@ public class BudgetExhaustedHandler {
         String message
     ) {}
 
-    /**
-     * 预算监听器
-     */
     @FunctionalInterface
     public interface BudgetListener {
         void onBudgetEvent(BudgetEvent event);
@@ -426,10 +314,7 @@ public class BudgetExhaustedHandler {
      * 创建默认处理器
      */
     public static BudgetExhaustedHandler createDefault() {
-        return new BudgetExhaustedHandler(
-            new CompactService(),
-            new SubTaskSplitter()
-        );
+        return new BudgetExhaustedHandler(new SubTaskSplitter());
     }
 
     @Override

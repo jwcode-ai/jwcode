@@ -2,7 +2,7 @@ package com.jwcode.core.tool;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.jwcode.core.compact.PostCompactRecoveryService;
+import com.jwcode.core.service.PostCompactRecoveryService;
 import com.jwcode.core.tool.context.ToolExecutionContext;
 import com.jwcode.core.tool.input.FileReadInput;
 import com.jwcode.core.tool.output.FileReadOutput;

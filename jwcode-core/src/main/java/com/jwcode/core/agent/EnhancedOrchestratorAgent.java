@@ -21,7 +21,6 @@ import com.jwcode.core.planner.IntentAnalyzer.Complexity;
 import com.jwcode.core.planner.SemanticIntentAnalyzer;
 import com.jwcode.core.advanced.swarm.AutoSwarmTrigger;
 import com.jwcode.core.advanced.swarm.AgentSwarm;
-import com.jwcode.core.advanced.ai.AutoAIManager;
 import com.jwcode.core.config.ConfigManager;
 import com.jwcode.core.planner.checkpoint.CheckpointManager;
 import com.jwcode.core.planner.checkpoint.CheckpointManager.Checkpoint;
@@ -99,7 +98,6 @@ public class EnhancedOrchestratorAgent {
     private MemoryAgent memoryAgent;
 
     private AutoSwarmTrigger autoSwarmTrigger;
-    private AutoAIManager autoAIManager;
 
     // GAN 迭代执行器（Generator ⇄ Evaluator）
     private GanExecutor ganExecutor;
@@ -228,15 +226,6 @@ public class EnhancedOrchestratorAgent {
                 this.autoSwarmTrigger = null;
             }
 
-            // 初始化 AutoAIManager
-            try {
-                this.autoAIManager = new AutoAIManager();
-                logger.info("[Orchestrator] AutoAIManager initialized");
-            } catch (Exception e) {
-                logger.warning("[Orchestrator] AutoAIManager init failed: " + e.getMessage());
-                this.autoAIManager = null;
-            }
-
             // 初始化 Hook 系统（仅首次创建时初始化，避免重复接线）
             try {
                 if (!HookSystemInitializer.isInitialized()) {
@@ -273,19 +262,16 @@ public class EnhancedOrchestratorAgent {
             return handleInterruption(analysis);
         }
 
-        // Step 3: Auto AI - if enabled and task is not CHAT, auto Plan+Act
-        if (autoAIManager != null && autoAIManager.isEnabled() && analysis.getTaskType() != com.jwcode.core.planner.IntentAnalyzer.TaskType.CHAT) {
-            logger.info("[Orchestrator] Auto AI enabled, auto Plan+Act for: " + analysis.getTaskType());
-            return processPlanOnly(userInput);
-        }
-
-        // Step 4: Auto Swarm - if enabled and complex, use AgentSwarm
+        // Step 3: Auto Swarm - if enabled and complex, use AgentSwarm
         if (autoSwarmTrigger != null && autoSwarmTrigger.isAutoSwarmEnabled() && analysis.getComplexity() == com.jwcode.core.planner.IntentAnalyzer.Complexity.COMPLEX) {
             logger.info("[Orchestrator] Auto Swarm enabled, delegating complex task");
-            autoSwarmTrigger.autoExecute(userInput, null);
+            Object swarmResult = autoSwarmTrigger.autoExecute(userInput, null);
+            if (swarmResult != null) {
+                return swarmResult.toString();
+            }
         }
 
-        // Step 5: dispatch by task type
+        // Step 4: dispatch by task type
         switch (analysis.getTaskType()) {
             case CHAT:
                 return handleChat(userInput);
@@ -841,6 +827,13 @@ public class EnhancedOrchestratorAgent {
 
         logger.info("Submitting task " + task.getTaskId() + " to agent " + agentName);
 
+        // 广播 Agent 信息流 — 任务分发事件
+        if (agentFlowBroadcaster != null && sessionId != null) {
+            agentFlowBroadcaster.broadcastDispatch(
+                "Orchestrator", agentName, task.getTaskId(),
+                analysis.getSummary(), sessionId);
+        }
+
         // 广播 plan_task_start — 子任务开始执行
         if (planTaskBroadcaster != null && sessionId != null) {
             planTaskBroadcaster.broadcastPlanTaskStart(sessionId, task.getTaskId(), agentName.toLowerCase());
@@ -877,6 +870,14 @@ public class EnhancedOrchestratorAgent {
             output.getSummary(),
             stepDuration
         ));
+
+        // 广播 Agent 信息流 — 任务完成事件
+        if (agentFlowBroadcaster != null && sessionId != null) {
+            String flowStatus = output.isSuccess() ? "completed" : "failed";
+            agentFlowBroadcaster.broadcastComplete(
+                agentName, "Orchestrator", task.getTaskId(),
+                flowStatus, sessionId);
+        }
 
         // 广播 plan_task_result — 子任务完成/失败
         if (planTaskBroadcaster != null && sessionId != null) {
@@ -1284,6 +1285,13 @@ public class EnhancedOrchestratorAgent {
      */
     public void setPlanTaskBroadcaster(PlanTaskBroadcaster broadcaster) {
         this.planTaskBroadcaster = broadcaster;
+    }
+
+    /**
+     * 设置 AgentFlowBroadcaster（用于向前端广播 Agent 信息流事件）
+     */
+    public void setAgentFlowBroadcaster(AgentFlowBroadcaster broadcaster) {
+        this.agentFlowBroadcaster = broadcaster;
     }
 
     /**

@@ -3,8 +3,8 @@
 :: Called by restart.bat or standalone
 cd /d "%~dp0"
 echo Starting JWCode Backend...
-echo Compiling...
-call mvn compile -pl jwcode-core,jwcode-web -am -q
+echo Building...
+call mvn install -pl jwcode-core,jwcode-web -am -DskipTests -q
 if errorlevel 1 (
     echo ERROR: Compile failed!
     pause

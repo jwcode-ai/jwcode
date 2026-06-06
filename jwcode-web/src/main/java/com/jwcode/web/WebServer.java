@@ -1,5 +1,7 @@
 package com.jwcode.web;
 
+import com.jwcode.core.config.ConfigInitializer;
+import com.jwcode.core.config.ConfigManager;
 import com.jwcode.core.config.JwcodeConfig;
 import com.jwcode.core.config.YamlConfigLoader;
 import com.jwcode.core.index.CodebaseIndexer;
@@ -75,6 +77,9 @@ public class WebServer {
      * 启动服务器
      */
     public void start() throws IOException {
+        // Initialize ~/.jwcode/ config templates on first run
+        new ConfigInitializer().initialize();
+
         // 初始化安全沙箱 — Docker 容器隔离，不可用时降级 WorkspaceGuard
         try {
             com.jwcode.core.tool.BashTool.setBackgroundExecutor(
@@ -98,6 +103,7 @@ public class WebServer {
         server.createContext("/api/sessions", new SessionsHandler(sessionManager));
         server.createContext("/api/tools", new ToolsHandler(toolRegistry));
         server.createContext("/api/config", new ConfigHandler());
+        server.createContext("/api/config/files", new ConfigFilesHandler());
         server.createContext("/api/skills", new SkillsHandler());
         server.createContext("/api/agents", new AgentsHandler());
         server.createContext("/api/templates", new TemplatesHandler());
@@ -180,6 +186,25 @@ public class WebServer {
             server.stop(0);
             logger.info("Web UI 服务器已停止");
         }
+    }
+
+    /**
+     * Restart the server in-process, reloading all config from disk.
+     */
+    public synchronized void restart() throws IOException {
+        logger.info("Restarting server...");
+        System.out.println("\n🔄 Restarting JWCode server...\n");
+
+        stop();
+
+        // Force config singletons to reload from disk
+        YamlConfigLoader.resetInstance();
+        ConfigManager.resetInstance();
+
+        start();
+
+        logger.info("Server restarted successfully");
+        System.out.println("✅ Server restarted successfully\n");
     }
 
     /**

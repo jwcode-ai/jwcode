@@ -136,33 +136,16 @@ public class ConfigHandler implements HttpHandler {
      */
     private void addAdvancedConfigToResponse(ObjectNode response, ConfigManager configManager) {
         ObjectNode advanced = response.putObject("advanced");
-        
-        // Thinking Mode (深度推理模式)
-        ObjectNode thinking = advanced.putObject("thinking");
-        thinking.put("enabled", Boolean.parseBoolean(getConfigWithDefault(configManager, "thinking.enabled", "false")));
-        thinking.put("description", "深度推理模式 - AI 将花更多时间分析再给出回答");
-        
+
         // YOLO Mode (全自动模式)
         ObjectNode yolo = advanced.putObject("yolo");
         yolo.put("enabled", Boolean.parseBoolean(getConfigWithDefault(configManager, "yolo.enabled", "false")));
         yolo.put("description", "全自动模式 - AI 将自动执行命令而无需确认");
-        
+
         // Auto Swarm Mode (自动 Agent Swarm 模式)
         ObjectNode autoSwarm = advanced.putObject("autoSwarm");
         autoSwarm.put("enabled", Boolean.parseBoolean(getConfigWithDefault(configManager, "autoSwarm.enabled", "false")));
         autoSwarm.put("description", "自动 Agent Swarm 模式 - 根据任务复杂度自动创建 Agent 团队");
-        
-        // Auto AI Mode (自动 AI 规划模式)
-        ObjectNode autoAI = advanced.putObject("autoAI");
-        autoAI.put("enabled", Boolean.parseBoolean(getConfigWithDefault(configManager, "autoAI.enabled", "false")));
-        autoAI.put("description", "自动 AI 规划模式 - 复杂任务自动启用 Agent Swarm");
-        
-        // Context Compression (上下文压缩功能)
-        ObjectNode compression = advanced.putObject("compression");
-        compression.put("enabled", Boolean.parseBoolean(getConfigWithDefault(configManager, "compression.enabled", "true")));
-        compression.put("description", "上下文压缩功能 - 自动压缩长对话以节省 Token");
-        compression.put("maxMessages", Integer.parseInt(getConfigWithDefault(configManager, "compression.maxMessages", "50")));
-        compression.put("tokenThreshold", Integer.parseInt(getConfigWithDefault(configManager, "compression.tokenThreshold", "4000")));
     }
     
     /**
@@ -271,13 +254,8 @@ public class ConfigHandler implements HttpHandler {
      * 检查是否为有效的高级配置键
      */
     private boolean isValidAdvancedConfigKey(String key) {
-        return key.equals("thinking.enabled") ||
-               key.equals("yolo.enabled") ||
-               key.equals("autoSwarm.enabled") ||
-               key.equals("autoAI.enabled") ||
-               key.equals("compression.enabled") ||
-               key.equals("compression.maxMessages") ||
-               key.equals("compression.tokenThreshold");
+        return key.equals("yolo.enabled") ||
+               key.equals("autoSwarm.enabled");
     }
     
     /**

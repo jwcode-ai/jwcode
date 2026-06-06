@@ -146,6 +146,7 @@ public class WebSocketMessageHandler {
                 // 0. 设置 Orchestrator 的 sessionId 和 PlanTaskBroadcaster
                 orchestrator.setSessionId(session.getId());
                 orchestrator.setPlanTaskBroadcaster(PlanTaskBroadcaster.getInstance());
+                orchestrator.setAgentFlowBroadcaster(AgentFlowBroadcaster.getInstance());
 
                 // 1. 通知前端：开始规划
                 broadcastToSession(session.getId(), Map.of(
@@ -243,6 +244,7 @@ public class WebSocketMessageHandler {
                 // 设置 Orchestrator
                 orchestrator.setSessionId(session.getId());
                 orchestrator.setPlanTaskBroadcaster(PlanTaskBroadcaster.getInstance());
+                orchestrator.setAgentFlowBroadcaster(AgentFlowBroadcaster.getInstance());
 
                 // 执行规划
                 String planResult = orchestrator.processPlanOnly(combinedInput);
@@ -296,6 +298,7 @@ public class WebSocketMessageHandler {
                 // 0. 设置 Orchestrator 的 sessionId 和 PlanTaskBroadcaster
                 orchestrator.setSessionId(session.getId());
                 orchestrator.setPlanTaskBroadcaster(PlanTaskBroadcaster.getInstance());
+                orchestrator.setAgentFlowBroadcaster(AgentFlowBroadcaster.getInstance());
 
                 // 0.5 自动创建 Task（PENDING 状态）
                 String goal = message;
@@ -461,6 +464,7 @@ public class WebSocketMessageHandler {
                 // 1. 设置 Orchestrator 的 sessionId 和 PlanTaskBroadcaster
                 orchestrator.setSessionId(session.getId());
                 orchestrator.setPlanTaskBroadcaster(PlanTaskBroadcaster.getInstance());
+                orchestrator.setAgentFlowBroadcaster(AgentFlowBroadcaster.getInstance());
 
                 // 2. 调用 Orchestrator 的 processInput — 规划+执行一步完成
                 //    内部会自动广播 plan_start、plan_thinking、plan_tasks、plan_complete

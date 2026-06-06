@@ -8,31 +8,48 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.management.ManagementFactory;
+import java.nio.charset.StandardCharsets;
 
 /**
  * 系统状态 API 处理器
  * 提供系统运行状态、内存、模型统计等聚合信息
  */
 public class SystemStatusHandler implements HttpHandler {
-    
+
     private static final ObjectMapper objectMapper = new ObjectMapper();
-    
+    private static WebServer webServer;
+
+    /**
+     * Set the WebServer reference for restart support.
+     */
+    public static void setWebServer(WebServer server) {
+        webServer = server;
+    }
+
     @Override
     public void handle(HttpExchange exchange) throws IOException {
         String method = exchange.getRequestMethod();
-        
+        String path = exchange.getRequestURI().getPath();
+
         // 设置 CORS 头
         exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
-        exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, OPTIONS");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
         exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
-        
+
         if ("OPTIONS".equalsIgnoreCase(method)) {
             exchange.sendResponseHeaders(200, -1);
             return;
         }
-        
+
+        // POST /api/system/restart
+        if (path.endsWith("/restart") && "POST".equalsIgnoreCase(method)) {
+            handleRestart(exchange);
+            return;
+        }
+
         if (!"GET".equalsIgnoreCase(method)) {
             sendError(exchange, 405, "Method not allowed");
             return;
@@ -80,6 +97,34 @@ public class SystemStatusHandler implements HttpHandler {
         }
     }
     
+    private void handleRestart(HttpExchange exchange) throws IOException {
+        if (webServer == null) {
+            sendError(exchange, 500, "WebServer reference not available");
+            return;
+        }
+
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("success", true);
+        response.put("message", "Server restarting...");
+
+        byte[] bytes = objectMapper.writeValueAsBytes(response);
+        exchange.getResponseHeaders().set("Content-Type", "application/json");
+        exchange.sendResponseHeaders(200, bytes.length);
+        try (OutputStream os = exchange.getResponseBody()) {
+            os.write(bytes);
+        }
+
+        // Restart in a new thread so the HTTP response is sent first
+        new Thread(() -> {
+            try {
+                Thread.sleep(500);
+                webServer.restart();
+            } catch (Exception e) {
+                System.err.println("Restart failed: " + e.getMessage());
+            }
+        }, "server-restart").start();
+    }
+
     private void sendSuccess(HttpExchange exchange, int statusCode, Object data) throws IOException {
         ObjectNode response = objectMapper.createObjectNode();
         response.put("success", true);

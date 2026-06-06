@@ -106,3 +106,87 @@ AICL 使用 **Priority-LRU** 算法：
 - `pinned` → 永久保留
 
 详细协议规范见 `docs/AICL_SPEC.md`。
+
+
+---
+
+## YAML 配置格式（v2 新增）
+
+系统也支持 YAML 格式的配置文件 `~/.jwcode/config.yaml`，支持多 Provider、多模型、API key 轮询等高级功能。
+
+### 完整配置示例
+
+```yaml
+providers:
+  # — OpenAI 兼容格式（默认）
+  deepseek:
+    base-url: https://api.deepseek.com
+    api-type: openai-completions
+    api-keys:
+      - sk-deepseek-key-1
+      - sk-deepseek-key-2
+    key-rotation:
+      strategy: round_robin      # round_robin | random | priority
+      failover-enabled: true
+      cooldown-ms: 60000
+    models:
+      - id: deepseek-chat
+        max-tokens: 8192
+        temperature: 0.7
+        context-window: 65536
+
+  # — Anthropic Messages 格式
+  deepseek-anthropic:
+    base-url: https://api.deepseek.com/anthropic
+    api-type: anthropic-messages
+    api-keys: [ sk-deepseek-key-1 ]
+    anthropic-version: 2023-06-01    # 可选，默认即可
+    models:
+      - id: deepseek-chat
+        max-tokens: 8192
+
+  # — 原生 Anthropic Claude
+  claude:
+    base-url: https://api.anthropic.com
+    api-type: anthropic-messages
+    api-keys: [ sk-ant-xxx ]
+    models:
+      - id: claude-sonnet-4-20250514
+        max-tokens: 8192
+
+default-provider: deepseek           # 默认使用的 provider
+fallback-provider: deepseek-anthropic # 限流时的备选 provider
+
+settings:
+  timeout-seconds: 300
+  max-retries: 3
+  debug: false
+  engine:
+    max-iterations: 0
+    timeout-minutes: 5
+    token-budget: 1000000
+```
+
+### api-type 说明
+
+| api-type | 对应服务类 | 协议格式 |
+|----------|-----------|---------|
+| `openai-completions`（默认） | `OpenAILLMService` | OpenAI Chat Completions API |
+| `anthropic-messages` | `AnthropicLLMService` | Anthropic Messages API |
+
+选择 `anthropic-messages` 可以：
+- 使用原生 Anthropic API 调用 Claude 模型
+- 通过兼容层调用支持 Anthropic 格式的第三方 API（如 DeepSeek 的 `/anthropic` 端点）
+- 利用 Anthropic 的 thinking 块和 tool_use 增量传输功能
+
+### ProviderConfig 字段
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `base-url` | string | — | API 基础 URL |
+| `api-type` | string | `openai-completions` | API 协议类型 |
+| `api-keys` | string[] | — | API key 列表，支持多 key 轮询 |
+| `anthropic-version` | string | `2023-06-01` | Anthropic API 版本（仅 `anthropic-messages` 类型） |
+| `key-rotation` | object | — | API key 轮询配置 |
+| `models` | ModelDefinition[] | — | 模型定义列表 |
+

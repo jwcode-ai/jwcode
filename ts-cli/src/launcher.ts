@@ -92,7 +92,14 @@ export function findMvn(): string {
   return 'mvn';
 }
 
-export function findJava(): string {
+export function findJava(installDir?: string): string {
+  // 1. Bundled JRE (npm global install)
+  if (installDir) {
+    const bundled = join(installDir, 'backend', 'jre', 'bin', process.platform === 'win32' ? 'java.exe' : 'java');
+    if (existsSync(bundled)) return bundled;
+  }
+
+  // 2. PATH
   const paths = process.env.PATH?.split(';') || [];
   for (const dir of paths) {
     for (const name of ['java.exe', 'java']) {
@@ -100,7 +107,8 @@ export function findJava(): string {
       if (existsSync(full)) return full;
     }
   }
-  // Common install locations
+
+  // 3. Common install locations (Windows)
   for (const root of ['C:\\Program Files\\Java', 'C:\\Program Files (x86)\\Java', homedir()]) {
     try {
       for (const entry of readdirSync(root, { withFileTypes: true })) {
@@ -111,6 +119,7 @@ export function findJava(): string {
       }
     } catch {}
   }
+
   return 'java';
 }
 
@@ -229,7 +238,7 @@ export interface StartOptions {
 
 export function startBackend(opts: StartOptions): ChildProcess {
   const { installDir, workspaceDir, port, wsPort, forceKill } = opts;
-  const java = findJava();
+  const java = findJava(installDir);
   const jarPath = findJar(installDir);
   if (!jarPath) {
     console.error('[launcher] Backend JAR not found. Run with --build first, or ensure backend/jwcode-web.jar exists.');
@@ -289,4 +298,107 @@ export function cleanupBackend(proc: ChildProcess | null): void {
       }
     }, 5000);
   }
+}
+
+// --- Daemon mode ---
+import { mkdirSync, writeFileSync, readFileSync, unlinkSync } from 'node:fs';
+import { homedir } from 'node:os';
+
+const DAEMON_DIR = join(homedir(), '.jwcode');
+const DAEMON_FILE = join(DAEMON_DIR, 'daemon.json');
+
+interface DaemonInfo {
+  pid: number;
+  httpPort: number;
+  wsPort: number;
+  workspaceDir: string;
+  startedAt: string;
+  lastActivity: string;
+}
+
+export function writeDaemonInfo(pid: number, httpPort: number, wsPort: number, workspaceDir: string): void {
+  try { mkdirSync(DAEMON_DIR, { recursive: true }); } catch {}
+  const info: DaemonInfo = {
+    pid, httpPort, wsPort, workspaceDir,
+    startedAt: new Date().toISOString(),
+    lastActivity: new Date().toISOString(),
+  };
+  writeFileSync(DAEMON_FILE, JSON.stringify(info, null, 2), 'utf-8');
+}
+
+export function readDaemonInfo(): DaemonInfo | null {
+  try {
+    if (!existsSync(DAEMON_FILE)) return null;
+    return JSON.parse(readFileSync(DAEMON_FILE, 'utf-8')) as DaemonInfo;
+  } catch { return null; }
+}
+
+export function clearDaemonInfo(): void {
+  try { unlinkSync(DAEMON_FILE); } catch {}
+}
+
+export function isDaemonAlive(info: DaemonInfo): boolean {
+  try {
+    if (process.platform === 'win32') {
+      const out = execSync(`tasklist /FI "PID eq ${info.pid}" /NH`, { encoding: 'utf-8', timeout: 3000 });
+      return out.includes(String(info.pid));
+    } else {
+      execSync(`kill -0 ${info.pid}`, { stdio: 'ignore' });
+      return true;
+    }
+  } catch {
+    return false;
+  }
+}
+
+export interface DaemonOptions extends StartOptions {
+  idleTimeout?: number;
+}
+
+export function startDaemon(opts: DaemonOptions): ChildProcess {
+  const { installDir, workspaceDir, port, wsPort, forceKill } = opts;
+  const java = findJava(installDir);
+  const jarPath = findJar(installDir);
+  if (!jarPath) {
+    console.error('[launcher] Backend JAR not found. Run: npm install -g @jwcode/cli');
+    process.exit(1);
+  }
+
+  if (forceKill) {
+    killPort(port);
+    killPort(wsPort);
+  }
+
+  const javaArgs = ['-jar', jarPath, String(port), String(wsPort), workspaceDir];
+  const idleSec = opts.idleTimeout ?? 300;
+
+  const proc = spawn(java, javaArgs, {
+    cwd: workspaceDir,
+    env: {
+      ...process.env,
+      JWCODE_WS_PORT: String(wsPort),
+      JWCODE_DAEMON_IDLE_TIMEOUT: String(idleSec),
+    },
+    stdio: 'ignore',
+    detached: true,
+    windowsHide: true,
+  });
+  proc.unref();
+
+  writeDaemonInfo(proc.pid!, port, wsPort, workspaceDir);
+  console.log(`[daemon] Started JWCode daemon (PID ${proc.pid}) on ports ${port}/${wsPort}`);
+  return proc;
+}
+
+export function findRunningDaemon(workspaceDir?: string): DaemonInfo | null {
+  const info = readDaemonInfo();
+  if (!info) return null;
+  if (!isDaemonAlive(info)) {
+    clearDaemonInfo();
+    return null;
+  }
+  if (workspaceDir && info.workspaceDir !== workspaceDir) {
+    return null;
+  }
+  return info;
 }

@@ -3,7 +3,7 @@ package com.jwcode.core.agent;
 import com.jwcode.core.a2a.model.AgentCard;
 import com.jwcode.core.a2a.model.Capabilities;
 import com.jwcode.core.a2a.model.Skill;
-import com.jwcode.core.compact.PostCompactRecoveryService;
+import com.jwcode.core.service.PostCompactRecoveryService;
 import com.jwcode.core.llm.LLMService;
 import com.jwcode.core.model.Message;
 import com.jwcode.core.service.SimpleCompactionStrategy;

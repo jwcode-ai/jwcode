@@ -110,6 +110,10 @@ public class TaskApiServer {
         // 配置 PlanTaskBroadcaster 使用 WebSocket 服务器
         PlanTaskBroadcaster.setWebSocketServer(wsServer);
         logger.info("PlanTaskBroadcaster configured");
+
+        // 配置 AgentFlowBroadcaster 使用 WebSocket 服务器
+        AgentFlowBroadcaster.setWebSocketServer(wsServer);
+        logger.info("AgentFlowBroadcaster configured");
         
         // 创建 WebSocket 消息处理器并注入到 WebSocket 服务器
         // 这样前端发送的 chat/plan 消息会被正确路由到 Orchestrator 或 LLMQueryEngine

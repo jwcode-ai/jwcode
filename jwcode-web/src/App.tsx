@@ -58,7 +58,6 @@ const TABS: Tab[] = [
   { id: 'tools', title: '工具', icon: 'Wrench' },
   { id: 'skills', title: '技能', icon: 'Target' },
   { id: 'agents', title: 'Agents', icon: 'Users' },
-  { id: 'agentflow', title: 'Agent Flow', icon: 'Activity' } as Tab,
   { id: 'settings', title: '设置', icon: 'Settings' },
   { id: 'logs', title: '日志', icon: 'ScrollText' },
 ];
@@ -78,6 +77,7 @@ function App() {
   const [hookModalOpen, setHookModalOpen] = useState(false);
   const [isTaskListOpen, setIsTaskListOpen] = useState(true);
   const [isHistoryOpen, setIsHistoryOpen] = useState(true);
+  const [isAgentFlowOpen, setIsAgentFlowOpen] = useState(false);
   const [ttydAvailable, setTtydAvailable] = useState<boolean | null>(null);
 
   const { t, i18n } = useTranslation();
@@ -698,8 +698,6 @@ function App() {
         return <SkillsView />;
       case 'agents':
         return <AgentsView />;
-      case 'agentflow':
-        return <AgentFlowView />;
       case 'settings':
         return <SettingsPanel />;
       case 'logs':
@@ -804,6 +802,39 @@ function App() {
 
         {/* Main Content Area */}
         <div className="flex-1 flex overflow-hidden min-h-0">
+          {/* AgentFlow Left Drawer — only visible on chat tab */}
+          {activeTab === 'chat' && (
+            <div
+              className={`shrink-0 border-r border-dark-border bg-dark-surface transition-all duration-300 ease-in-out overflow-hidden ${
+                isAgentFlowOpen ? 'w-80 xl:w-[420px]' : 'w-0 border-r-0'
+              }`}
+            >
+              <div className="h-full" style={{ width: isAgentFlowOpen ? undefined : 0, minWidth: isAgentFlowOpen ? 320 : 0 }}>
+                {isAgentFlowOpen && (
+                  <Suspense fallback={<PanelFallback />}>
+                    <AgentFlowView />
+                  </Suspense>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Toggle button for AgentFlow drawer */}
+          {activeTab === 'chat' && (
+            <button
+              onClick={() => setIsAgentFlowOpen(!isAgentFlowOpen)}
+              className={`shrink-0 flex items-center justify-center transition-all duration-300 bg-dark-surface hover:bg-dark-hover border-r border-dark-border ${
+                isAgentFlowOpen ? 'w-5' : 'w-7'
+              }`}
+              title={isAgentFlowOpen ? '折叠 Agent 信息流' : '展开 Agent 信息流'}
+            >
+              <Activity size={14} className={`text-accent-purple transition-transform duration-300 ${isAgentFlowOpen ? 'rotate-180' : ''}`} />
+              {!isAgentFlowOpen && (
+                <span className="text-[9px] text-dark-muted ml-1 hidden xl:inline">Agent 信息流</span>
+              )}
+            </button>
+          )}
+
           <div className="flex-1 flex flex-col min-w-0 min-h-0">
             <Suspense fallback={<PanelFallback />}>
               <ErrorBoundary>

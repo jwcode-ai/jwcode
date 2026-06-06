@@ -1,0 +1,84 @@
+# JWCode Configuration
+# Config file location: ~/.jwcode/config.yaml
+
+default-provider: ""
+
+# Provider configurations
+# Examples:
+#   openai:
+#     base-url: https://api.openai.com/v1
+#     api-type: openai-completions
+#     api-keys: [sk-...]
+#   anthropic:
+#     base-url: https://api.anthropic.com/v1
+#     api-type: anthropic-messages
+#     api-keys: [sk-ant-...]
+providers: {}
+
+# Global settings
+settings:
+  timeout-seconds: 120
+  max-retries: 3
+  debug: false
+  log-level: INFO
+
+  engine:
+    max-iterations: 0
+    timeout-minutes: 5
+    token-budget: 1000000
+    max-message-history: 0
+    max-consecutive-tool-only-rounds: 100
+
+  permissions:
+    auto-approve-read: true
+    auto-approve-write: false
+    auto-approve-delete: false
+    auto-approve-destructive: false
+
+  messaging:
+    history-enabled: true
+    max-history-size: 1000
+    show-timestamp: true
+    use-color: true
+
+  search:
+    default-engine: duckduckgo
+    default-summary-length: 300
+    similarity-threshold: 0.8
+    timeout-ms: 10000
+    embedding-dimension: 256
+
+  thinking:
+    thinking-delay-ms: 2000
+    show-thinking-trace: true
+    max-thinking-depth: 3
+    max-actions-per-minute: 30
+    dangerous-commands:
+      - rm -rf
+      - format
+      - del /s /q
+
+  compression:
+    max-messages-before-compression: 50
+    token-threshold: 8000
+    structured-context-enabled: true
+    enable-ai-evaluation: true
+
+  agent:
+    default-timeout: 60000
+    default-priority: 5
+    max-agents-per-type: 5
+    max-total-agents: 50
+
+  planning:
+    token-budget: 10000
+    time-budget-ms: 300000
+    allow-parallel: true
+    max-parallelism: 4
+
+  advanced:
+    auto-swarm-enabled: false
+    yolo-mode: false
+    auto-compact-enabled: true
+    analytics-enabled: true
+    anonymous-mode: true

@@ -83,6 +83,11 @@ export const api = {
       save: (data: Record<string, unknown>) => apiClient.post<{ message: string }>('/api/config/provider', data),
       delete: (providerName: string) => apiClient.post<{ message: string }>('/api/config/provider', { provider: providerName, apiKeys: [], models: [] }),
     },
+    files: {
+      list: () => apiClient.get<Array<{ name: string; size: number; modified: number; editable: boolean }>>('/api/config/files'),
+      read: (file: string) => apiClient.get<{ name: string; content: string; editable: boolean }>(`/api/config/files/read?file=${encodeURIComponent(file)}`),
+      write: (file: string, content: string) => apiClient.put<{ message: string }>('/api/config/files/write', { file, content }),
+    },
   },
 
   // 系统状态
@@ -94,6 +99,7 @@ export const api = {
       models: { total: number; online: number; offline: number };
       timestamp: number;
     }>('/api/system/status'),
+    restart: () => apiClient.post<{ message: string }>('/api/system/restart'),
   },
 };
 

@@ -137,6 +137,9 @@ public class JwcodeConfig {
         @JsonProperty("base-url")
         private String baseUrl;
         
+        @JsonProperty("anthropic-version")
+        private String anthropicVersion = "2023-06-01";
+        
         @JsonProperty("api-type")
         private String apiType = "openai-completions";
         

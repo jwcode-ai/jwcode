@@ -95,6 +95,7 @@ export interface Model {
   temperature?: number;
   contextWindow?: number;
   isDefault?: boolean;
+  apiType?: string;
 }
 
 export interface ModelStatus {
@@ -172,15 +173,8 @@ export interface Settings {
 }
 
 export interface AdvancedSettings {
-  thinking: { enabled: boolean };
   yolo: { enabled: boolean };
   autoSwarm: { enabled: boolean };
-  autoAI: { enabled: boolean };
-  compression: {
-    enabled: boolean;
-    maxMessages: number;
-    tokenThreshold: number;
-  };
 }
 
 export interface CustomThemeColors {
@@ -285,6 +279,8 @@ export type WSMessageType =
   | 'hook_deny'
   | 'hook_response_ack'
     | 'toggle_workspace_guard'
+  | 'toggle_yolo'
+  | 'toggle_auto_swarm'
   // Token 用量
   | 'token_update'
   // Infrastructure & diagnostics

@@ -11,8 +11,8 @@ mvn compile -pl jwcode-core,jwcode-web -am
 # Build with tests
 mvn package -pl jwcode-core,jwcode-web -am
 
-# Start Java backend (HTTP :8080, WS :8081)
-mvn exec:java -pl jwcode-web -Dexec.mainClass=com.jwcode.web.WebLauncher -Dexec.args="8080 8081"
+# Start Java backend (HTTP :8080, WS :8081) — install first to ensure jwcode-core in local Maven repo
+mvn install -pl jwcode-core,jwcode-web -am -DskipTests && mvn exec:java -pl jwcode-web -Dexec.mainClass=com.jwcode.web.WebLauncher -Dexec.args="8080 8081"
 
 # Build frontend only (Vite → dist/)
 cd jwcode-web && npm run build
@@ -28,6 +28,68 @@ The TS CLI bundles via esbuild into `dist/cli.js` (ESM, Node 18+). `npm run go` 
 Web frontend builds with `tsc && vite build` → `jwcode-web/dist/`, served from classpath by Java backend.
 
 ## Architecture
+
+## LLM Service Layer (base_url Dual-Format Support)
+
+**Architecture:**
+```
+LLMFactory (via ServiceRegistry routing)
+    |
+ServiceRegistry
+    |-- OpenAIServiceProvider  (api-type = "openai-completions")
+    |-- AnthropicServiceProvider (api-type = "anthropic-messages")
+            |                          |
+        OpenAILLMService         AnthropicLLMService
+            |                          |
+            +------- AbstractHttpLLMService --------+
+                (HttpClient, retry, error mapping, SSE)
+```
+
+**Key classes:**
+| Class | Purpose |
+|-------|---------|
+| `AbstractHttpLLMService` | Shared HTTP base: HttpClient (60s timeout, HTTP/1.1), exponential-backoff retry (2s->4s->8s, max 3), error code mapping, SSE line reading, 5 subclass hooks (buildRequestBody, buildRequestUri, buildExtraHeaders, parseResponse, processStreamEvent) |
+| `ServiceConfig` | Standalone config with apiType, anthropicVersion, baseUrl, apiKeys, model, timeout, contextWindow |
+| `ServiceRegistry` | Runtime provider registry: register(provider) / createService(apiType, config) / getSupportedTypes() |
+| `ServiceProvider` | Interface: getApiType() / createService(ServiceConfig) |
+| `OpenAIServiceProvider` | `"openai-completions"` -> `OpenAILLMService` |
+| `AnthropicServiceProvider` | `"anthropic-messages"` -> `AnthropicLLMService` |
+| `AnthropicMessageConverter` | Pure conversion: internal messages <-> Anthropic Messages API format (system top-level, content blocks: text/tool_use/thinking/tool_result, input_schema) |
+| `AnthropicLLMService` | Implements Anthropic Messages API: non-streaming + SSE streaming with state machine (message_start, content_block_start/delta/stop, message_delta/stop, ping), input_json_delta accumulation for tool_use input |
+
+**Config YAML format:**
+```yaml
+providers:
+  deepseek:
+    base-url: https://api.deepseek.com
+    api-type: openai-completions
+    api-keys: [ sk-xxx ]
+    models:
+      - id: deepseek-chat
+        max-tokens: 8192
+
+  deepseek-anthropic:
+    base-url: https://api.deepseek.com/anthropic
+    api-type: anthropic-messages
+    api-keys: [ sk-xxx ]
+    anthropic-version: 2023-06-01
+    models:
+      - id: deepseek-chat
+        max-tokens: 8192
+
+  claude:
+    base-url: https://api.anthropic.com
+    api-type: anthropic-messages
+    api-keys: [ sk-ant-xxx ]
+    models:
+      - id: claude-sonnet-4-20250514
+        max-tokens: 8192
+
+default-provider: deepseek
+```
+
+**Key files:** `jwcode-core/.../llm/` -- AbstractHttpLLMService, ServiceConfig, ServiceRegistry, ServiceProvider, OpenAILLMService, OpenAIServiceProvider, AnthropicMessageConverter, AnthropicLLMService, AnthropicServiceProvider
+
 
 **Four-layer Harness Engineering (v3.2):**
 - L4 Observability: CostTracker, ObservationPipeline, Doctor, analytics

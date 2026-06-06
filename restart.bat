@@ -28,10 +28,10 @@ if errorlevel 1 (
 )
 echo   Done.
 
-:: 3. Compile backend
-echo [3/4] Compiling backend...
+:: 3. Build & install backend (install ensures jwcode-core is in local Maven repo)
+echo [3/4] Building backend...
 cd /d "%ROOT%"
-call mvn compile -pl jwcode-core,jwcode-web -am -q
+call mvn install -pl jwcode-core,jwcode-web -am -DskipTests -q
 if errorlevel 1 (
     echo   ERROR: Backend compile failed!
     pause

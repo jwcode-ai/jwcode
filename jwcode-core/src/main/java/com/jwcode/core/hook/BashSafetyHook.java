@@ -46,7 +46,11 @@ public class BashSafetyHook implements HookExecutor {
                         "Auto-approved (cached fingerprint): " + truncate(toolInput, 80));
                 }
 
-                // ASK 审批：将指纹编码到 askPayload 中，审批通过后在 HookApprovalManager 中自动缓存
+                if (com.jwcode.core.permission.PermissionManager.getInstance().isAutoMode()) {
+                    return HookResult.allow("BashSafetyHook",
+                        "YOLO mode - auto approve: " + truncate(toolInput, 80));
+                }
+
                 String displayText = truncate(toolInput, 100);
                 String askPayload = fingerprint + "\n---\n" + displayText;
                 return HookResult.ask("BashSafetyHook", askPayload,

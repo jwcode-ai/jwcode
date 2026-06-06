@@ -1,16 +1,20 @@
 package com.jwcode.core.advanced.swarm;
 
+import com.jwcode.core.config.ConfigManager;
+
 import java.util.List;
 import java.util.regex.Pattern;
 
 /**
  * Auto Swarm Trigger - 自动触发 Agent Swarm
- * 
+ *
  * 自动检测复杂任务并触发 Agent Swarm 执行
  * 无需手动输入 advanced swarm 命令
  */
 public class AutoSwarmTrigger {
-    
+
+    private static final String CONFIG_KEY = "autoSwarm.enabled";
+
     // 复杂任务特征模式
     private static final List<TaskPattern> COMPLEX_TASK_PATTERNS = List.of(
         new TaskPattern("refactor.*", "重构任务通常涉及多个文件，适合使用 Swarm"),
@@ -23,15 +27,32 @@ public class AutoSwarmTrigger {
         new TaskPattern("fix.*all.*bugs.*", "批量修复 Bug 可以并行"),
         new TaskPattern("create.*tests.*", "生成测试可以按模块并行")
     );
-    
+
     // 任务复杂度阈值
     private static final int COMPLEXITY_THRESHOLD = 3;
-    
+
     private final AgentSwarm agentSwarm;
-    private boolean autoSwarmEnabled = false;
-    
+    private boolean autoSwarmEnabled;
+
     public AutoSwarmTrigger(AgentSwarm agentSwarm) {
         this.agentSwarm = agentSwarm;
+        reload();
+    }
+
+    /**
+     * 从 ConfigManager 重新加载配置。
+     */
+    public void reload() {
+        String raw = ConfigManager.getInstance().get(CONFIG_KEY);
+        this.autoSwarmEnabled = Boolean.parseBoolean(raw);
+    }
+
+    /**
+     * 动态设置（同时持久化）。
+     */
+    public void setEnabled(boolean enabled) {
+        this.autoSwarmEnabled = enabled;
+        ConfigManager.getInstance().set(CONFIG_KEY, String.valueOf(enabled));
     }
     
     /**

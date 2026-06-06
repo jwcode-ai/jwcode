@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { Activity, Circle, ArrowRight, CheckCircle2, XCircle, Loader2, RefreshCw } from 'lucide-react';
+import { Activity, Circle, ArrowRight, CheckCircle2, XCircle, Loader2, RefreshCw, ChevronDown } from 'lucide-react';
 import wsService from '../../services/websocket';
 
 // ---- Types ----
@@ -25,21 +25,7 @@ interface AgentNode {
   lastEvent: number;
 }
 
-interface FlowEdge {
-  from: string;
-  to: string;
-  taskId: string;
-  description: string;
-  status: 'running' | 'completed' | 'failed';
-  timestamp: number;
-  active: boolean;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 // ---- Constants ----
-
-const DEFAULT_DEF = { color: "#8b949e", label: "Agent" };
 
 const AGENT_DEFS: Record<string, { color: string; label: string }> = {
   Orchestrator: { color: '#a855f7', label: 'Orchestrator' },
@@ -51,34 +37,104 @@ const AGENT_DEFS: Record<string, { color: string; label: string }> = {
   debug: { color: '#db6d28', label: 'Debug' },
   documenter: { color: '#1f6feb', label: 'Documenter' },
   evaluator: { color: '#56d364', label: 'Evaluator' },
-  memory: { color: '#58a6ff', label: 'Memory' },
-  compiler: { color: '#3b82f6', label: 'Compiler' },
-  default: { color: '#8b949e', label: 'Agent' },
 };
 
 function getAgentDef(name: string): { color: string; label: string } {
   const key = name.toLowerCase();
-  return AGENT_DEFS[key] || DEFAULT_DEF;
+  return AGENT_DEFS[key] || { color: '#8b949e', label: name };
 }
 
 const SUB_AGENTS = ['explorer', 'architect', 'coder', 'tester', 'reviewer', 'debug', 'documenter', 'evaluator'];
-const MAX_EDGE_HISTORY = 50;
 const FLOW_TIMEOUT = 8000;
 
-// ---- Helper: status icon ----
+// ---- Status icon ----
 
-function StatusIcon({ status }: { status: string }) {
+function StatusIcon({ status, size }: { status: string; size?: number }) {
+  const s = size || 10;
   switch (status) {
     case 'busy':
     case 'running':
-      return <Loader2 size={14} className="animate-spin" />;
+      return <Loader2 size={s} className="animate-spin" />;
     case 'completed':
-      return <CheckCircle2 size={14} />;
+      return <CheckCircle2 size={s} />;
     case 'failed':
-      return <XCircle size={14} />;
+      return <XCircle size={s} />;
     default:
-      return <Circle size={14} />;
+      return <Circle size={s} />;
   }
+}
+
+// ---- Compact agent row ----
+
+function AgentRow({
+  agent,
+  isActive,
+}: {
+  agent: AgentNode;
+  isActive: boolean;
+}) {
+  const statusColor =
+    agent.status === 'busy' ? agent.color
+    : agent.status === 'completed' ? '#238636'
+    : agent.status === 'failed' ? '#f85149'
+    : '#484f58';
+
+  return (
+    <div
+      className="flex items-center gap-2 px-3 py-2 rounded-lg border transition-all duration-500"
+      style={{
+        backgroundColor: isActive
+          ? `${agent.color}12`
+          : agent.status === 'completed' ? '#23863608'
+          : agent.status === 'failed' ? '#f8514908'
+          : 'transparent',
+        borderColor: isActive ? `${agent.color}60`
+          : agent.status === 'completed' ? '#23863630'
+          : agent.status === 'failed' ? '#f8514930'
+          : '#30363d',
+        boxShadow: isActive ? `0 0 12px ${agent.color}20` : 'none',
+      }}
+    >
+      {/* Status dot */}
+      <div className="relative shrink-0">
+        <div
+          className="w-2.5 h-2.5 rounded-full transition-all duration-500"
+          style={{
+            backgroundColor: statusColor,
+            boxShadow: agent.status === 'busy' ? `0 0 8px ${agent.color}` : 'none',
+          }}
+        />
+        {agent.status === 'busy' && (
+          <div
+            className="absolute inset-0 rounded-full animate-ping"
+            style={{ backgroundColor: agent.color, opacity: 0.3 }}
+          />
+        )}
+      </div>
+
+      {/* Info */}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5">
+          <span className="text-[11px] font-semibold truncate" style={{ color: agent.color }}>
+            {agent.name}
+          </span>
+          <span className="text-[9px] shrink-0" style={{ color: statusColor }}>
+            {agent.status === 'idle' ? '空闲'
+              : agent.status === 'busy' ? '处理中'
+              : agent.status === 'completed' ? '完成'
+              : '失败'}
+          </span>
+        </div>
+        {agent.currentTask && (
+          <p className="text-[9px] text-dark-muted truncate mt-0.5 leading-tight">
+            {agent.currentTask}
+          </p>
+        )}
+      </div>
+
+      {agent.status === 'busy' && <Loader2 size={10} className="animate-spin shrink-0" style={{ color: agent.color }} />}
+    </div>
+  );
 }
 
 // ---- Main Component ----
@@ -100,12 +156,11 @@ export function AgentFlowView() {
     return m;
   });
 
-  const [edges, setEdges] = useState<FlowEdge[]>([]);
-  const [activeFlow, setActiveFlow] = useState<{ from: string; to: string; taskId: string } | null>(null);
+  const [activeFlows, setActiveFlows] = useState<Set<string>>(new Set());
   const [log, setLog] = useState<AgentFlowEvent[]>([]);
   const eventsRef = useRef<AgentFlowEvent[]>([]);
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  
+  const [logExpanded, setLogExpanded] = useState(false);
+
   // ---- WebSocket subscription ----
   useEffect(() => {
     const unsub = wsService.onMessage((msg: any) => {
@@ -120,16 +175,17 @@ export function AgentFlowView() {
     const now = Date.now();
 
     if (evt.eventType === 'dispatch') {
+      const toKey = SUB_AGENTS.find(a => a.toLowerCase() === evt.toAgent.toLowerCase()) || evt.toAgent.toLowerCase();
+
       setAgents(prev => {
         const next = new Map(prev);
-        const from = next.get('Orchestrator');
-        if (from) {
-          from.status = 'busy';
-          from.currentTask = evt.description;
-          from.currentTaskId = evt.taskId;
-          from.lastEvent = now;
+        const orch = next.get('Orchestrator');
+        if (orch) {
+          orch.status = 'busy';
+          orch.currentTask = evt.description;
+          orch.currentTaskId = evt.taskId;
+          orch.lastEvent = now;
         }
-        const toKey = SUB_AGENTS.find(a => a.toLowerCase() === evt.toAgent.toLowerCase()) || evt.toAgent.toLowerCase();
         const to = next.get(toKey);
         if (to) {
           to.status = 'busy';
@@ -139,289 +195,356 @@ export function AgentFlowView() {
         }
         return next;
       });
-      setActiveFlow({ from: 'Orchestrator', to: getAgentDef(evt.toAgent).label, taskId: evt.taskId });
-      setEdges(prevEdges => {
-        const newEdge: FlowEdge = {
-          from: 'Orchestrator', to: getAgentDef(evt.toAgent).label, taskId: evt.taskId,
-          description: evt.description, status: 'running', timestamp: now, active: true,
-        };
-        return [...prevEdges, newEdge].slice(-MAX_EDGE_HISTORY);
-      });
+
+      setActiveFlows(prev => new Set(prev).add(toKey));
     } else if (evt.eventType === 'complete') {
       const toKey = SUB_AGENTS.find(a => a.toLowerCase() === evt.toAgent.toLowerCase()) || evt.toAgent.toLowerCase();
+
       setAgents(prev => {
         const next = new Map(prev);
         const agent = next.get(toKey);
         if (agent) {
           agent.status = evt.status === 'completed' ? 'completed' : 'failed';
           agent.lastEvent = now;
-          setTimeout(() => {
-            setAgents(p => {
-              const n = new Map(p);
-              const a = n.get(toKey);
-              if (a) a.status = 'idle';
-              const o = n.get('Orchestrator');
-              if (o) o.status = 'idle';
-              return n;
-            });
-          }, FLOW_TIMEOUT);
         }
         return next;
       });
-      setEdges(prevEdges =>
-        prevEdges.map(e =>
-          e.taskId === evt.taskId && e.to === getAgentDef(evt.toAgent).label
-            ? { ...e, status: evt.status === 'completed' ? 'completed' : 'failed', active: false }
-            : e
-        )
-      );
-      setActiveFlow(null);
+
+      setTimeout(() => {
+        setAgents(p => {
+          const n = new Map(p);
+          const a = n.get(toKey);
+          if (a) a.status = 'idle';
+          const o = n.get('Orchestrator');
+          if (o) o.status = 'idle';
+          return n;
+        });
+        setActiveFlows(prev => {
+          const next = new Set(prev);
+          next.delete(toKey);
+          return next;
+        });
+      }, FLOW_TIMEOUT);
     }
 
-    // Add to log
     eventsRef.current = [evt, ...eventsRef.current].slice(0, 50);
     setLog(eventsRef.current);
   }, []);
 
+  const orch = agents.get('Orchestrator');
 
+  // ---- Test simulation ----
+  const runTestFlow = useCallback(() => {
+    const tasks = [
+      { agent: 'explorer', desc: '分析代码库结构' },
+      { agent: 'architect', desc: '设计系统架构' },
+      { agent: 'coder', desc: '实现核心功能' },
+      { agent: 'tester', desc: '编写单元测试' },
+      { agent: 'reviewer', desc: '代码审查' },
+      { agent: 'debug', desc: '调试问题' },
+      { agent: 'documenter', desc: '编写 API 文档' },
+      { agent: 'evaluator', desc: '评估代码质量' },
+    ];
 
-  // ---- Layout helpers ----
-  const ORCHESTRATOR_Y = 60;
-  const AGENT_START_Y = 170;
-  const AGENT_GAP_Y = 100;
+    tasks.forEach((task, i) => {
+      const taskId = `test-${Date.now()}-${i}`;
+      // Dispatch
+      setTimeout(() => {
+        handleEvent({
+          eventType: 'dispatch',
+          fromAgent: 'Orchestrator',
+          toAgent: task.agent,
+          taskId,
+          description: task.desc,
+          status: 'running',
+          sessionId: 'test-session',
+          timestamp: Date.now(),
+        });
+      }, i * 600);
 
-  const getAgentPosition = (index: number) => ({
-    x: 160 + (index % 4) * 200,
-    y: AGENT_START_Y + Math.floor(index / 4) * AGENT_GAP_Y,
-  });
+      // Complete
+      setTimeout(() => {
+        const success = i !== 5; // debug fails for variety
+        handleEvent({
+          eventType: 'complete',
+          fromAgent: task.agent,
+          toAgent: 'Orchestrator',
+          taskId,
+          description: '',
+          status: success ? 'completed' : 'failed',
+          sessionId: 'test-session',
+          timestamp: Date.now(),
+        });
+      }, i * 600 + 2500);
+    });
+  }, [handleEvent]);
 
   // ---- Render ----
   return (
     <div className="h-full flex flex-col bg-dark-bg">
       {/* Header */}
-      <div className="shrink-0 px-4 py-3 border-b border-dark-border flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Activity size={16} className="text-accent-purple" />
-          <span className="text-sm font-semibold text-dark-text">Agent 信息流</span>
+      <div className="shrink-0 px-3 py-2.5 border-b border-dark-border flex items-center justify-between">
+        <div className="flex items-center gap-1.5">
+          <Activity size={14} className="text-accent-purple" />
+          <span className="text-xs font-semibold text-dark-text">Agent 信息流</span>
         </div>
-        <div className="flex items-center gap-3 text-[11px] text-dark-muted">
-          <span className="flex items-center gap-1">
-            <Circle size={10} className="text-dark-muted" /> 空闲
-          </span>
-          <span className="flex items-center gap-1">
-            <Loader2 size={10} className="text-accent-blue animate-spin" /> 处理中
-          </span>
-          <span className="flex items-center gap-1">
-            <CheckCircle2 size={10} className="text-accent-green" /> 完成
-          </span>
-          <span className="flex items-center gap-1">
-            <XCircle size={10} className="text-accent-red" /> 失败
-          </span>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={runTestFlow}
+            className="text-[9px] px-2 py-0.5 rounded bg-accent-purple/20 text-accent-purple hover:bg-accent-purple/30 transition-colors"
+          >
+            模拟测试
+          </button>
+          <span className="flex items-center gap-0.5 text-[9px] text-dark-muted"><Circle size={8} className="text-dark-muted" /> 空闲</span>
+          <span className="flex items-center gap-0.5 text-[9px] text-dark-muted"><Loader2 size={8} className="text-accent-blue animate-spin" /> 处理中</span>
+          <span className="flex items-center gap-0.5 text-[9px] text-dark-muted"><CheckCircle2 size={8} className="text-accent-green" /> 完成</span>
+          <span className="flex items-center gap-0.5 text-[9px] text-dark-muted"><XCircle size={8} className="text-accent-red" /> 失败</span>
         </div>
       </div>
 
-      {/* Flow canvas */}
-      <div className="flex-1 flex overflow-hidden">
-        <div className="flex-1 relative overflow-auto">
-          <svg
-            width="100%"
-            height="100%"
-            className="absolute inset-0"
-            style={{ minWidth: 900, minHeight: 500 }}
-          >
-            <defs>
-              <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
-                <polygon points="0 0, 10 3.5, 0 7" fill="#58a6ff" />
-              </marker>
-            </defs>
-
-            {/* Connection curves from Orchestrator to each agent */}
-            {SUB_AGENTS.map((agentName, i) => {
-              const pos = getAgentPosition(i);
-              const agent = agents.get(agentName);
-              const isActive = activeFlow && activeFlow.to === (agent?.name || agentName);
-              const edge = edges.find(e => e.to === (agent?.name || agentName) && e.active);
-              const strokeColor = isActive
-                ? '#a855f7'
-                : edge?.status === 'completed'
-                  ? '#238636'
-                  : edge?.status === 'failed'
-                    ? '#f85149'
-                    : '#30363d';
-              const strokeWidth = isActive ? 3 : 1.5;
-              const opacity = isActive ? 1 : 0.4;
-
-              return (
-                <g key={agentName}>
-                  <path
-                    d={`M 300,${ORCHESTRATOR_Y + 30} C 300,${(ORCHESTRATOR_Y + 30 + pos.y) / 2}, ${300 + (pos.x - 300) * 0.3},${(ORCHESTRATOR_Y + 30 + pos.y) / 2}, ${pos.x + 60},${pos.y}`}
-                    fill="none"
-                    stroke={strokeColor}
-                    strokeWidth={strokeWidth}
-                    opacity={opacity}
-                    markerEnd={isActive ? 'url(#arrowhead)' : undefined}
-                    className={isActive ? 'animate-pulse' : ''}
-                  />
-                  {/* Animated dot along path */}
-                  {isActive && (
-                    <circle r="4" fill="#a855f7" filter="url(#glow)">
-                      <animateMotion
-                        dur="2s"
-                        repeatCount="indefinite"
-                        path={`M 300,${ORCHESTRATOR_Y + 30} C 300,${(ORCHESTRATOR_Y + 30 + pos.y) / 2}, ${300 + (pos.x - 300) * 0.3},${(ORCHESTRATOR_Y + 30 + pos.y) / 2}, ${pos.x + 60},${pos.y}`}
-                      />
-                    </circle>
-                  )}
-                </g>
-              );
-            })}
-          </svg>
-
-          {/* Orchestrator node */}
-          <div
-            className="absolute z-10"
-            style={{ left: 240, top: ORCHESTRATOR_Y, width: 120 }}
-          >
-            <div
-              className="flex flex-col items-center p-3 rounded-lg border"
-              style={{
-                backgroundColor: 'rgba(168, 85, 247, 0.1)',
-                borderColor: agents.get('Orchestrator')?.status === 'busy' ? '#a855f7' : '#30363d',
-                boxShadow: agents.get('Orchestrator')?.status === 'busy'
-                  ? '0 0 20px rgba(168, 85, 247, 0.3)' : 'none',
-              }}
-            >
-              <div className="flex items-center gap-1.5 mb-1">
-                <div
-                  className="w-2 h-2 rounded-full"
-                  style={{
-                    backgroundColor: agents.get('Orchestrator')?.status === 'busy' ? '#a855f7' : '#8b949e',
-                    boxShadow: agents.get('Orchestrator')?.status === 'busy'
-                      ? '0 0 8px #a855f7' : 'none',
-                  }}
-                />
-                <span className="text-xs font-bold text-purple-400">Orchestrator</span>
-              </div>
-              {agents.get('Orchestrator')?.currentTask && (
-                <span className="text-[10px] text-dark-muted text-center truncate max-w-[100px]">
-                  {agents.get('Orchestrator')?.currentTask}
-                </span>
-              )}
-            </div>
-          </div>
-
-          {/* Agent nodes */}
-          {SUB_AGENTS.map((agentName, i) => {
-            const pos = getAgentPosition(i);
-            const agent = agents.get(agentName);
-            if (!agent) return null;
-            const isActive = activeFlow?.to === agent.name;
-
-            return (
+      {/* Vertical river flow */}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex-1 overflow-y-auto overflow-x-hidden custom-scrollbar">
+          <div className="px-3 py-3 space-y-0">
+            {/* Orchestrator — river source */}
+            <div className="relative">
               <div
-                key={agentName}
-                className="absolute z-10"
-                style={{ left: pos.x, top: pos.y, width: 130 }}
+                className="flex items-center gap-2 px-3 py-2.5 rounded-lg border transition-all duration-500"
+                style={{
+                  backgroundColor: activeFlows.size > 0 ? '#a855f712' : 'transparent',
+                  borderColor: activeFlows.size > 0 ? '#a855f760' : '#30363d',
+                  boxShadow: activeFlows.size > 0 ? '0 0 16px #a855f720' : 'none',
+                }}
               >
-                <div
-                  className="flex flex-col items-center p-2.5 rounded-lg border transition-all duration-300"
-                  style={{
-                    backgroundColor: isActive
-                      ? `rgba(${parseInt(agent.color.slice(1,3), 16)}, ${parseInt(agent.color.slice(3,5), 16)}, ${parseInt(agent.color.slice(5,7), 16)}, 0.15)`
-                      : 'rgba(22, 27, 34, 0.8)',
-                    borderColor: isActive ? agent.color : '#30363d',
-                    boxShadow: isActive ? `0 0 15px ${agent.color}40` : 'none',
-                  }}
-                >
-                  <div className="flex items-center gap-1.5 mb-0.5">
+                <div className="relative shrink-0">
+                  <div
+                    className="w-3 h-3 rounded-full transition-all duration-500"
+                    style={{
+                      backgroundColor: orch?.status === 'busy' ? '#a855f7' : '#484f58',
+                      boxShadow: orch?.status === 'busy' ? '0 0 10px #a855f7' : 'none',
+                    }}
+                  />
+                  {orch?.status === 'busy' && (
+                    <div className="absolute inset-0 rounded-full animate-ping" style={{ backgroundColor: '#a855f7', opacity: 0.3 }} />
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[12px] font-bold text-purple-400">Orchestrator</span>
+                    <span className="text-[9px] text-dark-muted">
+                      {orch?.status === 'busy' ? '调度中' : '就绪'}
+                    </span>
+                  </div>
+                  {orch?.currentTask && (
+                    <p className="text-[9px] text-dark-muted truncate mt-0.5">{orch.currentTask}</p>
+                  )}
+                </div>
+                {orch?.status === 'busy' && <Loader2 size={12} className="animate-spin shrink-0 text-purple-400" />}
+              </div>
+
+              {/* Vertical river connector — from Orchestrator down */}
+              <div
+                className="flex justify-center py-0.5"
+                style={{ height: 16 }}
+              >
+                <div className="relative flex flex-col items-center" style={{ width: 2 }}>
+                  <div
+                    className="flex-1 w-full rounded-full transition-all duration-700"
+                    style={{
+                      backgroundColor: activeFlows.size > 0 ? '#a855f760' : '#30363d',
+                      boxShadow: activeFlows.size > 0 ? '0 0 6px #a855f740' : 'none',
+                    }}
+                  />
+                  {activeFlows.size > 0 && (
                     <div
-                      className="w-2 h-2 rounded-full transition-all duration-300"
+                      className="absolute w-1.5 h-1.5 rounded-full"
                       style={{
-                        backgroundColor: agent.status === 'idle' ? '#8b949e'
-                          : agent.status === 'busy' ? agent.color
-                            : agent.status === 'completed' ? '#238636'
-                              : '#f85149',
-                        boxShadow: isActive ? `0 0 8px ${agent.color}` : 'none',
+                        backgroundColor: '#a855f7',
+                        boxShadow: '0 0 8px #a855f7',
+                        animation: 'verticalDrift 1.5s ease-in-out infinite',
                       }}
                     />
-                    <span className="text-[11px] font-semibold text-dark-text">{agent.name}</span>
-                  </div>
-                  {agent.currentTask && (
-                    <div className="flex items-center gap-1 mt-0.5 max-w-[110px]">
-                      <span className="text-[9px] text-dark-muted truncate">{agent.currentTask}</span>
-                      {agent.status === 'busy' && (
-                        <Loader2 size={10} className="animate-spin shrink-0" style={{ color: agent.color }} />
-                      )}
-                    </div>
-                  )}
-                  {/* Task ID subtag */}
-                  {agent.currentTaskId && agent.status === 'busy' && (
-                    <span className="text-[8px] text-dark-muted/50 mt-0.5 font-mono">
-                      {agent.currentTaskId.substring(0, 8)}
-                    </span>
                   )}
                 </div>
               </div>
-            );
-          })}
+            </div>
+
+            {/* Sub-agents in 2-column grid */}
+            <div className="grid grid-cols-2 gap-x-2 gap-y-0">
+              {SUB_AGENTS.map((agentName, i) => {
+                const agent = agents.get(agentName);
+                if (!agent) return null;
+                const isActive = activeFlows.has(agentName);
+
+                // Branch connector
+                const colIndex = i % 2;
+                const isLeftCol = colIndex === 0;
+
+                return (
+                  <div key={agentName}>
+                    {/* Horizontal branch connector from center river to agent */}
+                    <div className="flex items-center" style={{ height: 14 }}>
+                      <div
+                        className="flex-1"
+                        style={{
+                          height: 2,
+                          backgroundColor: isActive ? `${getAgentDef(agentName).color}40` : '#30363d',
+                          boxShadow: isActive ? `0 0 4px ${getAgentDef(agentName).color}40` : 'none',
+                          marginLeft: isLeftCol ? '50%' : undefined,
+                          marginRight: isLeftCol ? undefined : '50%',
+                        }}
+                      />
+                      <div className="flex flex-col items-center shrink-0" style={{ width: 2 }}>
+                        <div
+                          className="flex-1 w-full"
+                          style={{
+                            backgroundColor: isActive ? `${getAgentDef(agentName).color}60` : '#30363d',
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Agent row */}
+                    <AgentRow agent={agent} isActive={isActive} />
+
+                    {/* Vertical river segment between rows */}
+                    {i < SUB_AGENTS.length - 2 && colIndex === 1 && (() => {
+                      const next1 = SUB_AGENTS[i + 1];
+                      const next2 = SUB_AGENTS[i + 2];
+                      const hasFlow = (next1 && activeFlows.has(next1)) || (next2 && activeFlows.has(next2));
+                      return (
+                        <div className="flex justify-center" style={{ height: 8 }}>
+                          <div
+                            className="w-0.5 h-full rounded-full"
+                            style={{ backgroundColor: hasFlow ? '#30363d80' : '#30363d' }}
+                          />
+                        </div>
+                      );
+                    })()}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* River endpoint */}
+            <div className="flex justify-center py-1">
+              <div className="flex flex-col items-center gap-1">
+                <div style={{ width: 2, height: 12, backgroundColor: '#30363d', borderRadius: 2 }} />
+                <div className="w-6 h-6 rounded-full border border-dashed border-dark-border flex items-center justify-center">
+                  <CheckCircle2 size={10} className="text-dark-muted" />
+                </div>
+                <span className="text-[8px] text-dark-muted">输出</span>
+              </div>
+            </div>
+          </div>
         </div>
 
-        {/* Event log sidebar */}
-        <div className="w-72 shrink-0 border-l border-dark-border flex flex-col">
-          <div className="shrink-0 px-3 py-2 border-b border-dark-border">
-            <span className="text-xs font-semibold text-dark-text">事件日志</span>
-          </div>
-          <div className="flex-1 overflow-y-auto custom-scrollbar">
-            {log.length === 0 ? (
-              <div className="px-3 py-4 text-[11px] text-dark-muted text-center">
-                等待 Agent 活动...
-              </div>
-            ) : (
-              log.map((evt, i) => (
-                <div
-                  key={`${evt.taskId}-${i}`}
-                  className="px-3 py-1.5 border-b border-dark-border/50 hover:bg-dark-hover/30 transition-colors"
-                >
-                  <div className="flex items-center gap-1.5">
-                    <StatusIcon status={evt.eventType === 'dispatch' ? 'running' : evt.status} />
-                    <span className="text-[10px] font-medium" style={{
-                      color: evt.eventType === 'dispatch' ? '#58a6ff'
-                        : evt.status === 'completed' ? '#238636'
-                          : evt.status === 'failed' ? '#f85149' : '#8b949e',
-                    }}>
-                      {evt.eventType === 'dispatch' ? '分发' : evt.eventType === 'complete' ? '完成' : '状态'}
-                    </span>
-                    <span className="text-[10px] text-dark-muted ml-auto">
-                      {new Date(evt.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1 mt-0.5">
-                    <span className="text-[10px] text-dark-muted">{evt.fromAgent}</span>
-                    <ArrowRight size={10} className="text-dark-muted" />
-                    <span className="text-[10px] text-dark-muted">{evt.toAgent || evt.fromAgent}</span>
-                  </div>
-                  {evt.description && (
-                    <p className="text-[9px] text-dark-muted/70 mt-0.5 truncate">{evt.description}</p>
-                  )}
+        {/* Event log — bottom panel */}
+        <div
+          className="shrink-0 border-t border-dark-border transition-all duration-300"
+          style={{ height: logExpanded ? 180 : 32 }}
+        >
+          <button
+            onClick={() => setLogExpanded(!logExpanded)}
+            className="w-full flex items-center justify-between px-3 py-1.5 hover:bg-dark-hover/30 transition-colors"
+          >
+            <span className="text-[10px] font-semibold text-dark-text flex items-center gap-1.5">
+              事件日志
+              {log.length > 0 && (
+                <span className="px-1 py-0.5 rounded text-[8px] bg-dark-surface text-dark-muted">
+                  {log.length}
+                </span>
+              )}
+            </span>
+            <ChevronDown
+              size={12}
+              className="text-dark-muted transition-transform duration-300"
+              style={{ transform: logExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}
+            />
+          </button>
+
+          {logExpanded && (
+            <div className="overflow-y-auto custom-scrollbar px-2" style={{ height: 146 }}>
+              {log.length === 0 ? (
+                <div className="py-4 text-[10px] text-dark-muted text-center">
+                  等待 Agent 活动...
                 </div>
-              ))
-            )}
-          </div>
-          {log.length > 0 && (
-            <div className="shrink-0 px-3 py-1.5 border-t border-dark-border">
-              <button
-                onClick={() => { eventsRef.current = []; setLog([]); }}
-                className="text-[10px] text-dark-muted hover:text-dark-text transition-colors flex items-center gap-1"
-              >
-                <RefreshCw size={10} /> 清空日志
-              </button>
+              ) : (
+                <div className="space-y-1 pb-2">
+                  {log.map((evt, i) => {
+                    const agentDef = getAgentDef(evt.toAgent || evt.fromAgent);
+                    return (
+                      <div
+                        key={`${evt.taskId}-${i}`}
+                        className="px-2 py-1.5 rounded border transition-all"
+                        style={{
+                          backgroundColor: evt.eventType === 'dispatch'
+                            ? `${agentDef.color}08`
+                            : evt.status === 'completed' ? '#23863608'
+                            : evt.status === 'failed' ? '#f8514908'
+                            : '#161b22',
+                          borderColor: evt.eventType === 'dispatch'
+                            ? `${agentDef.color}30`
+                            : evt.status === 'completed' ? '#23863630'
+                            : evt.status === 'failed' ? '#f8514930'
+                            : '#30363d',
+                        }}
+                      >
+                        <div className="flex items-center gap-1">
+                          <StatusIcon status={evt.eventType === 'dispatch' ? 'running' : evt.status} size={8} />
+                          <span
+                            className="text-[9px] font-medium"
+                            style={{
+                              color: evt.eventType === 'dispatch' ? agentDef.color
+                                : evt.status === 'completed' ? '#238636'
+                                : evt.status === 'failed' ? '#f85149' : '#8b949e',
+                            }}
+                          >
+                            {evt.eventType === 'dispatch' ? '分发'
+                              : evt.eventType === 'complete' ? '完成' : '状态'}
+                          </span>
+                          <span className="text-[8px] text-dark-muted/50 ml-auto">
+                            {new Date(evt.timestamp).toLocaleTimeString('zh-CN', {
+                              hour: '2-digit', minute: '2-digit', second: '2-digit',
+                            })}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1 mt-0.5">
+                          <span className="text-[9px] text-dark-muted">{evt.fromAgent}</span>
+                          <ArrowRight size={8} className="text-dark-muted" />
+                          <span className="text-[9px]" style={{ color: agentDef.color }}>
+                            {evt.toAgent || evt.fromAgent}
+                          </span>
+                        </div>
+                        {evt.description && (
+                          <p className="text-[8px] text-dark-muted/60 mt-0.5 truncate">{evt.description}</p>
+                        )}
+                      </div>
+                    );
+                  })}
+                  <button
+                    onClick={() => { eventsRef.current = []; setLog([]); }}
+                    className="w-full py-1 rounded border border-dark-border hover:border-dark-muted transition-colors text-[9px] text-dark-muted hover:text-dark-text flex items-center justify-center gap-1"
+                  >
+                    <RefreshCw size={8} />
+                    清空日志
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
       </div>
+
+      <style>{`
+        @keyframes verticalDrift {
+          0%   { top: 0%; opacity: 1; }
+          50%  { top: 50%; opacity: 0.5; }
+          100% { top: 100%; opacity: 1; }
+        }
+      `}</style>
     </div>
   );
 }
 
 export default AgentFlowView;
-

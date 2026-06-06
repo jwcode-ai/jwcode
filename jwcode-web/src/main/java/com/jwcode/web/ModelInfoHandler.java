@@ -95,6 +95,7 @@ public class ModelInfoHandler implements HttpHandler {
                         modelInfo.put("isDefault", providerName.equals(defaultProviderName) 
                             && defaultModel != null && model.getId().equals(defaultModel.getId()));
                         modelInfo.put("provider", providerName);
+                        modelInfo.put("apiType", provider.getApiType() != null ? provider.getApiType() : "openai-completions");
                         modelInfo.put("status", model.isEnabled() ? "online" : "offline");
                         modelInfo.put("priority", model.getPriority());
                         

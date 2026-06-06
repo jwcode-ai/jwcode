@@ -216,10 +216,10 @@ public class PlanModeManager {
      */
     public boolean isToolAllowedInCurrentMode(ToolCategory category, SideEffect sideEffect, String toolName) {
         if (currentMode != Mode.PLAN) return true;
-        if (PLAN_MODE_ALWAYS_BLOCKED_TOOLS.contains(toolName)) return false;
-        if (PLAN_MODE_ALWAYS_ALLOWED_TOOLS.contains(toolName)) return true;
-        if (PLAN_MODE_ALLOWED_CATEGORIES.contains(category)) return true;
-        if (PLAN_MODE_ALLOWED_SIDE_EFFECTS.contains(sideEffect)) return true;
+        if (toolName != null && PLAN_MODE_ALWAYS_BLOCKED_TOOLS.contains(toolName)) return false;
+        if (toolName != null && PLAN_MODE_ALWAYS_ALLOWED_TOOLS.contains(toolName)) return true;
+        if (category != null && PLAN_MODE_ALLOWED_CATEGORIES.contains(category)) return true;
+        if (sideEffect != null && PLAN_MODE_ALLOWED_SIDE_EFFECTS.contains(sideEffect)) return true;
         return false;
     }
 

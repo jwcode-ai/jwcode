@@ -16,13 +16,8 @@ interface SettingsState extends Settings, AdvancedSettings {
   setLanguage: (language: string) => void;
   setFontSize: (fontSize: number) => void;
   setStreamingEnabled: (enabled: boolean) => void;
-  setThinkingEnabled: (enabled: boolean) => void;
   setYoloEnabled: (enabled: boolean) => void;
   setAutoSwarmEnabled: (enabled: boolean) => void;
-  setAutoAIEnabled: (enabled: boolean) => void;
-  setCompressionEnabled: (enabled: boolean) => void;
-  setCompressionMaxMessages: (value: number) => void;
-  setCompressionTokenThreshold: (value: number) => void;
   setWorkspaceDir: (dir: string) => void;
   setWorkspaceGuardBypass: (bypass: boolean) => void;
   setCustomTheme: (colors: Partial<CustomThemeColors>) => void;
@@ -37,15 +32,8 @@ export const useSettingsStore = create<SettingsState>()(
       language: 'zh-CN',
       fontSize: 14,
       streamingEnabled: true,
-      thinking: { enabled: false },
       yolo: { enabled: false },
       autoSwarm: { enabled: false },
-      autoAI: { enabled: false },
-      compression: {
-        enabled: false,
-        maxMessages: 50,
-        tokenThreshold: 4000,
-      },
       workspaceDir: 'c:\\Users\\HUAWEI\\Desktop\\jwcode',
       workspaceGuardBypass: true,
       customTheme: DEFAULT_DARK_THEME,
@@ -55,26 +43,12 @@ export const useSettingsStore = create<SettingsState>()(
       setLanguage: (language) => set({ language }),
       setFontSize: (fontSize) => set({ fontSize }),
       setStreamingEnabled: (streamingEnabled) => set({ streamingEnabled }),
-      setThinkingEnabled: (enabled) => set({ thinking: { enabled } }),
       setYoloEnabled: (enabled) => set({ yolo: { enabled } }),
       setAutoSwarmEnabled: (enabled) => set({ autoSwarm: { enabled } }),
-      setAutoAIEnabled: (enabled) => set({ autoAI: { enabled } }),
       setCustomTheme: (colors) => set((state) => ({ customTheme: { ...state.customTheme, ...colors } })),
       setCustomThemeEnabled: (enabled) => set({ customThemeEnabled: enabled }),
       setWorkspaceGuardBypass: (bypass) => set({ workspaceGuardBypass: bypass }),
       resetCustomTheme: () => set({ customTheme: DEFAULT_DARK_THEME }),
-      setCompressionEnabled: (enabled) =>
-        set((state) => ({
-          compression: { ...state.compression, enabled },
-        })),
-      setCompressionMaxMessages: (maxMessages) =>
-        set((state) => ({
-          compression: { ...state.compression, maxMessages },
-        })),
-      setCompressionTokenThreshold: (tokenThreshold) =>
-        set((state) => ({
-          compression: { ...state.compression, tokenThreshold },
-        })),
       setWorkspaceDir: (dir) => set({ workspaceDir: dir }),
     }),
     {

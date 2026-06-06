@@ -31,7 +31,6 @@ import com.jwcode.core.service.SimpleCompactionStrategy;
 import com.jwcode.core.aicl.AICLPromptBuilder;
 import com.jwcode.core.agent.BudgetExhaustedHandler;
 import com.jwcode.core.config.ConfigManager;
-import com.jwcode.core.advanced.compression.ContextCompressor;
 import com.jwcode.core.permission.PermissionManagerChecker;
 import com.jwcode.core.task.TaskLifecycleManager;
 
@@ -328,7 +327,10 @@ public class LLMQueryEngine {
         
         // 【优化】重置无进展检测计数器
         resetStagnationDetectors();
-        
+
+        // Auto Swarm: 如果启用，分析任务复杂度并注入分解计划
+        checkAndInjectSwarmPlan(prompt);
+
         // 开始对话循环，初始空回复计数为 0
         return runConversationLoop(0, 0);
     }
@@ -356,10 +358,6 @@ public class LLMQueryEngine {
         
         // 注入 AICL 上下文解析规则（让 AI 理解优先级和生命周期）
         prompt.append(AICLPromptBuilder.buildCompactPrompt()).append("\n\n");
-        // [THINKING_MODE] if enabled, inject deep reasoning prompt
-        if (Boolean.parseBoolean(ConfigManager.getInstance().get("thinking.enabled"))) {
-            prompt.append("[Thinking Mode] Please perform deep reasoning before responding.\n\n");
-        }
 
         // 显式列出可用工具（增强约束感）
         List<Tool<?, ?, ?>> allowedTools = toolExecutor.getEnabledTools().stream()
@@ -849,7 +847,10 @@ public class LLMQueryEngine {
         
         // 【优化】重置无进展检测计数器
         resetStagnationDetectors();
-        
+
+        // Auto Swarm: 如果启用，分析任务复杂度并注入分解计划
+        checkAndInjectSwarmPlan(prompt);
+
         return runStreamConversationLoop(0, 0, contentConsumer, thinkingConsumer, toolCallConsumer);
     }
     
@@ -1311,6 +1312,14 @@ public class LLMQueryEngine {
         // Default to true — only disable bypass when metadata is explicitly false
         Boolean bypassWsGuard = session.getMetadata("workspaceGuardBypass");
         toolContext.setBypassWorkspaceGuard(!Boolean.FALSE.equals(bypassWsGuard));
+
+        // Sync YOLO mode from session metadata (allows runtime toggle)
+        Boolean yoloEnabled = session.getMetadata("yoloEnabled");
+        if (Boolean.TRUE.equals(yoloEnabled)) {
+            com.jwcode.core.permission.PermissionManager.getInstance().setYoloMode(true);
+        } else if (Boolean.FALSE.equals(yoloEnabled)) {
+            com.jwcode.core.permission.PermissionManager.getInstance().setYoloMode(false);
+        }
 
         // 通过 ToolExecutor 执行工具，并应用三阶段恢复协议
         return RecoveryExecutor.executeWithRecovery(
@@ -1835,6 +1844,35 @@ public class LLMQueryEngine {
 
     // ==================== 数据类 ====================
     
+    private void checkAndInjectSwarmPlan(String prompt) {
+        Boolean autoSwarmEnabled = session.getMetadata("autoSwarmEnabled");
+        if (!Boolean.TRUE.equals(autoSwarmEnabled)) {
+            autoSwarmEnabled = Boolean.parseBoolean(
+                com.jwcode.core.config.ConfigManager.getInstance().get("autoSwarm.enabled"));
+        }
+        if (!Boolean.TRUE.equals(autoSwarmEnabled)) return;
+
+        try {
+            com.jwcode.core.advanced.swarm.AgentSwarm swarm =
+                new com.jwcode.core.advanced.swarm.AgentSwarm(llmService);
+            com.jwcode.core.advanced.swarm.AutoSwarmTrigger trigger =
+                new com.jwcode.core.advanced.swarm.AutoSwarmTrigger(swarm);
+            com.jwcode.core.advanced.swarm.AutoSwarmTrigger.TaskAnalysis analysis = trigger.analyzeTask(prompt);
+            logger.info("[AutoSwarm] 复杂度=" + analysis.getComplexity() + " 触发=" + analysis.isShouldUseSwarm());
+
+            if (analysis.isShouldUseSwarm()) {
+                var result = swarm.executeComplexTask(prompt, null);
+                String plan = result.getFinalResult() != null ? result.getFinalResult().toString() : "";
+                session.addMessage(Message.createSystemMessage(
+                    "[自动 Agent Swarm 分析]\n" + plan +
+                    "\n\n请基于以上 Swarm 分析结果继续执行任务。"));
+                logger.info("[AutoSwarm] 已注入 Swarm 分解计划 (" + result.getSubTaskCount() + " 个子任务)");
+            }
+        } catch (Exception e) {
+            logger.warning("[AutoSwarm] 分析失败: " + e.getMessage());
+        }
+    }
+
     public static class EngineConfig {
         private int maxIterations = 0; // 默认 0 表示不限制，由 TokenBudget 控制
         private Duration timeout = Duration.ofMinutes(5);

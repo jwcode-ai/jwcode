@@ -77,7 +77,14 @@ public class ConfigManager {
         }
         return instance;
     }
-    
+
+    /**
+     * Reset the singleton instance so config is reloaded from disk on next access.
+     */
+    public static synchronized void resetInstance() {
+        instance = null;
+    }
+
     /**
      * 创建新实例（用于测试）
      */

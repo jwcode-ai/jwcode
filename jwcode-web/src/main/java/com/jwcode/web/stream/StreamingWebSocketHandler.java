@@ -693,6 +693,12 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                 case "toggle_workspace_guard":
                     handleToggleWorkspaceGuard(conn, clientMsg);
                     break;
+                case "toggle_yolo":
+                    handleToggleYolo(conn, clientMsg);
+                    break;
+                case "toggle_auto_swarm":
+                    handleToggleAutoSwarm(conn, clientMsg);
+                    break;
                 case "hook_allow":
                     handleHookApprovalResponse(clientMsg, true);
                     break;
@@ -1913,6 +1919,52 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         } catch (Exception e) {
             logger.warning("handleToggleWorkspaceGuard error: " + e.getMessage());
             sendMessage(conn, MessageType.ERROR, "Failed to toggle workspace guard: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Handle YOLO mode toggle.
+     * Message format: {type: "toggle_yolo", data: "true"|"false"}
+     */
+    private void handleToggleYolo(WebSocket conn, ClientMessage msg) {
+        try {
+            String dataStr = msg.data;
+            boolean enabled = "true".equalsIgnoreCase(dataStr) || "1".equals(dataStr);
+            String sessionId = getOrGenerateSessionId(conn, msg);
+            Session session = sessions.get(sessionId);
+            if (session != null) {
+                session.setMetadata("yoloEnabled", enabled);
+            }
+            com.jwcode.core.config.ConfigManager.getInstance().set("yolo.enabled", String.valueOf(enabled));
+            String state = enabled ? "已开启（全自动模式，无需确认）" : "已关闭（恢复权限检查）";
+            sendMessage(conn, MessageType.NOTIFICATION, "YOLO Mode: " + state);
+            logger.info("Session " + sessionId + " YOLO mode: " + enabled);
+        } catch (Exception e) {
+            logger.warning("handleToggleYolo error: " + e.getMessage());
+            sendMessage(conn, MessageType.ERROR, "Failed to toggle YOLO: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Handle Auto Swarm mode toggle.
+     * Message format: {type: "toggle_auto_swarm", data: "true"|"false"}
+     */
+    private void handleToggleAutoSwarm(WebSocket conn, ClientMessage msg) {
+        try {
+            String dataStr = msg.data;
+            boolean enabled = "true".equalsIgnoreCase(dataStr) || "1".equals(dataStr);
+            com.jwcode.core.config.ConfigManager.getInstance().set("autoSwarm.enabled", String.valueOf(enabled));
+            String sessionId = getOrGenerateSessionId(conn, msg);
+            Session session = sessions.get(sessionId);
+            if (session != null) {
+                session.setMetadata("autoSwarmEnabled", enabled);
+            }
+            String state = enabled ? "已开启（自动 Agent Swarm 模式）" : "已关闭";
+            sendMessage(conn, MessageType.NOTIFICATION, "Auto Swarm: " + state);
+            logger.info("Auto Swarm mode toggled: " + enabled);
+        } catch (Exception e) {
+            logger.warning("handleToggleAutoSwarm error: " + e.getMessage());
+            sendMessage(conn, MessageType.ERROR, "Failed to toggle Auto Swarm: " + e.getMessage());
         }
     }
 

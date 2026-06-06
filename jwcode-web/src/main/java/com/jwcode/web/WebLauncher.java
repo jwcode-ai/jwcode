@@ -34,6 +34,7 @@ public class WebLauncher {
 
         try {
             WebServer server = new WebServer(httpPort, wsPort, ToolRegistry.createDefault(), workspaceDir);
+            SystemStatusHandler.setWebServer(server);
             server.start();
 
             System.out.println("\n═══════════════════════════════════════════════════");
