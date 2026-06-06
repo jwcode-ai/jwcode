@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Shield, Check, X, ChevronDown, ChevronUp } from 'lucide-react';
+import { Shield, ChevronDown, ChevronUp } from 'lucide-react';
 import { Modal } from '../common/Modal';
 import { useHookApprovalStore } from '../../stores/useHookApprovalStore';
 import wsService from '../../services/websocket';
@@ -10,10 +10,7 @@ interface HookApprovalModalProps {
 }
 
 /**
- * HookApprovalModal — Hook ASK 审批弹窗。
- *
- * 当后端 Hook 返回 ASK 决策时，此弹窗展示给用户，
- * 用户可以选择允许、拒绝、或设为自动模式。
+ * HookApprovalModal — numbered option list style, matching HookApprovalCard design.
  */
 export function HookApprovalModal({ isOpen, onClose }: HookApprovalModalProps) {
   const approvalStore = useHookApprovalStore();
@@ -26,12 +23,10 @@ export function HookApprovalModal({ isOpen, onClose }: HookApprovalModalProps) {
 
   const [currentIndex, setCurrentIndex] = useState(0);
 
-  // 如果没有待审批项，不显示
   if (pendingApprovals.length === 0) {
     return null;
   }
 
-  // 自动模式：自动批准所有
   if (autoMode) {
     pendingApprovals.forEach((item) => {
       wsService.send({
@@ -85,7 +80,19 @@ export function HookApprovalModal({ isOpen, onClose }: HookApprovalModalProps) {
     }
   };
 
+  const handleAutoMode = () => {
+    setAutoMode(true);
+    handleAllow();
+  };
+
   const remaining = pendingApprovals.length - currentIndex - 1;
+
+  const options = [
+    { label: 'Allow — execute this command', hint: 'Allow this single operation', action: handleAllow },
+    { label: 'Deny — cancel this operation', hint: 'Reject this operation', action: handleDeny },
+    { label: 'Allow always this session', hint: `Don't ask again for ${currentApproval.toolName}`, action: handleAllowSession },
+    { label: 'Auto mode — allow all hooks', hint: 'All future hooks will be auto-approved', action: handleAutoMode },
+  ];
 
   return (
     <Modal
@@ -95,7 +102,7 @@ export function HookApprovalModal({ isOpen, onClose }: HookApprovalModalProps) {
       size="md"
     >
       <div className="space-y-4">
-        {/* 审批信息 */}
+        {/* Approval info */}
         <div className="bg-dark-bg rounded-lg p-4 border border-dark-border">
           <div className="flex items-center gap-2 mb-2">
             <Shield className="w-5 h-5 text-yellow-400" />
@@ -124,35 +131,35 @@ export function HookApprovalModal({ isOpen, onClose }: HookApprovalModalProps) {
           </div>
         </div>
 
-        {/* 操作按钮 */}
-        <div className="space-y-3">
-          <div className="flex gap-2">
+        {/* Numbered option list */}
+        <div className="space-y-0.5">
+          {options.map((opt, i) => (
             <button
-              onClick={handleAllow}
-              className="flex-1 px-4 py-2.5 text-sm bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors flex items-center justify-center gap-2"
+              key={i}
+              onClick={opt.action}
+              className="w-full text-left px-3 py-2 rounded-lg hover:bg-dark-hover transition-colors group border border-transparent hover:border-dark-border/50"
             >
-              <Check className="w-4 h-4" />
-              <span>允许执行</span>
+              <div className="flex items-baseline gap-2">
+                <span className="text-sm text-dark-muted font-mono shrink-0">
+                  {i + 1}.
+                </span>
+                <span className="text-sm text-dark-text group-hover:text-white transition-colors">
+                  {opt.label}
+                </span>
+              </div>
+              <div className="text-xs text-dark-muted/60 ml-7 mt-0.5">
+                {opt.hint}
+              </div>
             </button>
-            <button
-              onClick={handleDeny}
-              className="flex-1 px-4 py-2.5 text-sm bg-red-500/20 text-red-400 border border-red-500/30 rounded-lg hover:bg-red-500/30 transition-colors flex items-center justify-center gap-2"
-            >
-              <X className="w-4 h-4" />
-              <span>拒绝</span>
-            </button>
-          </div>
-
-          <button
-            onClick={handleAllowSession}
-            className="w-full px-4 py-2 text-sm bg-dark-surface border border-dark-border rounded-lg hover:bg-dark-hover transition-colors flex items-center justify-center gap-2"
-          >
-            <span>✅</span>
-            <span>本次会话始终允许 <code className="text-xs text-dark-muted">{currentApproval.toolName}</code></span>
-          </button>
+          ))}
         </div>
 
-        {/* 自动模式开关 */}
+        {/* Footer hint */}
+        <div className="text-xs text-dark-muted/50">
+          Click an option to respond · {remaining > 0 ? `${remaining + 1} requests remaining` : 'Last request'}
+        </div>
+
+        {/* Auto mode toggle */}
         <div className="flex items-center justify-between px-3 py-2 bg-dark-bg rounded-lg border border-dark-border">
           <div className="flex flex-col">
             <span className="text-sm text-dark-text">自动模式</span>
@@ -174,7 +181,7 @@ export function HookApprovalModal({ isOpen, onClose }: HookApprovalModalProps) {
           </button>
         </div>
 
-        {/* hooks.json 配置说明 */}
+        {/* hooks.json config hint */}
         <div className="border border-dark-border rounded-lg overflow-hidden">
           <button
             onClick={() => setShowConfigHint(!showConfigHint)}
