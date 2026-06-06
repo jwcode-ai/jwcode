@@ -4,6 +4,7 @@
  */
 import { useState, useMemo, useEffect } from 'react';
 import { Box, Text, useInput, useStdout } from 'ink';
+import { t } from '../theme.js';
 
 interface Props {
   query: string;   // text after @
@@ -68,10 +69,10 @@ export function FilePalette({ query, files, onSelect }: Props) {
   });
 
   return (
-    <Box flexDirection="column" borderStyle="single" borderColor="yellow" paddingX={1} width={64}>
+    <Box flexDirection="column" borderStyle="single" borderColor={t.warning} paddingX={1} width={64}>
       <Box>
-        <Text bold color="yellow">@ 搜索: </Text>
-        <Text color="green">{query || '(输入文件名)'}</Text>
+        <Text bold color={t.warning}>@ 搜索: </Text>
+        <Text color={t.success}>{query || '(输入文件名)'}</Text>
         <Text dimColor>  ↑↓ 选择 · Enter 插入 · Esc 关闭</Text>
       </Box>
       {visible.length === 0 && (
@@ -86,10 +87,10 @@ export function FilePalette({ query, files, onSelect }: Props) {
           : path;
         return (
           <Box key={path} paddingLeft={1}>
-            <Text color={idx === selected ? 'yellow' : undefined} bold={idx === selected}>
+            <Text color={idx === selected ? t.warning : undefined} bold={idx === selected}>
               {idx === selected ? '❯ ' : '  '}
             </Text>
-            <Text color="green">{name}</Text>
+            <Text color={t.success}>{name}</Text>
             <Text dimColor> — {dir}</Text>
           </Box>
         );

@@ -12,4 +12,4 @@ if not exist "%ROOT%dist\cli.js" (
 )
 
 :: Run
-node "%ROOT%dist\cli.js" %*
+node "%ROOT%dist\cli.js" %* 2> "%ROOT%debug.log"

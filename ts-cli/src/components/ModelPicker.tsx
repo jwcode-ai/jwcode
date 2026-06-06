@@ -6,6 +6,7 @@
  */
 import { useState, useEffect, useMemo } from 'react';
 import { Box, Text, useInput, useStdout } from 'ink';
+import { t } from '../theme.js';
 
 export interface ModelInfo {
   name: string;
@@ -77,21 +78,21 @@ export function ModelPicker({ backendUrl, onSelect, onCancel }: Props) {
   });
 
   return (
-    <Box flexDirection="column" borderStyle="single" borderColor="cyan" paddingX={1} width={60}>
+    <Box flexDirection="column" borderStyle="single" borderColor={t.primary} paddingX={1} width={60}>
       <Box>
-        <Text bold color="cyan">Available Models</Text>
+        <Text bold color={t.primary}>Available Models</Text>
         <Text dimColor>  ↑↓/PgUp/PgDn navigate  Enter select  Esc cancel</Text>
       </Box>
 
       {loading && (
         <Box paddingY={1}>
-          <Text color="yellow">Loading models...</Text>
+          <Text color={t.warning}>Loading models...</Text>
         </Box>
       )}
 
       {error && (
         <Box paddingY={1}>
-          <Text color="red">Failed to load models: {error}</Text>
+          <Text color={t.error}>Failed to load models: {error}</Text>
         </Box>
       )}
 
@@ -107,10 +108,10 @@ export function ModelPicker({ backendUrl, onSelect, onCancel }: Props) {
         const providerTag = m.provider ? ` [${m.provider}]` : '';
         return (
           <Box key={m.id || m.name || i} paddingLeft={1}>
-            <Text color={isSel ? 'cyan' : undefined} bold={isSel}>
+            <Text color={isSel ? t.primary : undefined} bold={isSel}>
               {isSel ? '❯ ' : '  '}
             </Text>
-            <Text color={isSel ? 'green' : undefined}>{m.name || m.id}</Text>
+            <Text color={isSel ? t.success : undefined}>{m.name || m.id}</Text>
             {providerTag ? <Text dimColor>{providerTag}</Text> : null}
             {m.priority !== undefined ? <Text dimColor>  p={m.priority}</Text> : null}
           </Box>

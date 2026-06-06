@@ -4,20 +4,18 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Box, Text, useStdout } from 'ink';
 import { TextInput, saveToHistory } from './components/TextInput.js';
+import { t } from './theme.js';
 import { JwCodeClient } from './client.js';
 import { StatusLine } from './components/StatusLine.js';
 import { ChatArea } from './components/ChatArea.js';
 import { CommandPalette } from './components/CommandPalette.js';
 import { FilePalette } from './components/FilePalette.js';
 import { ApprovalModal } from './components/ApprovalModal.js';
-import { SetupWizard } from './components/SetupWizard.js';
-import { ModelPicker, type ModelInfo } from './components/ModelPicker.js';
 import { updateAppState, useAppSlice } from './hooks/useAppState.js';
 import { createMessage } from './protocol.js';
 import { SLASH_COMMANDS, HELP_TEXT } from './commands/index.js';
 import { useStreamHandlers } from './hooks/useStreamHandlers.js';
 import { useKeyboardInput } from './hooks/useKeyboardInput.js';
-import { useMouseWheel } from './hooks/useMouseWheel.js';
 import { setClient } from './hooks/useWebSocket.js';
 
 interface AppProps {
@@ -53,8 +51,7 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
     toolName: string;
     payload: string;
   } | null>(null);
-  const [showModelConfig, setShowModelConfig] = useState(false);
-  const [showModelPicker, setShowModelPicker] = useState(false);
+  const sessionAllowRef = useRef<Set<string>>(new Set());
 
   const clientRef = useRef<JwCodeClient | null>(null);
   const { stdout } = useStdout();
@@ -64,12 +61,11 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
   const planMode = useAppSlice(s => s.planMode);
   const connected = useAppSlice(s => s.connected);
   const planWaiting = useAppSlice(s => s.planWaiting);
-  const messages = useAppSlice(s => s.messages);
-  const currentMessage = useAppSlice(s => s.currentMessage);
-  const scrollOffset = useAppSlice(s => s.scrollOffset);
-  const toolCallsExpanded = useAppSlice(s => s.toolCallsExpanded);
+  const isGenerating = useAppSlice(s => s.currentMessage !== null);
+  const messagesLen = useAppSlice(s => s.messages.length);
+  const modelName = useAppSlice(s => s.modelName);
 
-  const wireHandlers = useStreamHandlers(setShowApproval);
+  const wireHandlers = useStreamHandlers(setShowApproval, sessionAllowRef);
 
   useEffect(() => {
     const client = new JwCodeClient(backendUrl, wsUrl);
@@ -77,17 +73,16 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
     setClient(client);
     wireHandlers(client);
 
-    client.connect().then(() => {
-      updateAppState(s => ({ ...s, connected: true }));
-      fetch(backendUrl + '/api/models')
-        .then(r => r.json())
-        .then(d => {
-          const models = (d as any).data?.models;
-          if (models?.length) {
-            updateAppState(s => ({ ...s, modelName: models[0].name || '' }));
-          }
-        })
-        .catch(() => {});
+    client.connect().then(async () => {
+      try {
+        const r = await fetch(backendUrl + '/api/models');
+        const d = await r.json();
+        const models = (d as any).data?.models;
+        const name = models?.[0]?.name || '';
+        updateAppState(s => ({ ...s, connected: true, modelName: name }));
+      } catch {
+        updateAppState(s => ({ ...s, connected: true }));
+      }
     }).catch((err: Error) => {
       updateAppState(s => ({ ...s, statusText: 'Connection failed: ' + err.message }));
     });
@@ -116,7 +111,7 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
       const { action, needsArg } = def;
       const cl = clientRef.current;
       switch (action) {
-        case '__exit__': cl?.exit(); onExit(); return;
+        case '__exit__': onExit(); return;
         case '__confirm_plan':
           updateAppState(prev => {
             if (!prev.planWaiting) return prev;
@@ -128,16 +123,7 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
         case 'plan_mode': updateAppState(prev => ({ ...prev, planMode: !prev.planMode })); return;
         case 'auto_mode': updateAppState(prev => ({ ...prev, autoMode: !prev.autoMode })); return;
         case 'clear': updateAppState(prev => ({ ...prev, messages: [], currentMessage: null })); return;
-        case 'model_change':
-          if (cmdArg) {
-            cl?.switchModel(cmdArg);
-          } else {
-            setShowModelPicker(true);
-          }
-          return;
-        case 'setup_wizard':
-          setShowModelConfig(true);
-          return;
+        case 'model_change': if (needsArg && cmdArg) cl?.switchModel(cmdArg); return;
         case 'show_context':
           updateAppState(prev => ({
             ...prev,
@@ -210,9 +196,9 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
   }, []);
 
   const handleSubmit = useCallback((value: string) => {
-    if (showPalette || showFilePalette || showModelConfig || showModelPicker) return;
+    if (showPalette || showFilePalette) return;
     executeCommand(value);
-  }, [executeCommand, showPalette, showFilePalette, showModelConfig, showModelPicker]);
+  }, [executeCommand, showPalette, showFilePalette]);
 
   const handleChange = useCallback((value: string) => {
     setInput(value);
@@ -241,6 +227,7 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
     // Close file palette when no valid @ trigger
     setShowFilePalette(false);
     setFileQuery('');
+    process.stderr.write(`[handleChange] input="${value.slice(0, 20)}" showPalette=${value.startsWith('/')}\n`);
   }, []);
 
   const handleFileSelect = useCallback((path: string | null) => {
@@ -273,37 +260,7 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
     setShowApproval(null);
   }, []);
 
-  const handleModelSelect = useCallback((model: ModelInfo) => {
-    setShowModelPicker(false);
-    clientRef.current?.switchModel(model.name || model.id || '');
-    updateAppState(s => ({ ...s, modelName: model.name || model.id || '' }));
-  }, []);
-
-  const handleModelPickerCancel = useCallback(() => {
-    setShowModelPicker(false);
-  }, []);
-
-  const handleModelConfigComplete = useCallback(() => {
-    setShowModelConfig(false);
-    // Refresh model list after configuring a new provider
-    fetch(backendUrl + '/api/models')
-      .then(r => r.json())
-      .then(d => {
-        const models = (d as any).data?.models;
-        if (models?.length) {
-          updateAppState(s => ({ ...s, modelName: models[0].name || s.modelName }));
-        }
-      })
-      .catch(() => {});
-  }, [backendUrl]);
-
-  const handleModelConfigCancel = useCallback(() => {
-    setShowModelConfig(false);
-  }, []);
-
-  const isGenerating = currentMessage !== null;
-  const paletteActive = showPalette || showFilePalette || showModelConfig || showModelPicker;
-  useMouseWheel();
+  const paletteActive = showPalette || showFilePalette;
   useKeyboardInput({
     showApproval: showApproval !== null,
     showHelp,
@@ -324,94 +281,131 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
     if (showApproval) handleApprovalDeny(showApproval.approvalId);
   }, [showApproval, handleApprovalDeny]);
 
+  const handleAllowSession = useCallback(() => {
+    if (showApproval) {
+      sessionAllowRef.current.add(showApproval.toolName);
+      handleApprovalAllow(showApproval.approvalId);
+    }
+  }, [showApproval, handleApprovalAllow]);
+
+  const handleAutoMode = useCallback(() => {
+    updateAppState(prev => ({ ...prev, autoMode: true }));
+    if (showApproval) handleApprovalAllow(showApproval.approvalId);
+  }, [showApproval, handleApprovalAllow]);
+
   const placeholder = 'Type a message or / for commands...';
+
+  // Debug: trace render count and state to stderr (capture with: 2> debug.log)
+  const renderCountRef = useRef(0);
+  renderCountRef.current++;
+  process.stderr.write(
+    `[App render #${renderCountRef.current}] connected=${connected} showPalette=${showPalette} paletteActive=${paletteActive} msgs=${messagesLen} generating=${isGenerating} input="${input.slice(0, 20)}"\n`
+  );
 
   return (
     <Box flexDirection="column" width="100%">
-      <Box height={1} paddingLeft={2}>
-        <Text color="cyan">JWCode v3.0.0</Text>
-        {messages.length === 0 && !currentMessage && <Text dimColor>  --  Type / for commands</Text>}
-      </Box>
-      <Box flexGrow={1} flexDirection="column">
-        <ChatArea
-          messages={messages}
-          currentMessage={currentMessage}
-          terminalCols={terminalCols}
-          terminalRows={terminalRows}
-          scrollOffset={scrollOffset}
-          toolCallsExpanded={toolCallsExpanded}
-        />
-      </Box>
-      <Box flexDirection="row" borderStyle="single" borderColor={connected ? 'cyan' : 'red'} paddingLeft={1}>
-        <Text color="green" bold>&gt; </Text>
-        <TextInput
-          value={input}
-          onChange={handleChange}
-          onSubmit={handleSubmit}
-          placeholder={placeholder}
-          disabled={showApproval !== null}
-          disableHistory={paletteActive}
-        />
-      </Box>
-      <Box>
-        {showPalette && (
-          <CommandPalette filter={input} onSelect={handlePaletteSelect} />
-        )}
-        {showFilePalette && (
-          <FilePalette query={fileQuery} files={fileList} onSelect={handleFileSelect} />
-        )}
-        {showModelConfig && (
-          <SetupWizard
-            backendUrl={backendUrl}
-            onComplete={handleModelConfigComplete}
-            onCancel={handleModelConfigCancel}
-            mode="modal"
-          />
-        )}
-        {showModelPicker && (
-          <ModelPicker
-            backendUrl={backendUrl}
-            onSelect={handleModelSelect}
-            onCancel={handleModelPickerCancel}
-          />
-        )}
-        {showHelp && (() => {
-          const helpLines = HELP_TEXT.split('\\n');
-          const helpMax = Math.max(5, Math.min(terminalRows - 12, 10));
-          const helpEnd = Math.max(0, helpLines.length - helpScroll);
-          const helpStart = Math.max(0, helpEnd - helpMax);
-          const visibleHelp = helpLines.slice(helpStart, helpEnd);
-          return (
-            <Box flexDirection="column" borderStyle="single" borderColor="cyan" paddingX={1}>
-              {helpLines.length > helpMax && (
-                <Box>
-                  <Text dimColor>{'  ' + (helpStart + 1) + '-' + helpEnd + ' / ' + helpLines.length + '  PgUp/PgDn scroll / Esc close'}</Text>
-                </Box>
-              )}
-              {visibleHelp.map((line, i) => (
-                <Text key={i} color="cyan">{line}</Text>
-              ))}
+      {connected ? (
+        <Box flexDirection="column">
+          {messagesLen === 0 && !isGenerating && !!modelName && (
+            <Box key="welcome-banner" flexDirection="column" borderStyle="round" borderColor={t.primary} paddingX={1} marginBottom={1}>
+              <Box>
+                <Text color={t.primary} bold>&gt;_ JWCode v3.0.0</Text>
+              </Box>
+              <Box>
+                <Text dimColor>model:     </Text>
+                <Text color={t.success}>{modelName || 'connecting...'}</Text>
+                <Text dimColor>   /model to change</Text>
+              </Box>
+              <Box>
+                <Text dimColor>directory: </Text>
+                <Text color={t.warning}>{process.cwd()}</Text>
+              </Box>
             </Box>
-          );
-        })()}
-        {showApproval && (
-          <ApprovalModal
-            toolName={showApproval.toolName}
-            payload={showApproval.payload}
-            onAllow={handleApprovalAllowForModal}
-            onDeny={handleApprovalDenyForModal}
-            />
           )}
-      </Box>
+          {messagesLen === 0 && !isGenerating && !!modelName && (
+            <Box key="tip-line" paddingLeft={3} marginBottom={1}>
+              <Text dimColor>Tip: Type / for commands, @ to reference files, ↑↓ for history</Text>
+            </Box>
+          )}
+          {/* flexGrow=0 when palette open: prevents Yoga layout overflow + Ink ghost content duplication */}
+          <Box flexGrow={paletteActive ? 0 : 1} flexDirection="column">
+            <ChatArea
+              terminalCols={terminalCols}
+              terminalRows={terminalRows}
+            />
+          </Box>
+          <Box flexDirection="row" borderStyle="single" borderColor={t.primary} paddingLeft={1}>
+            <Text color={t.success} bold>&gt; </Text>
+            <TextInput
+              value={input}
+              onChange={handleChange}
+              onSubmit={handleSubmit}
+              placeholder={placeholder}
+              disabled={showApproval !== null}
+            />
+          </Box>
+          {/* flexDirection=column required: Ink 5 defaults to row, which miscalculates overlay heights */}
+          <Box flexDirection="column">
+            {showPalette && (
+              <CommandPalette key="command-palette" filter={input} onSelect={handlePaletteSelect} />
+            )}
+            {showFilePalette && (
+              <FilePalette key="file-palette" query={fileQuery} files={fileList} onSelect={handleFileSelect} />
+            )}
+            {showHelp && (() => {
+              const helpLines = HELP_TEXT.split('\\n');
+              const helpMax = Math.max(5, Math.min(terminalRows - 12, 10));
+              const helpEnd = Math.max(0, helpLines.length - helpScroll);
+              const helpStart = Math.max(0, helpEnd - helpMax);
+              const visibleHelp = helpLines.slice(helpStart, helpEnd);
+              return (
+                <Box key="help-box" flexDirection="column" borderStyle="single" borderColor={t.primary} paddingX={1}>
+                  {helpLines.length > helpMax && (
+                    <Box>
+                      <Text dimColor>{'  ' + (helpStart + 1) + '-' + helpEnd + ' / ' + helpLines.length + '  PgUp/PgDn scroll / Esc close'}</Text>
+                    </Box>
+                  )}
+                  {visibleHelp.map((line, i) => (
+                    <Text key={i} color={t.primary}>{line}</Text>
+                  ))}
+                </Box>
+              );
+            })()}
+            {showApproval && (
+              <ApprovalModal
+                key="approval-modal"
+                toolName={showApproval.toolName}
+                payload={showApproval.payload}
+                onAllow={handleApprovalAllowForModal}
+                onDeny={handleApprovalDenyForModal}
+                onAllowSession={handleAllowSession}
+                onAutoMode={handleAutoMode}
+                />
+              )}
+          </Box>
+        </Box>
+      ) : (
+        <Box flexDirection="column">
+          <Box flexGrow={1} flexDirection="column">
+            <ChatArea
+              terminalCols={terminalCols}
+              terminalRows={terminalRows}
+            />
+          </Box>
+          <Box paddingLeft={1}>
+            <Text dimColor>Connecting...</Text>
+          </Box>
+        </Box>
+      )}
       <StatusLine />
       <Box height={1}>
         {!connected && (
-          <Text color="red">Backend not connected -- WebSocket reconnecting.</Text>
+          <Text color={t.error}>Backend not connected -- WebSocket reconnecting.</Text>
         )}
       </Box>
       <Box height={1}>
         {planWaiting && (
-          <Text color="yellow" bold>Plan ready -- /confirm to execute, /cancel to discard.</Text>
+          <Text color={t.warning} bold>Plan ready -- /confirm to execute, /cancel to discard.</Text>
         )}
       </Box>
     </Box>

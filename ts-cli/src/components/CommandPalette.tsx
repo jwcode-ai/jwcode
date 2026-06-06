@@ -5,6 +5,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { Box, Text, useInput, useStdout } from 'ink';
 import { ALL_COMMANDS, type CmdEntry } from '../commands/index.js';
+import { t } from '../theme.js';
 
 interface Props {
   filter: string;
@@ -56,18 +57,18 @@ export function CommandPalette({ filter, onSelect }: Props) {
   });
 
   return (
-    <Box flexDirection="column" borderStyle="single" borderColor="cyan" paddingX={1} width={52}>
-      <Box><Text bold color="cyan">命令列表</Text><Text dimColor>  ↑↓选择 / PgUp/PgDn翻页 / 回车确认 / Esc取消</Text></Box>
+    <Box flexDirection="column" borderStyle="single" borderColor={t.primary} paddingX={1} width={52}>
+      <Box><Text bold color={t.primary}>命令列表</Text><Text dimColor>  ↑↓选择 / PgUp/PgDn翻页 / 回车确认 / Esc取消</Text></Box>
       {sliced.map((cmd, i) => {
         const idx = scrollOffset + i;
         return (
           <Box key={cmd.cmd} paddingLeft={1}>
-            <Text color={idx === selected ? 'cyan' : undefined} bold={idx === selected}>
+            <Text color={idx === selected ? t.primary : undefined} bold={idx === selected}>
               {idx === selected ? '> ' : '  '}
             </Text>
-            <Text color="green">{cmd.cmd}</Text>
+            <Text color={t.success}>{cmd.cmd}</Text>
             <Text dimColor>  {cmd.desc}</Text>
-            <Text color={cmd.via === 'ws' ? 'yellow' : 'blue'} dimColor={idx !== selected}>
+            <Text color={cmd.via === 'ws' ? t.warning : t.info} dimColor={idx !== selected}>
               ({cmd.via === 'ws' ? '后端' : '本地'})
             </Text>
           </Box>

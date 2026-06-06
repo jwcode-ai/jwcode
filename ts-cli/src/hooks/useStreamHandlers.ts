@@ -30,6 +30,7 @@ interface ApprovalState {
 
 export function useStreamHandlers(
   setShowApproval: (v: ApprovalState | null) => void,
+  sessionAllowRef: { current: Set<string> },
 ) {
   return useCallback((client: JwCodeClient) => {
     let _pendingContent = '';
@@ -422,7 +423,8 @@ export function useStreamHandlers(
     client.on('hook_ask', (_m: WSMessage) => {
       const d = parseData(_m);
       const approvalId = (d.approvalId as string) || '';
-      if (getStore().getState().autoMode) {
+      const toolName = (d.toolName as string) || '';
+      if (getStore().getState().autoMode || sessionAllowRef.current.has(toolName)) {
         client.approveHook(approvalId);
         return;
       }

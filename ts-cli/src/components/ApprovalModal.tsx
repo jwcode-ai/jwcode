@@ -1,8 +1,9 @@
-﻿/**
- * ApprovalModal -- enhanced permission prompt with risk levels, countdown, preview.
+/**
+ * ApprovalModal — numbered option list style, inspired by Claude Code plan approval prompt.
  */
 import { useState, useEffect, useRef } from "react";
 import { Box, Text, useInput } from "ink";
+import { t } from "../theme.js";
 
 type RiskLevel = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
 
@@ -11,6 +12,8 @@ interface Props {
   payload: string;
   onAllow: () => void;
   onDeny: () => void;
+  onAllowSession: () => void;
+  onAutoMode: () => void;
 }
 
 const COUNTDOWN_S = 15;
@@ -45,17 +48,17 @@ function classifyRisk(toolName: string, payload: string): { level: RiskLevel; re
 }
 
 const RISK_COLOR: Record<RiskLevel, string> = {
-  CRITICAL: "red",
-  HIGH: "yellow",
-  MEDIUM: "yellow",
-  LOW: "cyan",
+  CRITICAL: t.error,
+  HIGH: t.warning,
+  MEDIUM: t.warning,
+  LOW: t.info,
 };
 
 const RISK_ICON: Record<RiskLevel, string> = {
   CRITICAL: "!",
   HIGH: "!",
-  MEDIUM: "?",
-  LOW: "i",
+  MEDIUM: "*",
+  LOW: "~",
 };
 
 function extractPreview(toolName: string, payload: string): string {
@@ -69,14 +72,13 @@ function extractPreview(toolName: string, payload: string): string {
   return payload.length > 200 ? payload.slice(0, 200) + "..." : payload;
 }
 
-export function ApprovalModal({ toolName, payload, onAllow, onDeny }: Props) {
+export function ApprovalModal({ toolName, payload, onAllow, onDeny, onAllowSession, onAutoMode }: Props) {
   const [selected, setSelected] = useState(0);
   const [countdown, setCountdown] = useState(COUNTDOWN_S);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const { level, reason } = classifyRisk(toolName, payload);
   const riskColor = RISK_COLOR[level];
-  const riskIcon = RISK_ICON[level];
   const preview = extractPreview(toolName, payload);
 
   useEffect(() => {
@@ -99,65 +101,93 @@ export function ApprovalModal({ toolName, payload, onAllow, onDeny }: Props) {
 
   const countdownUrgent = countdown <= 5;
 
+  const options = [
+    { label: "Allow — execute this command", hint: "Press Enter or y to confirm", action: onAllow },
+    { label: "Deny — cancel this operation", hint: "Press Esc or n to cancel", action: onDeny },
+    { label: "Allow always this session", hint: "Don't ask again for " + toolName, action: onAllowSession },
+    { label: "Auto mode — allow all hooks", hint: "All future hooks will be auto-approved", action: onAutoMode },
+  ];
+
+  const execSelected = () => options[selected]!.action();
+
   useInput((_input, key) => {
     if (key.escape) { onDeny(); return; }
-    if (key.upArrow || key.downArrow) { setSelected(prev => prev === 0 ? 1 : 0); return; }
-    if (key.return) { if (selected === 0) onAllow(); else onDeny(); return; }
+    if (key.upArrow) { setSelected(prev => prev === 0 ? 3 : prev - 1); return; }
+    if (key.downArrow) { setSelected(prev => prev === 3 ? 0 : prev + 1); return; }
+    if (key.return) { execSelected(); return; }
     if (_input === "1") { onAllow(); return; }
     if (_input === "2") { onDeny(); return; }
+    if (_input === "3") { onAllowSession(); return; }
+    if (_input === "4") { onAutoMode(); return; }
     if (_input === "y" || _input === "Y") { onAllow(); return; }
     if (_input === "n" || _input === "N") { onDeny(); return; }
   });
 
-  const borderColor = level === "CRITICAL" ? "red" : level === "HIGH" ? "yellow" : "yellow";
+  const borderColor = level === "CRITICAL" ? t.error : t.warning;
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor={borderColor} paddingX={2} paddingY={1} marginTop={1}>
-      <Box marginBottom={1}>
-        <Text color={riskColor}>{riskIcon} </Text>
-        <Text bold color={riskColor}>{level}</Text>
-        <Text dimColor> - {reason}</Text>
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      borderColor={borderColor}
+      marginTop={1}
+    >
+      {/* Title row */}
+      <Box paddingLeft={1} paddingRight={1} justifyContent="space-between">
+        <Box gap={1}>
+          <Text bold>Permission Required</Text>
+          <Text dimColor>{"· "}{toolName}</Text>
+        </Box>
+        <Text color={countdownUrgent ? t.error : t.muted}>
+          Auto {countdown}s
+        </Text>
       </Box>
-      <Box marginBottom={1}>
-        <Text dimColor>Tool: </Text>
-        <Text color="cyan" bold>{toolName}</Text>
+
+      {/* Risk description */}
+      <Box paddingLeft={1} paddingRight={1}>
+        <Text color={riskColor} bold={level === "CRITICAL"}>
+          {RISK_ICON[level]} {level}
+        </Text>
+        <Text dimColor> — {reason}</Text>
       </Box>
+
+      {/* Preview */}
       {preview ? (
-        <Box flexDirection="column" marginBottom={1} paddingX={1}>
-          <Box><Text dimColor>{"preview"}</Text></Box>
-          <Box><Text dimColor>| </Text><Text>{preview}</Text></Box>
+        <Box flexDirection="column" paddingLeft={1} paddingRight={1} marginTop={1}>
+          <Box marginLeft={2}>
+            <Text color={t.tool}>{preview}</Text>
+          </Box>
         </Box>
       ) : null}
+
+      {/* Critical warning */}
       {level === "CRITICAL" && (
-        <Box marginBottom={1}>
-          <Text color="red" bold>! This may cause irreversible changes - verify carefully</Text>
+        <Box paddingLeft={1} paddingRight={1} marginTop={1}>
+          <Text color={t.error}>This may cause irreversible changes — verify carefully</Text>
         </Box>
       )}
-      <Box flexDirection="column" marginLeft={2} marginBottom={1}>
-        <Box>
-          <Text color={selected === 0 ? "green" : undefined} bold={selected === 0}>
-            {selected === 0 ? " > " : "   "} 1. Allow
-          </Text>
-        </Box>
-        <Box>
-          <Text color={selected === 1 ? "red" : undefined} bold={selected === 1}>
-            {selected === 1 ? " > " : "   "} 2. Deny
-          </Text>
-        </Box>
+
+      {/* Options */}
+      <Box flexDirection="column" marginTop={1}>
+        {options.map((opt, i) => (
+          <Box key={i} flexDirection="column" paddingLeft={1} paddingRight={1}>
+            <Box>
+              <Text color={selected === i ? t.brand : t.muted}>
+                {selected === i ? "❯" : " "} {i + 1}. {opt.label}
+              </Text>
+            </Box>
+            <Box marginLeft={4}>
+              <Text dimColor>{opt.hint}</Text>
+            </Box>
+          </Box>
+        ))}
       </Box>
-      <Box marginBottom={1}>
-        <Text dimColor>Auto-approve in: </Text>
-        <Text color={countdownUrgent ? "red" : "green"} bold={countdownUrgent}>
-          {countdown}s
+
+      {/* Footer */}
+      <Box paddingLeft={1} paddingRight={1} marginTop={1}>
+        <Text dimColor>
+          1/2/3/4 to select · ↑↓ to navigate · Enter to confirm · Esc to deny
         </Text>
-        <Text>  </Text>
-        <Text color={countdownUrgent ? "red" : "green"}>
-          {"#".repeat(Math.ceil(countdown / COUNTDOWN_S * 10))}
-          {"-".repeat(10 - Math.ceil(countdown / COUNTDOWN_S * 10))}
-        </Text>
-      </Box>
-      <Box>
-        <Text dimColor>1/2/y/n to decide | up/down to select | Enter to confirm | Esc to deny</Text>
       </Box>
     </Box>
   );

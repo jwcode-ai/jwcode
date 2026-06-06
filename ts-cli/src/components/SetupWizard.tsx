@@ -9,6 +9,7 @@
  */
 import React, { useState, useCallback, useEffect } from 'react';
 import { Box, Text, useInput } from 'ink';
+import { t } from '../theme.js';
 
 interface Props {
   backendUrl: string;
@@ -179,20 +180,20 @@ export const SetupWizard: React.FC<Props> = ({ backendUrl, onComplete, onCancel,
   if (step === 'done') {
     return (
       <Box flexDirection="column" padding={1}>
-        <Text color="green">✓ Configuration saved!</Text>
+        <Text color={t.success}>✓ Configuration saved!</Text>
         {mode === 'fullscreen' && <Text dimColor>Starting JWCode...</Text>}
       </Box>
     );
   }
 
   const borderStyle = isModal ? 'single' : 'round';
-  const borderColor = isModal ? 'yellow' : 'cyan';
+  const borderColor = isModal ? t.warning : t.primary;
   const title = isModal ? 'Add Provider' : 'JWCode — First Run Setup';
 
   return (
     <Box flexDirection="column" padding={1} borderStyle={borderStyle as any} borderColor={borderColor}>
       <Box marginBottom={1}>
-        <Text bold color="cyan">{title}</Text>
+        <Text bold color={t.primary}>{title}</Text>
       </Box>
       {mode === 'fullscreen' && (
         <>
@@ -221,47 +222,47 @@ export const SetupWizard: React.FC<Props> = ({ backendUrl, onComplete, onCancel,
 
       {step === 'enter_key' && (
         <Box flexDirection="column">
-          <Text>Provider: <Text color="green">{PROVIDER_TEMPLATES[providerKey].name}</Text></Text>
-          <Text>Base URL: <Text color="blue">{baseUrl}</Text></Text>
+          <Text>Provider: <Text color={t.success}>{PROVIDER_TEMPLATES[providerKey].name}</Text></Text>
+          <Text>Base URL: <Text color={t.info}>{baseUrl}</Text></Text>
           <Text> </Text>
           <Text>Enter API Key (Tab to toggle visibility):</Text>
           <Box>
-            <Text color="yellow">{'> '}</Text>
+            <Text color={t.warning}>{'> '}</Text>
             <Text>{keyVisible ? apiKey : apiKey.replace(/./g, '*')}</Text>
-            <Text color="gray">{keyVisible ? ' [visible]' : ' [hidden]'}</Text>
+            <Text color={t.muted}>{keyVisible ? ' [visible]' : ' [hidden]'}</Text>
           </Box>
           <Text dimColor>Press Enter to confirm, Backspace to edit</Text>
-          {errorMsg && <Text color="red">Error: {errorMsg}</Text>}
+          {errorMsg && <Text color={t.error}>Error: {errorMsg}</Text>}
         </Box>
       )}
 
       {step === 'enter_model' && (
         <Box flexDirection="column">
-          <Text>Provider: <Text color="green">{PROVIDER_TEMPLATES[providerKey].name}</Text></Text>
-          <Text>API Key: <Text color="green">configured</Text></Text>
+          <Text>Provider: <Text color={t.success}>{PROVIDER_TEMPLATES[providerKey].name}</Text></Text>
+          <Text>API Key: <Text color={t.success}>configured</Text></Text>
           <Text> </Text>
           <Text>Base URL:</Text>
           <Box>
-            <Text color="yellow">{'> '}</Text>
+            <Text color={t.warning}>{'> '}</Text>
             <Text>{baseUrl}</Text>
           </Box>
           <Text>Model ID:</Text>
           <Box>
-            <Text color="yellow">{'> '}</Text>
+            <Text color={t.warning}>{'> '}</Text>
             <Text>{modelId}</Text>
           </Box>
           <Text dimColor>Press Enter to save, type to edit model name</Text>
-          {errorMsg && <Text color="red">Error: {errorMsg}</Text>}
+          {errorMsg && <Text color={t.error}>Error: {errorMsg}</Text>}
         </Box>
       )}
 
       {step === 'saving' && (
-        <Text color="yellow">Saving configuration to ~/.jwcode/config.yaml...</Text>
+        <Text color={t.warning}>Saving configuration to ~/.jwcode/config.yaml...</Text>
       )}
 
       {step === 'error' && (
         <Box flexDirection="column">
-          <Text color="red">Failed to save: {errorMsg}</Text>
+          <Text color={t.error}>Failed to save: {errorMsg}</Text>
           <Text>Press Enter to retry{isModal ? ', Esc to cancel' : ''}.</Text>
         </Box>
       )}

@@ -1,16 +1,24 @@
-import { useState, useRef, useCallback, memo } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Box, Text, useInput } from 'ink';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { pasteSummary } from '../pasteBuffer.js';
+import { t } from '../theme.js';
 
-// Rough token estimation: English ~4 chars/token, CJK ~1.5 chars/token
+// Input history for arrow-key recall
+const _history: string[] = [];
+const MAX_HISTORY = 100;
+
+export function saveToHistory(text: string): void {
+  if (!text) return;
+  if (_history[_history.length - 1] === text) return;
+  _history.push(text);
+  if (_history.length > MAX_HISTORY) _history.shift();
+}
+
 function estimateTokens(text: string): number {
   let cjk = 0;
   let other = 0;
   for (const ch of text) {
-    if (/[一-鿿㐀-䶿豈-﫿　-〿＀-￯]/.test(ch)) {
+    if (/[一-鿿㐀-䶿豈-﫿]/.test(ch)) {
       cjk++;
     } else {
       other++;
@@ -19,101 +27,46 @@ function estimateTokens(text: string): number {
   return Math.ceil(cjk / 1.5 + other / 4);
 }
 
-const MAX_HISTORY = 30;
-const HISTORY_DIR = join(homedir(), '.jwcode');
-const HISTORY_FILE = join(HISTORY_DIR, 'history.json');
-
-function ensureHistoryDir() {
-  try { mkdirSync(HISTORY_DIR, { recursive: true }); } catch { /* ignore */ }
-}
-
-function loadHistory(): string[] {
-  try {
-    if (process.env.JWCODE_HISTORY) return JSON.parse(process.env.JWCODE_HISTORY);
-    const raw = readFileSync(HISTORY_FILE, 'utf-8');
-    return JSON.parse(raw);
-  } catch { return []; }
-}
-
-function saveHistory(entries: string[]) {
-  try {
-    ensureHistoryDir();
-    writeFileSync(HISTORY_FILE, JSON.stringify(entries), 'utf-8');
-  } catch { /* ignore */ }
-}
-
-export function saveToHistory(text: string) {
-  const trimmed = text.trim();
-  if (!trimmed) return;
-  const history = loadHistory().filter(h => h !== trimmed);
-  history.unshift(trimmed);
-  saveHistory(history.slice(0, MAX_HISTORY));
-}
-
 interface Props {
   value: string;
   onChange: (value: string) => void;
   onSubmit: (value: string) => void;
   placeholder?: string;
   disabled?: boolean;
-  disableHistory?: boolean;
 }
 
-export const TextInput = memo(function TextInput({ value, onChange, onSubmit, placeholder, disabled, disableHistory }: Props) {
-  const historyRef = useRef<string[]>(loadHistory());
-  const histIdxRef = useRef(-1);
-  const draftRef = useRef('');
+export function TextInput({ value, onChange, onSubmit, placeholder, disabled }: Props) {
   const cursorRef = useRef(value.length);
   const [, forceRender] = useState(0);
+  const valueRef = useRef(value);
+  const onChangeRef = useRef(onChange);
+  const onSubmitRef = useRef(onSubmit);
+  const disabledRef = useRef(disabled);
+  const histIdxRef = useRef(-1);
+  const draftRef = useRef('');
 
-  // Sync cursor when value changes externally
+  // Keep refs in sync so the useInput callback never sees stale closures
+  useEffect(() => { valueRef.current = value; });
+  useEffect(() => { onChangeRef.current = onChange; });
+  useEffect(() => { onSubmitRef.current = onSubmit; });
+  useEffect(() => { disabledRef.current = disabled; });
+
   if (cursorRef.current > value.length) {
     cursorRef.current = value.length;
   }
 
-  const navigateHistory = useCallback((dir: 'up' | 'down'): string | null => {
-    const history = historyRef.current;
-    if (history.length === 0) return null;
-
-    if (histIdxRef.current === -1) {
-      draftRef.current = value;
-      if (dir === 'up') {
-        histIdxRef.current = 0;
-        return history[0];
-      }
-      return null;
-    }
-
-    if (dir === 'up') {
-      const next = Math.min(histIdxRef.current + 1, history.length - 1);
-      histIdxRef.current = next;
-      return history[next];
-    } else {
-      const next = histIdxRef.current - 1;
-      if (next < 0) {
-        histIdxRef.current = -1;
-        return draftRef.current;
-      }
-      histIdxRef.current = next;
-      return history[next];
-    }
-  }, [value]);
-
-  const resetHistory = useCallback(() => {
-    histIdxRef.current = -1;
-    draftRef.current = '';
-  }, []);
-
-  // Bracketed paste state — persists across renders via refs
   const pasteState = useRef<{ accumulating: boolean; buf: string }>({ accumulating: false, buf: '' });
 
   useInput((input, key) => {
-    if (disabled) return;
+    if (disabledRef.current) return;
 
-    // ── bracketed paste detection ──
-    // Terminal wraps paste in \e[200~ ... \e[201~.  Ink strips the leading
-    // \e so we see "[200~" / "[201~".  Content between markers is buffered
-    // into pasteBuffer and replaced with a compact summary.
+    // DEBUG: trace every keystroke to stderr
+    process.stderr.write(
+      `[TextInput] input=${JSON.stringify(input.slice(0, 20))} key.bs=${key.backspace} key.del=${key.delete} key.esc=${key.escape} key.ret=${key.return} ` +
+      `key.ctrl=${key.ctrl} key.meta=${key.meta} key.tab=${key.tab} cursor=${cursorRef.current} val="${valueRef.current.slice(0, 20)}"\n`
+    );
+
+    // Ink strips the leading ESC, so we see "[200~" / "[201~"
     const PASTE_START = '[200~';
     const PASTE_END = '[201~';
 
@@ -125,7 +78,7 @@ export const TextInput = memo(function TextInput({ value, onChange, onSubmit, pl
         pasteState.current.buf = parts[0] || '';
         pasteState.current.accumulating = false;
         const { label } = pasteSummary(pasteState.current.buf);
-        onChange(value + label);
+        onChangeRef.current(valueRef.current + label);
       }
       return;
     }
@@ -135,7 +88,7 @@ export const TextInput = memo(function TextInput({ value, onChange, onSubmit, pl
       pasteState.current.buf += parts[0] || '';
       pasteState.current.accumulating = false;
       const { label } = pasteSummary(pasteState.current.buf);
-      onChange(value + label);
+      onChangeRef.current(valueRef.current + label);
       return;
     }
 
@@ -144,11 +97,8 @@ export const TextInput = memo(function TextInput({ value, onChange, onSubmit, pl
       return;
     }
 
-    // ── normal input ──
-
     if (key.return) {
-      onSubmit(value);
-      resetHistory();
+      onSubmitRef.current(valueRef.current);
       return;
     }
 
@@ -158,51 +108,79 @@ export const TextInput = memo(function TextInput({ value, onChange, onSubmit, pl
       return;
     }
     if (key.rightArrow) {
-      cursorRef.current = Math.min(value.length, cursorRef.current + 1);
+      cursorRef.current = Math.min(valueRef.current.length, cursorRef.current + 1);
       forceRender(c => c + 1);
       return;
     }
 
-    if (key.upArrow && !disableHistory) {
-      const hist = navigateHistory('up');
-      if (hist !== null) { onChange(hist); cursorRef.current = hist.length; forceRender(c => c + 1); }
+    // Up/down: input history recall
+    if (key.upArrow) {
+      if (_history.length === 0) return;
+      if (histIdxRef.current === -1) {
+        draftRef.current = valueRef.current;
+        histIdxRef.current = 0;
+      } else {
+        histIdxRef.current = Math.min(histIdxRef.current + 1, _history.length - 1);
+      }
+      const entry = _history[_history.length - 1 - histIdxRef.current];
+      onChangeRef.current(entry);
+      cursorRef.current = entry.length;
+      forceRender(c => c + 1);
       return;
     }
-    if (key.downArrow && !disableHistory) {
-      const hist = navigateHistory('down');
-      if (hist !== null) { onChange(hist); cursorRef.current = hist.length; forceRender(c => c + 1); }
+    if (key.downArrow) {
+      if (histIdxRef.current === -1) return;
+      histIdxRef.current = histIdxRef.current - 1;
+      if (histIdxRef.current < 0) {
+        histIdxRef.current = -1;
+        onChangeRef.current(draftRef.current);
+        cursorRef.current = draftRef.current.length;
+      } else {
+        const entry = _history[_history.length - 1 - histIdxRef.current];
+        onChangeRef.current(entry);
+        cursorRef.current = entry.length;
+      }
+      forceRender(c => c + 1);
       return;
-    }
-
-    // Any manual edit resets history navigation
-    if (histIdxRef.current !== -1 && input) {
-      resetHistory();
     }
 
     if (key.backspace) {
       if (cursorRef.current > 0) {
-        var p = cursorRef.current;
-        onChange(value.slice(0, p-1) + value.slice(p));
+        const p = cursorRef.current;
+        const cur = valueRef.current;
+        onChangeRef.current(cur.slice(0, p - 1) + cur.slice(p));
         cursorRef.current = p - 1;
+        histIdxRef.current = -1;
         forceRender(c => c + 1);
-        resetHistory();
       }
       return;
     }
-    if (key.delete) {
-      if (cursorRef.current < value.length) {
-        var p = cursorRef.current;
-        onChange(value.slice(0, p) + value.slice(p+1));
-        resetHistory();
+    if (key.delete && cursorRef.current < valueRef.current.length) {
+      const p = cursorRef.current;
+      const cur = valueRef.current;
+      onChangeRef.current(cur.slice(0, p) + cur.slice(p + 1));
+      histIdxRef.current = -1;
+      return;
+    }
+    // Fallback: some terminals send backspace as \x7f (DEL) or \b
+    if ((input === '\x7f' || input === '\b' || input === '') && !key.ctrl && !key.meta) {
+      if (cursorRef.current > 0) {
+        const p = cursorRef.current;
+        const cur = valueRef.current;
+        onChangeRef.current(cur.slice(0, p - 1) + cur.slice(p));
+        cursorRef.current = p - 1;
+        histIdxRef.current = -1;
+        forceRender(c => c + 1);
       }
       return;
     }
     if (input && !key.ctrl && !key.meta && !key.tab && !key.escape) {
-      var p = cursorRef.current;
-      onChange(value.slice(0, p) + input + value.slice(p));
+      const p = cursorRef.current;
+      const cur = valueRef.current;
+      onChangeRef.current(cur.slice(0, p) + input + cur.slice(p));
       cursorRef.current = p + input.length;
+      histIdxRef.current = -1;
       forceRender(c => c + 1);
-      resetHistory();
     }
   });
 
@@ -224,19 +202,19 @@ export const TextInput = memo(function TextInput({ value, onChange, onSubmit, pl
         ) : (
           <Text>
             <Text dimColor>{placeholder}</Text>
-            <Text dimColor>▊</Text>
+            <Text dimColor>{'▶'}</Text>
           </Text>
         )}
       </Box>
       {charCount > 0 && (
         <Box>
-          <Text dimColor>  {charCount} 字符 ≈ {tokenEstimate} tokens</Text>
-          <Text dimColor>  [{cursor+1}/{charCount}]</Text>
+          <Text dimColor>  {charCount} chars ~ {tokenEstimate} tokens</Text>
+          <Text dimColor>  [{cursor + 1}/{charCount}]</Text>
           {tokenEstimate > 100000 && (
-            <Text color="red">  ⚠ 接近上下文上限</Text>
+            <Text color={t.error}>  WARN: Approaching context limit</Text>
           )}
         </Box>
       )}
     </Box>
   );
-});
+}
