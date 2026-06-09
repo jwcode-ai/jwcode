@@ -3,6 +3,7 @@ package com.jwcode.core.agent;
 import com.jwcode.core.a2a.A2AFacade;
 import com.jwcode.core.a2a.model.A2ATask;
 import com.jwcode.core.a2a.model.TaskOutput;
+import com.jwcode.core.api.AgentFlowBroadcaster;
 import com.jwcode.core.api.PlanTaskBroadcaster;
 import com.jwcode.core.model.StructuredTask;
 import com.jwcode.core.model.StructuredTask.ExecutionMode;
@@ -295,6 +296,11 @@ public class TaskExecutionAgent {
             logger.info("[TaskExecutionAgent] Dispatching task " + task.getId()
                 + " to agent " + task.getAgentType());
 
+            // 广播 Agent 信息流：任务分发
+            AgentFlowBroadcaster.getInstance().broadcastDispatch(
+                "Orchestrator", task.getAgentType(), task.getId(),
+                task.getTitle(), sessionId);
+
             // 通过 A2AFacade 提交任务（同步等待）
             TaskOutput output;
             if (a2aFacade != null) {
@@ -316,6 +322,10 @@ public class TaskExecutionAgent {
                 sharedContext.put(task.getId() + "_result", output.getSummary());
 
                 broadcastTaskResult(task, "completed", output.getSummary(), null);
+
+                // 广播 Agent 信息流：任务完成
+                AgentFlowBroadcaster.getInstance().broadcastComplete(
+                    task.getAgentType(), "Orchestrator", task.getId(), "completed", sessionId);
             } else {
                 task.setStatus("failed");
                 task.setError(output.getSummary());
@@ -323,6 +333,10 @@ public class TaskExecutionAgent {
                 result.failedCount++;
 
                 broadcastTaskResult(task, "failed", null, output.getSummary());
+
+                // 广播 Agent 信息流：任务失败
+                AgentFlowBroadcaster.getInstance().broadcastComplete(
+                    task.getAgentType(), "Orchestrator", task.getId(), "failed", sessionId);
             }
 
             // 【新增】MemoryAgent 自动记忆任务完成
@@ -354,6 +368,10 @@ public class TaskExecutionAgent {
             result.errors.add(task.getId() + ": " + e.getMessage());
 
             broadcastTaskResult(task, "failed", null, e.getMessage());
+
+            // 广播 Agent 信息流：任务异常失败
+            AgentFlowBroadcaster.getInstance().broadcastComplete(
+                task.getAgentType(), "Orchestrator", task.getId(), "failed", sessionId);
         }
 
         task.setCompletedAt(System.currentTimeMillis());

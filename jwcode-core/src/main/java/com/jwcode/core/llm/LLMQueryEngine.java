@@ -119,6 +119,7 @@ public class LLMQueryEngine {
         this.startTime = Instant.now();
         this.toolCallHistory = new ArrayList<>();
         this.pipeline = new DefaultObservationPipeline();
+        ObservabilityService.getInstance().subscribeTo(this.pipeline);
         this.tokenBudget = TokenBudget.of(this.config.getTokenBudget());
         this.compactionStrategy = new SimpleCompactionStrategy(llmService);
         this.taskLifecycleManager = new TaskLifecycleManager(llmService, this.pipeline);
@@ -250,7 +251,7 @@ public class LLMQueryEngine {
         void onStepAction(String stepName, String action);
         void onStepComplete(String stepName, String result);
         
-        void onToolResult(String toolName, String result);
+        void onToolResult(String toolName, String result, String toolCallId);
         
         /**
          * 流式内容片段（实时推送生成的 content）
@@ -261,6 +262,13 @@ public class LLMQueryEngine {
          * 流式思考片段（实时推送 reasoning_content）
          */
         default void onThinkingChunk(String chunk) {}
+
+        /**
+         * Swarm event - real-time Agent Swarm execution event.
+         * @param eventType event type: task_start / task_complete / progress
+         * @param eventData JSON-encoded event payload
+         */
+        default void onSwarmEvent(String eventType, String eventData) {}
         
         /**
          * 流式工具调用片段（实时推送部分工具调用参数）
@@ -405,20 +413,38 @@ public class LLMQueryEngine {
             
             这些规则是为了避免"幻觉"问题 - 即 AI 基于不准确的文件内容生成编辑指令。
             
-            【‼️ 强制】任务结束规则 — 这是最重要的规则，违反将导致任务无限循环：
+            【‼️ 最高优先级】任务结束规则 — 这是整个系统最重要的规则，违反将导致任务无限循环，严重浪费资源：
 
-            当你认为任务已经完成（包括回答简单问题、执行完操作、确认结果），
-            必须立即在回复的最后一行单独输出 [FINISH]。
+            ## [FINISH] 协议 — 每个回复都必须遵守
 
-            正确示例：
-              当前工作目录是 D:\test
+            你的每一次回复都必须以下面两种方式之一结束：
+
+            ▶ 方式一（需要工具）：回复中调用工具 → 系统执行工具 → 自动继续下一轮
+            ▶ 方式二（任务完成）：回复最后一行输出 [FINISH] → 系统立即结束对话
+
+            [FINISH] 意味着：「我的任务已全部完成，这是最终回复，不再需要任何工具调用。」
+
+            ✅ 必须输出 [FINISH] 的场景：
+            - 回答了一个简单问题（如"当前目录是什么？"、"文件内容是什么？"）
+            - 工具执行完毕并确认结果正确
+            - 任务清单中所有步骤已标记 ✅ 完成
+            - 用户的问题已经被完整回答
+
+            ❌ 常见错误（会导致无限循环）：
+            - 回答了问题但忘记输出 [FINISH] → 系统会继续追问，消耗 token
+            - 工具调用完成后只说了"完成了"但没加 [FINISH] → 系统不理解已完成
+            - 在回复中间夹杂 [FINISH] → 必须在最后一行的行首，独占一行
+
+            正确格式（最后一行必须是纯粹的 [FINISH]，不能有任何前缀）：
+              文件已成功写入 D:\\test\\output.txt，共写入 42 行数据。
               [FINISH]
 
-            错误示例（缺少 [FINISH]，将导致循环）：
-              当前工作目录是 D:\test
-              (没有 [FINISH] — 系统会继续追问！)
+            错误格式：
+              文件已成功写入。[FINISH] ← 不在最后一行
+              文件已成功写入。
+              [FINISH] ← 正确！但前面说了"完成了"却没加标记
 
-            ⚠ 记住：无论任务大小，回答完后必须在最后一行输出 [FINISH]。不输出 [FINISH] = 任务未完成。
+            ⚠️ 核心规则：不输出 [FINISH] = 任务未完成 = 系统继续追问 = 浪费 token。
             
             【重要】简单任务快速路径（避免过度工程化）：
             
@@ -561,14 +587,14 @@ public class LLMQueryEngine {
     // 系统提示去重检查窗口（最近 N 条消息）
     private static final int SYSTEM_PROMPT_DEDUP_WINDOW = 5;
     // 空回复时的引导提示
-    private static final String EMPTY_RESPONSE_PROMPT = "你上一条回复为空。请继续完成当前任务，如果已完成请添加 [FINISH] 标记。";
+    private static final String EMPTY_RESPONSE_PROMPT = "⛔ 你上一条回复为空。如果任务已完成，立即输出 [FINISH] 结束对话；如果未完成，请继续执行操作。不要发送空回复。";
     // 【优化】无进展检测阈值已移至 EngineConfig.maxConsecutiveToolOnlyRounds（可通过 config.yaml 配置）
     // 【修复】纯思考无行动检测：连续 N 轮仅有 reasoning 但无文本/无工具调用则强制终止
-    private static final int MAX_CONSECUTIVE_THINKING_ONLY_ROUNDS = 10;
+    private static final int MAX_CONSECUTIVE_THINKING_ONLY_ROUNDS = 5;
     // 【修复】连续失败工具轮数检测：连续 N 轮工具调用全部失败则强制终止
-    private static final int MAX_CONSECUTIVE_FAILED_TOOL_ROUNDS = 5;
+    private static final int MAX_CONSECUTIVE_FAILED_TOOL_ROUNDS = 3;
     // 【优化】重复工具检测：同一工具连续调用超过此阈值触发干预
-    private static final int MAX_REPEATED_TOOL_CALLS = 8;
+    private static final int MAX_REPEATED_TOOL_CALLS = 5;
     // 【优化】[FINISH] 提示注入间隔：每 N 轮才检查一次，避免频繁注入
     private static final int FINISH_REMINDER_INTERVAL = 2; // 强提醒: 每 2 轮注入 [FINISH] 提示
     
@@ -585,14 +611,29 @@ public class LLMQueryEngine {
             return CompletableFuture.completedFuture(QueryResult.error("Max iterations exceeded"));
         }
 
+        // Quick guard: timeout enforcement
+        if (config.getTimeout() != null) {
+            Duration elapsed = Duration.between(startTime, Instant.now());
+            if (elapsed.compareTo(config.getTimeout()) > 0) {
+                logger.warning("[LLMQueryEngine] Query timeout: elapsed=" + elapsed + " > limit=" + config.getTimeout());
+                return CompletableFuture.completedFuture(QueryResult.error("查询超时（" + elapsed.toMinutes() + "分钟），请简化问题重试"));
+            }
+        }
+
         // Task lifecycle checks (non-stream only)
         var activeTask = session.getActiveTask();
         if (activeTask != null && activeTask.getStatus() == com.jwcode.core.task.TaskStatus.WAITING_INPUT) {
-            logger.info("[LLMQueryEngine] 任务处于 WAITING_INPUT 状态，暂停循环等待用户输入");
-            return CompletableFuture.completedFuture(
-                QueryResult.success(Message.createAssistantMessage(
-                    "⏳ 等待用户补充信息：" + activeTask.getWaitingFor()))
-            );
+            // 检查是否超时（5分钟），超时自动恢复
+            if (taskLifecycleManager.checkInputTimeout(session)) {
+                logger.info("[LLMQueryEngine] 用户输入超时，自动恢复对话循环");
+                // 不 return，让循环继续执行
+            } else {
+                logger.info("[LLMQueryEngine] 任务处于 WAITING_INPUT 状态，暂停循环等待用户输入");
+                return CompletableFuture.completedFuture(
+                    QueryResult.success(Message.createAssistantMessage(
+                        "⏳ 等待用户补充信息：" + activeTask.getWaitingFor()))
+                );
+            }
         }
 
         if (activeTask != null && activeTask.getStatus() == com.jwcode.core.task.TaskStatus.PLANNED && iteration == 0) {
@@ -631,7 +672,7 @@ public class LLMQueryEngine {
      */
     private CompletableFuture<QueryResult> handleResponse(LLMResponse response, int iteration, int emptyResponseCount) {
         if (response.hasError()) {
-            logger.severe("[LLMQueryEngine] API error: " + response.getErrorMessage());
+            logger.severe("[LLMQueryEngine] API error [" + response.getErrorCode() + "]: " + response.getErrorMessage());
             triggerStepComplete("LLM查询", "API错误: " + response.getErrorMessage());
             return CompletableFuture.completedFuture(
                 QueryResult.error(response.getErrorMessage())
@@ -699,10 +740,10 @@ public class LLMQueryEngine {
                 if (repeatedToolPatternCount >= MAX_REPEATED_TOOL_CALLS) {
                     logger.warning("[LLMQueryEngine] Repeated tool pattern exceeded threshold, injecting urgency prompt");
                     session.addMessage(Message.createSystemMessage(
-                        "【系统提示】你已连续多次调用相同的工具集但未完成任务。"
-                        + "请评估当前策略是否有效：如果遇到阻碍，请尝试不同方法；"
-                        + "如果任务已实际完成，请直接输出 [FINISH] 结束对话。"
-                        + "不要重复调用相同工具而不产生进展。"
+                        "⛔ 【系统警告】你已连续多次调用相同的工具集但未产生任何进展！"
+                        + "当前策略可能已失效。你必须：要么换一种完全不同的方法执行，"
+                        + "要么承认当前结果并输出 [FINISH] 结束对话。"
+                        + "禁止继续重复相同的工具调用模式。"
                     ));
                     repeatedToolPatternCount = 0; // 注入提示后重置计数器
                 }
@@ -721,10 +762,17 @@ public class LLMQueryEngine {
             String content = response.getContent();
             assistantMessage = Message.createAssistantMessage(content, response.getReasoningContent());
             session.addMessage(assistantMessage);
-            
+
             // API finish_reason="stop" + 无工具调用 → 模型认为任务完成，直接结束
             if ("stop".equals(response.getFinishReason()) && !response.hasToolCalls()) {
                 return CompletableFuture.completedFuture(QueryResult.success(assistantMessage));
+            }
+            // API finish_reason="length" + 无工具调用 → 上下文窗口耗尽，强制要求 [FINISH] 后给最后一轮机会
+            if ("length".equals(response.getFinishReason()) && !response.hasToolCalls()) {
+                logger.warning("[LLMQueryEngine] finish_reason=length (context exhausted), forcing finish");
+                session.addMessage(Message.createSystemMessage(
+                    "⛔ 【紧急】你的上下文窗口已完全耗尽！必须立即在最后一行输出 [FINISH] 结束对话。禁止发起任何新的工具调用，你没有足够的 token 来完成更多操作。"));
+                return runConversationLoop(iteration + 1, 0);
             }
             // 检查回复内容是否包含结束标记
             if (content != null && content.contains(FINISH_MARKER)) {
@@ -755,7 +803,7 @@ public class LLMQueryEngine {
                     QueryResult.success(assistantMessage)
                 );
             }
-            
+
             // 检查是否为空回复
             // 【修复】纯思考（仅有 reasoning，无文本内容、无工具调用）不算有效进展，
             // 连续纯思考达到阈值必须强制终止，否则会导致无限循环
@@ -796,9 +844,9 @@ public class LLMQueryEngine {
                 // 注入更明确的引导提示
                 if (consecutiveThinkingOnlyRounds % 3 == 0) {
                     session.addMessage(Message.createSystemMessage(
-                        "【系统提示】你已连续 " + consecutiveThinkingOnlyRounds + " 轮仅有内部思考而无实际输出。"
-                        + "请立即做出决定：执行工具操作，或输出文本回复，或在文本末尾添加 [FINISH] 结束对话。"
-                        + "不要只思考不行动。"
+                        "⛔ 【系统警告】你已连续 " + consecutiveThinkingOnlyRounds + " 轮仅有思考而无实际输出！"
+                        + "必须立即行动：1) 调用工具执行操作 2) 输出文本回复 + [FINISH] 结束对话。"
+                        + "禁止继续只思考不行动，否则对话将被强制终止。"
                     ));
                 }
             } else {
@@ -809,7 +857,9 @@ public class LLMQueryEngine {
                 // 【优化】降低 [FINISH] 提醒注入频率：每 FINISH_REMINDER_INTERVAL 轮才注入一次
                 if (iteration % FINISH_REMINDER_INTERVAL == 0 && !hasRecentSystemPrompt("[FINISH]")) {
                     session.addMessage(Message.createSystemMessage(
-                        "提示：如果任务已完成，请在回复末尾添加 [FINISH] 标记以结束对话。例如：\"任务已完成。\n\n[FINISH]\""
+                        "⛔ 【强制提醒】请在回复最后一行输出 [FINISH] 结束对话！"
+                        + "不输出 [FINISH] = 任务未完成 = 无限循环。"
+                        + "即使你已经口头回答了问题，也必须加上 [FINISH]。"
                     ));
                 }
             }
@@ -908,13 +958,13 @@ public class LLMQueryEngine {
             Consumer<String> thinkingConsumer,
             Consumer<LLMService.StreamToolCallEvent> toolCallConsumer) {
         if (response.hasError()) {
-            logger.severe("[LLMQueryEngine] API error: " + response.getErrorMessage());
+            logger.severe("[LLMQueryEngine] API error [" + response.getErrorCode() + "]: " + response.getErrorMessage());
             triggerStepComplete("LLM查询", "API错误: " + response.getErrorMessage());
             return CompletableFuture.completedFuture(
                 QueryResult.error(response.getErrorMessage())
             );
         }
-        
+
         logger.info("[LLMQueryEngine] Stream response received, content length: " +
             (response.getContent() != null ? response.getContent().length() : 0));
 
@@ -973,10 +1023,10 @@ public class LLMQueryEngine {
                 if (repeatedToolPatternCount >= MAX_REPEATED_TOOL_CALLS) {
                     logger.warning("[LLMQueryEngine] Repeated tool pattern exceeded threshold, injecting urgency prompt");
                     session.addMessage(Message.createSystemMessage(
-                        "【系统提示】你已连续多次调用相同的工具集但未完成任务。"
-                        + "请评估当前策略是否有效：如果遇到阻碍，请尝试不同方法；"
-                        + "如果任务已实际完成，请直接输出 [FINISH] 结束对话。"
-                        + "不要重复调用相同工具而不产生进展。"
+                        "⛔ 【系统警告】你已连续多次调用相同的工具集但未产生任何进展！"
+                        + "当前策略可能已失效。你必须：要么换一种完全不同的方法执行，"
+                        + "要么承认当前结果并输出 [FINISH] 结束对话。"
+                        + "禁止继续重复相同的工具调用模式。"
                     ));
                     repeatedToolPatternCount = 0;
                 }
@@ -999,6 +1049,14 @@ public class LLMQueryEngine {
             // API finish_reason="stop" + 无工具调用 → 模型认为任务完成，直接结束
             if ("stop".equals(response.getFinishReason()) && !response.hasToolCalls()) {
                 return CompletableFuture.completedFuture(QueryResult.success(assistantMessage));
+            }
+            // API finish_reason="length" + 无工具调用 → 上下文窗口耗尽，强制要求 [FINISH] 后给最后一轮机会
+            if ("length".equals(response.getFinishReason()) && !response.hasToolCalls()) {
+                logger.warning("[LLMQueryEngine] finish_reason=length (context exhausted), forcing finish");
+                session.addMessage(Message.createSystemMessage(
+                    "⛔ 【紧急】你的上下文窗口已完全耗尽！必须立即在最后一行输出 [FINISH] 结束对话。禁止发起任何新的工具调用，你没有足够的 token 来完成更多操作。"));
+                return runStreamConversationLoop(iteration + 1, 0,
+                    contentConsumer, thinkingConsumer, toolCallConsumer);
             }
             // 检查回复内容是否包含结束标记
             if (content != null && content.contains(FINISH_MARKER)) {
@@ -1023,15 +1081,6 @@ public class LLMQueryEngine {
                 }
 
                 logger.info("[LLMQueryEngine] 检测到结束标记 " + FINISH_MARKER + "，结束对话");
-
-                // 【修复】通过 contentConsumer 回放完整内容（移除 [FINISH] 标记），
-                // 确保即使流式过程中 contentConsumer 为 null，最终内容也能送达
-                if (contentConsumer != null && content != null) {
-                    String displayContent = content.replace(FINISH_MARKER, "").trim();
-                    if (!displayContent.isEmpty()) {
-                        contentConsumer.accept(displayContent);
-                    }
-                }
 
                 triggerStepComplete("LLM查询", "完成回复");
                 return CompletableFuture.completedFuture(
@@ -1079,8 +1128,8 @@ public class LLMQueryEngine {
 
                 if (consecutiveThinkingOnlyRounds % 3 == 0) {
                     session.addMessage(Message.createSystemMessage(
-                        "【系统提示】你已连续 " + consecutiveThinkingOnlyRounds + " 轮仅有内部思考而无实际输出。"
-                        + "请立即做出决定：执行工具操作，或输出文本回复，或在文本末尾添加 [FINISH] 结束对话。"
+                        "⛔ 【系统警告】你已连续 " + consecutiveThinkingOnlyRounds + " 轮仅有思考而无实际输出！"
+                        + "必须立即行动：1) 调用工具执行操作 2) 输出文本回复 + [FINISH] 结束对话。"
                     ));
                 }
             } else {
@@ -1090,7 +1139,9 @@ public class LLMQueryEngine {
 
                 if (iteration % FINISH_REMINDER_INTERVAL == 0 && !hasRecentSystemPrompt("[FINISH]")) {
                     session.addMessage(Message.createSystemMessage(
-                        "提示：如果任务已完成，请在回复末尾添加 [FINISH] 标记以结束对话。例如：\"任务已完成。\\n\\n[FINISH]\""
+                        "⛔ 【强制提醒】请在回复最后一行输出 [FINISH] 结束对话！"
+                        + "不输出 [FINISH] = 任务未完成 = 无限循环。"
+                        + "即使你已经口头回答了问题，也必须加上 [FINISH]。"
                     ));
                 }
             }
@@ -1223,8 +1274,22 @@ public class LLMQueryEngine {
                         .filter(r -> r != null && "AskUserQuestion".equals(r.getToolName()))
                         .findFirst()
                         .map(ToolExecutionResult::getResult)
-                        .orElse("需要用户补充信息");
-                    taskLifecycleManager.waitForUserInput(session, question);
+                        .orElse(null);
+
+                    if (question == null || question.isEmpty()) {
+                        // 工具执行失败或返回 null，注入系统消息让 LLM 继续
+                        session.addMessage(Message.createSystemMessage(
+                            "AskUserQuestion 未能获取用户补充信息。请基于已有信息继续执行，或尝试用更简单的方式向用户提问。"));
+                        logger.warning("[LLMQueryEngine] AskUserQuestion result is null/empty, skipping waitForUserInput");
+                    } else {
+                        try {
+                            taskLifecycleManager.waitForUserInput(session, question);
+                        } catch (Exception e) {
+                            logger.warning("[LLMQueryEngine] waitForUserInput failed: " + e.getMessage());
+                            session.addMessage(Message.createSystemMessage(
+                                "向用户提问失败。请基于已有信息继续执行。"));
+                        }
+                    }
                 } else if (hasError) {
                     taskLifecycleManager.failStep(session, "工具执行失败");
                 } else {
@@ -1787,8 +1852,24 @@ public class LLMQueryEngine {
                 QueryResult.error("达到最大迭代次数限制")));
         }
 
+        // 5b. Near-limit warning: 接近 maxIterations 时强制注入终止提示
+        if (config.getMaxIterations() > 0 && (config.getMaxIterations() - iteration) <= 3
+            && iteration > 0 && !hasRecentSystemPrompt("即将达到上限")) {
+            int remaining = config.getMaxIterations() - iteration;
+            session.addMessage(Message.createSystemMessage(
+                "⛔ 【最后通牒】仅剩 " + remaining + " 轮迭代！对话即将被强制终止。"
+                + "必须立即在最后一行输出 [FINISH] 结束对话。"
+                + "绝对禁止再发起工具调用，直接输出最终回复 + [FINISH]。"));
+        }
+
+        // Plan 模式使用更严格的停滞阈值
+        boolean isPlan = com.jwcode.core.plan.PlanModeManager.getInstance().isPlanMode();
+        int toolOnlyThreshold = isPlan ? 20 : config.getMaxConsecutiveToolOnlyRounds();
+        int thinkingOnlyThreshold = isPlan ? 5 : MAX_CONSECUTIVE_THINKING_ONLY_ROUNDS;
+        int failedToolThreshold = isPlan ? 3 : MAX_CONSECUTIVE_FAILED_TOOL_ROUNDS;
+
         // 6. Tool-only stagnation
-        if (consecutiveToolOnlyRounds >= config.getMaxConsecutiveToolOnlyRounds()) {
+        if (consecutiveToolOnlyRounds >= toolOnlyThreshold) {
             logger.warning("[LLMQueryEngine] Stagnation: " + consecutiveToolOnlyRounds
                 + " consecutive tool-only rounds, force terminating");
             triggerStepComplete("LLM查询", "检测到任务停滞（连续" + consecutiveToolOnlyRounds + "轮仅工具调用无进展）");
@@ -1800,7 +1881,7 @@ public class LLMQueryEngine {
         }
 
         // 7. Thinking-only stagnation
-        if (consecutiveThinkingOnlyRounds >= MAX_CONSECUTIVE_THINKING_ONLY_ROUNDS) {
+        if (consecutiveThinkingOnlyRounds >= thinkingOnlyThreshold) {
             logger.warning("[LLMQueryEngine] Thinking-only stagnation: " + consecutiveThinkingOnlyRounds);
             triggerStepComplete("LLM查询", "模型持续思考但无行动，已自动终止");
             if (contentConsumer != null) {
@@ -1811,7 +1892,7 @@ public class LLMQueryEngine {
         }
 
         // 8. Consecutive failed tool rounds
-        if (consecutiveFailedToolRounds >= MAX_CONSECUTIVE_FAILED_TOOL_ROUNDS) {
+        if (consecutiveFailedToolRounds >= failedToolThreshold) {
             logger.warning("[LLMQueryEngine] Consecutive failed tool rounds: " + consecutiveFailedToolRounds);
             triggerStepComplete("LLM查询", "连续" + consecutiveFailedToolRounds + "轮工具调用全部失败，已自动终止");
             if (contentConsumer != null) {
@@ -1836,7 +1917,8 @@ public class LLMQueryEngine {
         // 11. FINISH reminder
         if (iteration % FINISH_REMINDER_INTERVAL == 0 && !hasRecentSystemPrompt("[FINISH]")) {
             session.addMessage(Message.createSystemMessage(
-                "提示：如果任务已完成，请在回复末尾添加 [FINISH] 标记以结束对话。"));
+                "⛔ 【强制提醒】请在回复最后一行输出 [FINISH] 结束对话！"
+                + "不输出 [FINISH] = 任务未完成 = 无限循环。"));
         }
 
         return PreFlightResult.proceed(llmMessages, tools);
@@ -1861,7 +1943,7 @@ public class LLMQueryEngine {
             logger.info("[AutoSwarm] 复杂度=" + analysis.getComplexity() + " 触发=" + analysis.isShouldUseSwarm());
 
             if (analysis.isShouldUseSwarm()) {
-                var result = swarm.executeComplexTask(prompt, null);
+                var result = swarm.executeComplexTask(prompt, null, pipeline::publish);
                 String plan = result.getFinalResult() != null ? result.getFinalResult().toString() : "";
                 session.addMessage(Message.createSystemMessage(
                     "[自动 Agent Swarm 分析]\n" + plan +
@@ -1874,13 +1956,13 @@ public class LLMQueryEngine {
     }
 
     public static class EngineConfig {
-        private int maxIterations = 0; // 默认 0 表示不限制，由 TokenBudget 控制
+        private int maxIterations = 50; // 默认 50 轮迭代上限，防止无限循环
         private Duration timeout = Duration.ofMinutes(5);
         private int maxEmptyResponses = DEFAULT_MAX_EMPTY_RESPONSES;
         private boolean reasoningModel = false;
         private long tokenBudget = 1_000_000; // 默认 1M token 预算
         private int maxMessageHistory = 0; // 默认 0 表示不限制，由 ContextWindowManager 智能压缩
-        private int maxConsecutiveToolOnlyRounds = 100; // 连续仅工具调用无文本回复的轮数上限
+        private int maxConsecutiveToolOnlyRounds = 10; // 连续仅工具调用无文本回复的轮数上限
         private boolean layeredMode = true; // 默认启用分层多Agent架构
         private boolean fabricationCheckEnabled = true; // 【反编造】默认启用执行前自检
         
@@ -1892,12 +1974,12 @@ public class LLMQueryEngine {
             if (config != null && config.getSettings() != null) {
                 JwcodeConfig.EngineSettings engine = config.getSettings().getEngine();
                 if (engine != null) {
-                    // 【修复】只有当配置值 > 0 时才覆盖默认值，确保默认不限制迭代次数
+                    // 当配置值 > 0 时覆盖默认值 (50)，配置值 = 0 表示使用引擎默认值
                     int configuredMaxIterations = engine.getMaxIterations();
                     if (configuredMaxIterations > 0) {
                         engineConfig.setMaxIterations(configuredMaxIterations);
                     }
-                    // 否则保持默认值 0（无限制）
+                    // 否则保持默认值 50
                     
                     engineConfig.setTimeout(Duration.ofMinutes(engine.getTimeoutMinutes()));
                     engineConfig.setTokenBudget(engine.getTokenBudget());

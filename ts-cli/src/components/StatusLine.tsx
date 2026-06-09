@@ -1,6 +1,7 @@
-import { memo, useState, useEffect, useRef } from 'react';
+﻿import { memo, useState, useEffect, useRef } from 'react';
 import { Box, Text } from 'ink';
 import { useAppStatusLine, useAppIsGenerating, useAppDegradation, useAppPdcaPhase, useAppPlanTasks } from '../hooks/useAppState.js';
+import { debugLog } from '../client.js';
 import { t } from '../theme.js';
 
 function formatTokens(n: number): string {
@@ -27,6 +28,7 @@ function formatElapsed(sec: number): string {
 }
 
 export const StatusLine = memo(function StatusLine() {
+  debugLog('app', 'StatusLine mount planMode=' + useAppStatusLine().planMode);
   const { usage, modelName, planMode, autoMode, connected, statusText, messagesLen,
           tokenRate, compactionProgress } = useAppStatusLine();
   const degradation = useAppDegradation();
@@ -57,6 +59,8 @@ export const StatusLine = memo(function StatusLine() {
 
   const modeLabel = planMode ? ' Plan ' : ' Act ';
   const modeColor = planMode ? t.plan : t.success;
+  // Force re-mount on mode switch to prevent terminal ghosting
+  const modeKey = planMode ? 'mode-plan' : 'mode-act';
 
   const connIcon = connected ? '\u25CF' : '\u25CB';
   const connColor = connected ? t.connected : t.disconnected;
@@ -74,7 +78,7 @@ export const StatusLine = memo(function StatusLine() {
       <Box height={1}>
         <Text bold color={t.primary}>jwcode</Text>
         <Text>  </Text>
-        <Text backgroundColor={modeColor} color="black"> {modeLabel} </Text>
+        <Text key={modeKey} backgroundColor={modeColor} color="black"> {modeLabel} </Text>
         <Text>  </Text>
         {autoMode && (
           <>
@@ -134,31 +138,39 @@ export const StatusLine = memo(function StatusLine() {
           </>
         )}
       </Box>
-      {degradation.active && (
-        <Box height={1}>
+      <Box height={1}>
+        {degradation.active ? (
           <Text color={t.warning} dimColor>
             [{degradation.mode.toUpperCase()}] {degradation.message}
             {degradation.retryCount > 0 ? ` (${degradation.retryCount}/${degradation.maxRetries})` : ''}
           </Text>
-        </Box>
-      )}
-      {compactionProgress && (
-        <Box height={1}>
-          <Text color={compactionProgress.percent >= 100 ? t.success : t.primary}>
-            {compactionProgress.percent >= 100 ? '\u2713' : '\u2699'} {compactionProgress.message}
-          </Text>
+        ) : (
           <Text> </Text>
-          <Text color={t.warning}>{'\u2588'.repeat(Math.round(compactionProgress.percent / 10))}{'\u2591'.repeat(10 - Math.round(compactionProgress.percent / 10))}</Text>
-          <Text dimColor> {compactionProgress.percent}%</Text>
-        </Box>
-      )}
-      {statusText && statusText !== 'connecting...' && (
-        <Box height={1}>
+        )}
+      </Box>
+      <Box height={1}>
+        {compactionProgress ? (
+          <>
+            <Text color={compactionProgress.percent >= 100 ? t.success : t.primary}>
+              {compactionProgress.percent >= 100 ? '\u2713' : '\u2699'} {compactionProgress.message}
+            </Text>
+            <Text> </Text>
+            <Text color={t.warning}>{'\u2588'.repeat(Math.round(compactionProgress.percent / 10))}{'\u2591'.repeat(10 - Math.round(compactionProgress.percent / 10))}</Text>
+            <Text dimColor> {compactionProgress.percent}%</Text>
+          </>
+        ) : (
+          <Text> </Text>
+        )}
+      </Box>
+      <Box height={1}>
+        {statusText && statusText !== 'connecting...' ? (
           <Text color={isError ? t.error : t.muted} dimColor={!isError}>
             {statusText.slice(0, 100)}
           </Text>
-        </Box>
-      )}
+        ) : (
+          <Text> </Text>
+        )}
+      </Box>
     </Box>
   );
 });

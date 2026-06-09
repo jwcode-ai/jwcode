@@ -145,7 +145,10 @@ public class ToolExecutor {
         // Plan Mode isolation: reject write/execute tools
         if (!planModeManager.isToolAllowedInCurrentMode(tool.getCategory(), tool.getSideEffects().stream().findFirst().orElse(null), toolName)) {
             return CompletableFuture.completedFuture(ToolExecutionResult.error(toolName,
-                "[Plan Mode] " + toolName + " blocked -- write/execute tools require Act Mode"));
+                "[Plan Mode] " + toolName + " is blocked — you are in Plan Mode (read-only). "
+                    + "You must write your plan to .jwcode/plan.md first, then call ExitPlanModeV2 to submit it for approval. "
+                    + "Only after exiting Plan Mode into Act Mode can you use write/execute tools. "
+                    + "Use read-only tools (GlobTool, FileReadTool, GrepTool) to gather the information you need for your plan."));
         }
 
                 
@@ -208,6 +211,11 @@ public class ToolExecutor {
         // ──────── Hook: PRE_TOOL_USE ────────
         if (hookChain != null) {
             try {
+                // 等待同会话其他工具的审批完成，避免并发工具绕过审批阻塞
+                String sessionId = context != null && context.getSession() != null
+                    ? context.getSession().getId() : null;
+                HookApprovalManager.getInstance().waitForPendingApproval(sessionId);
+
                 JsonNode inputJson = SHARED_MAPPER
                     .valueToTree(input);
                 HookContext hookCtx = HookContext.forPreToolUse(
@@ -235,8 +243,6 @@ public class ToolExecutor {
                         + " | " + askPayload);
                     // 发起审批请求，一直等待用户决策（不超时）
                     try {
-                        String sessionId = context != null && context.getSession() != null
-                            ? context.getSession().getId() : null;
                         Boolean approved = HookApprovalManager.getInstance()
                             .requestApproval(toolName, askPayload != null ? askPayload : "", -1, sessionId)
                             .get();

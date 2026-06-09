@@ -17,20 +17,23 @@ import java.util.stream.Collectors;
  * 增强的配置管理器 - 管理多级配置继承和作用域支持
  * 
  * 配置文件位置（按优先级从低到高）:
- * - System: /etc/jwcode/config.yaml (Linux/Mac) 或 %ProgramData%/jwcode/config.yaml (Windows)
- * - User: ~/.jwcode/config.yaml
- * - Project: ./.jwcode/config.yaml (当前工作目录)
+ * - System: 由操作系统决定 (%ProgramData%/jwcode/settings.json 或 /etc/jwcode/settings.json)
+ * - User: ~/.jwcode/settings.json
+ * - Project: ./.jwcode/settings.json (当前工作目录)
  * - Runtime: 内存中的临时配置
- * 
+ *
  * 查找顺序: Runtime → Project → User → System
+ *
+ * 注意: 此 ConfigManager 现已独立使用 settings.json，与 YamlConfigLoader 的 config.yaml 分离，
+ * 避免两者的序列化格式互相覆盖。
  */
 public class ConfigManager {
-    
+
     private static final Logger logger = Logger.getLogger(ConfigManager.class.getName());
-    
+
     private static final String CONFIG_DIR = ".jwcode";
-    private static final String CONFIG_FILE_YAML = "config.yaml";
-    private static final String CONFIG_FILE_JSON = "config.json";
+    private static final String CONFIG_FILE_YAML = "config.yaml";  // 仅用于迁移读取
+    private static final String SETTINGS_FILE = "settings.json";
     
     private static ConfigManager instance;
     
@@ -100,24 +103,24 @@ public class ConfigManager {
         if (os.contains("win")) {
             String programData = System.getenv("ProgramData");
             if (programData != null) {
-                systemConfigPath = Paths.get(programData, "jwcode", CONFIG_FILE_YAML);
+                systemConfigPath = Paths.get(programData, "jwcode", SETTINGS_FILE);
             }
         } else {
-            systemConfigPath = Paths.get("/etc", "jwcode", CONFIG_FILE_YAML);
+            systemConfigPath = Paths.get("/etc", "jwcode", SETTINGS_FILE);
         }
-        
+
         // 用户级配置路径
         String userHome = System.getProperty("user.home");
         if (userHome != null) {
-            userConfigPath = Paths.get(userHome, CONFIG_DIR, CONFIG_FILE_YAML);
+            userConfigPath = Paths.get(userHome, CONFIG_DIR, SETTINGS_FILE);
         }
-        
+
         // 项目级配置路径
         String userDir = System.getProperty("user.dir");
         if (userDir != null) {
-            projectConfigPath = Paths.get(userDir, CONFIG_DIR, CONFIG_FILE_YAML);
+            projectConfigPath = Paths.get(userDir, CONFIG_DIR, SETTINGS_FILE);
         }
-        
+
         // 更新配置存储的源路径
         systemConfig.put(ConfigItem.of("_config.path", systemConfigPath != null ? systemConfigPath.toString() : "", ConfigScope.SYSTEM));
         userConfig.put(ConfigItem.of("_config.path", userConfigPath != null ? userConfigPath.toString() : "", ConfigScope.USER));
@@ -132,10 +135,27 @@ public class ConfigManager {
             loadFromFile(systemConfigPath, systemConfig);
         }
         if (userConfigPath != null) {
-            loadFromFile(userConfigPath, userConfig);
+            loadFromFileWithMigration(userConfigPath, userConfig);
         }
         if (projectConfigPath != null) {
-            loadFromFile(projectConfigPath, projectConfig);
+            loadFromFileWithMigration(projectConfigPath, projectConfig);
+        }
+    }
+
+    /**
+     * 加载配置文件，如果 settings.json 不存在则从 config.yaml 迁移。
+     */
+    private void loadFromFileWithMigration(Path settingsPath, ConfigScopeConfig target) {
+        if (Files.exists(settingsPath)) {
+            loadFromFile(settingsPath, target);
+            return;
+        }
+
+        // 迁移：settings.json 不存在时，尝试从旧的 config.yaml 读取
+        Path legacyYamlPath = settingsPath.resolveSibling(CONFIG_FILE_YAML);
+        if (Files.exists(legacyYamlPath)) {
+            logger.info("Migrating settings from " + legacyYamlPath + " to " + settingsPath);
+            loadFromFile(legacyYamlPath, target);
         }
     }
     
@@ -292,6 +312,63 @@ public class ConfigManager {
                 saveScopeConfig(ConfigScope.SYSTEM);
             }
         }
+
+        // 同步到 YamlConfigLoader 的 JwcodeConfig POJO（重叠的键）
+        propagateToJwcodeConfig(key, value);
+    }
+
+    /**
+     * 将 ConfigManager 中的关键开关同步到 YamlConfigLoader 的 JwcodeConfig POJO。
+     * 确保 Web UI 的开关变更同时反映在两个配置系统中。
+     */
+    private void propagateToJwcodeConfig(String key, String value) {
+        if (key == null || value == null) return;
+        try {
+            JwcodeConfig jwConfig = YamlConfigLoader.getInstance().getConfig();
+            boolean changed = false;
+            boolean boolVal = "true".equalsIgnoreCase(value) || "1".equals(value) || "yes".equalsIgnoreCase(value);
+
+            switch (key) {
+                case "yolo.enabled":
+                    if (jwConfig.getSettings().getAdvanced().isYoloMode() != boolVal) {
+                        jwConfig.getSettings().getAdvanced().setYoloMode(boolVal);
+                        changed = true;
+                    }
+                    break;
+                case "autoSwarm.enabled":
+                    if (jwConfig.getSettings().getAdvanced().isAutoSwarmEnabled() != boolVal) {
+                        jwConfig.getSettings().getAdvanced().setAutoSwarmEnabled(boolVal);
+                        changed = true;
+                    }
+                    break;
+                case "advanced.auto-compact-enabled":
+                    if (jwConfig.getSettings().getAdvanced().isAutoCompactEnabled() != boolVal) {
+                        jwConfig.getSettings().getAdvanced().setAutoCompactEnabled(boolVal);
+                        changed = true;
+                    }
+                    break;
+                case "advanced.analytics-enabled":
+                    if (jwConfig.getSettings().getAdvanced().isAnalyticsEnabled() != boolVal) {
+                        jwConfig.getSettings().getAdvanced().setAnalyticsEnabled(boolVal);
+                        changed = true;
+                    }
+                    break;
+                case "advanced.anonymous-mode":
+                    if (jwConfig.getSettings().getAdvanced().isAnonymousMode() != boolVal) {
+                        jwConfig.getSettings().getAdvanced().setAnonymousMode(boolVal);
+                        changed = true;
+                    }
+                    break;
+            }
+
+            if (changed) {
+                YamlConfigLoader.getInstance().saveCurrentConfig();
+                logger.fine("同步到 config.yaml: " + key + " = " + boolVal);
+            }
+        } catch (Exception e) {
+            // 同步失败不应影响主流程，但需记录以便排查
+            logger.warning("同步到 config.yaml 失败: " + key + "=" + value + " - " + e.getMessage());
+        }
     }
     
     /**
@@ -398,34 +475,34 @@ public class ConfigManager {
             case RUNTIME -> { /* 运行时配置不持久化 */ }
             case PROJECT -> {
                 if (projectConfigPath != null) {
-                    saveToYaml(projectConfigPath, projectConfig);
+                    saveToJson(projectConfigPath, projectConfig);
                 }
             }
             case USER -> {
                 if (userConfigPath != null) {
-                    saveToYaml(userConfigPath, userConfig);
+                    saveToJson(userConfigPath, userConfig);
                 }
             }
             case SYSTEM -> {
-                // 系统配置通常不通过程序修改
                 if (systemConfigPath != null) {
-                    saveToYaml(systemConfigPath, systemConfig);
+                    saveToJson(systemConfigPath, systemConfig);
                 }
             }
         }
     }
-    
-    private void saveToYaml(Path path, ConfigScopeConfig config) {
+
+    /**
+     * 保存配置到 JSON 文件（代替原来的 YAML，避免与 config.yaml 冲突）。
+     * JSON 格式更适合扁平的键值对存储，布尔/数字类型也无歧义。
+     */
+    private void saveToJson(Path path, ConfigScopeConfig config) {
         try {
             Files.createDirectories(path.getParent());
-            
-            // 转换回嵌套结构
             Map<String, Object> nested = unflattenMap(config.getAllAsMap());
-            String yaml = yamlMapper.writeValueAsString(nested);
-            Files.writeString(path, yaml);
-            
+            String json = jsonMapper.writeValueAsString(nested);
+            Files.writeString(path, json);
         } catch (IOException e) {
-            System.err.println("保存配置失败: " + path + " - " + e.getMessage());
+            logger.severe("保存配置失败: " + path + " - " + e.getMessage());
         }
     }
     

@@ -80,6 +80,9 @@ public class HookContext {
     private final String targetAgentName;
     private final String taskId;
 
+    // ==================== Dry-run 标记 ====================
+    private final boolean dryRun;
+
     private HookContext(Builder builder) {
         this.eventType = Objects.requireNonNull(builder.eventType, "eventType");
         this.sessionId = builder.sessionId;
@@ -101,6 +104,7 @@ public class HookContext {
         this.sourceAgentName = builder.sourceAgentName;
         this.targetAgentName = builder.targetAgentName;
         this.taskId = builder.taskId;
+        this.dryRun = builder.dryRun;
     }
 
     // ==================== Getters（公共） ====================
@@ -133,6 +137,9 @@ public class HookContext {
     public String getTargetAgentName() { return targetAgentName; }
     public String getTaskId() { return taskId; }
 
+    // ==================== Dry-run ====================
+    public boolean isDryRun() { return dryRun; }
+
     // ==================== 序列化 ====================
 
     /**
@@ -154,6 +161,7 @@ public class HookContext {
         if (sourceAgentName != null) node.put("sourceAgentName", sourceAgentName);
         if (targetAgentName != null) node.put("targetAgentName", targetAgentName);
         if (taskId != null) node.put("taskId", taskId);
+        if (dryRun) node.put("dryRun", true);
         if (!metadata.isEmpty()) {
             node.set("metadata", MAPPER.valueToTree(metadata));
         }
@@ -192,6 +200,9 @@ public class HookContext {
         private String targetAgentName;
         private String taskId;
 
+        // Dry-run
+        private boolean dryRun;
+
         public Builder(HookEventType eventType) {
             this.eventType = eventType;
         }
@@ -222,6 +233,7 @@ public class HookContext {
         public Builder sourceAgentName(String name) { this.sourceAgentName = name; return this; }
         public Builder targetAgentName(String name) { this.targetAgentName = name; return this; }
         public Builder taskId(String id) { this.taskId = id; return this; }
+        public Builder dryRun(boolean dry) { this.dryRun = dry; return this; }
 
         public HookContext build() {
             return new HookContext(this);

@@ -5,7 +5,7 @@
 import { useCallback } from 'react';
 import type { JwCodeClient } from '../client.js';
 import { updateAppState } from './useAppState.js';
-import { saveToHistory } from '../components/TextInput.js';
+
 import { createMessage } from '../protocol.js';
 import { SLASH_COMMANDS } from '../commands/index.js';
 import { expandPastes, clearAllPastes } from '../pasteBuffer.js';
@@ -108,7 +108,6 @@ export function useCommandHandler(opts: CommandHandlerOptions) {
     if (text.startsWith('/') && !(cmd && cmd in SLASH_COMMANDS)) return;
     // Expand "[Pasted text #N ...]" tokens to the real clipboard content
     const expanded = expandPastes(text);
-    saveToHistory(text); // save the compact view, not the expanded text
     const msg = createMessage('user', expanded);
     updateAppState(prev => ({ ...prev, messages: [...prev.messages, msg] }));
     clientRef.current!.chat(expanded, planModeRef.current);

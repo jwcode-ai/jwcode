@@ -150,7 +150,10 @@ public class AnthropicMessageConverter {
         }
         LLMResponse.Builder builder = LLMResponse.builder().rawResponse(responseBody);
         if (json.has("model")) builder.model(json.get("model").asText());
-        if (json.has("stop_reason")) builder.finishReason(json.get("stop_reason").asText());
+        if (json.has("stop_reason")) {
+            String sr = json.get("stop_reason").asText();
+            builder.finishReason("end_turn".equals(sr) ? "stop" : sr);
+        }
         if (json.has("content") && json.get("content").isArray()) {
             StringBuilder textContent = new StringBuilder();
             StringBuilder reasoningContent = new StringBuilder();

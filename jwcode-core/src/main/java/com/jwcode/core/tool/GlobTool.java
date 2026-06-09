@@ -161,6 +161,16 @@ public class GlobTool implements Tool<GlobInput, GlobOutput, GlobTool.GlobProgre
     public boolean isDestructive(GlobInput input) {
         return false;
     }
+
+    @Override
+    public ToolCategory getCategory() {
+        return ToolCategory.SEARCH;
+    }
+
+    @Override
+    public Set<SideEffect> getSideEffects() {
+        return Set.of(SideEffect.READ_ONLY);
+    }
     
     /**
      * 获取或初始化 FileNameCache。

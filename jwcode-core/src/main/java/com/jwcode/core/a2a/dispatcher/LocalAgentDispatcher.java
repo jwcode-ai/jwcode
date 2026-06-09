@@ -562,7 +562,7 @@ public class LocalAgentDispatcher implements AgentDispatcher {
 
         sb.append("## 执行要求\n\n");
         sb.append("1. 请根据上述任务描述，使用可用工具完成任务\n");
-        sb.append("2. 任务完成后，在回复末尾添加 [FINISH] 标记\n");
+        sb.append("2. 【强制】任务完成后，必须在回复最后一行单独输出 [FINISH] 标记以结束对话\n");
         sb.append("3. 简洁总结已完成的工作\n");
 
         return sb.toString();

@@ -123,12 +123,18 @@ public class PlanModeManager {
     
     // 单例
     private static volatile PlanModeManager instance;
-    
+
+    /** Plan 模式最大分析轮次，超过后强制总结 */
+    public static final int MAX_PLAN_ROUNDS = 8;
+
     // 当前模式
     private volatile Mode currentMode = Mode.NORMAL;
 
     /** Hard lock: prevents direct API calls from bypassing Plan mode isolation. */
     private volatile boolean planModeLocked = false;
+
+    /** Plan 模式下的 LLM 工具调用轮次计数 */
+    private volatile int planRounds = 0;
     
     // 模式切换监听器
     private final List<ModeChangeListener> listeners = new ArrayList<>();
@@ -141,34 +147,9 @@ public class PlanModeManager {
     
     private PlanModeManager() {
         this.stateFilePath = Paths.get(System.getProperty("user.dir"), STATE_FILE);
-        loadMode();
-    }
-    
-    /** 残留状态过期阈值（5分钟） */
-    private static final long STALE_THRESHOLD_MS = 300_000;
-
-    /**
-     * 残留状态检测：如果状态文件超过阈值且模式为 PLAN 或 ACT，自动重置为 NORMAL。
-     * 防止上次会话崩溃/异常退出导致残留的 Plan/Act Mode 影响本次启动。
-     *
-     * <p>ACT 模式残留尤其危险：autoApproveWrite=true 状态会意外批准文件写入。</p>
-     */
-    private boolean isStaleMode() {
-        if (currentMode == Mode.NORMAL) return false;
-        try {
-            if (Files.exists(stateFilePath)) {
-                long lastModified = Files.getLastModifiedTime(stateFilePath).toMillis();
-                long age = System.currentTimeMillis() - lastModified;
-                if (age > STALE_THRESHOLD_MS) {
-                    logger.warning(currentMode.getValue() + " mode state stale ("
-                        + (age / 1000) + "s old), resetting to NORMAL");
-                    return true;
-                }
-            }
-        } catch (Exception e) {
-            logger.fine("Cannot check state file age: " + e.getMessage());
-        }
-        return false;
+        // Always start in NORMAL mode — Plan/Act mode is an explicit user action,
+        // not something that should persist across restarts.
+        this.currentMode = Mode.NORMAL;
     }
     
     /**
@@ -207,7 +188,22 @@ public class PlanModeManager {
     public boolean isPlanMode() {
         return currentMode == Mode.PLAN;
     }
-    
+
+    /** Plan 模式下每轮 LLM 工具调用后递增 */
+    public void incrementPlanRound() {
+        planRounds++;
+    }
+
+    /** 当前已执行的 Plan 轮次 */
+    public int getPlanRounds() {
+        return planRounds;
+    }
+
+    /** Plan 轮次是否已超过限制 */
+    public boolean isPlanRoundsExceeded() {
+        return planRounds >= MAX_PLAN_ROUNDS;
+    }
+
     /**
      * 是否处于 Act Mode
      */
@@ -248,10 +244,11 @@ public class PlanModeManager {
             logger.fine("Already in plan mode");
             return true;
         }
-        
+
         Mode previousMode = currentMode;
         currentMode = Mode.PLAN;
         planModeLocked = true;
+        planRounds = 0; // 重置轮次计数
         saveMode();
         
         ModeChangeEvent event = new ModeChangeEvent(previousMode, Mode.PLAN, taskDescription);
@@ -291,9 +288,12 @@ public class PlanModeManager {
      * 进入 Act Mode
      */
     public synchronized boolean enterActMode() {
-        if (currentMode == Mode.PLAN && planModeLocked) {
-            logger.warning("Plan mode locked: use ExitPlanModeV2 tool to exit plan mode first.");
-            return false;
+        if (currentMode == Mode.PLAN) {
+            return exitPlanMode("Entering Act mode from Plan mode");
+        }
+        if (currentMode == Mode.ACT) {
+            logger.fine("Already in act mode");
+            return true;
         }
         Mode previousMode = currentMode;
         currentMode = Mode.ACT;
@@ -434,37 +434,6 @@ public class PlanModeManager {
     // ==================== 持久化 ====================
     
     /**
-     * 从文件加载模式
-     */
-    private void loadMode() {
-        try {
-            if (Files.exists(stateFilePath)) {
-                String content = Files.readString(stateFilePath);
-                if (content.contains("\"mode\"")) {
-                    int start = content.indexOf("\"mode\"") + 7;
-                    int end = content.indexOf("\"", start + 1);
-                    if (end > start + 1) {
-                        String modeStr = content.substring(start + 1, end);
-                        Mode loadedMode = Mode.fromString(modeStr);
-                        currentMode = loadedMode;
-                        // 残留检测：超过阈值的 PLAN/ACT 状态自动重置
-                        if (isStaleMode()) {
-                            if (currentMode == Mode.ACT) {
-                                PermissionManager.getInstance().setAutoApproveWrite(false);
-                            }
-                            currentMode = Mode.NORMAL;
-                            saveMode();
-                        }
-                        logger.info("Loaded mode: " + currentMode);
-                    }
-                }
-            }
-        } catch (Exception e) {
-            logger.warning("Failed to load mode: " + e.getMessage());
-        }
-    }
-    
-    /**
      * 保存模式到文件
      */
     private void saveMode() {
@@ -546,17 +515,31 @@ public class PlanModeManager {
     private String getReplacementSuggestion(String blockedToolName) {
         return switch (blockedToolName) {
             case "Bash", "PowerShell", "REPL" ->
-                "\n💡 替代方案：用 SmartAnalyzeTool 分析项目结构，用 GlobTool 搜索文件，用 FileReadTool 读取文件内容。";
+                "\nYou are in Plan Mode. Shell commands are blocked. "
+                + "Use GlobTool to search for files, FileReadTool to read file contents, GrepTool to search code, "
+                + "and SmartAnalyzeTool to analyze project structure. "
+                + "Write your plan to .jwcode/plan.md, then call ExitPlanModeV2 to submit.";
             case "FileWrite", "FileEdit", "FileDelete", "FileCreate" ->
-                "\n💡 替代方案：Plan Mode 下不能写文件。先用 FileReadTool 读取现有内容，规划好后再退出 Plan Mode 执行写操作。";
+                "\nYou are in Plan Mode. File writes are blocked. "
+                + "Read existing files with FileReadTool to understand the code, "
+                + "then write your structured plan to .jwcode/plan.md and call ExitPlanModeV2 to submit for approval. "
+                + "Once approved, you will enter Act Mode where file writes are allowed.";
             case "Git" ->
-                "\n💡 替代方案：用 GlobTool + FileReadTool 查看文件状态，用 SmartAnalyzeTool 分析项目结构。";
+                "\nYou are in Plan Mode. Git operations are blocked. "
+                + "Use GlobTool and FileReadTool to inspect file state, GrepTool to search code. "
+                + "Write your plan to .jwcode/plan.md, then call ExitPlanModeV2 to submit.";
             case "NotebookEdit" ->
-                "\n💡 替代方案：用 FileReadTool 读取 notebook 内容进行规划。";
+                "\nYou are in Plan Mode. Notebook edits are blocked. "
+                + "Use FileReadTool to read notebook contents for planning. "
+                + "Write your plan to .jwcode/plan.md, then call ExitPlanModeV2 to submit.";
             case "AgentTool" ->
-                "\n💡 替代方案：Plan Mode 下不能创建子 Agent 执行任务。用 SmartAnalyzeTool、GlobTool、FileReadTool 等只读工具做调研。";
+                "\nYou are in Plan Mode. Creating sub-agents is blocked. "
+                + "Use SmartAnalyzeTool, GlobTool, FileReadTool, and GrepTool to do your own research. "
+                + "Write your plan to .jwcode/plan.md, then call ExitPlanModeV2 to submit.";
             default ->
-                "\n💡 提示：Plan Mode 只允许只读操作。尝试用 SmartAnalyzeTool、GlobTool、FileReadTool 等只读工具替代。";
+                "\nYou are in Plan Mode. This tool is blocked. "
+                + "Use read-only tools (SmartAnalyzeTool, GlobTool, FileReadTool, GrepTool) instead. "
+                + "Write your plan to .jwcode/plan.md, then call ExitPlanModeV2 to submit.";
         };
     }
     

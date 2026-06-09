@@ -21,7 +21,7 @@ public class SearchEngineFactory {
     private final Map<String, SearchEngine> engines = new ConcurrentHashMap<>();
     
     // 默认引擎名称
-    private String defaultEngine = "duckduckgo";
+    private String defaultEngine = "bing";
     
     // 引擎配置
     private final Map<String, SearchEngine.SearchEngineConfig> engineConfigs = new ConcurrentHashMap<>();
@@ -141,18 +141,18 @@ public class SearchEngineFactory {
     }
     
     /**
-     * 配置 DuckDuckGo 搜索引擎
-     * 
+     * 配置 Bing 搜索引擎
+     *
      * @param timeoutMs 超时时间
      * @param userAgent User-Agent
      */
-    public void configureDuckDuckGo(int timeoutMs, String userAgent) {
+    public void configureBing(int timeoutMs, String userAgent) {
         SearchEngine.SearchEngineConfig config = SearchEngine.SearchEngineConfig.builder()
             .timeoutMs(timeoutMs)
             .userAgent(userAgent)
             .followRedirects(true);
-        
-        configureEngine("duckduckgo", config);
+
+        configureEngine("bing", config);
     }
     
     /**
@@ -167,7 +167,7 @@ public class SearchEngineFactory {
      * 获取所有可用引擎名称
      */
     public String[] getAvailableEngines() {
-        return new String[]{"duckduckgo", "google"};
+        return new String[]{"bing", "baidu", "sogou"};
     }
     
     /**
@@ -203,11 +203,12 @@ public class SearchEngineFactory {
      * 注册默认搜索引擎
      */
     private void registerDefaultEngines() {
-        // 注册 DuckDuckGo（无需配置）
-        DuckDuckGoEngine duckDuckGoEngine = new DuckDuckGoEngine();
-        engines.put("duckduckgo", duckDuckGoEngine);
-        
-        // Google 引擎会在配置后自动注册
+        // 注册 Bing（国内可直接访问）
+        engines.put("bing", new BingSearchEngine());
+        // 注册百度
+        engines.put("baidu", new BaiduSearchEngine());
+        // 注册搜狗
+        engines.put("sogou", new SogouSearchEngine());
     }
     
     /**
@@ -215,14 +216,17 @@ public class SearchEngineFactory {
      */
     private SearchEngine createEngine(String engineName) {
         SearchEngine.SearchEngineConfig config = engineConfigs.get(engineName);
-        
+
         switch (engineName) {
-            case "duckduckgo":
-                return config != null ? new DuckDuckGoEngine(config) : new DuckDuckGoEngine();
-                
-            case "google":
-                return config != null ? new GoogleCustomSearchEngine(config) : new GoogleCustomSearchEngine();
-                
+            case "bing":
+                return config != null ? new BingSearchEngine(config) : new BingSearchEngine();
+
+            case "baidu":
+                return config != null ? new BaiduSearchEngine(config) : new BaiduSearchEngine();
+
+            case "sogou":
+                return config != null ? new SogouSearchEngine(config) : new SogouSearchEngine();
+
             default:
                 logger.warning("未知的搜索引擎: " + engineName);
                 return null;
@@ -234,7 +238,7 @@ public class SearchEngineFactory {
      */
     private String normalizeEngineName(String name) {
         if (name == null) {
-            return "duckduckgo";
+            return "bing";
         }
         return name.toLowerCase().trim();
     }

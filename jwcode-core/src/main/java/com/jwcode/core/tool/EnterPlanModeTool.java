@@ -152,10 +152,14 @@ public class EnterPlanModeTool implements Tool<EnterPlanModeTool.Input, EnterPla
                 
                 if (success) {
                     logger.info("Entered Plan Mode: " + taskDescription);
-                    return ToolResult.success(new Output(true, "plan", 
-                        "已进入计划模式（Plan Mode）。\n" +
-                        "你现在可以自由探索代码、设计方案，但不能修改任何文件或执行命令。\n" +
-                        "完成规划后，请调用 ExitPlanMode 退出计划模式。"));
+                    return ToolResult.success(new Output(true, "plan",
+                        "Entered Plan Mode. You can ONLY use read-only tools (GlobTool, FileReadTool, SmartAnalyzeTool, GrepTool). "
+                        + "All write/execute tools are blocked.\n\n"
+                        + "REQUIRED WORKFLOW before you can use write tools:\n"
+                        + "1. Explore the codebase using read-only tools to understand the problem\n"
+                        + "2. Write your structured plan to .jwcode/plan.md using a plan format with tasks, dependencies, and expected outputs\n"
+                        + "3. Call ExitPlanModeV2 to submit the plan for approval — once approved, you will enter Act Mode where write tools are available\n\n"
+                        + "DO NOT call AskUserQuestion to ask if the plan is ready. DO NOT attempt write tools — they will be blocked."));
                 } else {
                     return ToolResult.error("进入计划模式失败");
                 }

@@ -109,6 +109,14 @@ public class AnthropicLLMService extends AbstractHttpLLMService {
                         String errorMsg = extractAnthropicErrorMessage(errorBody);
                         String internalCode = converter.mapAnthropicErrorCode(errorType);
 
+                        // Guard against empty error messages
+                        if (errorMsg == null || errorMsg.isEmpty()) {
+                            errorMsg = "HTTP " + response.statusCode()
+                                + (errorBody != null && !errorBody.isEmpty()
+                                    ? " body=" + errorBody.substring(0, Math.min(errorBody.length(), 200))
+                                    : " (empty body)");
+                        }
+
                         if ("RATE_LIMIT_HARD".equals(internalCode)) {
                             log.severe("[Anthropic] Hard rate limit (" + errorType + "): " + errorMsg);
                             return LLMResponse.error("RATE_LIMIT_HARD",
@@ -128,7 +136,7 @@ public class AnthropicLLMService extends AbstractHttpLLMService {
                             continue;
                         }
 
-                        log.severe("[Anthropic] Error: " + errorBody);
+                        log.severe("[Anthropic] Error " + response.statusCode() + ": " + errorBody);
                         return LLMResponse.error(internalCode, errorMsg);
                     }
 
@@ -201,11 +209,23 @@ public class AnthropicLLMService extends AbstractHttpLLMService {
                     HttpRequest request = buildHttpRequest(apiKey, requestJson);
                     HttpResponse<InputStream> response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
 
+                    log.info("[Anthropic Stream] Response status: " + response.statusCode());
+
                     if (response.statusCode() != 200) {
                         String errorBody = new String(response.body().readAllBytes(), StandardCharsets.UTF_8);
                         String errorType = extractAnthropicErrorType(errorBody);
                         String errorMsg = extractAnthropicErrorMessage(errorBody);
                         String internalCode = converter.mapAnthropicErrorCode(errorType);
+
+                        // Guard against empty error messages
+                        if (errorMsg == null || errorMsg.isEmpty()) {
+                            errorMsg = "HTTP " + response.statusCode()
+                                + (errorBody != null && !errorBody.isEmpty()
+                                    ? " body=" + errorBody.substring(0, Math.min(errorBody.length(), 200))
+                                    : " (empty body)");
+                        }
+
+                        log.severe("[Anthropic Stream] Error " + response.statusCode() + " type=" + errorType + " msg=" + errorMsg);
 
                         if ("RATE_LIMIT_HARD".equals(internalCode)) {
                             return LLMResponse.error("RATE_LIMIT_HARD",
@@ -259,16 +279,19 @@ public class AnthropicLLMService extends AbstractHttpLLMService {
         String line;
         String currentEventType = null;
         StringBuilder currentData = new StringBuilder();
+        boolean streamComplete = false;
 
-        while ((line = reader.readLine()) != null) {
+        while (!streamComplete && (line = reader.readLine()) != null) {
             if (line.isEmpty()) {
                 if (currentData.length() > 0) {
                     String dataStr = currentData.toString().trim();
                     if (!dataStr.isEmpty()) {
                         try {
                             JsonNode data = mapper.readTree(dataStr);
-                            processAnthropicStreamEvent(currentEventType, data, acc,
-                                contentConsumer, thinkingConsumer, toolCallConsumer);
+                            if (processAnthropicStreamEvent(currentEventType, data, acc,
+                                contentConsumer, thinkingConsumer, toolCallConsumer)) {
+                                streamComplete = true;
+                            }
                         } catch (Exception e) {
                             log.warning("[Anthropic Stream] Parse error: " + e.getMessage());
                         }
@@ -285,7 +308,7 @@ public class AnthropicLLMService extends AbstractHttpLLMService {
             }
         }
 
-        if (currentData.length() > 0) {
+        if (!streamComplete && currentData.length() > 0) {
             String dataStr = currentData.toString().trim();
             if (!dataStr.isEmpty()) {
                 try {
@@ -300,7 +323,7 @@ public class AnthropicLLMService extends AbstractHttpLLMService {
         return acc.buildResponse();
     }
 
-    private void processAnthropicStreamEvent(
+    private boolean processAnthropicStreamEvent(
             String eventType, JsonNode data, AnthropicStreamAccumulator acc,
             Consumer<String> contentConsumer, Consumer<String> thinkingConsumer,
             Consumer<StreamToolCallEvent> toolCallConsumer) {
@@ -393,7 +416,8 @@ public class AnthropicLLMService extends AbstractHttpLLMService {
                 if (data.has("delta")) {
                     JsonNode delta = data.get("delta");
                     if (delta.has("stop_reason")) {
-                        acc.finishReason = delta.get("stop_reason").asText();
+                        String sr = delta.get("stop_reason").asText();
+                        acc.finishReason = "end_turn".equals(sr) ? "stop" : sr;
                     }
                 }
                 if (data.has("usage")) {
@@ -403,8 +427,8 @@ public class AnthropicLLMService extends AbstractHttpLLMService {
                 break;
 
             case "message_stop":
-                // Stream complete
-                break;
+                // Stream complete — signal caller to stop reading
+                return true;
 
             case "ping":
                 // Keepalive, no action needed
@@ -412,8 +436,15 @@ public class AnthropicLLMService extends AbstractHttpLLMService {
 
             case "error":
                 log.severe("[Anthropic Stream] Error event: " + data.toString());
+                acc.errorCode = data.has("error") && data.get("error").has("type")
+                    ? data.get("error").get("type").asText("stream_error")
+                    : "stream_error";
+                acc.errorMessage = data.has("error") && data.get("error").has("message")
+                    ? data.get("error").get("message").asText(data.toString())
+                    : data.toString();
                 break;
         }
+        return false;
     }
 
     private String extractAnthropicErrorType(String errorBody) {
@@ -431,10 +462,21 @@ public class AnthropicLLMService extends AbstractHttpLLMService {
         try {
             JsonNode json = mapper.readTree(errorBody);
             if (json.has("error")) {
-                return json.get("error").has("message") ? json.get("error").get("message").asText("") : errorBody;
+                JsonNode error = json.get("error");
+                if (error.has("message")) {
+                    String msg = error.get("message").asText("");
+                    if (msg != null && !msg.isEmpty()) {
+                        return msg;
+                    }
+                }
+                // Fallback: construct from error type
+                String type = error.has("type") ? error.get("type").asText("") : "";
+                return type.isEmpty() ? errorBody : "[" + type + "] " + errorBody;
             }
         } catch (Exception e) { /* ignore */ }
-        return errorBody.length() > 500 ? errorBody.substring(0, 500) + "..." : errorBody;
+        return errorBody != null && !errorBody.isEmpty()
+            ? (errorBody.length() > 500 ? errorBody.substring(0, 500) + "..." : errorBody)
+            : "Unknown error (empty response body)";
     }
 
     private static class AnthropicStreamAccumulator extends StreamAccumulator {

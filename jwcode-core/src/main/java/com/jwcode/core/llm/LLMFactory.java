@@ -105,8 +105,16 @@ public class LLMFactory {
         if (provider == null) {
             throw new IllegalStateException("Provider not found: " + providerName);
         }
+        String apiType = provider.getApiType();
+        logger.info("[LLMFactory] createLLMService: providerName=" + providerName
+            + ", apiType=" + apiType
+            + ", baseUrl=" + provider.getBaseUrl()
+            + ", defaultProviderName=" + config.getDefaultProviderName());
         ServiceConfig serviceConfig = createServiceConfig(providerName, provider);
-        return registry.createService(provider.getApiType(), serviceConfig);
+        LLMService svc = registry.createService(apiType, serviceConfig);
+        logger.info("[LLMFactory] Created service: " + svc.getClass().getSimpleName()
+            + " for apiType=" + apiType);
+        return svc;
     }
     
     private ServiceConfig createServiceConfig(String providerName, JwcodeConfig.ProviderConfig provider) {
@@ -115,12 +123,26 @@ public class LLMFactory {
         }
         String baseUrl = provider.getBaseUrl();
         if (baseUrl == null || baseUrl.isEmpty()) {
-            baseUrl = "https://api.moonshot.cn/v1";
+            baseUrl = "https://api.openai.com/v1";
         }
         baseUrl = baseUrl.replaceAll("/+$", "");
-        if (baseUrl.contains("moonshot.cn") && !baseUrl.endsWith("/v1")) {
-            baseUrl = baseUrl + "/v1";
+
+        // 根据 apiType 进行 URL 规范化，避免后缀重复拼接
+        String apiType = provider.getApiType();
+        if ("anthropic-messages".equals(apiType)) {
+            // AnthropicLLMService.buildRequestUri() 自动追加 /v1/messages
+            // 防止用户配置了带后缀的 baseUrl 导致 /v1/v1/messages 这样的双拼接
+            if (baseUrl.endsWith("/v1")) {
+                baseUrl = baseUrl.substring(0, baseUrl.length() - 3);
+            }
+        } else {
+            // openai-completions (default): OpenAILLMService.normalizeUrl 会处理
+            // 对 moonshot.cn 保留向后兼容
+            if (baseUrl.contains("moonshot.cn") && !baseUrl.endsWith("/v1")) {
+                baseUrl = baseUrl + "/v1";
+            }
         }
+
         JwcodeConfig.ModelDefinition model = null;
         if (!provider.getModels().isEmpty()) {
             model = provider.getModels().get(0);
@@ -141,7 +163,7 @@ public class LLMFactory {
             .maxTokens(model != null ? model.getMaxTokens() : null)
             .timeoutSeconds(timeoutSeconds)
             .contextWindow(model != null ? model.getContextWindow() : 1000000)
-            .apiType(provider.getApiType())
+            .apiType(apiType)
             .anthropicVersion(provider.getAnthropicVersion())
             .build();
     }

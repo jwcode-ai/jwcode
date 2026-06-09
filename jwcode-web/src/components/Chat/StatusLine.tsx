@@ -77,13 +77,13 @@ export const StatusLine = memo(function StatusLine(_props: StatusLineProps) {
         <button
           onClick={() => setPlanMode('act')}
           className={`px-2 py-0.5 rounded-r text-xs font-medium transition-all border ${
-            planMode !== 'plan'
+            planMode === 'act'
               ? 'bg-accent-green/20 text-accent-green border-accent-green/30'
               : 'text-dark-muted border-dark-border hover:text-dark-text hover:border-dark-muted'
           }`}
           title={t('plan.switchToActMode')}
         >
-          {planMode !== 'plan' ? '●' : '○'} Act
+          {planMode === 'act' ? '●' : '○'} Act
         </button>
       </div>
 

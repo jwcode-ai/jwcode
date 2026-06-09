@@ -589,7 +589,12 @@ public class YamlConfigLoader {
         try {
             Files.createDirectories(path.getParent());
             String yaml = yamlMapper.writeValueAsString(config);
-            Files.writeString(path, yaml);
+            String header = "# JWCode Configuration\n"
+                + "# 可通过 Web UI (设置 > 配置文件) 或直接编辑此文件\n"
+                + "# 修改 provider/model 配置后需重启服务生效\n"
+                + "# 功能开关 (yolo, autoSwarm 等) 保存在 settings.json，此文件仅存 provider/model 配置\n"
+                + "\n";
+            Files.writeString(path, header + yaml);
             this.jwcodeConfig = config;
             log.info("Saved config to: {}", path);
         } catch (IOException e) {

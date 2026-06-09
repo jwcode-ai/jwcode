@@ -6,8 +6,10 @@ import com.jwcode.core.advanced.swarm.ai.AITaskDecomposer.SubTaskDef;
 import com.jwcode.core.llm.LLMMessage;
 import com.jwcode.core.llm.LLMResponse;
 import com.jwcode.core.llm.LLMService;
+import com.jwcode.core.observability.ObservationEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import java.util.function.Consumer;
 
 import java.util.*;
 import java.util.concurrent.*;
@@ -29,6 +31,7 @@ public class AgentSwarm {
     private final AtomicInteger agentCounter = new AtomicInteger(0);
     private final Map<String, SwarmAgent> swarmAgents = new ConcurrentHashMap<>();
     private final List<SubTask> taskHistory = new CopyOnWriteArrayList<>();
+    private Consumer<ObservationEvent> eventConsumer;
     private final LLMService llmService;
     private final AITaskDecomposer aiDecomposer;
 
@@ -48,6 +51,11 @@ public class AgentSwarm {
     }
 
     public SwarmExecutionResult executeComplexTask(String taskDescription, Object context) {
+        return executeComplexTask(taskDescription, context, null);
+    }
+
+    public SwarmExecutionResult executeComplexTask(String taskDescription, Object context, Consumer<ObservationEvent> eventConsumer) {
+        this.eventConsumer = eventConsumer;
         log.info("[AgentSwarm] 开始执行复杂任务: " + taskDescription.substring(0, Math.min(50, taskDescription.length())) + "...");
         long startTime = System.currentTimeMillis();
 
@@ -208,8 +216,18 @@ public class AgentSwarm {
 
             return CompletableFuture.supplyAsync(() -> {
                 long start = System.currentTimeMillis();
+                if (eventConsumer != null) {
+                    eventConsumer.accept(new ObservationEvent.SwarmTaskStarted(
+                        agent.getId(), task.getId(), task.getDescription(), task.getType().name(), task.getPriority()
+                    ));
+                }
                 Object result = agent.execute(task, context, depContext);
                 long duration = System.currentTimeMillis() - start;
+                if (eventConsumer != null) {
+                    eventConsumer.accept(new ObservationEvent.SwarmTaskCompleted(
+                        agent.getId(), task.getId(), task.getDescription(), true, duration
+                    ));
+                }
                 return SubTaskResult.builder()
                     .taskId(task.getId())
                     .taskDescription(task.getDescription())
@@ -268,6 +286,10 @@ public class AgentSwarm {
             case EXECUTION -> Set.of("code-generation", "refactoring", "testing");
             case VERIFICATION -> Set.of("testing", "review", "validation");
         };
+    }
+
+    public void setEventConsumer(Consumer<ObservationEvent> eventConsumer) {
+        this.eventConsumer = eventConsumer;
     }
 
     public SwarmStats getStats() {

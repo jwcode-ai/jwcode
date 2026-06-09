@@ -42,9 +42,11 @@
     "tools": "Tools",
     "skills": "Skills",
     "agents": "Agents",
+    "hooks": "Hooks",
     "agentFlow": "Agent Flow",
     "settings": "Settings",
-    "logs": "Logs"
+    "logs": "Logs",
+    "observability": "Observability"
   },
   "chat": {
     "newSession": "New Session",

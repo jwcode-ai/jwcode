@@ -40,6 +40,7 @@ public class HookSystemInitializer {
         .enable(SerializationFeature.INDENT_OUTPUT);
 
     private static volatile boolean initialized = false;
+    private static volatile HookRegistry registry;
 
     private static final String HOOKS_DIR = ".jwcode";
     private static final String HOOKS_FILE = ".jwcode/hooks.json";
@@ -243,27 +244,28 @@ public class HookSystemInitializer {
             }
 
             // 2. 创建 HookRegistry 并加载配置
-            HookRegistry registry = new HookRegistry(hooksFile);
+            HookRegistry hookRegistry = new HookRegistry(hooksFile);
+            HookSystemInitializer.registry = hookRegistry;
 
             // 3. 注册内置 Hook（纯 Java 实现，零外部依赖 — 无论 hooks.json 是否为空都生效）
-            registry.register(new BashSafetyExecutor());
-            registry.register(new FileWriteAuditExecutor());
-            registry.register(new ToolUsageStatsExecutor());
+            hookRegistry.register(new BashSafetyExecutor());
+            hookRegistry.register(new FileWriteAuditExecutor());
+            hookRegistry.register(new ToolUsageStatsExecutor());
             logger.info("[HookInit] Registered 3 built-in hooks");
 
             // 4. 创建工厂并解析配置文件中的 Hook
             HookExecutorFactory factory = new HookExecutorFactory(llmCallback, agentCallback);
-            int resolved = registry.resolveConfiguredExecutors(factory);
+            int resolved = hookRegistry.resolveConfiguredExecutors(factory);
             if (resolved > 0) {
                 logger.info("[HookInit] Resolved " + resolved + " configured hook(s)");
             }
 
             // 5. 统计总数
-            hookCount = registry.getAllExecutors().size();
+            hookCount = hookRegistry.getAllExecutors().size();
 
             // 6. 创建 HookChain + 审计日志
             HookAuditLogger auditLogger = new HookAuditLogger();
-            HookChain chain = new HookChain(registry, auditLogger);
+            HookChain chain = new HookChain(hookRegistry, auditLogger);
 
             // 7. 注入到各拦截点
             if (toolExecutor != null) {
@@ -292,6 +294,13 @@ public class HookSystemInitializer {
         initialized = result.isSuccess();
         logger.info("[HookInit] Done: " + result);
         return result;
+    }
+
+    /**
+     * 获取全局 HookRegistry 实例（需先调用 initialize()）。
+     */
+    public static HookRegistry getRegistry() {
+        return registry;
     }
 
     /**

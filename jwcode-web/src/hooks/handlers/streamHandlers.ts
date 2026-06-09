@@ -1,4 +1,4 @@
-import { useChatStore } from '../../stores/chatStore';
+﻿import { useChatStore } from '../../stores/chatStore';
 import { useTokenStore } from '../../stores/tokenStore';
 import { toast } from '../../stores/toastStore';
 
@@ -9,12 +9,12 @@ export function handleStreamMessage(rawType: string, rawData: any, sessionId: st
     case 'start':
       chatStore.startGeneration(sessionId);
       chatStore.addMessage(sessionId, {
-        id: `msg-${Date.now()}`, type: 'assistant', content: '', timestamp: Date.now(),
+        id: crypto.randomUUID(), type: 'assistant', content: '', timestamp: Date.now(),
       });
       break;
 
     case 'content':
-      chatStore.appendToLastMessage(sessionId, rawData || '');
+      { const filtered = (rawData || '').replace(/\[FINISH\]/g, ''); if (filtered) chatStore.appendToLastMessage(sessionId, filtered); }
       break;
 
     case 'thinking':
@@ -24,7 +24,7 @@ export function handleStreamMessage(rawType: string, rawData: any, sessionId: st
     case 'tool_call':
       try {
         const toolData = JSON.parse(rawData || '{}');
-        const toolId = toolData.id || `tool-${Date.now()}`;
+        const toolId = toolData.id || crypto.randomUUID();
         const toolIndex = typeof toolData.index === 'number' ? toolData.index : undefined;
         const toolArgs = toolData.args || toolData.arguments || '';
 
@@ -54,17 +54,14 @@ export function handleStreamMessage(rawType: string, rawData: any, sessionId: st
         const toolData = JSON.parse(rawData || '{}');
         const state = useChatStore.getState();
         const msgs = state.messagesBySession[sessionId] || [];
-        // 搜索最近 3 条消息（而非仅最后 1 条），防止新消息已创建导致匹配失败
-        const recentMsgs = msgs.slice(Math.max(0, msgs.length - 3));
         const allToolCalls: any[] = [];
-        for (const msg of recentMsgs) {
+        for (const msg of msgs) {
           const steps = msg.steps || [];
           for (const step of steps) {
             if (step.toolCalls) allToolCalls.push(...step.toolCalls);
           }
           if (msg.toolCalls) allToolCalls.push(...msg.toolCalls);
         }
-        // 优先按 id 匹配，其次按 index，最后按 name + status='running'（FIFO：最早的时间戳）
         const toolName = toolData.toolName;
         const toolId = toolData.id;
         const toolIndex = typeof toolData.index === 'number' ? toolData.index : undefined;
@@ -81,6 +78,14 @@ export function handleStreamMessage(rawType: string, rawData: any, sessionId: st
           );
           runningByName.sort((a: any, b: any) => (a.timestamp || 0) - (b.timestamp || 0));
           matched = runningByName[0];
+        }
+        if (!matched) {
+          const erroredByName = allToolCalls.filter((tc: any) =>
+            tc.name === toolName && tc.status === 'error' &&
+            tc.result === '生成已结束（工具执行超时或连接中断）'
+          );
+          erroredByName.sort((a: any, b: any) => (b.timestamp || 0) - (a.timestamp || 0));
+          matched = erroredByName[0];
         }
         if (matched) {
           const duration = Math.floor((Date.now() - (matched.timestamp || Date.now())) / 1000);
@@ -120,15 +125,14 @@ export function handleStreamMessage(rawType: string, rawData: any, sessionId: st
     case 'context_compressed':
       try {
         const cd = JSON.parse(rawData || '{}');
-        const msg = `上下文压缩: ${cd.originalCount} → ${cd.compressedCount} 条消息, 释放 ${cd.tokensSaved?.toLocaleString() || 0} tokens`;
-        chatStore.appendToLastMessage(sessionId, `\n\n---\n📦 ${msg}\n\n`);
+        const msg = `Context compressed: ${cd.originalCount} -> ${cd.compressedCount} msgs, freed ${cd.tokensSaved} tokens`;
+        chatStore.appendToLastMessage(sessionId, `\n\n---\n${msg}\n\n`);
         toast.info(msg, 5000);
         useTokenStore.getState().setCompacting({
           originalCount: cd.originalCount || 0,
           compressedCount: cd.compressedCount || 0,
           tokensSaved: cd.tokensSaved || 0,
         });
-        // Clear progress bar on completion
         useTokenStore.getState().setCompactionProgress(null);
       } catch (e) { console.error('Failed to parse context_compressed:', e); }
       break;
@@ -136,8 +140,8 @@ export function handleStreamMessage(rawType: string, rawData: any, sessionId: st
     case 'error':
       chatStore.endGeneration(sessionId);
       chatStore.addMessage(sessionId, {
-        id: `msg-${Date.now()}`, type: 'assistant',
-        content: `❌ 错误: ${rawData}`, timestamp: Date.now(),
+        id: crypto.randomUUID(), type: 'assistant',
+        content: 'Error occurred', timestamp: Date.now(),
       });
       break;
   }

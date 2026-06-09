@@ -12,6 +12,8 @@ import com.jwcode.core.session.Session;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.regex.Pattern;
@@ -216,6 +218,9 @@ public class TaskLifecycleManager {
         }
     }
 
+    /** 等待用户输入超时：5 分钟 */
+    private static final long WAITING_INPUT_TIMEOUT_MS = 5 * 60 * 1000;
+
     /**
      * 设置等待用户补充信息状态。
      */
@@ -226,11 +231,39 @@ public class TaskLifecycleManager {
         TaskStatus oldStatus = task.getStatus();
         task.setStatus(TaskStatus.WAITING_INPUT);
         task.setWaitingFor(question);
+        task.setWaitingSince(Instant.now());
 
         publishTaskStateChanged(oldStatus, TaskStatus.WAITING_INPUT,
             "等待用户补充: " + question);
         publishWaitingForInput(task, question);
         logger.info("[TaskLifecycle] 任务等待输入: {}", question);
+    }
+
+    /**
+     * 检查等待用户输入是否超时。超时时自动恢复任务，
+     * 注入系统消息告知 LLM 用户未响应。
+     *
+     * @return 如果超时已处理返回 true
+     */
+    public boolean checkInputTimeout(Session session) {
+        ActiveTask task = session.getActiveTask();
+        if (task == null || task.getStatus() != TaskStatus.WAITING_INPUT) {
+            return false;
+        }
+        Instant waitingSince = task.getWaitingSince();
+        if (waitingSince == null) {
+            return false;
+        }
+        if (Duration.between(waitingSince, Instant.now()).toMillis() >= WAITING_INPUT_TIMEOUT_MS) {
+            logger.warn("[TaskLifecycle] 用户输入超时，自动恢复任务: {}", task.getTaskId());
+            task.setStatus(TaskStatus.EXECUTING);
+            task.setWaitingFor(null);
+            task.setWaitingSince(null);
+            session.addMessage(com.jwcode.core.model.Message.createSystemMessage(
+                "用户未在规定时间内回复。请基于已有信息继续执行，无需等待用户补充。"));
+            return true;
+        }
+        return false;
     }
 
     /**

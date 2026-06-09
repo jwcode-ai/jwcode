@@ -3,15 +3,16 @@
  */
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Box, Text, useStdout } from 'ink';
-import { TextInput, saveToHistory } from './components/TextInput.js';
+import { TextInput } from './components/TextInput.js';
 import { t } from './theme.js';
 import { JwCodeClient } from './client.js';
 import { StatusLine } from './components/StatusLine.js';
+import { debugLog } from './client.js';
 import { ChatArea } from './components/ChatArea.js';
 import { CommandPalette } from './components/CommandPalette.js';
 import { FilePalette } from './components/FilePalette.js';
 import { ApprovalModal } from './components/ApprovalModal.js';
-import { updateAppState, useAppSlice } from './hooks/useAppState.js';
+import { updateAppState, useAppSlice, getStore } from './hooks/useAppState.js';
 import { createMessage } from './protocol.js';
 import { SLASH_COMMANDS, HELP_TEXT } from './commands/index.js';
 import { useStreamHandlers } from './hooks/useStreamHandlers.js';
@@ -58,12 +59,22 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
   const terminalRows = (stdout as any)?.rows || 24;
   const terminalCols = (stdout as any)?.columns || 80;
 
-  const planMode = useAppSlice(s => s.planMode);
   const connected = useAppSlice(s => s.connected);
   const planWaiting = useAppSlice(s => s.planWaiting);
   const isGenerating = useAppSlice(s => s.currentMessage !== null);
   const messagesLen = useAppSlice(s => s.messages.length);
   const modelName = useAppSlice(s => s.modelName);
+  const planMode = useAppSlice(s => s.planMode);
+  const [layoutVer, setLayoutVer] = useState(0);
+  // Increment layout version when layout-affecting state changes to force full remount
+  const prevKey = useRef("");
+  useEffect(() => {
+    const key = planMode + "-" + connected + "-" + (messagesLen === 0);
+    if (prevKey.current && prevKey.current !== key) {
+      setLayoutVer(v => v + 1);
+    }
+    prevKey.current = key;
+  }, [planMode, connected, messagesLen]);
 
   const wireHandlers = useStreamHandlers(setShowApproval, sessionAllowRef);
 
@@ -121,7 +132,7 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
           return;
         case '__cancel_plan': updateAppState(prev => ({ ...prev, planWaiting: false })); return;
         case 'plan_mode': updateAppState(prev => ({ ...prev, planMode: !prev.planMode })); return;
-        case 'auto_mode': updateAppState(prev => ({ ...prev, autoMode: !prev.autoMode })); return;
+        case 'auto_mode': debugLog('app', 'auto_mode toggle'); updateAppState(prev => ({ ...prev, autoMode: !prev.autoMode })); return;
         case 'clear': updateAppState(prev => ({ ...prev, messages: [], currentMessage: null })); return;
         case 'model_change': if (needsArg && cmdArg) cl?.switchModel(cmdArg); return;
         case 'show_context':
@@ -158,11 +169,11 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
 
     if (text.startsWith('/') && !(cmd && cmd in SLASH_COMMANDS)) return;
     // Resolve @ file references
-    resolveAndSend(text, planMode);
-  }, [onExit, planMode]);
+    resolveAndSend(text);
+  }, [onExit]);
 
   // Resolve @-referenced file contents and send message
-  const resolveAndSend = useCallback(async (text: string, planMode: boolean) => {
+  const resolveAndSend = useCallback(async (text: string) => {
     const cl = clientRef.current;
     if (!cl) return;
 
@@ -189,10 +200,10 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
       finalText = finalText.trim();
     }
 
-    saveToHistory(finalText);
     const msg = createMessage('user', finalText);
     updateAppState(prev => ({ ...prev, messages: [...prev.messages, msg] }));
-    cl.chat(finalText, planMode);
+    // Read planMode from store at send time to avoid re-subscribing in App
+    cl.chat(finalText, getStore().getState().planMode);
   }, []);
 
   const handleSubmit = useCallback((value: string) => {
@@ -227,7 +238,7 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
     // Close file palette when no valid @ trigger
     setShowFilePalette(false);
     setFileQuery('');
-    process.stderr.write(`[handleChange] input="${value.slice(0, 20)}" showPalette=${value.startsWith('/')}\n`);
+    
   }, []);
 
   const handleFileSelect = useCallback((path: string | null) => {
@@ -289,42 +300,36 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
   }, [showApproval, handleApprovalAllow]);
 
   const handleAutoMode = useCallback(() => {
+    debugLog('app', 'autoMode button pressed');
     updateAppState(prev => ({ ...prev, autoMode: true }));
     if (showApproval) handleApprovalAllow(showApproval.approvalId);
   }, [showApproval, handleApprovalAllow]);
 
   const placeholder = 'Type a message or / for commands...';
 
-  // Debug: trace render count and state to stderr (capture with: 2> debug.log)
-  const renderCountRef = useRef(0);
-  renderCountRef.current++;
-  process.stderr.write(
-    `[App render #${renderCountRef.current}] connected=${connected} showPalette=${showPalette} paletteActive=${paletteActive} msgs=${messagesLen} generating=${isGenerating} input="${input.slice(0, 20)}"\n`
-  );
-
   return (
-    <Box flexDirection="column" width="100%">
+    <Box key={layoutVer} flexDirection="column" width="100%">
       {connected ? (
         <Box flexDirection="column">
           {messagesLen === 0 && !isGenerating && !!modelName && (
-            <Box key="welcome-banner" flexDirection="column" borderStyle="round" borderColor={t.primary} paddingX={1} marginBottom={1}>
-              <Box>
-                <Text color={t.primary} bold>&gt;_ JWCode v3.0.0</Text>
+            <Box key="welcome" flexDirection="column" flexShrink={0} marginBottom={1}>
+              <Box flexDirection="column" paddingX={1}>
+                <Box>
+                  <Text color={t.primary} bold>&gt;_ JWCode v3.0.0</Text>
+                </Box>
+                <Box>
+                  <Text dimColor>model:     </Text>
+                  <Text color={t.success}>{modelName || 'connecting...'}</Text>
+                  <Text dimColor>   /model to change</Text>
+                </Box>
+                <Box>
+                  <Text dimColor>directory: </Text>
+                  <Text color={t.warning}>{process.cwd()}</Text>
+                </Box>
               </Box>
-              <Box>
-                <Text dimColor>model:     </Text>
-                <Text color={t.success}>{modelName || 'connecting...'}</Text>
-                <Text dimColor>   /model to change</Text>
+              <Box paddingLeft={3}>
+                <Text dimColor>Tip: Type / for commands, @ to reference files</Text>
               </Box>
-              <Box>
-                <Text dimColor>directory: </Text>
-                <Text color={t.warning}>{process.cwd()}</Text>
-              </Box>
-            </Box>
-          )}
-          {messagesLen === 0 && !isGenerating && !!modelName && (
-            <Box key="tip-line" paddingLeft={3} marginBottom={1}>
-              <Text dimColor>Tip: Type / for commands, @ to reference files, ↑↓ for history</Text>
             </Box>
           )}
           {/* flexGrow=0 when palette open: prevents Yoga layout overflow + Ink ghost content duplication */}
@@ -397,17 +402,17 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
           </Box>
         </Box>
       )}
-      <StatusLine />
-      <Box height={1}>
-        {!connected && (
+      <StatusLine key={planMode ? 'status-plan' : 'status-act'} />
+      {!connected && (
+        <Box height={1}>
           <Text color={t.error}>Backend not connected -- WebSocket reconnecting.</Text>
-        )}
-      </Box>
-      <Box height={1}>
-        {planWaiting && (
+        </Box>
+      )}
+      {planWaiting && (
+        <Box height={1}>
           <Text color={t.warning} bold>Plan ready -- /confirm to execute, /cancel to discard.</Text>
-        )}
-      </Box>
+        </Box>
+      )}
     </Box>
   );
 }

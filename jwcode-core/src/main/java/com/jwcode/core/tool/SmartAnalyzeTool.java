@@ -144,13 +144,26 @@ public class SmartAnalyzeTool implements Tool<SmartAnalyzeInput, SmartAnalyzeOut
 
         return CompletableFuture.supplyAsync(() -> {
             try {
-                // 验证输入
+                // 获取 session 工作目录（由前端 workspace 消息设置，优先于 JVM user.dir）
+                Path sessionWorkingDir = (context != null && context.getWorkingDirectory() != null)
+                    ? context.getWorkingDirectory().toAbsolutePath().normalize()
+                    : null;
+
+                // project_root 为空时默认使用 session 工作目录
                 if (input.projectRoot() == null || input.projectRoot().isBlank()) {
-                    return ToolResult.error("project_root 是必需的");
+                    if (sessionWorkingDir != null) {
+                        logger.fine("SmartTool: project_root 未指定，使用 session 工作目录: " + sessionWorkingDir);
+                    } else {
+                        return ToolResult.error("project_root 是必需的，且无法确定 session 工作目录");
+                    }
                 }
 
-                // 【修复】路径规范化 - 支持 Unix 路径自动转换为 Windows 路径
-                String projectRoot = input.projectRoot();
+                // 路径规范化 - 支持 Unix 路径自动转换为 Windows 路径
+                String projectRoot = (input.projectRoot() != null && !input.projectRoot().isBlank())
+                    ? input.projectRoot()
+                    : sessionWorkingDir.toString();
+                String originalProjectRoot = projectRoot;
+                String fallbackReason = null;
                 
                 // 处理 Unix 绝对路径开头（如 /home/ubuntu、/jwcode）
                 if (projectRoot.startsWith("/")) {
@@ -160,8 +173,10 @@ public class SmartAnalyzeTool implements Tool<SmartAnalyzeInput, SmartAnalyzeOut
                         // 在 Windows 上，尝试将 Unix 路径转换为有效路径
                         // 常见转换：/home/ubuntu -> C:/Users/ubuntu, /jwcode -> 当前工作目录
                         if (projectRoot.equals("/jwcode") || projectRoot.equals("/jwcode/")) {
-                            // 特殊处理：转换为当前工作目录
-                            projectRoot = System.getProperty("user.dir", ".");
+                            // 使用 session 工作目录而非 JVM user.dir
+                            projectRoot = (sessionWorkingDir != null)
+                                ? sessionWorkingDir.toString()
+                                : System.getProperty("user.dir", ".");
                             logger.fine("SmartTool: 将 /jwcode 转换为: " + projectRoot);
                         } else if (projectRoot.startsWith("/home/")) {
                             // /home/username -> C:/Users/username
@@ -180,21 +195,32 @@ public class SmartAnalyzeTool implements Tool<SmartAnalyzeInput, SmartAnalyzeOut
                 
                 Path rootPath = Paths.get(projectRoot).toAbsolutePath().normalize();
                 if (!Files.exists(rootPath)) {
-                    // 尝试使用当前工作目录作为回退
-                    String cwd = System.getProperty("user.dir", "");
-                    if (!cwd.isEmpty()) {
-                        Path cwdPath = Paths.get(cwd);
-                        if (Files.exists(cwdPath) && Files.isDirectory(cwdPath)) {
-                            logger.fine("SmartTool: 项目路径不存在，使用当前工作目录: " + cwd);
-                            rootPath = cwdPath.toAbsolutePath().normalize();
+                    // 优先回退到 session 工作目录，其次回退到 JVM user.dir
+                    if (sessionWorkingDir != null && Files.isDirectory(sessionWorkingDir)) {
+                        logger.warning("SmartTool: 项目路径不存在 (" + originalProjectRoot
+                            + ")，回退到 session 工作目录: " + sessionWorkingDir);
+                        rootPath = sessionWorkingDir;
+                        fallbackReason = "指定的项目路径 \"" + originalProjectRoot
+                            + "\" 不存在，已自动回退到当前工作目录: " + sessionWorkingDir;
+                    } else {
+                        String cwd = System.getProperty("user.dir", "");
+                        if (!cwd.isEmpty()) {
+                            Path cwdPath = Paths.get(cwd);
+                            if (Files.exists(cwdPath) && Files.isDirectory(cwdPath)) {
+                                logger.warning("SmartTool: 项目路径不存在 (" + originalProjectRoot
+                                    + ")，回退到 JVM 工作目录: " + cwd);
+                                rootPath = cwdPath.toAbsolutePath().normalize();
+                                fallbackReason = "指定的项目路径 \"" + originalProjectRoot
+                                    + "\" 不存在，已自动回退到 JVM 工作目录: " + cwd;
+                            }
                         }
                     }
                     if (!Files.exists(rootPath)) {
-                        return ToolResult.error("项目路径不存在: " + input.projectRoot() + " (尝试转换后: " + projectRoot + ")");
+                        return ToolResult.error("项目路径不存在: " + originalProjectRoot + " (尝试转换后: " + projectRoot + ")");
                     }
                 }
                 if (!Files.isDirectory(rootPath)) {
-                    return ToolResult.error("项目路径不是目录: " + input.projectRoot());
+                    return ToolResult.error("项目路径不是目录: " + originalProjectRoot);
                 }
 
                 SmartProjectAnalyzer analyzer = new SmartProjectAnalyzer(rootPath.toString());
@@ -254,7 +280,10 @@ public class SmartAnalyzeTool implements Tool<SmartAnalyzeInput, SmartAnalyzeOut
                     ))
                     .collect(Collectors.toList());
 
-                String scanSummary = String.format(
+                String scanSummary = (fallbackReason != null
+                    ? "⚠️ 路径回退警告: " + fallbackReason + "\n\n"
+                    : "")
+                    + String.format(
                     "项目类型: %s | 扫描文件: %d | 跳过噪音: %d | 证据文件: %d | 假设数: %d | 耗时: %dms",
                     report.getProjectType(),
                     report.getTotalFilesScanned(),

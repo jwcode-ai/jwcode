@@ -205,7 +205,7 @@ public class SearchCache {
      */
     private String generateKey(String query, String engine) {
         String normalizedQuery = query != null ? query.trim().toLowerCase() : "";
-        String normalizedEngine = engine != null ? engine.trim().toLowerCase() : "duckduckgo";
+        String normalizedEngine = engine != null ? engine.trim().toLowerCase() : "bing";
         return normalizedEngine + ":" + normalizedQuery;
     }
     

@@ -3,6 +3,7 @@ package com.jwcode.web.stream;
 import com.jwcode.common.config.ConfigLoader;
 import com.jwcode.core.agent.AgentRegistry;
 import com.jwcode.core.agent.EnhancedOrchestratorAgent;
+import com.jwcode.core.api.AgentFlowBroadcaster;
 import com.jwcode.core.hook.HookApprovalManager;
 import com.jwcode.core.hook.HookChain;
 import com.jwcode.core.hook.HookContext;
@@ -118,13 +119,18 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         final MessageType type;
         final String data;
         final long timestamp;
-        
-        PendingMessage(MessageType type, String data) {
+        final long seq;
+
+        PendingMessage(MessageType type, String data, long seq) {
             this.type = type;
             this.data = data;
             this.timestamp = System.currentTimeMillis();
+            this.seq = seq;
         }
     }
+
+    // 每个会话的消息序号生成器
+    private final Map<String, java.util.concurrent.atomic.AtomicLong> sessionSeqCounters = new ConcurrentHashMap<>();
     
     // 默认工作目录（前端可动态切换）
     private String defaultWorkingDirectory = System.getProperty("user.dir");
@@ -621,6 +627,10 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                     // 客户端心跳响应，更新时间戳即可
                     lastPongTime.put(conn, System.currentTimeMillis());
                     break;
+                case "message_ack":
+                    // 客户端确认收到消息，标记已送达
+                    handleMessageAck(conn, clientMsg);
+                    break;
                 case "create_session":
                     handleCreateSession(conn, clientMsg);
                     break;
@@ -1004,6 +1014,31 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             4. **风险与注意事项**：潜在问题和注意事项
             5. **实施建议**：建议的执行步骤（自然语言即可）
 
+            ## 深度分析清单（根据需求类型选择性覆盖）
+            在分析过程中，请根据需求类型选择性地覆盖以下维度：
+
+            ### 架构分析
+            - 模块依赖关系：核心模块之间的依赖方向是否合理？是否存在循环依赖？
+            - 接口与抽象：关键模块是否通过接口解耦？实现类是否符合单一职责？
+            - 数据流：数据在模块间的流转路径是否清晰？是否存在跨层数据泄露？
+            - 扩展点：哪些部分是硬编码的、需要重构才能扩展？
+
+            ### 安全审查
+            - 输入验证：用户输入、文件路径、命令参数是否经过校验？是否存在注入风险？
+            - 认证与会话：Token 管理是否安全？会话标识是否符合安全最佳实践？
+            - 文件权限：文件操作是否有路径穿越防护？工作区隔离是否生效？
+            - 敏感信息：日志/错误消息中是否可能泄露 Token、密钥或内部路径？
+
+            ### 性能考量
+            - 资源使用：是否存在潜在的内存泄漏或无限增长的数据结构？
+            - I/O 模式：文件读写是否频繁？是否需要批量操作或缓存？
+            - 并发模型：线程池配置是否合理？是否存在锁竞争或死锁风险？
+
+            ### 代码质量
+            - 错误处理：异常路径是否都得到了处理？是否存在静默吞异常的模式？
+            - 日志级别：重要操作是否有日志？调试信息是否使用了合适的日志级别？
+            - 向后兼容：改动是否会影响现有 API 或持久化数据格式？
+
             ## 可用工具（仅只读工具）
             - **SmartAnalyzeTool**: 智能分析项目整体结构（Plan 模式首选）
             - **GlobTool**: 按模式搜索文件路径
@@ -1178,6 +1213,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             JwcodeConfig.ProviderConfig dp = config.getDefaultProvider();
             if (dp != null) {
                 logger.info("[ModelDebug][Plan] defaultProvider baseUrl=" + dp.getBaseUrl()
+                    + ", apiType=" + dp.getApiType()
                     + ", modelCount=" + (dp.getModels() != null ? dp.getModels().size() : 0));
             } else {
                 logger.warning("[ModelDebug][Plan] defaultProvider is NULL! providerName=" + defaultProviderName);
@@ -1254,6 +1290,26 @@ public class StreamingWebSocketHandler extends WebSocketServer {
 
                 while (!finished && toolIteration < maxToolIterations) {
                     toolIteration++;
+
+                    // Plan 轮次限制：超过最大轮次强制总结
+                    if (PlanModeManager.getInstance().isPlanRoundsExceeded()) {
+                        logger.warning("Plan 查询: 已达最大分析轮次(" + PlanModeManager.MAX_PLAN_ROUNDS
+                            + ")，强制总结。当前轮次=" + PlanModeManager.getInstance().getPlanRounds());
+                        session.addMessage(com.jwcode.core.model.Message.createSystemMessage(
+                            "你已达到最大分析轮次限制（" + PlanModeManager.MAX_PLAN_ROUNDS
+                            + "轮）。请基于已有信息直接给出分析总结和计划，不要继续使用工具探索。"));
+                        java.util.List<LLMMessage> finalMessages = buildLLMMessagesFromSession(session);
+                        CompletableFuture<LLMResponse> finalFuture = llmService.chatStreamWithTools(
+                            finalMessages, java.util.List.of(), fullContentBuilder::append, null, null);
+                        try {
+                            LLMResponse finalResponse = finalFuture.get(baseTimeout, TimeUnit.SECONDS);
+                            if (!finalResponse.hasError()) {
+                                fullContentBuilder.append(finalResponse.getContent());
+                            }
+                        } catch (Exception ignored) {}
+                        finished = true;
+                        break;
+                    }
 
                     // 熔断：连续 5 轮工具都失败/未知，停止循环给出已有结果
                     if (consecutiveToolErrors >= 5) {
@@ -1396,9 +1452,12 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                             consecutiveToolErrors = 0;
                         }
 
+                        // 递增 Plan 轮次计数（用于上限检查）
+                        PlanModeManager.getInstance().incrementPlanRound();
+
                         // 继续循环，让 AI 基于工具结果继续分析
                         WebSocketLogBroadcaster.getInstance().broadcast(
-                            LogEntry.info("Plan", "继续分析中...（第 " + toolIteration + " 轮）")
+                            LogEntry.info("Plan", "继续分析中...（第 " + toolIteration + " 轮 / 上限 " + PlanModeManager.MAX_PLAN_ROUNDS + " 轮）")
                         );
                     } else {
                         // 没有工具调用，分析完成
@@ -1609,7 +1668,11 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                     success = modeManager.enterPlanMode("User requested Plan mode via WebSocket");
                     break;
                 case "act":
-                    success = modeManager.enterActMode();
+                    if (modeManager.isPlanMode()) {
+                        success = modeManager.exitPlanMode("User requested Act mode via WebSocket");
+                    } else {
+                        success = modeManager.enterActMode();
+                    }
                     break;
                 default:
                     logger.warning("plan_mode_change: 未知模式 " + newModeStr);
@@ -2350,9 +2413,12 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                 while (queue.size() >= MAX_PENDING_MESSAGES) {
                     queue.poll();
                 }
-                queue.offer(new PendingMessage(type, data));
-                logger.fine("消息已暂存: sessionId=" + sessionId + ", type=" + type 
-                    + ", queueSize=" + queue.size());
+                long seq = sessionSeqCounters
+                    .computeIfAbsent(sessionId, k -> new java.util.concurrent.atomic.AtomicLong(0))
+                    .incrementAndGet();
+                queue.offer(new PendingMessage(type, data, seq));
+                logger.fine("消息已暂存: sessionId=" + sessionId + ", type=" + type
+                    + ", seq=" + seq + ", queueSize=" + queue.size());
             } else {
                 // 连接已断开但消息仍在发送 — 首次降为 INFO，后续降为 FINE 避免刷屏
                 logger.fine("sendMessage 连接不可用: sessionId=" + sessionId 
@@ -2399,10 +2465,11 @@ public class StreamingWebSocketHandler extends WebSocketServer {
      * ERROR（错误信息）、STEP_COMPLETE（步骤完成）
      */
     private boolean shouldQueueMessage(MessageType type) {
-        return type == MessageType.CONTENT 
-            || type == MessageType.COMPLETE 
+        return type == MessageType.CONTENT
+            || type == MessageType.COMPLETE
             || type == MessageType.ERROR
-            || type == MessageType.STEP_COMPLETE;
+            || type == MessageType.STEP_COMPLETE
+            || type == MessageType.TOOL_RESULT;
     }
     
     /**
@@ -2410,24 +2477,39 @@ public class StreamingWebSocketHandler extends WebSocketServer {
      * 所有消息都会在 JSON 中附加 sessionId，方便前端路由
      */
     private void sendMessage(WebSocket conn, MessageType type, String data, String sessionId) {
+        sendMessage(conn, type, data, sessionId, -1);
+    }
+
+    /**
+     * 发送消息到客户端（带 sessionId 和序号）
+     */
+    private void sendMessage(WebSocket conn, MessageType type, String data, String sessionId, long seq) {
         if (conn == null || !conn.isOpen()) {
             return;
         }
-        
+
+        // 生成消息序号（用于 ACK 确认和丢包检测）
+        long msgSeq = (seq >= 0) ? seq
+            : (sessionId != null) ? sessionSeqCounters
+                .computeIfAbsent(sessionId, k -> new java.util.concurrent.atomic.AtomicLong(0))
+                .incrementAndGet()
+            : -1;
+
         String json;
         if (type == MessageType.LOG) {
-            // 日志消息直接使用 data 作为 JSON
-            json = String.format("{\"type\": \"%s\", \"data\": %s, \"sessionId\": \"%s\"}",
+            json = String.format("{\"type\": \"%s\", \"data\": %s, \"sessionId\": \"%s\", \"seq\": %d}",
                 type.name().toLowerCase(),
                 data,
-                escapeJson(sessionId != null ? sessionId : ""));
+                escapeJson(sessionId != null ? sessionId : ""),
+                msgSeq);
         } else {
-            json = String.format("{\"type\": \"%s\", \"data\": %s, \"sessionId\": \"%s\"}",
+            json = String.format("{\"type\": \"%s\", \"data\": %s, \"sessionId\": \"%s\", \"seq\": %d}",
                 type.name().toLowerCase(),
                 data != null ? "\"" + escapeJson(data) + "\"" : "null",
-                escapeJson(sessionId != null ? sessionId : ""));
+                escapeJson(sessionId != null ? sessionId : ""),
+                msgSeq);
         }
-        
+
         try {
             conn.send(json);
         } catch (Exception e) {
@@ -2441,6 +2523,25 @@ public class StreamingWebSocketHandler extends WebSocketServer {
      */
     private void sendMessage(WebSocket conn, MessageType type, String data) {
         sendMessage(conn, type, data, null);
+    }
+
+    /**
+     * 处理客户端的消息确认（ACK）
+     */
+    private void handleMessageAck(WebSocket conn, ClientMessage clientMsg) {
+        try {
+            if (clientMsg.data != null && !clientMsg.data.isEmpty()) {
+                com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                com.fasterxml.jackson.databind.JsonNode ackData = mapper.readTree(clientMsg.data);
+                long ackSeq = ackData.has("seq") ? ackData.get("seq").asLong() : -1;
+                if (ackSeq >= 0) {
+                    // 确认消息已送达前端的消息，可用于未来清理持久化消息
+                    logger.fine("收到消息 ACK: sessionId=" + clientMsg.sessionId + ", seq=" + ackSeq);
+                }
+            }
+        } catch (Exception e) {
+            logger.fine("解析 message_ack 失败: " + e.getMessage());
+        }
     }
     
     /**
@@ -2505,6 +2606,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                 JwcodeConfig.ProviderConfig dp = config.getDefaultProvider();
                 if (dp != null) {
                     logger.info("[ModelDebug] defaultProvider baseUrl=" + dp.getBaseUrl()
+                        + ", apiType=" + dp.getApiType()
                         + ", modelCount=" + (dp.getModels() != null ? dp.getModels().size() : 0));
                 } else {
                     logger.warning("[ModelDebug] defaultProvider is NULL! providerName=" + defaultProviderName);
@@ -2573,6 +2675,11 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                     WebSocketLogBroadcaster.getInstance().broadcast(
                         LogEntry.tool("[动作] " + stepName + ": " + action)
                     );
+                    // 广播 Agent 信息流：工具调用 -> 对应 Agent 处理中
+                    String agent = mapToolToAgent(stepName);
+                    String taskId = stepName + "-" + System.currentTimeMillis();
+                    AgentFlowBroadcaster.getInstance().broadcastDispatch(
+                        "Orchestrator", agent, taskId, stepName, querySessionId);
                 }
                 
                 @Override
@@ -2588,15 +2695,19 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                 }
                 
                 @Override
-                public void onToolResult(String toolName, String result) {
+                public void onToolResult(String toolName, String result, String toolCallId) {
                     String json = String.format(
-                        "{\"toolName\":\"%s\",\"result\":\"%s\"}",
-                        escapeJson(toolName), escapeJson(result)
+                        "{\"id\":\"%s\",\"toolName\":\"%s\",\"result\":\"%s\"}",
+                        escapeJson(toolCallId), escapeJson(toolName), escapeJson(result)
                     );
                     sendMessage(querySessionId, MessageType.TOOL_RESULT, json);
                     WebSocketLogBroadcaster.getInstance().broadcast(
                         LogEntry.tool("[工具结果] " + toolName + ": " + truncate(result, 50))
                     );
+                    // 广播 Agent 信息流：工具完成 -> 对应 Agent 完成
+                    String agent = mapToolToAgent(toolName);
+                    AgentFlowBroadcaster.getInstance().broadcastComplete(
+                        agent, "Orchestrator", toolCallId, "completed", querySessionId);
                 }
                 
                 @Override
@@ -2618,6 +2729,42 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                         "{\"promptTokens\":%d,\"completionTokens\":%d,\"totalTokens\":%d,\"usageRatio\":%.3f,\"model\":\"%s\"}",
                         usedTokens, 0, usedTokens, usageRatio, engine.getModelName());
                     sendMessage(querySessionId, MessageType.TOKEN_UPDATE, json);
+                }
+
+                @Override
+                public void onSwarmEvent(String eventType, String eventData) {
+                    // 将 Swarm 事件转换为 AgentFlowView 识别的 dispatch/complete 格式
+                    try {
+                        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                        com.fasterxml.jackson.databind.JsonNode data = mapper.readTree(eventData);
+                        String type = data.has("type") ? data.get("type").asText() : "";
+                        String taskId = data.has("taskId") ? data.get("taskId").asText() : "";
+                        String desc = data.has("description") ? data.get("description").asText() : "";
+                        // Map Swarm task type to display agent name
+                        String agent = mapSwarmTypeToAgent(type);
+
+                        if ("task_start".equals(eventType)) {
+                            String dispatchJson = String.format(
+                                "{\"eventType\":\"dispatch\",\"fromAgent\":\"Orchestrator\",\"toAgent\":\"%s\",\"taskId\":\"%s\",\"description\":\"%s\",\"status\":\"running\",\"sessionId\":\"%s\",\"timestamp\":%d}",
+                                escapeJson(agent), escapeJson(taskId), escapeJson(desc),
+                                escapeJson(querySessionId), System.currentTimeMillis());
+                            sendMessage(querySessionId, MessageType.AGENT_FLOW_EVENT, dispatchJson);
+                        } else if ("task_complete".equals(eventType)) {
+                            boolean success = data.has("success") && data.get("success").asBoolean();
+                            String status = success ? "completed" : "failed";
+                            String completeJson = String.format(
+                                "{\"eventType\":\"complete\",\"fromAgent\":\"%s\",\"toAgent\":\"Orchestrator\",\"taskId\":\"%s\",\"description\":\"\",\"status\":\"%s\",\"sessionId\":\"%s\",\"timestamp\":%d}",
+                                escapeJson(agent), escapeJson(taskId), status,
+                                escapeJson(querySessionId), System.currentTimeMillis());
+                            sendMessage(querySessionId, MessageType.AGENT_FLOW_EVENT, completeJson);
+                        } else {
+                            // progress or other events — send as-is
+                            sendMessage(querySessionId, MessageType.AGENT_FLOW_EVENT,
+                                "{\"eventType\":\"" + escapeJson(eventType) + "\",\"data\":" + eventData + "}");
+                        }
+                    } catch (Exception e) {
+                        logger.fine("onSwarmEvent parse error: " + e.getMessage());
+                    }
                 }
 
                 @Override
@@ -2690,9 +2837,13 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             logger.log(java.util.logging.Level.SEVERE, "查询执行失败", e);
 
             sendMessage(querySessionId, MessageType.ERROR, escapeJson("执行失败: " + e.getMessage()));
+            sendMessage(querySessionId, MessageType.COMPLETE, null);
             WebSocketLogBroadcaster.getInstance().broadcast(
                 LogEntry.error("执行异常: " + e.getMessage())
             );
+        } finally {
+            // 清理序号生成器，避免内存泄漏
+            runningQueryFutures.remove(querySessionId);
         }
     }
     
@@ -2897,7 +3048,46 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             logger.severe("关闭 WebSocket 服务器失败: " + e.getMessage());
         }
     }
-    
+
+    /**
+     * Map a Swarm task type to a display agent name.
+     */
+    private static String mapSwarmTypeToAgent(String type) {
+        if (type == null) return "explorer";
+        return switch (type.toUpperCase()) {
+            case "ANALYSIS" -> "explorer";
+            case "PLANNING" -> "architect";
+            case "EXECUTION" -> "coder";
+            case "VERIFICATION" -> "tester";
+            default -> "explorer";
+        };
+    }
+
+    /**
+     * Map a tool name to a display agent name for AgentFlowView.
+     */
+    private static String mapToolToAgent(String toolName) {
+        if (toolName == null) return "explorer";
+        String name = toolName.toLowerCase();
+        if (name.contains("read") || name.contains("glob") || name.contains("grep")) return "explorer";
+        if (name.contains("edit") || name.contains("write")) return "coder";
+        if (name.contains("bash")) {
+            if (name.contains("test") || name.contains("npm test") || name.contains("mvn test")
+                || name.contains("pytest") || name.contains("jest")) return "tester";
+            return "debug";
+        }
+        if (name.contains("websearch") || name.contains("webfetch")) return "explorer";
+        if (name.contains("taskcreate") || name.contains("taskupdate")) return "architect";
+        if (name.contains("agent")) return "architect";
+        if (name.contains("review") || name.contains("security")) return "reviewer";
+        if (name.contains("test")) return "tester";
+        if (name.contains("doc")) return "documenter";
+        if (name.contains("eval")) return "evaluator";
+        if (name.contains("plan")) return "architect";
+        if (name.contains("debug") || name.contains("fix")) return "debug";
+        return "explorer";
+    }
+
         /**
      * 消息类型枚举
      */
@@ -2942,6 +3132,8 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         TOKEN_UPDATE,       // Token 用量更新（实时）
         CONTEXT_COMPRESSED, // 上下文压缩通知（自动压缩时广播到前端）
         COMPACTION_PROGRESS, // 压缩进度更新（阶段 + 百分比）
+        AGENT_FLOW_EVENT,   // Agent 流程事件（Swarm 等）
+        MESSAGE_ACK,        // 消息确认（前端收到消息后回执）
         EXIT                // 退出后端服务
     }
     

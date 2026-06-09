@@ -33,7 +33,7 @@ public class StepCallbackAdapter implements ObservationPipeline.Observer {
         } else if (event instanceof ObservationEvent.StepComplete e) {
             callback.onStepComplete(e.stepName(), e.result());
         } else if (event instanceof ObservationEvent.ToolResult e) {
-            callback.onToolResult(e.toolName(), e.result());
+            callback.onToolResult(e.toolName(), e.result(), e.toolCallId());
         } else if (event instanceof ObservationEvent.ContentChunk e) {
             callback.onContentChunk(e.chunk());
         } else if (event instanceof ObservationEvent.ThinkingChunk e) {
@@ -46,7 +46,16 @@ public class StepCallbackAdapter implements ObservationPipeline.Observer {
                     return; // 已处理过，跳过
                 }
             }
-            callback.onStepAction(e.toolName(), "执行 " + e.toolName());
+                        callback.onStepAction(e.toolName(), "执行 " + e.toolName());
+        } else if (event instanceof ObservationEvent.SwarmTaskStarted e) {
+            String data = "{\"agentId\":\"" + escapeJson(e.agentId()) + "\",\"taskId\":\"" + escapeJson(e.taskId()) + "\",\"description\":\"" + escapeJson(e.description()) + "\",\"type\":\"" + e.type() + "\",\"priority\":" + e.priority() + "}";
+            callback.onSwarmEvent("task_start", data);
+        } else if (event instanceof ObservationEvent.SwarmTaskCompleted e) {
+            String data = "{\"agentId\":\"" + escapeJson(e.agentId()) + "\",\"taskId\":\"" + escapeJson(e.taskId()) + "\",\"description\":\"" + escapeJson(e.description()) + "\",\"success\":" + e.success() + ",\"durationMs\":" + e.durationMs() + "}";
+            callback.onSwarmEvent("task_complete", data);
+        } else if (event instanceof ObservationEvent.SwarmProgress e) {
+            String data = "{\"completedTasks\":" + e.completedTasks() + ",\"totalTasks\":" + e.totalTasks() + "}";
+            callback.onSwarmEvent("progress", data);
         }
         // 其他事件类型 StepCallback 不支持，静默丢弃
     }
@@ -54,5 +63,14 @@ public class StepCallbackAdapter implements ObservationPipeline.Observer {
     @Override
     public String getObserverName() {
         return "StepCallbackAdapter(" + callback.getClass().getSimpleName() + ")";
+    }
+
+    private String escapeJson(String s) {
+        if (s == null) return "";
+        return s.replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\n", " ")
+                .replace("\r", " ")
+                .replace("\t", " ");
     }
 }

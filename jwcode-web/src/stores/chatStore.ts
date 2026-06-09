@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist, type PersistStorage } from 'zustand/middleware';
-import { Message, Step, ToolCall } from '../types';
+import { HookApprovalInfo, Message, Step, ToolCall } from '../types';
 
 const MAX_MESSAGES_PER_SESSION = 200;
 const STORAGE_KEY = 'jwcode-chat-store';
@@ -56,6 +56,7 @@ interface ChatState {
   removeSession: (sessionId: string) => void;
   setSessionInput: (sessionId: string, input: string) => void;
   getSessionInput: (sessionId: string) => string;
+  attachHookApproval: (sessionId: string, approval: HookApprovalInfo) => void;
   isGenerating: (sessionId: string) => boolean;
   isPaused: (sessionId: string) => boolean;
 }
@@ -328,11 +329,30 @@ export const useChatStore = create<ChatState>()(
             if (typeof mergedArgs === 'string') {
               mergedArgs = mergedArgs + argsPartial;
             } else if (typeof mergedArgs === 'object' && mergedArgs !== null) {
-              try {
-                const parsed = JSON.parse(argsPartial);
-                mergedArgs = { ...(mergedArgs as Record<string, unknown>), ...parsed };
-              } catch {
-                mergedArgs = JSON.stringify(mergedArgs) + argsPartial;
+              // åªåœ?argsPartial æ˜¯å®Œæ•?JSON å¯¹è±¡æ—¶æ‰?å?merge
+              // å¦åˆ™ç»§ç»­åšå­—ç¬¦ä¸²ç§¯ç´¯ï¼Œé¿å……æµ?å¼ä¸嶇е®Œ JSON ç‰囨电殀 JSON.parse
+              const trimmed = argsPartial.trim();
+              if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+                try {
+                  const parsed = JSON.parse(trimmed);
+                  // è‹¥existing.args æ˜¯字符串åˆ§åˆ濈姸æ€?åˆ?åˆ?parse ä½滺Record
+                  if (typeof mergedArgs === 'string') {
+                    mergedArgs = { ...parsed };
+                  } else {
+                    mergedArgs = { ...(mergedArgs as Record<string, unknown>), ...parsed };
+                  }
+                } catch {
+                  // ä¸嶇е®Œ JSON ï¼Œå?ªèƒ½å?š字符串拼接
+                  const str = JSON.stringify(mergedArgs);
+                  mergedArgs = str.slice(0, -1) + ',' + trimmed.slice(1);
+                }
+              } else {
+                // æ?å°?éƒㄧ被åï¼Œå?ªèƒ½å?š字符串拼接
+                if (typeof mergedArgs === 'string') {
+                  mergedArgs = mergedArgs + trimmed;
+                } else {
+                  mergedArgs = JSON.stringify(mergedArgs) + trimmed;
+                }
               }
             } else {
               mergedArgs = argsPartial;
@@ -487,6 +507,43 @@ export const useChatStore = create<ChatState>()(
       getSessionInput: (sessionId) => {
         return get().sessionInputs[sessionId] || '';
       },
+
+      attachHookApproval: (sessionId, approval) =>
+        set((state) => {
+          const messages = state.messagesBySession[sessionId] || [];
+          if (messages.length === 0) {
+            // 没有消息则创建一条
+            const newMsg: Message = {
+              id: `hook-approval-${approval.approvalId || Date.now()}`,
+              type: 'assistant', content: '', timestamp: Date.now(),
+              hookApproval: approval,
+            };
+            return {
+              messagesBySession: { ...state.messagesBySession, [sessionId]: [newMsg] },
+            };
+          }
+          const lastIdx = messages.length - 1;
+          const lastMsg = messages[lastIdx];
+          if (lastMsg && lastMsg.type === 'assistant') {
+            const updated = messages.slice();
+            updated[lastIdx] = { ...lastMsg, hookApproval: approval } as Message;
+            return {
+              messagesBySession: { ...state.messagesBySession, [sessionId]: updated },
+            };
+          }
+          // 最后一条不是 assistant 消息，追加新消息
+          const newMsg: Message = {
+            id: `hook-approval-${approval.approvalId || Date.now()}`,
+            type: 'assistant', content: '', timestamp: Date.now(),
+            hookApproval: approval,
+          };
+          return {
+            messagesBySession: {
+              ...state.messagesBySession,
+              [sessionId]: [...messages, newMsg].slice(-MAX_MESSAGES_PER_SESSION),
+            },
+          };
+        }),
 
       isGenerating: (sessionId) => {
         return get().generatingSessions.includes(sessionId);

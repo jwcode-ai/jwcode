@@ -206,4 +206,9 @@ public class DockerSandboxExecutor implements BackgroundCommandExecutor {
         void complete(String out) { this.output = out; this.success = true; this.done = true; }
         void fail(String err) { this.error = err; this.success = false; this.done = true; }
     }
+
+    /** 关闭线程池，终止正在执行的任务 */
+    public void shutdown() {
+        taskExecutor.shutdownNow();
+    }
 }

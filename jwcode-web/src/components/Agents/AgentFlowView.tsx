@@ -1,11 +1,16 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+﻿import { useEffect, useState, useRef, useCallback } from 'react';
 import { Activity, Circle, ArrowRight, CheckCircle2, XCircle, Loader2, RefreshCw, ChevronDown } from 'lucide-react';
 import wsService from '../../services/websocket';
+
+
+// ---- Global event buffer (survives component mount/unmount) ----
+const agentFlowBuffer: AgentFlowEvent[] = [];
+const MAX_BUFFER = 50;
 
 // ---- Types ----
 
 interface AgentFlowEvent {
-  eventType: 'dispatch' | 'complete' | 'agent_status';
+  eventType: 'dispatch' | 'complete' | 'agent_status' | 'task_start' | 'task_complete' | 'progress';
   fromAgent: string;
   toAgent: string;
   taskId: string;
@@ -13,7 +18,20 @@ interface AgentFlowEvent {
   status: string;
   sessionId: string;
   timestamp: number;
+  // Swarm event fields (optional)
+  type?: string;
+  agentId?: string;
+  success?: boolean;
+  data?: Record<string, unknown>;
 }
+
+/** Map Swarm task type to display agent key */
+const SWARM_TYPE_TO_AGENT: Record<string, string> = {
+  ANALYSIS: 'explorer',
+  PLANNING: 'architect',
+  EXECUTION: 'coder',
+  VERIFICATION: 'tester',
+};
 
 interface AgentNode {
   name: string;
@@ -164,17 +182,71 @@ export function AgentFlowView() {
   // ---- WebSocket subscription ----
   useEffect(() => {
     const unsub = wsService.onMessage((msg: any) => {
-      if (msg.type === 'agent_flow_event' && msg.data) {
-        handleEvent(msg.data);
-      }
+        if (msg.type === 'agent_flow_event') {
+          try {
+            const data = typeof msg.data === 'string' ? JSON.parse(msg.data) : msg.data;
+            if (data) handleEvent(data);
+          } catch (e) {
+            console.warn('[AgentFlow] Failed to parse event data:', e);
+          }
+        }
     });
+    // Initialize from global buffer on mount
+    if (agentFlowBuffer.length > 0) {
+      eventsRef.current = [...agentFlowBuffer];
+      setLog([...agentFlowBuffer]);
+    }
     return () => unsub();
   }, []);
 
   const handleEvent = useCallback((evt: AgentFlowEvent) => {
     const now = Date.now();
 
-    if (evt.eventType === 'dispatch') {
+    // Unwrap nested Swarm events: {eventType:"task_start", data:{...}}
+    let unwrapped = evt;
+    if ((evt.eventType === 'task_start' || evt.eventType === 'task_complete') && evt.data) {
+      unwrapped = { ...evt.data, eventType: evt.eventType } as AgentFlowEvent;
+    }
+
+    if (unwrapped.eventType === 'task_start') {
+      // Swarm task_start -> handle like dispatch
+      const swarmType = unwrapped.type || '';
+      const agent = SWARM_TYPE_TO_AGENT[swarmType] || 'explorer';
+      const toKey = SUB_AGENTS.find(a => a.toLowerCase() === agent) || agent;
+
+      setAgents(prev => {
+        const next = new Map(prev);
+        const orch = next.get('Orchestrator');
+        if (orch) { orch.status = 'busy'; orch.currentTask = unwrapped.description || ''; orch.lastEvent = now; }
+        const to = next.get(toKey);
+        if (to) { to.status = 'busy'; to.currentTask = unwrapped.description || ''; to.lastEvent = now; }
+        return next;
+      });
+      setActiveFlows(prev => new Set(prev).add(toKey));
+    } else if (unwrapped.eventType === 'task_complete') {
+      // Swarm task_complete -> handle like complete
+      const swarmType = unwrapped.type || '';
+      const agent = SWARM_TYPE_TO_AGENT[swarmType] || 'explorer';
+      const toKey = SUB_AGENTS.find(a => a.toLowerCase() === agent) || agent;
+
+      setAgents(prev => {
+        const next = new Map(prev);
+        const a = next.get(toKey);
+        if (a) { a.status = unwrapped.success !== false ? 'completed' : 'failed'; a.lastEvent = now; }
+        return next;
+      });
+      setTimeout(() => {
+        setAgents(p => {
+          const n = new Map(p);
+          const a = n.get(toKey);
+          if (a) a.status = 'idle';
+          const o = n.get('Orchestrator');
+          if (o) o.status = 'idle';
+          return n;
+        });
+        setActiveFlows(prev => { const next = new Set(prev); next.delete(toKey); return next; });
+      }, FLOW_TIMEOUT);
+    } else if (evt.eventType === 'dispatch') {
       const toKey = SUB_AGENTS.find(a => a.toLowerCase() === evt.toAgent.toLowerCase()) || evt.toAgent.toLowerCase();
 
       setAgents(prev => {
@@ -228,6 +300,9 @@ export function AgentFlowView() {
     }
 
     eventsRef.current = [evt, ...eventsRef.current].slice(0, 50);
+    // Also push to global buffer
+    agentFlowBuffer.unshift(evt);
+    if (agentFlowBuffer.length > MAX_BUFFER) agentFlowBuffer.length = MAX_BUFFER;
     setLog(eventsRef.current);
   }, []);
 
@@ -523,7 +598,7 @@ export function AgentFlowView() {
                     );
                   })}
                   <button
-                    onClick={() => { eventsRef.current = []; setLog([]); }}
+                    onClick={() => { eventsRef.current = []; setLog([]); agentFlowBuffer.length = 0; }}
                     className="w-full py-1 rounded border border-dark-border hover:border-dark-muted transition-colors text-[9px] text-dark-muted hover:text-dark-text flex items-center justify-center gap-1"
                   >
                     <RefreshCw size={8} />

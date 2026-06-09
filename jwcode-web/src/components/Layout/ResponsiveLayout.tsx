@@ -1,4 +1,4 @@
-import { ReactNode } from 'react';
+﻿import { ReactNode, useState, useEffect } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { cn } from '../../utils/cn';
 
@@ -21,8 +21,13 @@ export function ResponsiveLayout({
   showSidebar = true,
   className = '',
 }: ResponsiveLayoutProps) {
-  // On mobile, hide sidebar by default
-  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+  // On mobile, hide sidebar by default (responsive to resize)
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768);
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   if (!showSidebar) {
     return (

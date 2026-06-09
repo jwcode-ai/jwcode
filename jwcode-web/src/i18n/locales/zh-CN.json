@@ -42,9 +42,11 @@
     "tools": "工具",
     "skills": "技能",
     "agents": "Agents",
+    "hooks": "Hooks",
     "agentFlow": "Agent Flow",
     "settings": "设置",
-    "logs": "日志"
+    "logs": "日志",
+    "observability": "可观测性"
   },
   "chat": {
     "newSession": "新建会话",

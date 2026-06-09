@@ -289,6 +289,7 @@ export type WSMessageType =
   | 'context_compressed'
   | 'compaction_progress'
   | 'agent_flow_event'
+  | 'message_ack'
   | 'exit';
 
 
@@ -298,6 +299,7 @@ export interface WSMessage {
   sessionId?: string;
   message?: string;
   token?: string;
+  seq?: number; // 消息序号，用于 ACK 确认
 }
 
 // Task types
@@ -380,7 +382,7 @@ export interface SessionTask {
 }
 
 // Tab types
-export type TabId = 'chat' | 'plan' | 'terminal' | 'files' | 'models' | 'tools' | 'skills' | 'agents' | 'settings' | 'logs' | 'agentflow' | 'agentflow';
+export type TabId = 'chat' | 'plan' | 'terminal' | 'files' | 'models' | 'tools' | 'skills' | 'agents' | 'hooks' | 'settings' | 'logs' | 'agentflow' | 'observability';
 
 export interface Tab {
   id: TabId;
@@ -411,4 +413,166 @@ export interface TerminalStatusResponse {
   port?: number;
   uptime?: number;
   workspaceDir?: string;
+}
+
+// Observability types
+export interface ObservabilitySummary {
+  llmCalls: number;
+  toolCalls: number;
+  errors: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  cacheHitRate: number;
+  elapsedSeconds: number;
+  totalCostDollars: number;
+}
+
+export interface ModelCostSummary {
+  modelId: string;
+  totalCostDollars: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  requestCount: number;
+}
+
+export interface CostEntry {
+  timestamp: string;
+  modelId: string;
+  inputTokens: number;
+  outputTokens: number;
+  costDollars: number;
+}
+
+export interface CostData {
+  totalCostDollars: number;
+  byModel: ModelCostSummary[];
+  history: CostEntry[];
+}
+
+export interface TraceRunSummary {
+  runId: string;
+  scenarioId: string;
+  description: string;
+  status: string;
+  startedAt: string;
+  completedAt?: string;
+  eventCount: number;
+  summary?: string;
+}
+
+export type TraceRunDetail = TraceRunSummary;
+
+export interface TraceEvent {
+  runId: string;
+  scenarioId: string;
+  turnId: number;
+  timestamp: string;
+  eventType: string;
+  event: Record<string, unknown>;
+}
+
+export interface PaginatedEvents {
+  events: TraceEvent[];
+  total: number;
+  page: number;
+  size: number;
+}
+
+// Hook configuration types
+export type HookImplementationType = 'SHELL' | 'HTTP' | 'PROMPT' | 'AGENT';
+export type HookPriority = 'SYSTEM' | 'SECURITY' | 'PROJECT' | 'USER' | 'PLUGIN';
+export type HookScope = 'user' | 'project' | 'local';
+export type HookDecision = 'ALLOW' | 'DENY' | 'ASK' | 'MODIFY' | 'VOID' | 'DEFER';
+
+export interface HookRule {
+  name: string;
+  description: string;
+  events: string[];
+  implementationType: HookImplementationType;
+  command?: string;
+  url?: string;
+  promptTemplate?: string;
+  agentName?: string;
+  priority: HookPriority;
+  tools: string[];
+  matchers: Record<string, string>;
+  timeoutMs: number;
+  enabled: boolean;
+  failOpen: boolean;
+  scope: HookScope;
+}
+
+export interface HookRuleFormData {
+  name: string;
+  description: string;
+  events: string[];
+  implementationType: HookImplementationType;
+  command: string;
+  url: string;
+  promptTemplate: string;
+  agentName: string;
+  priority: HookPriority;
+  tools: string[];
+  matcherToolNamePattern: string;
+  matcherFromState: string;
+  matcherToState: string;
+  timeoutMs: number;
+  enabled: boolean;
+  failOpen: boolean;
+  scope: HookScope;
+}
+
+export interface HookDryRunRequest {
+  hook: HookRule;
+  eventType: string;
+  toolName: string;
+  toolInput: string;
+}
+
+export interface HookDryRunResult {
+  decision: HookDecision;
+  hookName: string;
+  reason: string;
+  durationMs: number;
+  contextOutput: string;
+}
+
+export interface HookExecutionLog {
+  id: string;
+  hookName: string;
+  eventType: string;
+  decision: string;
+  reason: string;
+  durationMs: number;
+  timestamp: number;
+}
+
+export interface HookStats {
+  totalHooks: number;
+  enabledCount: number;
+  disabledCount: number;
+  configFile: string;
+  lastLoadTime: string;
+  hooksByEvent: Record<string, number>;
+}
+
+export interface HookEventCategory {
+  category: string;
+  events: HookEventMeta[];
+}
+
+export interface HookEventMeta {
+  name: string;
+  summary: string;
+  hasMatcher: boolean;
+  matcherField?: string;
+}
+
+export interface HookAgentInfo {
+  id: string;
+  name: string;
+  description: string;
 }

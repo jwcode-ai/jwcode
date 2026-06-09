@@ -9,6 +9,7 @@
  */
 import React, { useState, useCallback, useEffect } from 'react';
 import { Box, Text, useInput } from 'ink';
+import { TextInput } from './TextInput.js';
 import { t } from '../theme.js';
 
 interface Props {
@@ -45,7 +46,6 @@ export const SetupWizard: React.FC<Props> = ({ backendUrl, onComplete, onCancel,
   const [baseUrl, setBaseUrl] = useState('');
   const [modelId, setModelId] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
-  const [keyVisible, setKeyVisible] = useState(false);
 
   const isModal = mode === 'modal';
 
@@ -98,16 +98,18 @@ export const SetupWizard: React.FC<Props> = ({ backendUrl, onComplete, onCancel,
     check();
   }, [step, backendUrl, onComplete]);
 
-  useInput((input, key) => {
+  // Only handle global keys (Escape) and select_provider/error step navigation.
+  // enter_key and enter_model use TextInput which has its own useInput.
+  useInput((_input, key) => {
     if (key.escape && isModal && onCancel) {
       onCancel();
       return;
     }
 
     if (step === 'select_provider') {
-      if (key.upArrow || input === 'k') {
+      if (key.upArrow || _input === 'k') {
         setSelectedIdx(s => (s - 1 + PROVIDER_KEYS.length) % PROVIDER_KEYS.length);
-      } else if (key.downArrow || input === 'j') {
+      } else if (key.downArrow || _input === 'j') {
         setSelectedIdx(s => (s + 1) % PROVIDER_KEYS.length);
       } else if (key.return) {
         const pk = PROVIDER_KEYS[selectedIdx];
@@ -116,51 +118,6 @@ export const SetupWizard: React.FC<Props> = ({ backendUrl, onComplete, onCancel,
         setBaseUrl(tmpl.baseUrl);
         setModelId(tmpl.defaultModel);
         setStep('enter_key');
-      }
-      return;
-    }
-
-    if (step === 'enter_key') {
-      if (key.escape && isModal && onCancel) {
-        onCancel();
-        return;
-      }
-      if (key.return) {
-        if (apiKey.trim().length < 10) {
-          setErrorMsg('API key too short (min 10 characters).');
-          return;
-        }
-        setErrorMsg('');
-        if (providerKey === 'custom') {
-          setStep('enter_model');
-        } else {
-          saveConfig();
-        }
-      } else if (key.backspace || key.delete) {
-        setApiKey(s => s.slice(0, -1));
-      } else if (input === '\t') {
-        setKeyVisible(v => !v);
-      } else if (input && input.length === 1 && !key.ctrl) {
-        setApiKey(s => s + input);
-      }
-      return;
-    }
-
-    if (step === 'enter_model') {
-      if (key.escape && isModal && onCancel) {
-        onCancel();
-        return;
-      }
-      if (key.return) {
-        if (modelId.trim().length === 0) {
-          setErrorMsg('Model name is required.');
-          return;
-        }
-        saveConfig();
-      } else if (key.backspace || key.delete) {
-        setModelId(s => s.slice(0, -1));
-      } else if (input && input.length === 1 && !key.ctrl) {
-        setModelId(s => s + input);
       }
       return;
     }
@@ -176,6 +133,27 @@ export const SetupWizard: React.FC<Props> = ({ backendUrl, onComplete, onCancel,
       }
     }
   });
+
+  const handleKeySubmit = () => {
+    if (apiKey.trim().length < 10) {
+      setErrorMsg('API key too short (min 10 characters).');
+      return;
+    }
+    setErrorMsg('');
+    if (providerKey === 'custom') {
+      setStep('enter_model');
+    } else {
+      saveConfig();
+    }
+  };
+
+  const handleModelSubmit = () => {
+    if (modelId.trim().length === 0) {
+      setErrorMsg('Model name is required.');
+      return;
+    }
+    saveConfig();
+  };
 
   if (step === 'done') {
     return (
@@ -225,13 +203,14 @@ export const SetupWizard: React.FC<Props> = ({ backendUrl, onComplete, onCancel,
           <Text>Provider: <Text color={t.success}>{PROVIDER_TEMPLATES[providerKey].name}</Text></Text>
           <Text>Base URL: <Text color={t.info}>{baseUrl}</Text></Text>
           <Text> </Text>
-          <Text>Enter API Key (Tab to toggle visibility):</Text>
-          <Box>
-            <Text color={t.warning}>{'> '}</Text>
-            <Text>{keyVisible ? apiKey : apiKey.replace(/./g, '*')}</Text>
-            <Text color={t.muted}>{keyVisible ? ' [visible]' : ' [hidden]'}</Text>
-          </Box>
-          <Text dimColor>Press Enter to confirm, Backspace to edit</Text>
+          <Text>Enter API Key:</Text>
+          <TextInput
+            value={apiKey}
+            onChange={setApiKey}
+            onSubmit={handleKeySubmit}
+            placeholder="sk-..."
+          />
+          <Text dimColor>Press Enter to confirm</Text>
           {errorMsg && <Text color={t.error}>Error: {errorMsg}</Text>}
         </Box>
       )}
@@ -241,17 +220,16 @@ export const SetupWizard: React.FC<Props> = ({ backendUrl, onComplete, onCancel,
           <Text>Provider: <Text color={t.success}>{PROVIDER_TEMPLATES[providerKey].name}</Text></Text>
           <Text>API Key: <Text color={t.success}>configured</Text></Text>
           <Text> </Text>
-          <Text>Base URL:</Text>
-          <Box>
-            <Text color={t.warning}>{'> '}</Text>
-            <Text>{baseUrl}</Text>
-          </Box>
+          <Text>Base URL: <Text color={t.info}>{baseUrl}</Text></Text>
+          <Text> </Text>
           <Text>Model ID:</Text>
-          <Box>
-            <Text color={t.warning}>{'> '}</Text>
-            <Text>{modelId}</Text>
-          </Box>
-          <Text dimColor>Press Enter to save, type to edit model name</Text>
+          <TextInput
+            value={modelId}
+            onChange={setModelId}
+            onSubmit={handleModelSubmit}
+            placeholder="model-name"
+          />
+          <Text dimColor>Press Enter to confirm, type to edit model name</Text>
           {errorMsg && <Text color={t.error}>Error: {errorMsg}</Text>}
         </Box>
       )}

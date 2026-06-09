@@ -5,6 +5,7 @@ import { MarkdownRenderer } from '../common/MarkdownRenderer';
 import { StepItem } from './StepItem';
 import { ToolCallItem } from './ToolCallItem';
 import { HookApprovalCard } from './HookApprovalCard';
+import { SwarmVisualizer } from './SwarmVisualizer';
 import { useChatStore } from '../../stores/chatStore';
 
 interface MessageBubbleProps {
@@ -72,15 +73,8 @@ export const MessageBubble = memo(function MessageBubble({
   return (
     <div className="flex animate-fade-in-up px-1">
       <div className="w-full max-w-full">
-        {/* Hook approval card */}
-        {message.hookApproval && (
-          <div className="mb-3 border-l-2 border-accent-yellow/50 pl-3">
-            <HookApprovalCard
-              approval={message.hookApproval}
-              onResolved={handleHookResolved}
-            />
-          </div>
-        )}
+        {/* Swarm visualizer */}
+        {sessionId && <SwarmVisualizer sessionId={sessionId} />}
 
         {/* Steps with tool calls */}
         {message.steps && message.steps.length > 0 && (
@@ -141,6 +135,16 @@ export const MessageBubble = memo(function MessageBubble({
             Thinking...
           </div>
         ) : null}
+
+        {/* Hook approval card — always at the bottom so it stays visible */}
+        {message.hookApproval && (
+          <div className="mt-3 border-l-2 border-accent-yellow/50 pl-3">
+            <HookApprovalCard
+              approval={message.hookApproval}
+              onResolved={handleHookResolved}
+            />
+          </div>
+        )}
 
         {/* Timestamp */}
         <div className="text-[10px] text-dark-muted/50 mt-1.5">

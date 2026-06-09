@@ -1,8 +1,9 @@
-/**
+﻿/**
  * WebSocket event handlers -- streaming update batching, tool calls, plan events.
  */
 import { useCallback } from 'react';
 import type { JwCodeClient } from '../client.js';
+import { debugLog } from '../client.js';
 import { updateAppState, getStore } from './useAppState.js';
 import { createMessage, parseData, type WSMessage, type ToolCall, type Message, type PlanTask, type Step } from '../protocol.js';
 
@@ -109,6 +110,7 @@ export function useStreamHandlers(
     // ---- core event wiring ----
 
     client.on('start', () => {
+      debugLog('evt', '>> STREAM START');
       flushNow();
       const msg = createMessage('assistant');
       updateAppState(prev => ({
@@ -132,6 +134,7 @@ export function useStreamHandlers(
 
     client.on('tool_call', (_m: WSMessage) => {
       const d = parseData(_m) as unknown as ToolCall;
+      debugLog('evt', 'tool_call: ' + (d.name || '?') + (d.complete ? ' complete' : ' running'));
       _pendingToolFns.push((msg: Message): Message => {
         let existingIdx = d.id
           ? msg.toolCalls.findIndex((t: ToolCall) => t.id === d.id)
@@ -181,6 +184,7 @@ export function useStreamHandlers(
     });
 
     client.on('complete', () => {
+      debugLog('evt', '>> STREAM COMPLETE');
       flushNow();
       updateAppState(prev => {
         if (!prev.currentMessage) return prev;
@@ -198,6 +202,7 @@ export function useStreamHandlers(
 
     client.on('error', (_m: WSMessage) => {
       const text = String(_m.data || 'Error');
+      debugLog('evt', 'error: ' + text.slice(0, 80));
       updateAppState(prev => ({
         ...prev,
         statusText: 'Error: ' + text.slice(0, 120),
@@ -272,6 +277,7 @@ export function useStreamHandlers(
 
     // ---- plan events ----
     client.on('plan_start', () => {
+      debugLog('evt', '>> PLAN START');
       flushNow();
       const msg = createMessage('assistant');
       updateAppState(prev => ({
@@ -304,10 +310,12 @@ export function useStreamHandlers(
     });
 
     client.on('plan_mode_enter', () => {
+      debugLog('evt', 'plan_mode_enter');
       updateAppState(prev => ({ ...prev, planMode: true, statusText: 'Entered plan mode' }));
     });
 
     client.on('plan_mode_exit', () => {
+      debugLog('evt', 'plan_mode_exit');
       updateAppState(prev => ({ ...prev, planMode: false, statusText: 'Exited plan mode' }));
     });
 
@@ -353,6 +361,7 @@ export function useStreamHandlers(
     client.on('plan_complete', (_m: WSMessage) => {
       flushNow();
       const status = (_m as any).status as string | undefined;
+      debugLog('evt', '>> PLAN COMPLETE status=' + (status || 'none'));
       const planText = typeof _m.data === 'string' ? _m.data : '';
       updateAppState(prev => {
         if (!prev.currentMessage) return prev;
@@ -422,6 +431,8 @@ export function useStreamHandlers(
     // ---- hook & approval ----
     client.on('hook_ask', (_m: WSMessage) => {
       const d = parseData(_m);
+      const tn = (d.toolName as string) || '';
+      debugLog('evt', 'hook_ask: ' + tn + ' autoMode=' + String(getStore().getState().autoMode));
       const approvalId = (d.approvalId as string) || '';
       const toolName = (d.toolName as string) || '';
       if (getStore().getState().autoMode || sessionAllowRef.current.has(toolName)) {

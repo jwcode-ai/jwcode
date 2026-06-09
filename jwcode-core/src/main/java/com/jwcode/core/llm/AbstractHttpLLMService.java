@@ -440,10 +440,18 @@ public abstract class AbstractHttpLLMService implements LLMService {
         protected String finishReason;
         protected String model;
         protected String rawResponse;
+        protected String errorMessage;
+        protected String errorCode;
 
         public StreamAccumulator() {}
 
         public LLMResponse buildResponse() {
+            if (errorMessage != null) {
+                return errorCode != null
+                    ? LLMResponse.error(errorCode, errorMessage)
+                    : LLMResponse.error(errorMessage);
+            }
+
             LLMResponse.Builder builder = LLMResponse.builder()
                 .content(contentBuilder.toString())
                 .reasoningContent(reasoningBuilder.length() > 0 ? reasoningBuilder.toString() : null)

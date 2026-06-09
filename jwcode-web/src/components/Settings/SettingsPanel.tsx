@@ -1,14 +1,21 @@
 import { memo, useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Settings, Palette, RefreshCw } from 'lucide-react';
+import {
+  Settings, Palette, RefreshCw, Globe, Search,
+  Zap, FileCode, Server, Info, ExternalLink, Cpu,
+} from 'lucide-react';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import wsService from '../../services/websocket';
 import { FeatureToggle } from './FeatureToggle';
 import { ConfigFileEditor } from './ConfigFileEditor';
-import { CustomThemeColors } from '../../types';
+import { CustomThemeColors, TabId } from '../../types';
 import api from '../../services/api';
 import { toast } from '../../stores/toastStore';
+
+interface SettingsPanelProps {
+  onNavigate?: (tabId: TabId) => void;
+}
 
 const COLOR_LABELS: { key: keyof CustomThemeColors; labelKey: string }[] = [
   { key: 'bg', labelKey: 'settings.colorBg' },
@@ -23,7 +30,18 @@ const COLOR_LABELS: { key: keyof CustomThemeColors; labelKey: string }[] = [
   { key: 'accentPurple', labelKey: 'settings.colorAccentPurple' },
 ];
 
-export const SettingsPanel = memo(function SettingsPanel() {
+// Search metadata for each section
+const SECTION_SEARCH: Record<string, string[]> = {
+  language: ['language', 'lang', 'Chinese', '中文', 'English', 'en', 'zh'],
+  theme: ['theme', 'dark', 'light', 'color', 'palette', 'custom'],
+  advanced: ['advanced', 'yolo', 'auto', 'swarm', 'workspace', 'guard', 'bypass'],
+  provider: ['provider', 'model', 'api', 'key', 'openai', 'anthropic', 'deepseek'],
+  configFiles: ['config', 'file', 'yaml', 'json', 'editor'],
+  system: ['system', 'server', 'uptime', 'restart', 'reboot'],
+  about: ['about', 'version', 'info'],
+};
+
+export const SettingsPanel = memo(function SettingsPanel({ onNavigate }: SettingsPanelProps) {
   const { t } = useTranslation();
   const {
     theme, setTheme,
@@ -38,6 +56,14 @@ export const SettingsPanel = memo(function SettingsPanel() {
   const [showCustomTheme, setShowCustomTheme] = useState(customThemeEnabled);
   const [uptime, setUptime] = useState(0);
   const [restarting, setRestarting] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const matchesSearch = useCallback((sectionId: string) => {
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase().trim();
+    const keys = SECTION_SEARCH[sectionId] ?? [];
+    return keys.some(k => k.toLowerCase().includes(q));
+  }, [searchQuery]);
 
   useEffect(() => {
     let active = true;
@@ -90,201 +116,276 @@ export const SettingsPanel = memo(function SettingsPanel() {
 
   return (
     <div className="flex-1 overflow-y-auto p-4">
-      <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-        <Settings size={18} className="text-accent-blue" />
-        {t('settings.title')}
-      </h2>
-
-      <div className="space-y-6 max-w-2xl">
-        {/* Language */}
-        <div className="bg-dark-surface border border-dark-border rounded-lg p-4">
-          <h3 className="font-medium mb-3 flex items-center gap-2">
-            <span>🌐</span> {t('settings.language')}
-          </h3>
-          <div className="flex gap-2">
-            {(['zh-CN', 'en'] as const).map(lang => (
-              <button
-                key={lang}
-                onClick={() => setLanguage(lang)}
-                className={`px-4 py-2 rounded-lg transition-all ${
-                  language === lang
-                    ? 'bg-accent-blue text-white'
-                    : 'bg-dark-hover text-dark-text hover:bg-dark-border'
-                }`}
-              >
-                {lang === 'zh-CN' ? t('settings.languageZh') : t('settings.languageEn')}
-              </button>
-            ))}
-          </div>
+      {/* Header with search */}
+      <div className="flex items-center justify-between mb-4 gap-4">
+        <h2 className="text-lg font-semibold flex items-center gap-2 shrink-0">
+          <Settings size={18} className="text-accent-blue" />
+          {t('settings.title')}
+        </h2>
+        <div className="relative flex-1 max-w-xs">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-dark-muted pointer-events-none" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search settings..."
+            className="w-full bg-dark-bg border border-dark-border rounded-lg pl-9 pr-3 py-1.5 text-sm text-dark-text placeholder-dark-muted focus:border-accent-blue outline-none transition-colors"
+          />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-dark-muted hover:text-dark-text text-xs p-1 rounded"
+            >
+              &times;
+            </button>
+          )}
         </div>
+      </div>
+
+      <div className="space-y-5 max-w-2xl">
+        {/* Language */}
+        {matchesSearch('language') && (
+          <Section icon={Globe} iconColor="text-accent-blue" title={t('settings.language')}>
+            <div className="flex gap-2">
+              {(['zh-CN', 'en'] as const).map(lang => (
+                <button
+                  key={lang}
+                  onClick={() => setLanguage(lang)}
+                  className={`px-4 py-2 rounded-lg transition-all ${
+                    language === lang
+                      ? 'bg-accent-blue text-white'
+                      : 'bg-dark-hover text-dark-text hover:bg-dark-border'
+                  }`}
+                >
+                  {lang === 'zh-CN' ? t('settings.languageZh') : t('settings.languageEn')}
+                </button>
+              ))}
+            </div>
+          </Section>
+        )}
 
         {/* Theme */}
-        <div className="bg-dark-surface border border-dark-border rounded-lg p-4">
-          <h3 className="font-medium mb-3 flex items-center gap-2">
-            <span>🎨</span> {t('settings.theme')}
-          </h3>
-          <div className="flex gap-2">
-            {(['dark', 'light', 'auto'] as const).map(mode => (
-              <button
-                key={mode}
-                onClick={() => setTheme(mode)}
-                className={`px-4 py-2 rounded-lg transition-all ${
-                  theme === mode
-                    ? 'bg-accent-blue text-white'
-                    : 'bg-dark-hover text-dark-text hover:bg-dark-border'
-                }`}
-              >
-                {mode === 'dark' ? t('settings.themeDark') : mode === 'light' ? t('settings.themeLight') : t('settings.themeAuto')}
-              </button>
-            ))}
-          </div>
-
-          {/* Custom Theme Toggle */}
-          <div className="mt-4 pt-4 border-t border-dark-border">
-            <button
-              onClick={() => {
-                const next = !showCustomTheme;
-                setShowCustomTheme(next);
-                setCustomThemeEnabled(next);
-              }}
-              className="flex items-center gap-2 text-sm text-dark-muted hover:text-dark-text transition-colors"
-            >
-              <Palette size={14} />
-              <span>{t('settings.customColors')}</span>
-              <span className={`w-8 h-4 rounded-full transition-colors ${showCustomTheme ? 'bg-accent-blue' : 'bg-dark-border'}`}>
-                <span className={`block w-3 h-3 rounded-full bg-white transition-transform mt-0.5 ${showCustomTheme ? 'ml-4' : 'ml-0.5'}`} />
-              </span>
-            </button>
-
-            {showCustomTheme && (
-              <div className="mt-3 space-y-2">
-                <div className="grid grid-cols-2 gap-2">
-                  {COLOR_LABELS.map(({ key, labelKey }) => (
-                    <div key={key} className="flex items-center gap-2">
-                      <input
-                        type="color"
-                        value={customTheme[key]}
-                        onChange={(e) => setCustomTheme({ [key]: e.target.value })}
-                        className="w-7 h-7 rounded border border-dark-border cursor-pointer bg-transparent p-0"
-                      />
-                      <span className="text-xs text-dark-muted flex-1">{t(labelKey)}</span>
-                      <input
-                        type="text"
-                        value={customTheme[key]}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          if (/^#[0-9a-fA-F]{0,6}$/.test(v)) setCustomTheme({ [key]: v });
-                        }}
-                        className="w-20 bg-dark-bg border border-dark-border rounded px-1.5 py-0.5 text-xs text-dark-text font-mono"
-                        maxLength={7}
-                      />
-                    </div>
-                  ))}
-                </div>
+        {matchesSearch('theme') && (
+          <Section icon={Palette} iconColor="text-accent-purple" title={t('settings.theme')}>
+            <div className="flex gap-2 mb-4">
+              {(['dark', 'light', 'auto'] as const).map(mode => (
                 <button
-                  onClick={resetCustomTheme}
-                  className="text-xs text-dark-muted hover:text-accent-red transition-colors"
+                  key={mode}
+                  onClick={() => setTheme(mode)}
+                  className={`px-4 py-2 rounded-lg transition-all ${
+                    theme === mode
+                      ? 'bg-accent-blue text-white'
+                      : 'bg-dark-hover text-dark-text hover:bg-dark-border'
+                  }`}
                 >
-                  {t('settings.resetColors')}
+                  {mode === 'dark' ? t('settings.themeDark') : mode === 'light' ? t('settings.themeLight') : t('settings.themeAuto')}
                 </button>
-              </div>
-            )}
-          </div>
-        </div>
+              ))}
+            </div>
+
+            {/* Custom Theme Toggle */}
+            <div className="pt-4 border-t border-dark-border">
+              <button
+                onClick={() => {
+                  const next = !showCustomTheme;
+                  setShowCustomTheme(next);
+                  setCustomThemeEnabled(next);
+                }}
+                className="flex items-center gap-2 text-sm text-dark-muted hover:text-dark-text transition-colors"
+              >
+                <Palette size={14} />
+                <span>{t('settings.customColors')}</span>
+                <span className={`w-8 h-4 rounded-full transition-colors ${showCustomTheme ? 'bg-accent-blue' : 'bg-dark-border'}`}>
+                  <span className={`block w-3 h-3 rounded-full bg-white transition-transform mt-0.5 ${showCustomTheme ? 'ml-4' : 'ml-0.5'}`} />
+                </span>
+              </button>
+
+              {showCustomTheme && (
+                <div className="mt-3">
+                  {/* Color preview strip */}
+                  <div className="flex gap-1 mb-3 rounded-lg overflow-hidden h-6">
+                    {COLOR_LABELS.map(({ key }) => (
+                      <div
+                        key={key}
+                        className="flex-1"
+                        style={{ backgroundColor: customTheme[key] }}
+                        title={key}
+                      />
+                    ))}
+                  </div>
+                  {/* Color grid */}
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+                    {COLOR_LABELS.map(({ key, labelKey }) => (
+                      <div key={key} className="flex items-center gap-2">
+                        <input
+                          type="color"
+                          value={customTheme[key]}
+                          onChange={(e) => setCustomTheme({ [key]: e.target.value })}
+                          className="w-8 h-8 rounded border border-dark-border cursor-pointer bg-transparent p-0.5 shrink-0"
+                        />
+                        <span className="text-xs text-dark-muted flex-1 truncate">{t(labelKey)}</span>
+                        <input
+                          type="text"
+                          value={customTheme[key]}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            if (/^#[0-9a-fA-F]{0,6}$/.test(v)) setCustomTheme({ [key]: v });
+                          }}
+                          className="w-16 bg-dark-bg border border-dark-border rounded px-1 py-0.5 text-xs text-dark-text font-mono text-center"
+                          maxLength={7}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    onClick={resetCustomTheme}
+                    className="mt-2 text-xs text-dark-muted hover:text-accent-red transition-colors"
+                  >
+                    {t('settings.resetColors')}
+                  </button>
+                </div>
+              )}
+            </div>
+          </Section>
+        )}
+
+        {/* Provider & Models (quick nav) */}
+        {matchesSearch('provider') && (
+          <Section icon={Cpu} iconColor="text-accent-yellow" title="Provider & Models">
+            <p className="text-sm text-dark-muted mb-3">
+              Configure AI providers, API keys, and model settings. Add or remove providers like OpenAI, Anthropic, DeepSeek, and more.
+            </p>
+            <button
+              onClick={() => onNavigate?.('models')}
+              className="flex items-center gap-2 px-4 py-2 bg-accent-blue text-white rounded-lg hover:opacity-90 transition-opacity text-sm w-fit"
+            >
+              <ExternalLink size={14} />
+              Manage Providers & Models
+            </button>
+          </Section>
+        )}
 
         {/* Advanced Features */}
-        <div className="bg-dark-surface border border-dark-border rounded-lg p-4">
-          <h3 className="font-medium mb-3 flex items-center gap-2">
-            <span>🚀</span> {t('settings.advancedFeatures')}
-          </h3>
-          <div className="space-y-3">
-            <FeatureToggle
-              title={t('settings.yoloMode')}
-              subtitle={t('settings.yoloDesc')}
-              enabled={yolo.enabled}
-              onChange={(enabled) => {
-                setYoloEnabled(enabled);
-                wsService.send({
-                  type: 'toggle_yolo',
-                  sessionId: activeSessionId || '',
-                  data: enabled ? 'true' : 'false',
-                });
-              }}
-            />
-            <FeatureToggle
-              title={t('settings.autoSwarm')}
-              subtitle={t('settings.autoSwarmDesc')}
-              enabled={autoSwarm.enabled}
-              onChange={(enabled) => {
-                setAutoSwarmEnabled(enabled);
-                wsService.send({
-                  type: 'toggle_auto_swarm',
-                  sessionId: activeSessionId || '',
-                  data: enabled ? 'true' : 'false',
-                });
-              }}
-            />
-            <FeatureToggle
-              title={t('settings.workspaceGuard')}
-              subtitle={t('settings.workspaceGuardDesc')}
-              enabled={workspaceGuardBypass}
-              onChange={(enabled) => {
-                setWorkspaceGuardBypass(enabled);
-                wsService.send({
-                  type: 'toggle_workspace_guard',
-                  sessionId: activeSessionId || '',
-                  data: enabled ? 'true' : 'false',
-                });
-              }}
-            />
-          </div>
-        </div>
+        {matchesSearch('advanced') && (
+          <Section icon={Zap} iconColor="text-accent-yellow" title={t('settings.advancedFeatures')}>
+            <div className="space-y-3">
+              <FeatureToggle
+                title={t('settings.yoloMode')}
+                subtitle={t('settings.yoloDesc')}
+                enabled={yolo.enabled}
+                onChange={(enabled) => {
+                  setYoloEnabled(enabled);
+                  wsService.send({
+                    type: 'toggle_yolo',
+                    sessionId: activeSessionId || '',
+                    data: enabled ? 'true' : 'false',
+                  });
+                }}
+              />
+              <FeatureToggle
+                title={t('settings.autoSwarm')}
+                subtitle={t('settings.autoSwarmDesc')}
+                enabled={autoSwarm.enabled}
+                onChange={(enabled) => {
+                  setAutoSwarmEnabled(enabled);
+                  wsService.send({
+                    type: 'toggle_auto_swarm',
+                    sessionId: activeSessionId || '',
+                    data: enabled ? 'true' : 'false',
+                  });
+                }}
+              />
+              <FeatureToggle
+                title={t('settings.workspaceGuard')}
+                subtitle={t('settings.workspaceGuardDesc')}
+                enabled={workspaceGuardBypass}
+                onChange={(enabled) => {
+                  setWorkspaceGuardBypass(enabled);
+                  wsService.send({
+                    type: 'toggle_workspace_guard',
+                    sessionId: activeSessionId || '',
+                    data: enabled ? 'true' : 'false',
+                  });
+                }}
+              />
+            </div>
+          </Section>
+        )}
 
         {/* Config Files */}
-        <div className="bg-dark-surface border border-dark-border rounded-lg p-4">
-          <h3 className="font-medium mb-3 flex items-center gap-2">
-            <span>📁</span> Config Files (~/.jwcode/)
-          </h3>
-          <ConfigFileEditor />
-        </div>
+        {matchesSearch('configFiles') && (
+          <Section icon={FileCode} iconColor="text-accent-green" title="Config Files (~/.jwcode/)">
+            <ConfigFileEditor />
+          </Section>
+        )}
 
         {/* System */}
-        <div className="bg-dark-surface border border-dark-border rounded-lg p-4">
-          <h3 className="font-medium mb-3 flex items-center gap-2">
-            <span>⚙️</span> System
-          </h3>
-          <div className="space-y-3">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-dark-muted">Server Uptime</span>
-              <span className="text-dark-text font-mono">{formatUptime(uptime)}</span>
+        {matchesSearch('system') && (
+          <Section icon={Server} iconColor="text-dark-muted" title="System">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-dark-muted">Server Uptime</span>
+                <span className="text-dark-text font-mono">{formatUptime(uptime)}</span>
+              </div>
+              <button
+                onClick={handleRestart}
+                disabled={restarting}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-all ${
+                  restarting
+                    ? 'bg-dark-hover text-dark-muted cursor-wait'
+                    : 'bg-accent-red/10 text-accent-red hover:bg-accent-red/20 border border-accent-red/30'
+                }`}
+              >
+                <RefreshCw size={14} className={restarting ? 'animate-spin' : ''} />
+                {restarting ? 'Restarting...' : 'Restart Server'}
+              </button>
             </div>
-            <button
-              onClick={handleRestart}
-              disabled={restarting}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-all ${
-                restarting
-                  ? 'bg-dark-hover text-dark-muted cursor-wait'
-                  : 'bg-accent-red/10 text-accent-red hover:bg-accent-red/20 border border-accent-red/30'
-              }`}
-            >
-              <RefreshCw size={14} className={restarting ? 'animate-spin' : ''} />
-              {restarting ? 'Restarting...' : 'Restart Server'}
-            </button>
-          </div>
-        </div>
+          </Section>
+        )}
 
         {/* About */}
-        <div className="bg-dark-surface border border-dark-border rounded-lg p-4">
-          <h3 className="font-medium mb-3 flex items-center gap-2">
-            <span>ℹ️</span> {t('settings.about')}
-          </h3>
-          <div className="text-sm text-dark-muted space-y-2">
-            <p><span className="text-dark-text">JwCode Web</span> v1.0.0</p>
-            <p>{t('settings.aboutDesc')}</p>
-            <p className="text-xs">Powered by React + TypeScript + TailwindCSS</p>
+        {matchesSearch('about') && (
+          <Section icon={Info} iconColor="text-accent-blue" title={t('settings.about')}>
+            <div className="text-sm text-dark-muted space-y-2">
+              <p><span className="text-dark-text">JwCode Web</span> v1.0.0</p>
+              <p>{t('settings.aboutDesc')}</p>
+              <p className="text-xs">Powered by React + TypeScript + TailwindCSS</p>
+            </div>
+          </Section>
+        )}
+
+        {/* No results */}
+        {searchQuery.trim() && !['language', 'theme', 'provider', 'advanced', 'configFiles', 'system', 'about'].some(matchesSearch) && (
+          <div className="text-center py-12 text-dark-muted">
+            <Search size={32} className="mx-auto mb-2 opacity-40" />
+            <p className="text-sm">No settings match &ldquo;{searchQuery}&rdquo;</p>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );
 });
+
+/** Reusable section wrapper with lucide icon header */
+function Section({
+  icon: Icon,
+  iconColor,
+  title,
+  children,
+}: {
+  icon: React.ComponentType<{ size?: number | string; className?: string }>;
+  iconColor: string;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="bg-dark-surface border border-dark-border rounded-lg p-4">
+      <h3 className="font-medium mb-3 flex items-center gap-2">
+        <Icon size={16} className={iconColor} />
+        {title}
+      </h3>
+      {children}
+    </div>
+  );
+}
+

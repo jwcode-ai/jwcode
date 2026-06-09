@@ -319,6 +319,11 @@ export function ModelsView() {
                             className="w-full bg-dark-bg border border-dark-border rounded px-2 py-1.5 text-sm focus:border-accent-blue outline-none"
                             onClick={e => e.stopPropagation()}
                           />
+                          <div className="text-[10px] text-dark-muted mt-0.5 opacity-70">
+                            {presetForm.apiType === 'anthropic-messages'
+                              ? '自动追加 /v1/messages · 输入不含后缀的根地址'
+                              : '自动追加 /v1/chat/completions'}
+                          </div>
                         </div>
                       )}
                       <div>

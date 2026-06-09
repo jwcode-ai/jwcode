@@ -22,6 +22,7 @@ public class ActiveTask {
     private List<TaskStep> steps;
     private int currentStepIndex;
     private String waitingFor;
+    private Instant waitingSince; // WAITING_INPUT 开始时间（用于超时检测）
     private Instant createdAt;
     private Instant updatedAt;
 
@@ -46,6 +47,7 @@ public class ActiveTask {
     public List<TaskStep> getSteps() { return Collections.unmodifiableList(steps); }
     public int getCurrentStepIndex() { return currentStepIndex; }
     public String getWaitingFor() { return waitingFor; }
+    public Instant getWaitingSince() { return waitingSince; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
 
@@ -58,6 +60,7 @@ public class ActiveTask {
     }
     public void setCurrentStepIndex(int currentStepIndex) { this.currentStepIndex = currentStepIndex; }
     public void setWaitingFor(String waitingFor) { this.waitingFor = waitingFor; }
+    public void setWaitingSince(Instant waitingSince) { this.waitingSince = waitingSince; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
     public void setUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; }
 

@@ -23,11 +23,11 @@ settings:
   log-level: INFO
 
   engine:
-    max-iterations: 0
+    max-iterations: 50
     timeout-minutes: 5
     token-budget: 1000000
     max-message-history: 0
-    max-consecutive-tool-only-rounds: 100
+    max-consecutive-tool-only-rounds: 10
 
   permissions:
     auto-approve-read: true
@@ -42,7 +42,7 @@ settings:
     use-color: true
 
   search:
-    default-engine: duckduckgo
+    default-engine: bing
     default-summary-length: 300
     similarity-threshold: 0.8
     timeout-ms: 10000

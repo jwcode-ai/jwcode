@@ -42,7 +42,7 @@ settings:
     use-color: true
 
   search:
-    default-engine: duckduckgo
+    default-engine: bing
     default-summary-length: 300
     similarity-threshold: 0.8
     timeout-ms: 10000

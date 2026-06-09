@@ -88,8 +88,10 @@ public class AgentFlowBroadcaster {
         }
         if (messageSender != null) {
             try {
-                String json = MAPPER.writeValueAsString(message);
-                messageSender.send("agent_flow_event", null, json);
+                String payloadJson = MAPPER.writeValueAsString(payload);
+                String sid = payload.get("sessionId") instanceof String
+                    ? (String) payload.get("sessionId") : null;
+                messageSender.send("agent_flow_event", sid, payloadJson);
             } catch (Exception e) {
                 logger.log(Level.WARNING, "AgentFlowBroadcaster: messageSender failed", e);
             }

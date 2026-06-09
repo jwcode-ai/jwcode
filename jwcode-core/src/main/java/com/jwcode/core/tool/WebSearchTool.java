@@ -13,10 +13,10 @@ import java.util.function.Consumer;
 import java.util.logging.Logger;
 
 /**
- * WebSearch 工具 - 网页搜索（增强版，Phase 8）
- * 
+ * WebSearch 工具 - 网页搜索（国内增强版）
+ *
  * 使用 SearchEngineFactory 支持多搜索引擎
- * 支持 DuckDuckGo 和 Google Custom Search
+ * 支持 Bing、百度、搜狗，国内可直接访问
  * 集成搜索结果缓存和结果处理管道
  * 
  * @author JWCode Team
@@ -37,7 +37,7 @@ public class WebSearchTool implements Tool<WebSearchTool.Input, WebSearchTool.Ou
     private final SearchResultProcessor processor;
     
     // 默认配置
-    private static final String DEFAULT_ENGINE = "duckduckgo";
+    private static final String DEFAULT_ENGINE = "bing";
     private static final int DEFAULT_MAX_RESULTS = 5;
     private static final int MAX_ALLOWED_RESULTS = 20;
     
@@ -63,29 +63,29 @@ public class WebSearchTool implements Tool<WebSearchTool.Input, WebSearchTool.Ou
     
     @Override
     public String getDescription() {
-        return "搜索网页内容。支持多搜索引擎（DuckDuckGo、Google），支持搜索结果缓存和智能处理。";
+        return "搜索网页内容。支持多搜索引擎（Bing、百度、搜狗），国内可直接访问，集成搜索结果缓存和智能处理。";
     }
     
     @Override
     public String getPrompt() {
         return """
                使用 WebSearch 工具搜索网页内容。
-               
+
                参数:
                - query: 搜索查询词（必需）
                - max_results: 最大结果数（可选，默认 5，最大 20）
-               - engine: 搜索引擎（可选，默认 duckduckgo，可选值: duckduckgo, google）
+               - engine: 搜索引擎（可选，默认 bing，可选值: bing, baidu, sogou）
                - use_cache: 是否使用缓存（可选，默认 true）
-               
+
                示例:
-               - {"query": "Java 21 新特性"} - 使用默认引擎搜索
+               - {"query": "Java 21 新特性"} - 使用默认引擎（Bing）搜索
                - {"query": "Spring Boot 教程", "max_results": 10} - 返回 10 条结果
-               - {"query": "OpenAI API 文档", "engine": "google"} - 使用 Google 搜索
-               
+               - {"query": "人工智能最新进展", "engine": "baidu"} - 使用百度搜索
+
                注意:
                - 使用简洁明确的搜索词
                - 可以包含版本号、技术栈名称等关键词
-               - Google 引擎需要配置 API Key
+               - 三个引擎均国内可直接访问，无需 API Key
                """;
     }
     
@@ -98,7 +98,7 @@ public class WebSearchTool implements Tool<WebSearchTool.Input, WebSearchTool.Ou
                     "properties": {
                         "query": {"type": "string", "description": "搜索查询词"},
                         "max_results": {"type": "integer", "description": "最大结果数", "default": 5},
-                        "engine": {"type": "string", "description": "搜索引擎", "default": "duckduckgo", "enum": ["duckduckgo", "google"]},
+                        "engine": {"type": "string", "description": "搜索引擎", "default": "bing", "enum": ["bing", "baidu", "sogou"]},
                         "use_cache": {"type": "boolean", "description": "是否使用缓存", "default": true}
                     },
                     "required": ["query"]

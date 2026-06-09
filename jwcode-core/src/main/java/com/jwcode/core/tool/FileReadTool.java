@@ -14,6 +14,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Base64;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
@@ -32,11 +33,25 @@ import org.apache.pdfbox.text.PDFTextStripper;
 public class FileReadTool implements Tool<FileReadInput, FileReadOutput, FileReadTool.FileReadProgress> {
     
     private static final Logger logger = Logger.getLogger(FileReadTool.class.getName());
-    
+
     // 配置常量
     private static final int MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
     private static final int MAX_LINES = 2000;
     private static final int MAX_TOKENS = 8000;
+
+    // 文件读取结果缓存：减少重复读取，TTL 30 秒
+    private static final long CACHE_TTL_MS = 30_000;
+    private static final java.util.concurrent.ConcurrentHashMap<String, CacheEntry> readCache = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static class CacheEntry {
+        final FileReadOutput output;
+        final long timestamp;
+        CacheEntry(FileReadOutput output) {
+            this.output = output;
+            this.timestamp = System.currentTimeMillis();
+        }
+        boolean isExpired() { return System.currentTimeMillis() - timestamp > CACHE_TTL_MS; }
+    }
     
     // 支持的图片格式
     private static final List<String> IMAGE_EXTENSIONS = List.of(
@@ -133,16 +148,33 @@ public class FileReadTool implements Tool<FileReadInput, FileReadOutput, FileRea
                 // 记录文件访问（用于压缩后自动恢复）— 使用解析后的绝对路径
                 PostCompactRecoveryService.getInstance().recordFileAccess(filePath.toAbsolutePath().toString());
 
+                // 缓存检查：避免短时间内重复读取同一文件范围
+                String cacheKey = filePath.toAbsolutePath() + "#L" + input.getEffectiveStartLine()
+                    + "-" + (input.endLine() != null ? input.endLine() : "END");
+                CacheEntry cached = readCache.get(cacheKey);
+                if (cached != null && !cached.isExpired()) {
+                    logger.fine("FileRead cache hit: " + cacheKey);
+                    return ToolResult.success(cached.output);
+                }
+
                 // 根据文件类型处理
                 String fileName = filePath.getFileName().toString().toLowerCase();
 
+                ToolResult<FileReadOutput> result;
                 if (isImageFile(fileName)) {
-                    return readImageFile(filePath, input);
+                    result = readImageFile(filePath, input);
                 } else if (isDocumentFile(fileName)) {
-                    return readDocumentFile(filePath, input);
+                    result = readDocumentFile(filePath, input);
                 } else {
-                    return readTextFile(filePath, input);
+                    result = readTextFile(filePath, input);
                 }
+
+                // 缓存成功结果
+                if (result.isSuccess()) {
+                    readCache.put(cacheKey, new CacheEntry(result.getData()));
+                }
+
+                return result;
 
             } catch (Exception e) {
                 logger.severe("读取文件失败: " + e.getMessage());
@@ -187,6 +219,16 @@ public class FileReadTool implements Tool<FileReadInput, FileReadOutput, FileRea
     @Override
     public boolean isDestructive(FileReadInput input) {
         return false;
+    }
+
+    @Override
+    public ToolCategory getCategory() {
+        return ToolCategory.SEARCH;
+    }
+
+    @Override
+    public Set<SideEffect> getSideEffects() {
+        return Set.of(SideEffect.READ_ONLY);
     }
     
     /**

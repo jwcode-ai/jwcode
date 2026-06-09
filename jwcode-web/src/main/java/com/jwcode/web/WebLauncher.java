@@ -1,13 +1,13 @@
 package com.jwcode.web;
 
 import com.jwcode.core.tool.ToolRegistry;
-import java.util.Scanner;
+import java.util.concurrent.CountDownLatch;
 
 /**
  * Web UI 启动器
  */
 public class WebLauncher {
-    
+
     public static void main(String[] args) {
         int httpPort = 8080;
         int wsPort = 8081;
@@ -45,15 +45,21 @@ public class WebLauncher {
             System.out.println("  Web UI:     http://localhost:" + httpPort);
             System.out.println("═══════════════════════════════════════════════════\n");
 
-            // 添加 shutdown hook 处理 SIGINT/SIGTERM
-            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                System.out.println("\nShutting down...");
-                server.stop();
-                System.out.println("Server stopped.");
-            }));
+            CountDownLatch shutdownLatch = new CountDownLatch(1);
 
-            // 保持主线程存活，由 shutdown hook 处理退出
-            Thread.currentThread().join();
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                shutdownLatch.countDown();
+            }, "jwcode-shutdown"));
+
+            try {
+                shutdownLatch.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+
+            System.out.println("\nShutting down...");
+            server.stop();
+            System.out.println("Server stopped.");
 
         } catch (Exception e) {
             System.err.println("Startup failed: " + e.getMessage());

@@ -1,10 +1,11 @@
 /**
- * useMouseWheel — enable terminal SGR mouse tracking and handle mouse wheel events.
+ * useMouseWheel — enable terminal SGR mouse tracking, handle mouse wheel +
+ * scrollbar click/drag events.
  *
  * Modern terminal emulators (Windows Terminal, iTerm2, kitty, etc.) support
  * SGR mouse mode (DECSET 1006). When enabled, mouse events arrive as
- * escape sequences on stdin. We parse wheel events and translate them into
- * scrollOffset changes for the message list.
+ * escape sequences on stdin. We parse wheel, press, motion, and release events
+ * and translate them into scrollOffset changes for the message list.
  *
  * Ink v5 does not natively support mouse events, so we hook into Ink's
  * internal_eventEmitter to receive raw input without switching stdin to
@@ -16,22 +17,52 @@ import { useEffect, useRef } from 'react';
 import { useStdin } from 'ink';
 import { updateAppState } from './useAppState.js';
 
-const MOUSE_ENABLE  = '\x1b[?1000h\x1b[?1002h\x1b[?1006h'; // button events + SGR
+const MOUSE_ENABLE  = '\x1b[?1000h\x1b[?1002h\x1b[?1006h'; // button events + motion + SGR
 const MOUSE_DISABLE = '\x1b[?1006l\x1b[?1002l\x1b[?1000l';
 
-function parseSgrMouse(data: string): { btn: number; col: number; row: number } | null {
+// ---- shared scrollbar geometry (updated by ChatArea) ----
+
+interface ScrollGeometry {
+  topRow: number;       // estimated terminal row of scrollbar top (0-indexed)
+  trackHeight: number;  // visible rows in scrollbar track
+  total: number;        // total messages
+  maxVisible: number;
+  termCols: number;     // terminal width in columns
+}
+
+let _scrollGeo: ScrollGeometry = { topRow: 0, trackHeight: 0, total: 0, maxVisible: 0, termCols: 80 };
+
+export function setScrollGeometry(geo: ScrollGeometry): void {
+  _scrollGeo = geo;
+}
+
+// ---- SGR parser ----
+
+interface SgrEvent {
+  btn: number;
+  col: number;
+  row: number;
+  final: 'M' | 'm'; // M = press/motion, m = release
+}
+
+function parseSgr(data: string): SgrEvent | null {
   const match = data.match(/\x1b\[<(\d+);(\d+);(\d+)([Mm])/);
   if (!match) return null;
   return {
     btn: parseInt(match[1], 10),
     col: parseInt(match[2], 10),
     row: parseInt(match[3], 10),
+    final: match[4] as 'M' | 'm',
   };
 }
+
+const SCROLLBAR_COL_WIDTH = 4; // rightmost N columns considered scrollbar area
 
 export function useMouseWheel(): void {
   const { stdin, internal_eventEmitter } = useStdin();
   const bufferRef = useRef('');
+  const draggingRef = useRef(false);
+  const lastDragTimeRef = useRef(0);
 
   useEffect(() => {
     if (!stdin || !internal_eventEmitter || process.env.JWCODE_NO_MOUSE === '1') return;
@@ -40,32 +71,72 @@ export function useMouseWheel(): void {
 
     const onData = (chunk: Buffer | string) => {
       const text = typeof chunk === 'string' ? chunk : chunk.toString('utf-8');
-
       bufferRef.current += text;
 
-      let mouseEvent = parseSgrMouse(bufferRef.current);
+      let event = parseSgr(bufferRef.current);
       let processedUpTo = 0;
 
-      if (mouseEvent) {
-        const isWheelUp   = mouseEvent.btn === 64;
-        const isWheelDown = mouseEvent.btn === 65;
+      if (event) {
+        const seqStr = `\x1b[<${event.btn};${event.col};${event.row}`;
+        const fullSeq = seqStr + event.final;
+        const seqEnd = bufferRef.current.indexOf(fullSeq) + fullSeq.length;
 
-        if (isWheelUp || isWheelDown) {
-          const scrollStep = isWheelUp ? 3 : -3;
+        // ---- wheel ----
+        if (event.btn === 64 || event.btn === 65) {
+          const scrollStep = event.btn === 64 ? 3 : -3;
           updateAppState(prev => {
-            const newOffset = Math.max(0, Math.min(
-              prev.scrollOffset + scrollStep,
-              prev.messages.length,
-            ));
+            const maxScroll = Math.max(0, prev.messages.length - _scrollGeo.maxVisible);
+            const newOffset = Math.max(0, Math.min(prev.scrollOffset + scrollStep, maxScroll));
             return { ...prev, scrollOffset: newOffset };
           });
         }
 
-        const seqStr = `\x1b[<${mouseEvent.btn};${mouseEvent.col};${mouseEvent.row}`;
-        const lastChar = bufferRef.current.includes(seqStr + 'M') ? 'M' : 'm';
-        const fullSeq = seqStr + lastChar;
-        const seqEnd = bufferRef.current.indexOf(fullSeq) + fullSeq.length;
-        processedUpTo = Math.max(processedUpTo, seqEnd);
+        // ---- left press in scrollbar area (rightmost columns) ----
+        if (event.btn === 0 && event.final === 'M') {
+          const geo = _scrollGeo;
+          const inScrollbarCol = event.col > geo.termCols - SCROLLBAR_COL_WIDTH;
+          if (inScrollbarCol && geo.trackHeight > 0 && geo.total > geo.maxVisible) {
+            const trackRow = event.row - geo.topRow - 2; // 0 = top of track (1-indexed SGR row → 0-indexed track row)
+            if (trackRow >= 0 && trackRow < geo.trackHeight) {
+              const maxOffset = geo.total - geo.maxVisible;
+              const ratio = 1 - trackRow / Math.max(1, geo.trackHeight - 1);
+              const newOffset = Math.round(ratio * maxOffset);
+              updateAppState(prev => ({
+                ...prev,
+                scrollOffset: Math.max(0, Math.min(newOffset, maxOffset)),
+              }));
+              draggingRef.current = true;
+              lastDragTimeRef.current = Date.now();
+            }
+          }
+        }
+
+        // ---- motion while left button held (drag) ----
+        if (event.btn === 32 && draggingRef.current) {
+          const now = Date.now();
+          if (now - lastDragTimeRef.current < 33) {
+            processedUpTo = seqEnd;
+            bufferRef.current = bufferRef.current.slice(processedUpTo);
+            return;
+          }
+          lastDragTimeRef.current = now;
+          const geo = _scrollGeo;
+          const trackRow = event.row - geo.topRow - 2;
+          const maxOffset = geo.total - geo.maxVisible;
+          const ratio = 1 - Math.max(0, Math.min(1, trackRow / Math.max(1, geo.trackHeight - 1)));
+          const newOffset = Math.round(ratio * maxOffset);
+          updateAppState(prev => ({
+            ...prev,
+            scrollOffset: Math.max(0, Math.min(newOffset, maxOffset)),
+          }));
+        }
+
+        // ---- release ----
+        if (event.btn === 0 && event.final === 'm') {
+          draggingRef.current = false;
+        }
+
+        processedUpTo = seqEnd;
       }
 
       if (processedUpTo > 0) {
@@ -75,14 +146,13 @@ export function useMouseWheel(): void {
       }
     };
 
-    // Use internal_eventEmitter to avoid switching stdin into flowing mode,
-    // which would break Ink's 'readable'-based input handling.
     internal_eventEmitter.on('input', onData);
 
     return () => {
       internal_eventEmitter.removeListener('input', onData);
       stdin.write(MOUSE_DISABLE);
       bufferRef.current = '';
+      draggingRef.current = false;
     };
   }, [stdin, internal_eventEmitter]);
 }

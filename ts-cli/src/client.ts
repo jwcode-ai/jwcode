@@ -1,4 +1,4 @@
-/**
+﻿/**
  * WebSocket client — matches python-cli/jwcode/client.py protocol with Java backend.
  */
 import WebSocket from 'ws';
@@ -12,6 +12,9 @@ const MAX_RECONNECT_RETRIES = 50;
 
 function stderr(msg: string): void {
   try { process.stderr.write(msg); } catch {}
+}
+export function debugLog(cat: string, msg: string): void {
+  try { process.stderr.write('[dbg ' + cat + '] ' + msg + '\n'); } catch {}
 }
 
 export class JwCodeClient {
@@ -188,6 +191,7 @@ export class JwCodeClient {
   }
 
   send(msgType: string, message?: string, data?: Record<string, unknown>): void {
+    debugLog('send', msgType + (message ? ' msg=' + message.slice(0, 40) : '') + (data ? ' data=' + JSON.stringify(data).slice(0, 60) : ''));
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       console.warn(`[ws] Not connected, dropping: ${msgType}`);
       return;
@@ -203,7 +207,7 @@ export class JwCodeClient {
   }
 
   chat(content: string, planMode = false): void { this.send(planMode ? 'plan' : 'chat', content); }
-  stop(): void { this.send('stop'); }
+  stop(): void { debugLog('send', 'stop'); this.send('stop'); }
   pause(): void { this.send('pause'); }
   resume(): void { this.send('resume'); }
   planConfirm(): void { this.send('plan_confirm'); }
@@ -212,8 +216,8 @@ export class JwCodeClient {
   rewind(): void { this.send('rewind'); }
   compact(): void { this.send('compact'); }
   switchModel(model: string): void { this.send('model_change', undefined, { model }); }
-  approveHook(approvalId: string): void { this.send('hook_allow', undefined, { approvalId }); }
-  denyHook(approvalId: string): void { this.send('hook_deny', undefined, { approvalId }); }
+  approveHook(approvalId: string): void { debugLog('send', 'approveHook ' + approvalId); this.send('hook_allow', undefined, { approvalId }); }
+  denyHook(approvalId: string): void { debugLog('send', 'denyHook ' + approvalId); this.send('hook_deny', undefined, { approvalId }); }
   exit(): void { this.send('exit'); }
   init(): void { this.send('init'); }
   effort(level: string): void { this.send('effort', undefined, { level }); }

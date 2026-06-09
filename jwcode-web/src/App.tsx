@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense, startTransition } from 'react';
+﻿import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense, startTransition } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Activity, MessageSquare, Terminal, FolderTree, Settings, Brain, Wrench, Target, Users, FileText, ScrollText, LucideIcon, Menu, X, ChevronDown, ChevronUp, ListChecks } from 'lucide-react';
+import { Activity, MessageSquare, Terminal, FolderTree, Settings, Brain, Wrench, Target, Users, FileText, ScrollText, LucideIcon, Menu, X, ChevronDown, ChevronUp, ListChecks, Shield } from 'lucide-react';
 import { useChatStore } from './stores/chatStore';
 import { useSessionStore } from './stores/sessionStore';
 import { useTerminalStore } from './stores/terminalStore';
@@ -27,8 +27,10 @@ const SessionTabs = lazy(() => import('./components/Chat/SessionTabs').then(m =>
 const SessionGrid = lazy(() => import('./components/Chat/SessionGrid').then(m => ({ default: m.SessionGrid })));
 const SettingsPanel = lazy(() => import('./components/Settings/SettingsPanel').then(m => ({ default: m.SettingsPanel })));
 const LogsPanel = lazy(() => import('./components/Logs/LogsPanel').then(m => ({ default: m.LogsPanel })));
+const ObservabilityView = lazy(() => import('./components/Observability/ObservabilityView').then(m => ({ default: m.ObservabilityView })));
 
 const HookApprovalModal = lazy(() => import('./components/Hook/HookApprovalModal').then(m => ({ default: m.HookApprovalModal })));
+const HookConfigView = lazy(() => import('./components/Hook/HookConfigView').then(m => ({ default: m.HookConfigView })));
 import { ToastContainer } from './components/Toast/ToastContainer';
 import { toast } from './stores/toastStore';
 
@@ -46,8 +48,11 @@ const TAB_KEYS: Record<string, string> = {
   models: 'nav.models',
   tools: 'nav.tools',
   skills: 'nav.skills',
+  agents: 'nav.agents',
+  hooks: 'nav.hooks',
   settings: 'nav.settings',
   logs: 'nav.logs',
+  observability: 'nav.observability',
 };
 
 const TABS: Tab[] = [
@@ -58,13 +63,15 @@ const TABS: Tab[] = [
   { id: 'tools', title: '工具', icon: 'Wrench' },
   { id: 'skills', title: '技能', icon: 'Target' },
   { id: 'agents', title: 'Agents', icon: 'Users' },
+  { id: 'hooks', title: 'Hooks', icon: 'Shield' },
   { id: 'settings', title: '设置', icon: 'Settings' },
   { id: 'logs', title: '日志', icon: 'ScrollText' },
+  { id: 'observability', title: '监控', icon: 'Activity' },
 ];
 
 const ICON_MAP: Record<string, LucideIcon> = {
   MessageSquare, Terminal, FolderTree, Settings, Brain,
-  Wrench, Target, Users, FileText, ScrollText, ListChecks, Activity,
+  Wrench, Target, Users, FileText, ScrollText, ListChecks, Activity, Shield,
 };
 
 function App() {
@@ -446,11 +453,11 @@ function App() {
     const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
     const [editValue, setEditValue] = useState('');
     const inputRef = useRef<HTMLInputElement>(null);
-    const loadedRef = useRef(false);
+    const loadedRef = useRef<string | null>(null);
 
     useEffect(() => {
-      if (!sid || loadedRef.current) return;
-      loadedRef.current = true;
+      if (!sid || loadedRef.current === sid) return;
+      loadedRef.current = sid;
 
       const existing = useSessionStore.getState().tasksBySession[sid] || [];
       if (existing.length === 0) return;
@@ -698,10 +705,14 @@ function App() {
         return <SkillsView />;
       case 'agents':
         return <AgentsView />;
+      case 'hooks':
+        return <HookConfigView />;
       case 'settings':
-        return <SettingsPanel />;
+        return <SettingsPanel onNavigate={handleTabChange} />;
       case 'logs':
         return <LogsPanel logs={logs} onClear={handleClearLogs} />;
+      case 'observability':
+        return <ObservabilityView />;
       default:
         return null;
     }

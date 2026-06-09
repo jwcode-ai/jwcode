@@ -16,16 +16,21 @@ import com.jwcode.core.tool.shell.CommandReadOnlyValidator;
 import com.jwcode.core.tool.shell.SedCommandValidator;
 import com.jwcode.core.tool.shell.SedCommandValidator.SedValidationResult;
 
-import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStreamReader;
+import java.io.InputStream;
+import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
+import java.nio.charset.CharsetDecoder;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.CharacterCodingException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
+import com.jwcode.common.util.CharsetDetector;
 
 /**
  * Bash 工具 - Shell 命令执行（重构后）
@@ -56,6 +61,8 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
     private static final int DEFAULT_TIMEOUT_MS = 600000; // 10 分钟
     private static final int MAX_OUTPUT_LINES = 1000;
     private static final int MAX_OUTPUT_CHARS = 100000; // 100KB
+    private static final int IDLE_TIMEOUT_MS = 30000; // 30s idle cutoff
+    private static final int MAX_EXECUTION_TIMEOUT_MS = 600000; // 10min hard cap
     private static final int MAX_FILE_LIST_RESULTS = 100;
     
     // 危险命令模式
@@ -880,65 +887,95 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
     }
     
     /**
-     * 读取进程输出
+     * 读取进程输出（自适应编码检测）
+     *
+     * 在 Windows 上 chcp 65001 不一定对所有命令生效，
+     * 因此先按 UTF-8 解码，失败时回退到系统默认编码（如 GBK）。
      */
     private CompletableFuture<Void> readProcessOutput(
-            Process process, 
-            StringBuilder stdoutBuilder, 
+            Process process,
+            StringBuilder stdoutBuilder,
             StringBuilder stderrBuilder) {
-        
-        // buildCommand() 在 Windows 上已添加 chcp 65001 切换到 UTF-8 代码页
-        // 因此 Windows 上统一使用 UTF-8 解码输出
-        Charset outputCharset = isWindows() ? StandardCharsets.UTF_8 : StandardCharsets.UTF_8;
-        
+
         return CompletableFuture.runAsync(() -> {
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(process.getInputStream(), outputCharset))) {
-                
-                String line;
-                int lineCount = 0;
-                
-                while ((line = reader.readLine()) != null) {
-                    if (lineCount < MAX_OUTPUT_LINES) {
-                        stdoutBuilder.append(line).append("\n");
-                        lineCount++;
-                    } else {
-                        // 超过最大行数，停止读取
-                        break;
-                    }
-                    
-                    // 检查总字符数
-                    if (stdoutBuilder.length() > MAX_OUTPUT_CHARS) {
-                        stdoutBuilder.setLength(MAX_OUTPUT_CHARS);
-                        stdoutBuilder.append("\n...[输出被截断]");
-                        break;
-                    }
+            // 读取 stdout 原始字节
+            byte[] stdoutBytes = readStreamBytes(process.getInputStream(), MAX_OUTPUT_CHARS * 4);
+            String stdout = detectAndDecode(stdoutBytes);
+
+            // 应用行数和字符数限制
+            String[] lines = stdout.split("\n", -1);
+            int lineCount = 0;
+            for (String line : lines) {
+                if (lineCount >= MAX_OUTPUT_LINES) break;
+                stdoutBuilder.append(line).append("\n");
+                lineCount++;
+                if (stdoutBuilder.length() > MAX_OUTPUT_CHARS) {
+                    stdoutBuilder.setLength(MAX_OUTPUT_CHARS);
+                    stdoutBuilder.append("\n...[输出被截断]");
+                    break;
                 }
-                
-            } catch (IOException e) {
-                logger.warning("读取进程输出失败: " + e.getMessage());
             }
-            
-            // 读取错误流
-            try (BufferedReader errorReader = new BufferedReader(
-                    new InputStreamReader(process.getErrorStream(), outputCharset))) {
-                
-                String line;
-                while ((line = errorReader.readLine()) != null) {
-                    stderrBuilder.append(line).append("\n");
-                    
-                    // 检查总字符数
-                    if (stderrBuilder.length() > MAX_OUTPUT_CHARS) {
-                        stderrBuilder.setLength(MAX_OUTPUT_CHARS);
-                        stderrBuilder.append("\n...[错误输出被截断]");
-                        break;
-                    }
+
+            // 读取 stderr 原始字节
+            byte[] stderrBytes = readStreamBytes(process.getErrorStream(), MAX_OUTPUT_CHARS * 4);
+            if (stderrBytes.length > 0) {
+                String stderr = detectAndDecode(stderrBytes);
+                if (stderr.length() > MAX_OUTPUT_CHARS) {
+                    stderr = stderr.substring(0, MAX_OUTPUT_CHARS) + "\n...[错误输出被截断]";
                 }
-                
-            } catch (IOException e) {
-                logger.warning("读取进程错误输出失败: " + e.getMessage());
+                stderrBuilder.append(stderr);
             }
         });
+    }
+
+    /**
+     * 从 InputStream 读取原始字节，上限为 maxBytes
+     */
+    private byte[] readStreamBytes(InputStream is, int maxBytes) {
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        byte[] chunk = new byte[8192];
+        int totalRead = 0;
+        try {
+            int bytesRead;
+            while ((bytesRead = is.read(chunk)) != -1) {
+                if (totalRead + bytesRead > maxBytes) {
+                    int remaining = maxBytes - totalRead;
+                    if (remaining > 0) {
+                        buffer.write(chunk, 0, remaining);
+                    }
+                    break;
+                }
+                buffer.write(chunk, 0, bytesRead);
+                totalRead += bytesRead;
+            }
+        } catch (IOException e) {
+            logger.warning("读取进程输出字节失败: " + e.getMessage());
+        }
+        return buffer.toByteArray();
+    }
+
+    /**
+     * 自适应编码检测：先尝试 UTF-8 严格解码，失败时回退到系统默认编码。
+     *
+     * 解决 Windows 上 chcp 65001 不生效时中文输出乱码问题。
+     */
+    private String detectAndDecode(byte[] rawBytes) {
+        if (rawBytes.length == 0) return "";
+
+        // 尝试 UTF-8 严格解码
+        CharsetDecoder utf8Decoder = StandardCharsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT);
+        try {
+            return utf8Decoder.decode(ByteBuffer.wrap(rawBytes)).toString();
+        } catch (CharacterCodingException e) {
+            // UTF-8 解码失败，回退到系统默认编码（Windows 中文版为 GBK）
+            Charset fallback = Charset.defaultCharset();
+            if (!fallback.equals(StandardCharsets.UTF_8)) {
+                logger.warning("UTF-8 解码失败，回退到系统编码 " + fallback.name() + ": " + e.getMessage());
+            }
+            return new String(rawBytes, fallback);
+        }
     }
     
     /**

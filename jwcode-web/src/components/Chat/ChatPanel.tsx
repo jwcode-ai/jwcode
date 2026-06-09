@@ -1,4 +1,4 @@
-import { memo, useRef, useCallback, useState, useMemo } from 'react';
+import { memo, useRef, useCallback, useState, useMemo, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
 import { MessageSquare, Zap, Square, Pause, Play } from 'lucide-react';
@@ -74,11 +74,34 @@ export const ChatPanel = memo(function ChatPanel({
   // @ file mention state
   const [showFileMenu, setShowFileMenu] = useState(false);
   const [fileMenuFiles, setFileMenuFiles] = useState<FileNode[]>([]);
+  const [isFileSearching, setIsFileSearching] = useState(false);
   const [fileMenuIndex, setFileMenuIndex] = useState(0);
   const [fileSearchQuery, setFileSearchQuery] = useState('');
   const fileSearchRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Track @-referenced file paths for content attachment on send
   const referencedFilesRef = useRef<Set<string>>(new Set());
+  // Preloaded flat file list for instant @ popup
+  const allFilesRef = useRef<FileNode[]>([]);
+  const filesLoadedRef = useRef(false);
+
+  // Preload file tree on mount for instant @ popup
+  useEffect(() => {
+    let cancelled = false;
+    api.files.list('.').then(result => {
+      if (cancelled || !result.success || !result.data) return;
+      const flat: FileNode[] = [];
+      const walk = (nodes: FileNode[]) => {
+        for (const n of nodes) {
+          if (n.type === 'file') flat.push(n);
+          if (n.children) walk(n.children);
+        }
+      };
+      walk(result.data);
+      allFilesRef.current = flat;
+      filesLoadedRef.current = true;
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   // Slash commands
   const slashCommands = useSlashCommands({ setActiveTab, createNewSession, clearMessages, setTheme, toggleTerminal, setLogs, setUnreadLogs });
@@ -108,17 +131,37 @@ export const ChatPanel = memo(function ChatPanel({
   const closeFileMention = () => {
     setShowFileMenu(false);
     setFileSearchQuery('');
+    setIsFileSearching(false);
     setFileMenuFiles([]);
     setFileMenuIndex(0);
     if (fileSearchRef.current) clearTimeout(fileSearchRef.current);
   };
 
-  const handleAtSearch = useCallback(async (query: string) => {
+  const handleAtSearch = useCallback((query: string) => {
     setFileSearchQuery(query);
-    const files = await searchFiles(query);
-    setFileMenuFiles(files);
-    setFileMenuIndex(0);
     setShowFileMenu(true);
+
+    if (!filesLoadedRef.current) {
+      // Preload not ready — fall back to on-demand fetch
+      setIsFileSearching(true);
+      searchFiles(query).then(files => {
+        setFileMenuFiles(files);
+        setIsFileSearching(false);
+        setFileMenuIndex(0);
+      });
+      return;
+    }
+
+    // Sync filter from preloaded cache (no API call, no delay)
+    setIsFileSearching(false);
+    const allFiles = allFilesRef.current;
+    if (!query) {
+      setFileMenuFiles(allFiles.slice(0, 15));
+    } else {
+      const q = query.toLowerCase();
+      setFileMenuFiles(allFiles.filter(f => f.name.toLowerCase().includes(q)).slice(0, 15));
+    }
+    setFileMenuIndex(0);
   }, []);
 
   // Detect @ trigger position in textarea
@@ -135,7 +178,7 @@ export const ChatPanel = memo(function ChatPanel({
     if (query && !/^[\w.\-/]*$/.test(query)) { closeFileMention(); return; }
 
     if (fileSearchRef.current) clearTimeout(fileSearchRef.current);
-    fileSearchRef.current = setTimeout(() => handleAtSearch(query), 150);
+    handleAtSearch(query);
   }, [handleAtSearch]);
 
   const handleFileSelect = useCallback((file: FileNode) => {
@@ -305,7 +348,7 @@ export const ChatPanel = memo(function ChatPanel({
         <SessionTaskBoard sessionId={sessionId} />
       </div>
 
-      {/* Plan Mode Banner */}
+      {/* Plan/Act Mode Banner */}
       {planMode === "plan" && (
         <div className="px-3 pt-1 pb-0.5 bg-accent-purple/10 border-b border-accent-purple/20 flex items-center gap-2 text-xs">
           <span className="text-accent-purple font-bold">{t('plan.readOnlyMode')}</span>
@@ -313,7 +356,6 @@ export const ChatPanel = memo(function ChatPanel({
           <button onClick={toggleMode} className="ml-auto px-2 py-0.5 text-[10px] bg-accent-green text-white rounded">{t('plan.switchToAct')}</button>
         </div>
       )}
-
       {/* Input Area */}
       <div className="px-3 pb-3 pt-2 border-t border-dark-border bg-dark-surface relative shrink-0">
         {/* Slash command menu */}
@@ -322,14 +364,22 @@ export const ChatPanel = memo(function ChatPanel({
 
         {/* @ file mention menu */}
         <FileMentionMenu isOpen={showFileMenu} files={fileMenuFiles} selectedIndex={fileMenuIndex} query={fileSearchQuery}
-          onSelect={handleFileSelect} onHover={setFileMenuIndex} />
+          onSelect={handleFileSelect} onHover={setFileMenuIndex} isSearching={isFileSearching} />
 
         <div className="flex gap-2 items-end">
           <div className="flex-1 flex flex-col gap-1">
             <textarea
               ref={textareaRef} value={input} onChange={handleChange} onKeyDown={handleKeyDown}
-              placeholder={planMode === "plan" ? "Plan Mode — analysis only, switch to Act to execute" : t('chat.inputPlaceholder')}
-              rows={1} disabled={isGenerating} className={`flex-1 bg-dark-bg border rounded-lg px-3 sm:px-4 py-2.5 sm:py-3 text-dark-text placeholder-dark-muted resize-none focus:outline-none focus:border-accent-green text-sm min-h-[40px] max-h-[40vh] transition-colors ${planMode === "plan" ? "border-accent-purple/50" : "border-dark-border"}`}
+              placeholder={
+                planMode === "plan" ? t('plan.planTitle') :
+                planMode === "act" ? t('plan.actTitle') :
+                t('chat.inputPlaceholder')
+              }
+              rows={1} disabled={isGenerating} className={`flex-1 bg-dark-bg border rounded-lg px-3 sm:px-4 py-2.5 sm:py-3 text-dark-text placeholder-dark-muted resize-none focus:outline-none focus:border-accent-green text-sm min-h-[40px] max-h-[40vh] transition-colors ${
+                planMode === "plan" ? "border-accent-purple/50" :
+                planMode === "act" ? "border-accent-green/50" :
+                "border-dark-border"
+              }`}
               onCompositionStart={() => { isComposingRef.current = true; }}
               onCompositionEnd={(e) => {
                 isComposingRef.current = false;

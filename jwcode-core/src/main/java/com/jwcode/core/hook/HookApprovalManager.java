@@ -4,6 +4,8 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
 
@@ -63,6 +65,9 @@ public class HookApprovalManager {
 
     /** 指纹缓存 TTL（毫秒） */
     private static final long FINGERPRINT_TTL_MS = 60 * 60 * 1000;
+
+    /** 会话级审批门闩：sessionId → latch，有审批等待时阻止同会话其他工具执行 */
+    private final Map<String, CountDownLatch> sessionApprovalGates = new ConcurrentHashMap<>();
 
     /** WebSocket 广播回调 */
     private volatile Consumer<ApprovalRequest> wsBroadcaster;
@@ -126,6 +131,24 @@ public class HookApprovalManager {
         logger.info("[HookApproval] Cleared " + size + " cached fingerprints");
     }
 
+    /**
+     * 等待同会话中已有的审批完成。如果当前会话没有挂起的审批，立即返回。
+     * 工具执行前调用此方法，确保同一会话中不会同时有多个工具等待审批。
+     */
+    public void waitForPendingApproval(String sessionId) {
+        if (sessionId == null) return;
+        CountDownLatch gate = sessionApprovalGates.get(sessionId);
+        if (gate != null) {
+            logger.info("[HookApproval] Waiting for pending approval in session=" + sessionId);
+            try {
+                gate.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                logger.warning("[HookApproval] Interrupted while waiting for approval gate: " + e.getMessage());
+            }
+        }
+    }
+
     // ==================== 审批流程 ====================
 
     /**
@@ -147,6 +170,11 @@ public class HookApprovalManager {
         String id = UUID.randomUUID().toString().substring(0, 8);
         CompletableFuture<Boolean> future = new CompletableFuture<>();
         ApprovalRequest request = new ApprovalRequest(id, toolName, askPayload, future, sessionId);
+
+        // 创建会话级审批门闩，阻止同会话其他工具并发执行
+        if (sessionId != null) {
+            sessionApprovalGates.put(sessionId, new CountDownLatch(1));
+        }
 
         // 如果设置了有效超时（>0），挂载超时自动拒绝
         long effectiveTimeout = timeoutMs > 0 ? timeoutMs : defaultTimeoutMs;
@@ -206,6 +234,7 @@ public class HookApprovalManager {
             logger.info("[HookApproval] APPROVED: " + approvalId + " (" + request.toolName
                 + ") | fingerprint valid for 60min");
             request.future.complete(true);
+            releaseSessionGate(request.sessionId);
         } else {
             logger.fine("[HookApproval] Unknown approval ID: " + approvalId);
         }
@@ -219,6 +248,7 @@ public class HookApprovalManager {
         if (request != null) {
             logger.info("[HookApproval] DENIED: " + approvalId + " (" + request.toolName + ")");
             request.future.complete(false);
+            releaseSessionGate(request.sessionId);
         } else {
             logger.fine("[HookApproval] Unknown approval ID: " + approvalId);
         }
@@ -243,6 +273,7 @@ public class HookApprovalManager {
         if (count > 0) {
             logger.info("[HookApproval] Denied " + count + " pending approvals for session=" + sessionId);
         }
+        releaseSessionGate(sessionId);
     }
 
     /**
@@ -253,6 +284,18 @@ public class HookApprovalManager {
     }
 
     // ==================== 内部方法 ====================
+
+    /**
+     * 释放会话级审批门闩，唤醒等待中的同会话其他工具。
+     */
+    private void releaseSessionGate(String sessionId) {
+        if (sessionId == null) return;
+        CountDownLatch gate = sessionApprovalGates.remove(sessionId);
+        if (gate != null) {
+            gate.countDown();
+            logger.fine("[HookApproval] Released approval gate for session=" + sessionId);
+        }
+    }
 
     /**
      * 从 hook 编码的 askPayload 中提取指纹并缓存（60分钟TTL）。

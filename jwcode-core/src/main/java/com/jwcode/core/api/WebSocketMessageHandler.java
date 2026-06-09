@@ -641,11 +641,11 @@ public class WebSocketMessageHandler {
                 }
 
                 @Override
-                public void onToolResult(String toolName, String result) {
+                public void onToolResult(String toolName, String result, String toolCallId) {
                     broadcastToSession(session.getId(), Map.of(
                             "type", "tool_result",
                             "sessionId", session.getId(),
-                            "data", "{\"toolName\":\"" + escapeJson(toolName) + "\",\"result\":\"" + escapeJson(result) + "\"}"
+                            "data", "{\"id\":\"" + escapeJson(toolCallId) + "\",\"toolName\":\"" + escapeJson(toolName) + "\",\"result\":\"" + escapeJson(result) + "\"}"
                     ));
                 }
 

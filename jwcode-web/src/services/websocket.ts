@@ -1,4 +1,4 @@
-import { WSMessage } from '../types';
+﻿import { WSMessage } from '../types';
 
 type MessageHandler = (message: WSMessage) => void;
 type ConnectionHandler = () => void;
@@ -78,7 +78,7 @@ class WebSocketService {
     this.ws.onmessage = (event) => {
       try {
         const message: WSMessage = JSON.parse(event.data);
-        
+
         // 处理 pong 回复（响应服务器的 ping），收到 ping 也视为活跃信号
         if (message.type === 'pong' || message.type === 'ping') {
           this.lastPongTime = Date.now();
@@ -86,7 +86,12 @@ class WebSocketService {
             return;
           }
         }
-        
+
+        // 发送 ACK 确认（消息包含 seq 字段时）
+        if (message.seq !== undefined && message.seq >= 0) {
+          this.send({ type: 'message_ack', data: JSON.stringify({ seq: message.seq }) });
+        }
+
         this.messageHandlers.forEach((handler) => handler(message));
       } catch (error) {
         console.error('Failed to parse WebSocket message:', error);
@@ -106,13 +111,11 @@ class WebSocketService {
       // 检查是否超过心跳超时时间
       if (Date.now() - this.lastPongTime > this.HEARTBEAT_TIMEOUT) {
         console.warn('[WS] Heartbeat timeout, reconnecting...');
-        // 主动触发重连
-        this.isManualClose = false;
+        // 设置 isManualClose 防止 onclose 重复触发
+        this.isManualClose = true;
         this.ws?.close();
-        // 如果 ws.onclose 没有触发重连（比如 ws 已经是 null），手动触发
-        if (!this.ws) {
-          this.scheduleReconnect();
-        }
+        this.ws = null;
+        this.scheduleReconnect();
         return;
       }
       

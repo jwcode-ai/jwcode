@@ -13,6 +13,7 @@ import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
@@ -35,11 +36,25 @@ import java.util.regex.PatternSyntaxException;
 public class GrepTool implements Tool<GrepInput, GrepOutput, GrepTool.GrepProgress> {
     
     private static final Logger logger = Logger.getLogger(GrepTool.class.getName());
-    
+
     private static final int DEFAULT_MAX_RESULTS = 100;
     private static final int MAX_MAX_RESULTS = 500;
     private static final int DEFAULT_CONTEXT_LINES = 2;
     private static final long MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+
+    // Grep 结果缓存：减少重复搜索，TTL 30 秒
+    private static final long CACHE_TTL_MS = 30_000;
+    private static final java.util.concurrent.ConcurrentHashMap<String, GrepCacheEntry> grepCache = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static class GrepCacheEntry {
+        final GrepOutput output;
+        final long timestamp;
+        GrepCacheEntry(GrepOutput output) {
+            this.output = output;
+            this.timestamp = System.currentTimeMillis();
+        }
+        boolean isExpired() { return System.currentTimeMillis() - timestamp > CACHE_TTL_MS; }
+    }
     
     @Override
     public String getName() {
@@ -111,9 +126,26 @@ public class GrepTool implements Tool<GrepInput, GrepOutput, GrepTool.GrepProgre
                     return ToolResult.error("没有权限读取目录: " + input.getPathOrDefault());
                 }
                 
+                // 缓存检查：避免短时间内重复搜索
+                String cacheKey = input.pattern() + "@" + input.getPathOrDefault()
+                    + "#" + input.isRegex() + "#" + input.isIgnoreCase()
+                    + "#" + (input.filePattern() != null ? input.filePattern() : "");
+                GrepCacheEntry cached = grepCache.get(cacheKey);
+                if (cached != null && !cached.isExpired()) {
+                    logger.fine("Grep cache hit: " + cacheKey);
+                    return ToolResult.success(cached.output);
+                }
+
                 // 执行搜索
-                return searchFiles(input, context);
-                
+                ToolResult<GrepOutput> result = searchFiles(input, context);
+
+                // 缓存成功结果
+                if (result.isSuccess()) {
+                    grepCache.put(cacheKey, new GrepCacheEntry(result.getData()));
+                }
+
+                return result;
+
             } catch (Exception e) {
                 logger.severe("文本搜索失败: " + e.getMessage());
                 return ToolResult.error("文本搜索失败: " + e.getMessage());
@@ -161,6 +193,16 @@ public class GrepTool implements Tool<GrepInput, GrepOutput, GrepTool.GrepProgre
     @Override
     public boolean isDestructive(GrepInput input) {
         return false;
+    }
+
+    @Override
+    public ToolCategory getCategory() {
+        return ToolCategory.SEARCH;
+    }
+
+    @Override
+    public Set<SideEffect> getSideEffects() {
+        return Set.of(SideEffect.READ_ONLY);
     }
     
     /**

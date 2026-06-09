@@ -1,5 +1,6 @@
 package com.jwcode.core.config;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -153,14 +154,17 @@ public class JwcodeConfig {
         private List<ModelDefinition> models = new ArrayList<>();
         
         /** 轮询计数器（线程安全） */
+        @JsonIgnore
         private final AtomicInteger roundRobinCounter = new AtomicInteger(0);
 
         /** API Key 健康状态（key -> 不可用到 nextRetryTime） */
+        @JsonIgnore
         private final Map<String, Long> keyHealthMap = new ConcurrentHashMap<>();
 
         /**
          * 获取当前应该使用的 API Key（支持轮询 + 故障转移）
          */
+        @JsonIgnore
         public String getCurrentApiKey() {
             if (apiKeys.isEmpty()) {
                 return null;
@@ -432,7 +436,7 @@ public class JwcodeConfig {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class EngineSettings {
         @JsonProperty("max-iterations")
-        private int maxIterations = 0;  // 最大迭代次数，默认 0 表示不限制（由 TokenBudget 控制）
+        private int maxIterations = 50;  // 最大迭代次数，默认 50 轮，0 表示使用引擎默认值
         
         @JsonProperty("timeout-minutes")
         private int timeoutMinutes = 5;   // 超时时间（分钟）
@@ -495,7 +499,7 @@ public class JwcodeConfig {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class SearchSettings {
         @JsonProperty("default-engine")
-        private String defaultEngine = "duckduckgo";
+        private String defaultEngine = "bing";
         
         @JsonProperty("default-summary-length")
         private int defaultSummaryLength = 300;
@@ -681,13 +685,15 @@ public class JwcodeConfig {
     /**
      * 获取当前提供商配置（别名）
      */
+    @JsonIgnore
     public ProviderConfig getCurrentProvider() {
         return getDefaultProvider();
     }
-    
+
     /**
      * 获取当前模型配置（别名）
      */
+    @JsonIgnore
     public ModelDefinition getCurrentModel() {
         return getDefaultModel();
     }

@@ -2,6 +2,7 @@ import { Box, Text } from 'ink';
 import { useState, useMemo, memo, useEffect } from 'react';
 import { type Message, type ToolCall, type Step } from '../protocol.js';
 import { updateAppState, useAppChatArea, useAppSlice } from '../hooks/useAppState.js';
+import { setScrollGeometry } from '../hooks/useMouseWheel.js';
 import { DiffDisplay } from './DiffDisplay.js';
 import { t } from '../theme.js';
 
@@ -55,6 +56,46 @@ function shouldStartCollapsed(toolCalls: ToolCall[], index: number): boolean {
   return index !== lastFinishedIdx;
 }
 
+// ---- Scrollbar ----
+
+const SCROLLBAR_TRACK = 'â”‚';
+const SCROLLBAR_THUMB = 'â–ˆ';
+const SCROLLBAR_ARROW_UP = 'â–²';
+const SCROLLBAR_ARROW_DOWN = 'â–¼';
+
+function Scrollbar({
+  total, offset, maxVisible, trackHeight,
+}: {
+  total: number; offset: number; maxVisible: number; trackHeight: number;
+}) {
+  if (total <= maxVisible) return null;
+
+  const thumbH = Math.max(1, Math.floor(trackHeight * maxVisible / Math.max(total, 1)));
+  const maxOffset = Math.max(0, total - maxVisible);
+  const thumbPos = maxOffset > 0
+    ? Math.round((trackHeight - thumbH) * offset / maxOffset)
+    : 0;
+
+  const chars: string[] = [];
+  for (let i = 0; i < trackHeight; i++) {
+    if (i >= thumbPos && i < thumbPos + thumbH) {
+      chars.push(SCROLLBAR_THUMB);
+    } else {
+      chars.push(SCROLLBAR_TRACK);
+    }
+  }
+
+  return (
+    <Box flexDirection="column" width={2} flexShrink={0}>
+      <Text dimColor>{SCROLLBAR_ARROW_UP}</Text>
+      {chars.map((c, i) => (
+        <Text key={i} dimColor={c !== SCROLLBAR_THUMB}>{c}</Text>
+      ))}
+      <Text dimColor>{SCROLLBAR_ARROW_DOWN}</Text>
+    </Box>
+  );
+}
+
 // ---- Sub-components ----
 
 /**
@@ -69,7 +110,7 @@ function MessageContent({ content, terminalCols }: { content: string; terminalCo
 }
 
 /**
- * Render tool result ¡ª use DiffDisplay for diffs, otherwise truncate.
+ * Render tool result â€” use DiffDisplay for diffs, otherwise truncate.
  */
 function ToolResult({ result, terminalCols }: { result: string; terminalCols: number }) {
   if (isDiffContent(result)) {
@@ -286,6 +327,20 @@ export const ChatArea = memo(function ChatArea({
   const maxScroll = Math.max(0, total - maxVisible);
   const safeOffset = Math.min(scrollOffset, maxScroll);
 
+  // Keep scrollbar geometry up-to-date for mouse click/drag mapping
+  const welcomeRows = (total === 0 && !currentMessage) ? 6 : 1;
+  const scrollbarTopRow = welcomeRows;
+
+  useEffect(() => {
+    setScrollGeometry({
+      topRow: scrollbarTopRow,
+      trackHeight: maxVisible - 2, // subtract â–²/â–¼ rows
+      total,
+      maxVisible,
+      termCols: terminalCols,
+    });
+  });
+
   useEffect(() => {
     if (scrollOffset > maxScroll) {
       updateAppState(prev => ({ ...prev, scrollOffset: maxScroll }));
@@ -305,42 +360,47 @@ export const ChatArea = memo(function ChatArea({
     setExpandedMessages(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   };
 
+  const needsScrollbar = total > maxVisible;
+
   return (
-    <Box flexDirection="column" width="100%">
-      {total > maxVisible && (
-        <Box>
-          <Text dimColor>
-            [{safeOffset + 1}-{safeOffset + visibleCount} / {total}]
-          </Text>
-          <Text color={t.warning}>
-            {'¨€'.repeat(Math.min(10, Math.round((1 - safeOffset / (maxScroll || 1)) * 10)))}
-          </Text>
-          <Text dimColor>
-            {'?'.repeat(10 - Math.min(10, Math.round((1 - safeOffset / (maxScroll || 1)) * 10)))}
-          </Text>
-          <Text dimColor>  PgUp/PgDn ¡ü¡ý  Home/End</Text>
-        </Box>
-      )}
-      {visibleMessages.map(msg => (
-        <MessageItem
-          key={msg.id}
-          msg={msg}
-          expandedMessages={expandedMessages}
-          expandedTools={expandedTools}
-          terminalCols={terminalCols}
-          toolCallsExpanded={toolCallsExpanded}
-          onToggleTool={toggleExpandTool}
-          onToggleMessage={toggleExpandMessage}
-        />
-      ))}
-      {currentMessage && (
-        <StreamingMessage
-          key={currentMessage.id}
-          msg={currentMessage}
-          terminalCols={terminalCols}
-          expandedTools={expandedTools}
-          toolCallsExpanded={toolCallsExpanded}
-          onToggleTool={toggleExpandTool}
+    <Box flexDirection="row" width="100%">
+      <Box flexGrow={1} flexDirection="column">
+        {needsScrollbar && (
+          <Box>
+            <Text dimColor>
+              [{safeOffset + 1}-{safeOffset + visibleCount} / {total}]
+            </Text>
+          </Box>
+        )}
+        {visibleMessages.map(msg => (
+          <MessageItem
+            key={msg.id}
+            msg={msg}
+            expandedMessages={expandedMessages}
+            expandedTools={expandedTools}
+            terminalCols={terminalCols}
+            toolCallsExpanded={toolCallsExpanded}
+            onToggleTool={toggleExpandTool}
+            onToggleMessage={toggleExpandMessage}
+          />
+        ))}
+        {currentMessage && (
+          <StreamingMessage
+            key={currentMessage.id}
+            msg={currentMessage}
+            terminalCols={terminalCols}
+            expandedTools={expandedTools}
+            toolCallsExpanded={toolCallsExpanded}
+            onToggleTool={toggleExpandTool}
+          />
+        )}
+      </Box>
+      {needsScrollbar && (
+        <Scrollbar
+          total={total}
+          offset={safeOffset}
+          maxVisible={maxVisible}
+          trackHeight={maxVisible - 2}
         />
       )}
     </Box>

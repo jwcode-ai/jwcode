@@ -12,11 +12,14 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
+import java.util.logging.Logger;
 
 /**
  * 配置 API - 从 ConfigManager 读取真实配置
  */
 public class ConfigHandler implements HttpHandler {
+
+    private static final Logger logger = Logger.getLogger(ConfigHandler.class.getName());
     
     private final ObjectMapper objectMapper = new ObjectMapper();
     
@@ -455,6 +458,33 @@ public class ConfigHandler implements HttpHandler {
                 config.setDefaultProvider(providerName);
             } else if (config.getProviders().size() == 1) {
                 config.setDefaultProvider(providerName);
+            }
+
+            // 软校验 baseUrl — 检测常见配置错误并自动修正或警告
+            String apiType = provider.getApiType();
+            String baseUrl = provider.getBaseUrl();
+            if (baseUrl != null && apiType != null) {
+                if ("anthropic-messages".equals(apiType)) {
+                    if (baseUrl.endsWith("/v1/messages")) {
+                        String corrected = baseUrl.substring(0, baseUrl.length() - "/v1/messages".length());
+                        logger.warning("[ConfigHandler] Base URL ends with /v1/messages for anthropic-messages provider; "
+                            + "auto-correcting to: " + corrected
+                            + " (the suffix is added automatically)");
+                        provider.setBaseUrl(corrected);
+                    } else if (baseUrl.endsWith("/v1")) {
+                        String corrected = baseUrl.substring(0, baseUrl.length() - 3);
+                        logger.warning("[ConfigHandler] Base URL ends with /v1 for anthropic-messages provider; "
+                            + "auto-correcting to: " + corrected);
+                        provider.setBaseUrl(corrected);
+                    }
+                } else if ("openai-completions".equals(apiType)) {
+                    if (baseUrl.endsWith("/chat/completions")) {
+                        String corrected = baseUrl.substring(0, baseUrl.length() - "/chat/completions".length());
+                        logger.warning("[ConfigHandler] Base URL ends with /chat/completions for openai-completions provider; "
+                            + "auto-correcting to: " + corrected);
+                        provider.setBaseUrl(corrected);
+                    }
+                }
             }
 
             // Save to user config

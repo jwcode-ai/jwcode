@@ -9,6 +9,7 @@ import com.jwcode.core.index.EmbeddingService;
 import com.jwcode.core.index.IndexConfig;
 import com.jwcode.core.task.TaskStore;
 import com.jwcode.core.tool.ToolRegistry;
+import com.jwcode.core.api.AgentFlowBroadcaster;
 import com.jwcode.core.api.PlanTaskBroadcaster;
 import com.jwcode.web.stream.StreamingWebSocketHandler;
 import com.jwcode.web.terminal.TerminalHandler;
@@ -42,6 +43,7 @@ public class WebServer {
     private HttpServer server;
     private StreamingWebSocketHandler webSocketHandler;
     private TerminalHandler terminalHandler;
+    private com.jwcode.core.tool.shell.DockerSandboxExecutor sandboxExecutor;
     private final int port;
     private final int wsPort;
     private final WebSessionManager sessionManager;
@@ -82,9 +84,9 @@ public class WebServer {
 
         // 初始化安全沙箱 — Docker 容器隔离，不可用时降级 WorkspaceGuard
         try {
-            com.jwcode.core.tool.BashTool.setBackgroundExecutor(
-                new com.jwcode.core.tool.shell.DockerSandboxExecutor(
-                    java.nio.file.Path.of(this.workspaceDir)));
+            sandboxExecutor = new com.jwcode.core.tool.shell.DockerSandboxExecutor(
+                java.nio.file.Path.of(this.workspaceDir));
+            com.jwcode.core.tool.BashTool.setBackgroundExecutor(sandboxExecutor);
             System.out.println("[WebServer] Docker sandbox initialized");
         } catch (Exception e) {
             System.err.println("[WebServer] Sandbox init failed (non-fatal): " + e.getMessage());
@@ -113,6 +115,10 @@ public class WebServer {
         server.createContext("/api/files", new FilesHandler());
         server.createContext("/api/system/status", new SystemStatusHandler());
         server.createContext("/api/checkpoints", new CheckpointsHandler());
+        server.createContext("/api/observability", new ObservabilityHandler());
+
+        // Logs API — browse and download server log files
+        server.createContext("/api/logs", new LogsHandler());
 
         // Terminal — ttyd sidecar for web-based terminal access
         {
@@ -131,6 +137,24 @@ public class WebServer {
 
             terminalHandler = new TerminalHandler(ttydPath, tsCliPath);
             server.createContext("/api/terminal", terminalHandler);
+        }
+
+        // Hooks config management API
+        {
+            com.jwcode.core.hook.HookRegistry hookRegistry =
+                com.jwcode.core.hook.HookSystemInitializer.getRegistry();
+            if (hookRegistry == null) {
+                // Fallback: create standalone registry if HookSystemInitializer not yet run
+                java.nio.file.Path hooksFile = java.nio.file.Path.of(this.workspaceDir,
+                    ".jwcode", "hooks.json");
+                hookRegistry = new com.jwcode.core.hook.HookRegistry(hooksFile);
+                logger.info("[WebServer] Created standalone HookRegistry for HooksHandler");
+            }
+            com.jwcode.core.agent.AgentRegistry agentRegistry =
+                new com.jwcode.core.agent.AgentRegistry(toolRegistry);
+            server.createContext("/api/hooks", new HooksHandler(hookRegistry, agentRegistry,
+                java.nio.file.Path.of(this.workspaceDir, ".jwcode", "hooks.json")));
+            System.out.println("  ✓ Hook config API: /api/hooks");
         }
         
         // 使用 ThreadPoolExecutor 替代 newFixedThreadPool，支持有界队列和拒绝策略
@@ -162,6 +186,11 @@ public class WebServer {
         PlanTaskBroadcaster.setMessageSender((type, sid, data) ->
             webSocketHandler.sendMessage(sid,
                 StreamingWebSocketHandler.MessageType.valueOf(type.toUpperCase()), data));
+
+        // 将 AgentFlowBroadcaster 接入主 WebSocket，使 agent_flow_event 消息通过当前连接发送
+        AgentFlowBroadcaster.setMessageSender((type, sid, data) ->
+            webSocketHandler.sendMessage(sid,
+                StreamingWebSocketHandler.MessageType.valueOf(type.toUpperCase()), data));
         
         logger.info("Web UI 服务器启动: http://localhost:" + port);
         logger.info("WebSocket 服务器启动: ws://localhost:" + wsPort);
@@ -173,15 +202,31 @@ public class WebServer {
      * 停止服务器
      */
     public void stop() {
+        // 1. 关闭代码库索引器（包括 indexExecutor, debounceScheduler, watcher）
         if (codebaseIndexer != null) {
             codebaseIndexer.shutdown();
         }
+
+        // 2. 关闭 WebSocket 服务器（包括 heartbeatScheduler, queryExecutor）
         if (webSocketHandler != null) {
-            webSocketHandler.shutdown();
+            try {
+                webSocketHandler.shutdown();
+            } catch (Exception e) {
+                logger.warning("WebSocket shutdown error: " + e.getMessage());
+            }
         }
+
+        // 3. 关闭终端处理器
         if (terminalHandler != null) {
             terminalHandler.shutdown();
         }
+
+        // 4. 关闭 Docker 沙箱执行器的线程池
+        if (sandboxExecutor != null) {
+            sandboxExecutor.shutdown();
+        }
+
+        // 5. 停止 HTTP 服务器（包括 http-worker 线程池）
         if (server != null) {
             server.stop(0);
             logger.info("Web UI 服务器已停止");
