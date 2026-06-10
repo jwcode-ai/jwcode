@@ -7,11 +7,12 @@ import wsService from '../../services/websocket';
 
 interface HookApprovalModalProps {
   isOpen: boolean;
+  onCloseModal?: () => void;
 }
 
 const COUNTDOWN_SECONDS = 15;
 
-export function HookApprovalModal({ isOpen }: HookApprovalModalProps) {
+export function HookApprovalModal({ isOpen, onCloseModal }: HookApprovalModalProps) {
   const approvalStore = useHookApprovalStore();
   const pendingApprovals = approvalStore.pendingApprovals;
 
@@ -170,7 +171,7 @@ export function HookApprovalModal({ isOpen }: HookApprovalModalProps) {
   return (
     <Modal
       isOpen={isOpen}
-      onClose={handleDeny}
+      onClose={() => onCloseModal?.()}
       title={
         <div className="flex items-center gap-2">
           <Shield className="w-5 h-5 text-yellow-400" />

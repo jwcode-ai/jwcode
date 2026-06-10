@@ -1,4 +1,4 @@
-﻿import { memo, useRef, useCallback, useEffect, useState } from 'react';
+import { memo, useRef, useCallback, useEffect, useState } from 'react';
 import { ScrollText, FileText, Download, Eye, ChevronLeft, Loader2 } from 'lucide-react';
 import { LogEntry } from '../../types';
 import { api, LogFileInfo, LogFileContent } from '../../services/api';
@@ -25,6 +25,8 @@ const levelIcons: Record<string, string> = {
   tool: '\ud83d\udd27',
 };
 
+
+
 function LogFileBrowser() {
   const [files, setFiles] = useState<LogFileInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -34,9 +36,13 @@ function LogFileBrowser() {
 
   const loadFiles = useCallback(async () => {
     setLoading(true);
-    const res = await api.logs.list();
-    if (res.success && res.data) {
-      setFiles(res.data);
+    try {
+      const res = await api.logs.list();
+      if (res.success && res.data) {
+        setFiles(res.data);
+      }
+    } catch (e) {
+      console.error("Failed to load log files:", e);
     }
     setLoading(false);
   }, []);
@@ -242,7 +248,7 @@ export const LogsPanel = memo(function LogsPanel({ logs, onClear, compact }: Log
       )}
 
       {!compact && (
-        <div className="mb-4 border border-dark-border rounded-lg p-3 bg-dark-surface shrink-0 max-h-[260px] overflow-hidden flex flex-col">
+        <div className="mb-4 border border-dark-border rounded-lg p-3 bg-dark-surface shrink-0 max-h-[320px] overflow-hidden flex flex-col">
           <LogFileBrowser />
         </div>
       )}

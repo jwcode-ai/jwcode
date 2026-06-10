@@ -89,6 +89,7 @@ export function TerminalView() {
 
         const attachAddon = new AttachAddon(ws);
         term.loadAddon(attachAddon);
+        term.focus();
 
         term.onResize(({ cols, rows }) => {
           if (ws.readyState === WebSocket.OPEN) {
@@ -127,8 +128,9 @@ export function TerminalView() {
     setIdle();
   }, [cleanup, setStopping, setIdle]);
 
-  // Initialize xterm + start session on mount
+  // Initialize xterm + start session once ttyd is confirmed available
   useEffect(() => {
+    if (ttydAvailable !== true) return;
     if (!terminalRef.current) return;
 
     const term = new Terminal({
@@ -146,6 +148,7 @@ export function TerminalView() {
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(terminalRef.current);
+    term.focus();
     fitAddon.fit();
 
     xtermRef.current = term;
@@ -166,7 +169,7 @@ export function TerminalView() {
       term.dispose();
       xtermRef.current = null;
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ttydAvailable]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleClear = () => {
     if (xtermRef.current) {

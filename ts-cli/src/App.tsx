@@ -18,6 +18,7 @@ import { createMessage } from './protocol.js';
 import { SLASH_COMMANDS, HELP_TEXT } from './commands/index.js';
 import { useStreamHandlers } from './hooks/useStreamHandlers.js';
 import { useKeyboardInput } from './hooks/useKeyboardInput.js';
+import { useMouseWheel } from './hooks/useMouseWheel.js';
 import { setClient } from './hooks/useWebSocket.js';
 
 interface AppProps {
@@ -85,16 +86,7 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
   const [showSessionPicker, setShowSessionPicker] = useState(false);
   const [sessionList, setSessionList] = useState<SessionInfo[]>([]);
 
-  const [layoutVer, setLayoutVer] = useState(0);
-  // Increment layout version when layout-affecting state changes to force full remount
-  const prevKey = useRef("");
-  useEffect(() => {
-    const key = planMode + "-" + connected + "-" + (messagesLen === 0);
-    if (prevKey.current && prevKey.current !== key) {
-      setLayoutVer(v => v + 1);
-    }
-    prevKey.current = key;
-  }, [planMode, connected, messagesLen]);
+  useMouseWheel();
 
   const wireHandlers = useStreamHandlers(setApprovalQueue, sessionAllowRef);
 
@@ -396,7 +388,7 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
   const placeholder = 'Type a message or / for commands...';
 
   return (
-    <Box key={layoutVer} flexDirection="column" width="100%">
+    <Box flexDirection="column" width="100%">
       {connected ? (
         <Box flexDirection="column">
           {messagesLen === 0 && !isGenerating && !!modelName && (

@@ -37,6 +37,9 @@ public class LogsHandler implements HttpHandler {
     /** 允许直接预览的日志文件扩展名 */
     private static final List<String> PREVIEW_EXTS = List.of(".log", ".txt", ".out", ".err");
 
+    /** 文件读取大小限制（50MB） */
+    private static final long MAX_READ_SIZE = 50L * 1024 * 1024;
+
     @Override
     public void handle(HttpExchange exchange) throws IOException {
         String method = exchange.getRequestMethod();
@@ -141,6 +144,11 @@ public class LogsHandler implements HttpHandler {
         }
 
         Path resolved = resolveAndValidate(fileName);
+        long fileSize = Files.size(resolved);
+        if (fileSize > MAX_READ_SIZE) {
+            sendError(exchange, 413, "File too large to preview (" + (fileSize / 1024 / 1024) + "MB, max 50MB)");
+            return;
+        }
         int maxLines = 1000;
         if (maxLinesStr != null && !maxLinesStr.isEmpty()) {
             try {
@@ -221,11 +229,13 @@ public class LogsHandler implements HttpHandler {
      * 在中文 Windows 上，系统默认编码为 GBK，可以正确显示 GBK 编码的日志文件。
      */
     private Charset detectCharset(byte[] bytes) {
+        int sampleLen = Math.min(bytes.length, 8192);
+        byte[] sample = java.util.Arrays.copyOf(bytes, sampleLen);
         try {
             StandardCharsets.UTF_8.newDecoder()
                 .onMalformedInput(CodingErrorAction.REPORT)
                 .onUnmappableCharacter(CodingErrorAction.REPORT)
-                .decode(ByteBuffer.wrap(bytes));
+                .decode(ByteBuffer.wrap(sample));
             return StandardCharsets.UTF_8;
         } catch (CharacterCodingException e) {
             return Charset.defaultCharset();

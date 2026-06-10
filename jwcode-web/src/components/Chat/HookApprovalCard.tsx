@@ -29,8 +29,8 @@ export const HookApprovalCard = memo(function HookApprovalCard({
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const isPending = approval.status === 'pending';
-  const isModalActive = useHookApprovalStore((s) => s.pendingApprovals.length > 0
-    && s.pendingApprovals.some(a => a.approvalId === approval.approvalId));
+    // Always show inline buttons; the modal is a separate component shown via App.tsx
+  const isModalActive = false;
   const { level, reason } = classifyRisk(approval.toolName, approval.askPayload);
   const rc = RISK_CONFIG[level];
 

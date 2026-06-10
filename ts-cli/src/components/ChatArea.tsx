@@ -1,5 +1,5 @@
 import { Box, Text } from 'ink';
-import { useState, useMemo, useRef, useLayoutEffect, memo, forwardRef } from 'react';
+import { useState, useMemo, useRef, useLayoutEffect, useCallback, memo, forwardRef } from 'react';
 import { measureElement, type DOMElement } from 'ink';
 import { type Message, type ToolCall, type Step } from '../protocol.js';
 import { updateAppState, useAppChatArea, useAppSlice } from '../hooks/useAppState.js';
@@ -309,7 +309,13 @@ const StreamingMessage = memo(forwardRef<DOMElement, {
       )}
     </Box>
   );
-}));
+}), (prev, next) => {
+  return prev.msg.id === next.msg.id
+    && prev.msg.content === next.msg.content
+    && prev.msg.thinking === next.msg.thinking
+    && prev.toolCallsExpanded === next.toolCallsExpanded
+    && prev.terminalCols === next.terminalCols;
+});
 
 // Heuristic fallback height for a message whose DOM node has not been
 // measured yet. After the first useLayoutEffect the real measured height
@@ -348,7 +354,6 @@ export const ChatArea = memo(function ChatArea({
   const toolCallsExpanded = useAppSlice(s => s.toolCallsExpanded);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(new Set());
-  const [, setMeasureTick] = useState(0);
 
   // viewport = visible area in terminal rows for the message list
   const viewportHeight = Math.max(3, terminalRows - RESERVED_ROWS);
@@ -369,66 +374,6 @@ export const ChatArea = memo(function ChatArea({
       ? messages.filter(m => m.id !== currentMessage.id)
       : messages,
     [messages, currentMessage && currentMessage.id]);
-
-  // --- measurement loop ---
-  // Runs after every render where messages / currentMessage / measureTick change.
-  // measureElement() reads Yoga's computed height (Ink runs Yoga before
-  // useLayoutEffect), so values are accurate on the very first measurement.
-  useLayoutEffect(() => {
-    let total = 0;
-    const refs = messageRefs.current;
-    const heights = messageHeightsRef.current;
-    const cols = Math.max(10, terminalCols - 4);
-
-    // Sum measured heights for currently-sliced (rendered) messages.
-    for (const [id, node] of refs) {
-      try {
-        const { height } = measureElement(node);
-        if (height > 0) {
-          heights.set(id, height);
-          total += height;
-        }
-      } catch {
-        // node not yet attached — skip; previous value (or default) holds
-      }
-    }
-    // Add fallback heights for messages that exist but are NOT in the current
-    // slice (i.e. above the visible window). This lets the scrollbar's
-    // `contentHeight` reflect the full document even when only a subset is
-    // mounted.
-    for (const m of allMessages) {
-      if (!refs.has(m.id)) {
-        const h = heights.get(m.id) ?? defaultMessageHeight(m, cols);
-        heights.set(m.id, h);
-        total += h;
-      }
-    }
-    if (currentMessage) {
-      const cm = currentMessage;
-      const h = heights.get(cm.id) ?? defaultMessageHeight(cm, cols);
-      heights.set(cm.id, h);
-      total += h;
-    }
-
-    // Reserve one extra line for the `[N/M]` header above the message list.
-    total += 1;
-
-    if (total !== lastTotalRef.current) {
-      lastTotalRef.current = total;
-      updateAppState(prev => (prev.contentHeight === total ? prev : { ...prev, contentHeight: total }));
-    }
-
-    // Publish geometry to mouse handler. The viewport's absolute top row is
-    // its own yogaNode top + 1 (for the [N/M] header line).
-    const topRow = getAbsoluteTopRow(viewportRef.current) + 1;
-    setScrollGeometry({
-      topRow,
-      trackHeight: Math.max(2, viewportHeight - 2),
-      contentHeight: total,
-      viewportHeight,
-      termCols: terminalCols,
-    });
-  });
 
   // --- slicing ---
   // Find the smallest startIdx such that messages[startIdx..end] covers the
@@ -466,32 +411,15 @@ export const ChatArea = memo(function ChatArea({
   const visibleMessages = allMessages.slice(startIdx);
 
   // Clamp scrollOffset if the document shrank under it (e.g. /clear, /compact).
-  useLayoutEffect(() => {
-    const maxOff = Math.max(0, lastTotalRef.current - viewportHeight);
-    if (scrollOffset > maxOff) {
-      updateAppState(prev => ({ ...prev, scrollOffset: maxOff }));
-    }
-  }, [scrollOffset, viewportHeight]);
+  // Garbage-collect height entries + measurement done in combined effect below.
 
-  // Garbage-collect height entries for messages that no longer exist.
-  useLayoutEffect(() => {
-    const live = new Set(allMessages.map(m => m.id));
-    if (currentMessage) live.add(currentMessage.id);
-    for (const id of messageHeightsRef.current.keys()) {
-      if (!live.has(id)) {
-        messageHeightsRef.current.delete(id);
-        messageRefs.current.delete(id);
-      }
-    }
-  });
-
-  const toggleExpandTool = (id: string) => {
+  const toggleExpandTool = useCallback((id: string) => {
     setExpandedTools(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
-  };
+  }, []);
 
-  const toggleExpandMessage = (id: string) => {
+  const toggleExpandMessage = useCallback((id: string) => {
     setExpandedMessages(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
-  };
+  }, []);
 
   const contentHeight = lastTotalRef.current;
   const needsScrollbar = contentHeight > viewportHeight || scrollOffset > 0;
@@ -502,11 +430,75 @@ export const ChatArea = memo(function ChatArea({
     else messageRefs.current.delete(id);
   };
 
-  // Force a measurement re-run whenever the slice membership changes
-  // (so newly mounted nodes are measured on the next paint).
+  // --- combined measurement + scroll clamp + GC effect ---
+  // Runs when layout-affecting state changes, not on every render.
   useLayoutEffect(() => {
-    setMeasureTick(t => t + 1);
-  }, [startIdx, visibleMessages.length, currentMessage && currentMessage.id, expandedTools.size, expandedMessages.size, toolCallsExpanded]);
+    let total = 0;
+    const refs = messageRefs.current;
+    const heights = messageHeightsRef.current;
+    const cols = Math.max(10, terminalCols - 4);
+
+    // Sum measured heights for currently-sliced (rendered) messages.
+    for (const [id, node] of refs) {
+      try {
+        const { height } = measureElement(node);
+        if (height > 0) {
+          heights.set(id, height);
+          total += height;
+        }
+      } catch {
+        // node not yet attached — skip; previous value (or default) holds
+      }
+    }
+    // Add fallback heights for messages not in the current slice.
+    for (const m of allMessages) {
+      if (!refs.has(m.id)) {
+        const h = heights.get(m.id) ?? defaultMessageHeight(m, cols);
+        heights.set(m.id, h);
+        total += h;
+      }
+    }
+    if (currentMessage) {
+      const cm = currentMessage;
+      const h = heights.get(cm.id) ?? defaultMessageHeight(cm, cols);
+      heights.set(cm.id, h);
+      total += h;
+    }
+
+    // Reserve one extra line for the `[N/M]` header above the message list.
+    total += 1;
+
+    if (total !== lastTotalRef.current) {
+      lastTotalRef.current = total;
+      updateAppState(prev => (prev.contentHeight === total ? prev : { ...prev, contentHeight: total }));
+    }
+
+    // Publish geometry to mouse handler.
+    const topRow = getAbsoluteTopRow(viewportRef.current) + 1;
+    setScrollGeometry({
+      topRow,
+      trackHeight: Math.max(2, viewportHeight - 2),
+      contentHeight: total,
+      viewportHeight,
+      termCols: terminalCols,
+    });
+
+    // Clamp scrollOffset if the document shrank under it.
+    const maxOff = Math.max(0, total - viewportHeight);
+    if (scrollOffset > maxOff) {
+      updateAppState(prev => ({ ...prev, scrollOffset: maxOff }));
+    }
+
+    // Garbage-collect entries for messages that no longer exist.
+    const live = new Set(allMessages.map(m => m.id));
+    if (currentMessage) live.add(currentMessage.id);
+    for (const id of messageHeightsRef.current.keys()) {
+      if (!live.has(id)) {
+        messageHeightsRef.current.delete(id);
+        messageRefs.current.delete(id);
+      }
+    }
+  }, [allMessages, currentMessage?.id, terminalCols, viewportHeight, scrollOffset, expandedTools.size, expandedMessages.size, toolCallsExpanded]);
 
   return (
     <Box flexDirection="row" width="100%" overflow="hidden" ref={viewportRef}>

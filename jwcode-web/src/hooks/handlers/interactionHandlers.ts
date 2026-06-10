@@ -1,7 +1,8 @@
-﻿import { useChatStore } from "../../stores/chatStore";
+import { useChatStore } from "../../stores/chatStore";
 import { useSessionStore } from "../../stores/sessionStore";
 import { useSwarmStore, SwarmTask } from "../../stores/swarmStore";
 import { useHookApprovalStore } from "../../stores/useHookApprovalStore";
+import { useSettingsStore } from "../../stores/settingsStore";
 import wsService from "../../services/websocket";
 import type { SessionTask } from "../../types";
 
@@ -18,7 +19,8 @@ export function handleHookAsk(rawData: any, sessionId: string) {
     const approvalStore = useHookApprovalStore.getState();
     const { approvalId, toolName, askPayload } = data;
 
-    if (approvalStore.isSessionAllowed(toolName)) {
+    const settingsStore = useSettingsStore.getState();
+    if (approvalStore.isSessionAllowed(toolName) || approvalStore.autoMode || settingsStore?.yolo?.enabled) {
       wsService.send({ type: "hook_allow" as any, data: JSON.stringify({ approvalId }) });
       return;
     }
@@ -37,6 +39,9 @@ export function handleHookAsk(rawData: any, sessionId: string) {
       approvalId: approvalId || "", toolName: toolName || "unknown",
       askPayload: askPayload || "", timestamp: Date.now(),
     });
+
+    // Trigger modal open event for HookApprovalModal
+    window.dispatchEvent(new CustomEvent("hook-approval-required"));
   } catch (e) {
     DEBUG && console.warn("[WS] hook_ask parse error:", e);
   }
