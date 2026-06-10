@@ -1,3 +1,24 @@
+#!/usr/bin/env node
+/**
+ * Build JRE archive for the current platform.
+ *
+ * Usage:
+ *   node scripts/build-jre-zip.js
+ *
+ * This runs jlink to produce a minimal JRE in backend/jre/,
+ * then packs it into a compressed archive you can upload
+ * to your download site.
+ *
+ * Environment:
+ *   JAVA_HOME       Path to JDK 17+ (default: from env or PATH)
+ *
+ * Prerequisites:
+ *   JDK 17+ with jmods (jlink + jmods directory must exist)
+ */
+import { execSync } from 'node:child_process';
+import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { platform, arch } from 'node:os';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -150,4 +171,3 @@ main().catch(err => {
   console.error('Build failed:', err);
   process.exit(1);
 });
-
