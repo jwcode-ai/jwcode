@@ -239,23 +239,37 @@ public class ToolExecutor {
                 }
                 if (hookResult.getDecision() == HookDecision.ASK) {
                     String askPayload = hookResult.getAskPayload();
-                    logger.info("[Hook] PRE_TOOL_USE ASK: " + toolName
-                        + " | " + askPayload);
-                    // 发起审批请求，一直等待用户决策（不超时）
-                    try {
-                        Boolean approved = HookApprovalManager.getInstance()
-                            .requestApproval(toolName, askPayload != null ? askPayload : "", -1, sessionId)
-                            .get();
-                        if (approved == null || !approved) {
+                    String effectivePayload = askPayload != null ? askPayload : "";
+
+                    // 生成指纹并检查缓存 —— 适用所有 Hook 类型
+                    String fingerprint = HookApprovalManager.extractFingerprint(
+                        effectivePayload, toolName);
+                    if (HookApprovalManager.getInstance().isFingerprintCached(fingerprint)) {
+                        logger.info("[Hook] PRE_TOOL_USE auto-approved (cached fingerprint): "
+                            + toolName + " | " + truncateForLog(fingerprint, 80));
+                        // 指纹命中缓存，直接放行，无需用户审批
+                    } else {
+                        logger.info("[Hook] PRE_TOOL_USE ASK: " + toolName
+                            + " | " + askPayload);
+                        // 发起审批请求，一直等待用户决策（不超时）
+                        // 设计说明：CompletableFuture.get() 阻塞工具线程，
+                        // 由 sessionApprovalGates 确保同 session 串行化，
+                        // 审批完成后 future.complete() 唤醒此线程继续执行
+                        try {
+                            Boolean approved = HookApprovalManager.getInstance()
+                                .requestApproval(toolName, effectivePayload,
+                                    fingerprint, -1, sessionId)
+                                .get();
+                            if (approved == null || !approved) {
+                                return CompletableFuture.completedFuture(
+                                    ToolResult.error("用户拒绝了 Hook 审批: " + askPayload));
+                            }
+                            logger.info("[Hook] PRE_TOOL_USE ASK approved by user: " + toolName);
+                        } catch (Exception e) {
+                            logger.warning("[Hook] PRE_TOOL_USE ASK error: " + e.getMessage());
                             return CompletableFuture.completedFuture(
-                                ToolResult.error("用户拒绝了 Hook 审批: " + askPayload));
+                                ToolResult.error("Hook审批异常: " + e.getMessage()));
                         }
-                        logger.info("[Hook] PRE_TOOL_USE ASK approved by user: " + toolName);
-                        // 审批通过，继续执行
-                    } catch (Exception e) {
-                        logger.warning("[Hook] PRE_TOOL_USE ASK error: " + e.getMessage());
-                        return CompletableFuture.completedFuture(
-                            ToolResult.error("Hook审批异常: " + e.getMessage()));
                     }
                 }
                 // ALLOW / DEFER / VOID → continue

@@ -1,5 +1,6 @@
 package com.jwcode.core.advanced.swarm;
 
+import com.jwcode.core.a2a.dispatcher.LocalAgentDispatcher;
 import com.jwcode.core.advanced.swarm.ai.AITaskDecomposer;
 import com.jwcode.core.advanced.swarm.ai.AITaskDecomposer.DecompositionResult;
 import com.jwcode.core.advanced.swarm.ai.AITaskDecomposer.SubTaskDef;
@@ -13,6 +14,7 @@ import java.util.function.Consumer;
 
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
@@ -26,6 +28,13 @@ public class AgentSwarm {
     private static final int MAX_SWARM_SIZE = 100;
     private static final int DEFAULT_MAX_PARALLEL = 16;
 
+    private static final ExecutorService SHARED_EXECUTOR = Executors.newFixedThreadPool(
+            DEFAULT_MAX_PARALLEL, r -> {
+                Thread t = new Thread(r, "SwarmAgent-" + new java.util.concurrent.atomic.AtomicInteger(0).incrementAndGet());
+                t.setDaemon(true);
+                return t;
+            });
+
     private final ExecutorService executor;
     private final SwarmConfig config;
     private final AtomicInteger agentCounter = new AtomicInteger(0);
@@ -34,20 +43,22 @@ public class AgentSwarm {
     private Consumer<ObservationEvent> eventConsumer;
     private final LLMService llmService;
     private final AITaskDecomposer aiDecomposer;
+    private final LocalAgentDispatcher dispatcher;
 
     public AgentSwarm() {
-        this(null);
+        this(null, null);
     }
 
     public AgentSwarm(LLMService llmService) {
+        this(llmService, null);
+    }
+
+    public AgentSwarm(LLMService llmService, LocalAgentDispatcher dispatcher) {
         this.config = SwarmConfig.defaultConfig();
         this.llmService = llmService;
         this.aiDecomposer = llmService != null ? new AITaskDecomposer(llmService) : null;
-        this.executor = Executors.newFixedThreadPool(DEFAULT_MAX_PARALLEL, r -> {
-            Thread t = new Thread(r, "SwarmAgent-" + agentCounter.incrementAndGet());
-            t.setDaemon(true);
-            return t;
-        });
+        this.dispatcher = dispatcher;
+        this.executor = SHARED_EXECUTOR;
     }
 
     public SwarmExecutionResult executeComplexTask(String taskDescription, Object context) {
@@ -166,12 +177,10 @@ public class AgentSwarm {
             TaskType type = entry.getKey();
             int agentCount = Math.min(entry.getValue().size(), config.getMaxAgentsPerType());
             for (int i = 0; i < agentCount; i++) {
-                SwarmAgent agent = SwarmAgent.builder()
-                    .id("swarm-" + type.name().toLowerCase() + "-" + i)
-                    .specialization(type)
-                    .capabilities(getCapabilitiesForType(type))
-                    .taskQueue(new ConcurrentLinkedQueue<>())
-                    .build();
+                SwarmAgent agent = createSwarmAgent(
+                    "swarm-" + type.name().toLowerCase() + "-" + i,
+                    type,
+                    getCapabilitiesForType(type));
                 agents.add(agent);
                 swarmAgents.put(agent.getId(), agent);
             }
@@ -242,12 +251,7 @@ public class AgentSwarm {
 
     private SwarmAgent findBestAgent(List<SwarmAgent> agents, SubTask task) {
         if (agents.isEmpty()) {
-            return SwarmAgent.builder()
-                .id("swarm-default-0")
-                .specialization(task.getType())
-                .capabilities(Set.of("general"))
-                .taskQueue(new ConcurrentLinkedQueue<>())
-                .build();
+            return createSwarmAgent("swarm-default-0", task.getType(), Set.of("general"));
         }
         return agents.stream()
             .filter(a -> a.getSpecialization() == task.getType())
@@ -422,7 +426,7 @@ public class AgentSwarm {
         }
     }
 
-    private static class SwarmAgent {
+    private class SwarmAgent {
         private final String id;
         private final TaskType specialization;
         private final Set<String> capabilities;
@@ -441,19 +445,79 @@ public class AgentSwarm {
         public Queue<SubTask> getTaskQueue() { return taskQueue; }
 
         public Object execute(SubTask task, Object context, String depResults) {
-            try {
-                Thread.sleep(100 + (long)(Math.random() * 200));
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+            long startTime = System.currentTimeMillis();
+            String role = mapTaskTypeToRole(specialization);
+
+            if (dispatcher == null || llmService == null) {
+                // 降级：无 dispatcher 时使用简单 LLM 调用
+                return executeSimple(task, depResults);
             }
-            return "[" + id + "] 完成任务: " + task.getDescription();
+
+            try {
+                String prompt = buildSubTaskPrompt(task, depResults);
+                var agentResult = dispatcher.dispatchToRole(role, prompt);
+                long duration = System.currentTimeMillis() - startTime;
+
+                String result = agentResult != null ? agentResult.toString() : "";
+                if (eventConsumer != null) {
+                    eventConsumer.accept(new ObservationEvent.SwarmAgentExecution(
+                        id, task.getId(), role, task.getDescription(),
+                        duration, true, result));
+                }
+                return result;
+            } catch (Exception e) {
+                long duration = System.currentTimeMillis() - startTime;
+                log.warn("[SwarmAgent] 执行失败: " + id + " — " + e.getMessage());
+                if (eventConsumer != null) {
+                    eventConsumer.accept(new ObservationEvent.SwarmAgentExecution(
+                        id, task.getId(), role, task.getDescription(),
+                        duration, false, e.getMessage()));
+                }
+                return "[" + id + "] 执行失败: " + e.getMessage();
+            }
+        }
+
+        private Object executeSimple(SubTask task, String depResults) {
+            if (llmService == null) {
+                return "[" + id + "] 完成任务: " + task.getDescription() + " (无LLM)";
+            }
+            try {
+                LLMMessage msg = LLMMessage.user(buildSubTaskPrompt(task, depResults));
+                LLMResponse response = llmService.chat(List.of(msg)).get(60, TimeUnit.SECONDS);
+                return response.getContent() != null ? response.getContent()
+                    : "[" + id + "] 完成任务: " + task.getDescription();
+            } catch (Exception e) {
+                return "[" + id + "] 执行异常: " + e.getMessage();
+            }
+        }
+
+        private String buildSubTaskPrompt(SubTask task, String depResults) {
+            StringBuilder sb = new StringBuilder();
+            sb.append("你是一个").append(mapTaskTypeToRole(specialization)).append("。\n\n");
+            sb.append("## 任务\n").append(task.getDescription()).append("\n\n");
+
+            if (depResults != null && !depResults.isBlank()) {
+                sb.append("## 前置任务结果\n").append(depResults).append("\n\n");
+            }
+
+            sb.append("请完成上述任务并返回结果。完成后请输出 [FINISH]。");
+            return sb.toString();
+        }
+
+        private String mapTaskTypeToRole(TaskType type) {
+            return switch (type) {
+                case ANALYSIS -> "Explorer";
+                case PLANNING -> "Architect";
+                case EXECUTION -> "Coder";
+                case VERIFICATION -> "Reviewer";
+            };
         }
 
         public boolean isActive() { return !taskQueue.isEmpty(); }
 
-        public static Builder builder() { return new Builder(); }
+        public Builder builder() { return new Builder(); }
 
-        public static class Builder {
+        public class Builder {
             private String id;
             private TaskType specialization;
             private Set<String> capabilities;
@@ -463,8 +527,15 @@ public class AgentSwarm {
             public Builder specialization(TaskType v) { this.specialization = v; return this; }
             public Builder capabilities(Set<String> v) { this.capabilities = v; return this; }
             public Builder taskQueue(Queue<SubTask> v) { this.taskQueue = v; return this; }
-            public SwarmAgent build() { return new SwarmAgent(id, specialization, capabilities, taskQueue); }
+            public SwarmAgent build() {
+                return new SwarmAgent(id, specialization, capabilities, taskQueue);
+            }
         }
+    }
+
+    private SwarmAgent createSwarmAgent(String id, TaskType specialization,
+                                         Set<String> capabilities) {
+        return new SwarmAgent(id, specialization, capabilities, new ConcurrentLinkedQueue<>());
     }
 
     private static class SubTaskResult {

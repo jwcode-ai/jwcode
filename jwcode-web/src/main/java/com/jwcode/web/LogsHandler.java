@@ -8,6 +8,10 @@ import com.sun.net.httpserver.HttpHandler;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.Charset;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -145,16 +149,19 @@ public class LogsHandler implements HttpHandler {
         }
 
         try {
-            List<String> allLines = Files.readAllLines(resolved, StandardCharsets.UTF_8);
-            int totalLines = allLines.size();
-            List<String> lines;
+            byte[] rawBytes = Files.readAllBytes(resolved);
+            Charset charset = detectCharset(rawBytes);
+            String fullContent = new String(rawBytes, charset);
+            String[] allLines = fullContent.split("\n", -1);
+            int totalLines = allLines.length;
+            String[] lines;
             int startLine;
 
             if (totalLines <= maxLines) {
                 lines = allLines;
                 startLine = 1;
             } else {
-                lines = allLines.subList(totalLines - maxLines, totalLines);
+                lines = java.util.Arrays.copyOfRange(allLines, totalLines - maxLines, totalLines);
                 startLine = totalLines - maxLines + 1;
             }
 
@@ -206,6 +213,23 @@ public class LogsHandler implements HttpHandler {
         if (dot < 0) return false;
         String ext = fileName.substring(dot).toLowerCase();
         return PREVIEW_EXTS.contains(ext);
+    }
+
+    /**
+     * 检测文件字节流的字符编码。
+     * 优先尝试 UTF-8（严格模式），如果解码失败则回退到系统默认编码。
+     * 在中文 Windows 上，系统默认编码为 GBK，可以正确显示 GBK 编码的日志文件。
+     */
+    private Charset detectCharset(byte[] bytes) {
+        try {
+            StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(bytes));
+            return StandardCharsets.UTF_8;
+        } catch (CharacterCodingException e) {
+            return Charset.defaultCharset();
+        }
     }
 
     /**

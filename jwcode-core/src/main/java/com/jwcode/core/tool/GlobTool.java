@@ -5,6 +5,8 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.jwcode.core.tool.context.ToolExecutionContext;
 import com.jwcode.core.tool.input.GlobInput;
 import com.jwcode.core.tool.output.GlobOutput;
+import com.jwcode.core.tool.search.ParallelDirectoryTraverser;
+import com.jwcode.core.tool.search.SearchCancellationToken;
 
 import java.io.IOException;
 import java.nio.file.*;
@@ -297,33 +299,57 @@ public class GlobTool implements Tool<GlobInput, GlobOutput, GlobTool.GlobProgre
             return results;
         }
         
-        // 遍历目录
-        Files.walkFileTree(normalizedStartPath, new SimpleFileVisitor<Path>() {
+        // 并行遍历目录（大目录使用 ForkJoinPool）
+        try {
+            SearchCancellationToken token = getSearchCancellationToken();
+            List<Path> matched = ParallelDirectoryTraverser.traverse(
+                normalizedStartPath,
+                file -> {
+                    Path relativePath = normalizedStartPath.relativize(file);
+                    String relStr = relativePath.toString();
+                    return matchesPattern(relStr, compiledPattern)
+                        && (compiledExclude == null || !matchesPattern(relStr, compiledExclude));
+                },
+                maxResults,
+                token);
+            for (Path p : matched) {
+                results.add(p.toString());
+            }
+        } catch (IOException e) {
+            // 降级到单线程遍历
+            fallbackWalkFileTree(normalizedStartPath, compiledPattern, compiledExclude,
+                maxResults, results);
+        }
+        return results;
+    }
+
+    private SearchCancellationToken getSearchCancellationToken() {
+        return SearchCancellationToken.none(); // 默认无超时，
+    }
+
+    /** 降级: 传统单线程遍历 */
+    private void fallbackWalkFileTree(Path startPath, Pattern compiledPattern,
+                                       Pattern compiledExclude, int maxResults,
+                                       List<String> results) throws IOException {
+        Files.walkFileTree(startPath, new SimpleFileVisitor<Path>() {
             @Override
             public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
                 if (results.size() >= maxResults) {
                     return FileVisitResult.TERMINATE;
                 }
-                
                 try {
-                    // 获取相对路径
-                    Path relativePath = normalizedStartPath.relativize(file);
-                    String relativePathStr = relativePath.toString();
-                    
-                    // 检查是否匹配
-                    if (matchesPattern(relativePathStr, compiledPattern)) {
-                        // 检查是否被排除
-                        if (compiledExclude == null || !matchesPattern(relativePathStr, compiledExclude)) {
-                            results.add(file.toString());
-                        }
+                    Path relativePath = startPath.relativize(file);
+                    String relStr = relativePath.toString();
+                    if (matchesPattern(relStr, compiledPattern)
+                        && (compiledExclude == null || !matchesPattern(relStr, compiledExclude))) {
+                        results.add(file.toString());
                     }
                 } catch (Exception e) {
-                    // 忽略单个文件的错误
+                    // ignore
                 }
-                
                 return FileVisitResult.CONTINUE;
             }
-            
+
             @Override
             public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
                 String dirName = dir.getFileName().toString();
@@ -361,10 +387,8 @@ public class GlobTool implements Tool<GlobInput, GlobOutput, GlobTool.GlobProgre
                 return FileVisitResult.CONTINUE;
             }
         });
-        
-        return results;
     }
-    
+
     /**
      * 编译 glob 模式为正则表达式
      */

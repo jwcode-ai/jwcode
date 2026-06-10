@@ -35,7 +35,11 @@ public record BashInput(
     
     /** 是否作为后台任务执行（OS级进程隔离），用于长时任务如 mvn clean install */
     @JsonProperty("background")
-    Boolean background
+    Boolean background,
+
+    /** 策略上下文 — 命令类别/意图提示，供 ExecPolicyEngine 做更精准的判断 */
+    @JsonProperty("policy_context")
+    String policyContext
 ) {
     
     public BashInput {
@@ -51,11 +55,11 @@ public record BashInput(
     }
     
     public BashInput(String command) {
-        this(command, null, null, null, null, null, null);
+        this(command, null, null, null, null, null, null, null);
     }
-    
+
     public BashInput(String command, String description) {
-        this(command, description, null, null, null, null, null);
+        this(command, description, null, null, null, null, null, null);
     }
     
     /**

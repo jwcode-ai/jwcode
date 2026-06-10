@@ -2,6 +2,18 @@
  * WebSocket event handlers -- streaming update batching, tool calls, plan events.
  */
 import { useCallback } from 'react';
+
+// 对标 Codex rollout 的消息上限，防止 TUI 内存无限增长
+const MAX_MESSAGES = 200;
+
+function appendMessage(prev: any, msg: Message) {
+  const next = [...prev.messages, msg];
+  if (next.length > MAX_MESSAGES) {
+    return next.slice(next.length - MAX_MESSAGES);
+  }
+  return next;
+}
+
 import type { JwCodeClient } from '../client.js';
 import { debugLog } from '../client.js';
 import { updateAppState, getStore } from './useAppState.js';
@@ -29,8 +41,10 @@ interface ApprovalState {
   payload: string;
 }
 
+type SetApprovalQueue = (updater: (prev: ApprovalState[]) => ApprovalState[]) => void;
+
 export function useStreamHandlers(
-  setShowApproval: (v: ApprovalState | null) => void,
+  setApprovalQueue: SetApprovalQueue,
   sessionAllowRef: { current: Set<string> },
 ) {
   return useCallback((client: JwCodeClient) => {
@@ -116,8 +130,9 @@ export function useStreamHandlers(
       updateAppState(prev => ({
         ...prev,
         currentMessage: msg,
-        messages: [...prev.messages, msg],
-        scrollOffset: prev.scrollOffset > 0 ? prev.scrollOffset + 1 : 0,
+        messages: appendMessage(prev, msg),
+        // stick-to-bottom: only re-anchor when user is already at bottom (offset === 0)
+        scrollOffset: 0,
       }));
     });
 
@@ -284,8 +299,9 @@ export function useStreamHandlers(
         ...prev,
         planWaiting: false,
         currentMessage: msg,
-        messages: [...prev.messages, msg],
-        scrollOffset: prev.scrollOffset > 0 ? prev.scrollOffset + 1 : 0,
+        messages: appendMessage(prev, msg),
+        // stick-to-bottom: force back to bottom on plan start (treat as fresh stream)
+        scrollOffset: 0,
       }));
     });
 
@@ -439,10 +455,13 @@ export function useStreamHandlers(
         client.approveHook(approvalId);
         return;
       }
-      setShowApproval({
-        approvalId,
-        toolName: (d.toolName as string) || '',
-        payload: (d.askPayload as string) || (d.payload as string) || JSON.stringify(d),
+      setApprovalQueue(prev => {
+        if (prev.some(a => a.approvalId === approvalId)) return prev;
+        return [...prev, {
+          approvalId,
+          toolName: (d.toolName as string) || '',
+          payload: (d.askPayload as string) || (d.payload as string) || JSON.stringify(d),
+        }];
       });
     });
 
@@ -453,7 +472,7 @@ export function useStreamHandlers(
       const msg = createMessage('assistant', truncated);
       updateAppState(prev => ({
         ...prev,
-        messages: [...prev.messages, msg],
+        messages: appendMessage(prev, msg),
         statusText: 'Doctor diagnosis complete',
       }));
     });
@@ -513,6 +532,6 @@ export function useStreamHandlers(
       }));
     });
 
-  }, [setShowApproval]);
+  }, [setApprovalQueue]);
 }
 

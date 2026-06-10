@@ -229,4 +229,16 @@ public sealed interface ObservationEvent {
             this(completedTasks, totalTasks, Instant.now());
         }
     }
+
+    /**
+     * Swarm agent execution - a SwarmAgent is executing a sub-task via LLM.
+     */
+    record SwarmAgentExecution(String agentId, String taskId, String agentRole,
+                                String task, long durationMs, boolean success,
+                                String result, Instant timestamp) implements ObservationEvent {
+        public SwarmAgentExecution(String agentId, String taskId, String agentRole,
+                                    String task, long durationMs, boolean success, String result) {
+            this(agentId, taskId, agentRole, task, durationMs, success, result, Instant.now());
+        }
+    }
 }

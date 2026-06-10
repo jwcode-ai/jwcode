@@ -42,15 +42,18 @@ public class HookApprovalManager {
         public final String id;
         public final String toolName;
         public final String askPayload;
+        public final String fingerprint;
         public final long createdAt;
         public final CompletableFuture<Boolean> future;
         public final String sessionId;
 
         ApprovalRequest(String id, String toolName, String askPayload,
-                        CompletableFuture<Boolean> future, String sessionId) {
+                        String fingerprint, CompletableFuture<Boolean> future,
+                        String sessionId) {
             this.id = id;
             this.toolName = toolName;
             this.askPayload = askPayload;
+            this.fingerprint = fingerprint;
             this.createdAt = System.currentTimeMillis();
             this.future = future;
             this.sessionId = sessionId;
@@ -59,6 +62,12 @@ public class HookApprovalManager {
 
     /** pending 审批映射：approvalId → ApprovalRequest */
     private final Map<String, ApprovalRequest> pendingApprovals = new ConcurrentHashMap<>();
+    
+    /** 会话级审批门闩（sessionId -> latch），防止被新请求覆盖 */
+    private final Map<String, CountDownLatch> sessionLatches = new ConcurrentHashMap<>();
+    
+    /** 门闩超时队列（latch -> 等待线程），用于并发控制 */
+    private final Object latchLock = new Object();
 
     /** 审批指纹缓存：fingerprint → 过期时间戳(epochMs)，60分钟TTL */
     private final Map<String, Long> fingerprintCache = new ConcurrentHashMap<>();
@@ -132,6 +141,39 @@ public class HookApprovalManager {
     }
 
     /**
+     * 标准化字符串为指纹：去首尾空白、压缩连续空白、转小写。
+     */
+    public static String normalizeFingerprint(String input) {
+        if (input == null || input.isEmpty()) return "";
+        return input.trim().replaceAll("\\s+", " ").toLowerCase();
+    }
+
+    /**
+     * 从 askPayload 中提取指纹，或为所有 Hook 类型生成兜底指纹。
+     *
+     * <p>提取优先级：
+     * <ol>
+     *   <li>若 askPayload 包含 {@code "\n---\n"} 分隔符，取分隔符之前的部分（兼容 BashSafetyHook 格式）</li>
+     *   <li>兜底生成 {@code "toolName:normalized(askPayload)"}，确保非 bash 钩子也有指纹可缓存</li>
+     * </ol>
+     *
+     * @param askPayload 钩子返回的 ASK 载荷
+     * @param toolName   工具名称
+     * @return 指纹字符串，不可能为 null
+     */
+    public static String extractFingerprint(String askPayload, String toolName) {
+        if (askPayload != null && !askPayload.isEmpty()) {
+            int separatorIdx = askPayload.indexOf("\n---\n");
+            if (separatorIdx > 0) {
+                return askPayload.substring(0, separatorIdx);
+            }
+        }
+        // 兜底：生成 toolName:normalized(askPayload) 格式指纹
+        String prefix = toolName != null ? toolName : "unknown";
+        return prefix + ":" + normalizeFingerprint(askPayload != null ? askPayload : "");
+    }
+
+    /**
      * 等待同会话中已有的审批完成。如果当前会话没有挂起的审批，立即返回。
      * 工具执行前调用此方法，确保同一会话中不会同时有多个工具等待审批。
      */
@@ -167,9 +209,27 @@ public class HookApprovalManager {
      * 发起审批请求（带 sessionId 关联，用于连接断开时批量清理）。
      */
     public CompletableFuture<Boolean> requestApproval(String toolName, String askPayload, long timeoutMs, String sessionId) {
+        String fingerprint = extractFingerprint(askPayload, toolName);
+        return requestApproval(toolName, askPayload, fingerprint, timeoutMs, sessionId);
+    }
+
+    /**
+     * 发起审批请求（完整参数：带显式 fingerprint）。
+     *
+     * @param toolName   工具名称
+     * @param askPayload ASK 载荷（展示给用户的提示信息）
+     * @param fingerprint 审批指纹（用于 60 分钟自动免审）；null 或空字符串表示不缓存
+     * @param timeoutMs  超时（毫秒），≤0 表示不超时一直等待
+     * @param sessionId  会话 ID，用于连接断开时批量清理
+     * @return true=允许, false=拒绝
+     */
+    public CompletableFuture<Boolean> requestApproval(String toolName, String askPayload,
+        String fingerprint, long timeoutMs, String sessionId) {
         String id = UUID.randomUUID().toString().substring(0, 8);
         CompletableFuture<Boolean> future = new CompletableFuture<>();
-        ApprovalRequest request = new ApprovalRequest(id, toolName, askPayload, future, sessionId);
+        // Store the wrapped future (with timeout) to ensure timeout rejection works with approve/deny
+        CompletableFuture<Boolean> wrappedFuture = future;
+        ApprovalRequest request = new ApprovalRequest(id, toolName, askPayload, fingerprint, wrappedFuture, sessionId);
 
         // 创建会话级审批门闩，阻止同会话其他工具并发执行
         if (sessionId != null) {
@@ -182,7 +242,8 @@ public class HookApprovalManager {
             future.orTimeout(effectiveTimeout, java.util.concurrent.TimeUnit.MILLISECONDS)
                 .exceptionally(ex -> {
                     logger.warning("[HookApproval] Timeout for " + id + " (" + toolName + "), auto-deny");
-                    pendingApprovals.remove(id);
+                    // Do NOT remove from pendingApprovals: user may still respond after timeout
+                    // Just complete the future with false; approve/deny will check completion status
                     return false;
                 });
         }
@@ -229,11 +290,20 @@ public class HookApprovalManager {
     public void approve(String approvalId) {
         ApprovalRequest request = pendingApprovals.remove(approvalId);
         if (request != null) {
-            // 缓存审批指纹（从 askPayload 中提取），60分钟内同命令免审
-            cacheFingerprintFromAskPayload(request.askPayload);
-            logger.info("[HookApproval] APPROVED: " + approvalId + " (" + request.toolName
-                + ") | fingerprint valid for 60min");
-            request.future.complete(true);
+            // 使用 ApprovalRequest 中存储的 fingerprint 直接缓存（适用所有 Hook 类型）
+            if (request.fingerprint != null && !request.fingerprint.isEmpty()) {
+                cacheFingerprint(request.fingerprint);
+                logger.info("[HookApproval] APPROVED: " + approvalId + " (" + request.toolName
+                    + ") | fingerprint cached (60min TTL): " + truncate(request.fingerprint, 80));
+            } else {
+                logger.info("[HookApproval] APPROVED: " + approvalId + " (" + request.toolName
+                    + ") | no fingerprint to cache");
+            }
+            if (!request.future.isDone()) {
+                request.future.complete(true);
+            } else {
+                logger.info("XXApproval already resolved (timed out): " + approvalId);
+            }
             releaseSessionGate(request.sessionId);
         } else {
             logger.fine("[HookApproval] Unknown approval ID: " + approvalId);
@@ -247,7 +317,11 @@ public class HookApprovalManager {
         ApprovalRequest request = pendingApprovals.remove(approvalId);
         if (request != null) {
             logger.info("[HookApproval] DENIED: " + approvalId + " (" + request.toolName + ")");
-            request.future.complete(false);
+            if (!request.future.isDone()) {
+                request.future.complete(false);
+            } else {
+                logger.info("XXDenial arrived after resolution: " + approvalId);
+            }
             releaseSessionGate(request.sessionId);
         } else {
             logger.fine("[HookApproval] Unknown approval ID: " + approvalId);
@@ -294,23 +368,6 @@ public class HookApprovalManager {
         if (gate != null) {
             gate.countDown();
             logger.fine("[HookApproval] Released approval gate for session=" + sessionId);
-        }
-    }
-
-    /**
-     * 从 hook 编码的 askPayload 中提取指纹并缓存（60分钟TTL）。
-     * BashSafetyHook 编码格式: {@code fingerprint + "\n---\n" + displayText}
-     */
-    private void cacheFingerprintFromAskPayload(String askPayload) {
-        if (askPayload == null || askPayload.isEmpty()) return;
-        int separatorIdx = askPayload.indexOf("\n---\n");
-        if (separatorIdx > 0) {
-            String fingerprint = askPayload.substring(0, separatorIdx);
-            if (!fingerprint.isEmpty()) {
-                fingerprintCache.put(fingerprint, System.currentTimeMillis() + FINGERPRINT_TTL_MS);
-                logger.info("[HookApproval] Fingerprint cached from approval (60min TTL): "
-                    + truncate(fingerprint, 80));
-            }
         }
     }
 

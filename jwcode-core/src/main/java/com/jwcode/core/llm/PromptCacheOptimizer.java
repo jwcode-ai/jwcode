@@ -161,6 +161,31 @@ public class PromptCacheOptimizer {
     }
 
     /**
+     * 当片段变更时使缓存失效。
+     *
+     * @param fragmentId 变更的片段 ID
+     */
+    public void invalidateFragment(String fragmentId) {
+        stats.recordMiss("fragment_changed:" + fragmentId);
+        lastSystemPromptHash = null; // 强制下次全量检测
+        logger.info("[PromptCache] 片段变更导致缓存失效: " + fragmentId);
+    }
+
+    /**
+     * 记录片段注入（与 ContextFragment 架构集成）。
+     * 将片段作为 CacheSegment 注册以追踪变更。
+     */
+    public void registerFragmentSegment(String fragmentId, String content, int priority) {
+        String hash = sha256(content);
+        CacheSegment existing = cachedSegments.get(fragmentId);
+        if (existing != null && !existing.sha256().equals(hash)) {
+            invalidateFragment(fragmentId);
+        }
+        cachedSegments.put(fragmentId, new CacheSegment(
+            fragmentId, content, hash, System.currentTimeMillis(), priority));
+    }
+
+    /**
      * 记录缓存命中。
      */
     public void recordHit(long estimatedSavedTokens) {

@@ -35,3 +35,9 @@ auto-*/
 *.pyc
 nul
 *.lst
+
+# === IDE (local) ===
+.claude/
+
+# === Node.js portable ===
+jwcode-web/node/

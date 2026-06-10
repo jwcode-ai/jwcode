@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Activity, RefreshCw, AlertTriangle, BarChart3, DollarSign, History, Zap, Wrench, AlertCircle, Cpu, Clock, ChevronLeft } from 'lucide-react';
+import { EvalButton } from '../Chat/EvalButton';
 import { api } from '../../services/api';
 import type { ObservabilitySummary, CostData, TraceRunSummary, TraceRunDetail, TraceEvent } from '../../types';
 
@@ -230,6 +231,7 @@ export function ObservabilityView() {
         <button onClick={loadData} className="p-1.5 rounded hover:bg-dark-hover text-dark-muted hover:text-dark-text transition-colors" title="Refresh">
           <RefreshCw size={16} />
         </button>
+        <EvalButton />
       </div>
 
       {/* Sub-tab bar */}

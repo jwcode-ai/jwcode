@@ -59,8 +59,33 @@ if (existsSync(fatJarSource)) {
       copyFileSync(fatJarSource, join(backendDir, 'jwcode-web.jar'));
     }
   } else {
-    console.log('[build] ProGuard JAR not found, skipping obfuscation. Copying un-obfuscated JAR.');
-    copyFileSync(fatJarSource, join(backendDir, 'jwcode-web.jar'));
+    // Auto-download ProGuard if not present
+    const proguardUrl = 'https://github.com/Guardsquare/proguard/releases/download/v7.4.1/proguard-7.4.1.jar';
+    console.log('[build] ProGuard JAR not found locally. Downloading from GitHub...');
+    try {
+      const { createWriteStream } = await import('node:fs');
+      const { pipeline } = await import('node:stream/promises');
+      const resp = await fetch(proguardUrl);
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const dest = createWriteStream(proguardJar);
+      await pipeline(resp.body, dest);
+      console.log('[build] ProGuard downloaded. Running obfuscation...');
+      execFileSync('java', [
+        '-jar', proguardJar,
+        '-injars', fatJarSource,
+        '-outjars', obfJar,
+        '-libraryjars', String(process.env.JAVA_HOME || '') + '/jre/lib/rt.jar',
+        '@' + proguardConf,
+        '-printmapping', join(backendDir, 'proguard.map')
+      ], { stdio: 'inherit' });
+      console.log('[build] ProGuard obfuscation completed.');
+      const finalJar = join(backendDir, 'jwcode-web.jar');
+      if (existsSync(finalJar)) unlinkSync(finalJar);
+      copyFileSync(obfJar, finalJar);
+    } catch (err) {
+      console.error('[build] ProGuard download/run failed, falling back to un-obfuscated JAR:', err.message);
+      copyFileSync(fatJarSource, join(backendDir, 'jwcode-web.jar'));
+    }
   }
 } else {
   console.log('[build] JAR not found (skip Maven build first, or use --build flag).');
@@ -101,8 +126,11 @@ function getJmodsPath() {
 const jlinkPath = getJlinkPath();
 const jmodsPath = getJmodsPath();
 const jreDir = join(backendDir, 'jre');
+const skipJlink = process.argv.includes('--publish');
 
-if (jlinkPath && jmodsPath) {
+if (skipJlink) {
+  console.log('[build] --publish flag set, skipping JRE bundle.');
+} else if (jlinkPath && jmodsPath) {
   // Only build JRE if the JAR step succeeded
   const jarExists = existsSync(join(backendDir, 'jwcode-web.jar'));
   if (!jarExists) {
@@ -112,7 +140,7 @@ if (jlinkPath && jmodsPath) {
     try {
       execFileSync(jlinkPath, [
         '--module-path', jmodsPath,
-        '--add-modules', 'java.base,java.net.http,java.logging,java.sql,java.xml,java.management,java.naming,jdk.unsupported,java.compiler,java.instrument',
+        '--add-modules', 'java.base,java.net.http,java.logging,java.sql,java.xml,java.management,java.naming,jdk.unsupported,java.compiler,java.instrument,jdk.httpserver,jdk.crypto.ec',
         '--output', jreDir,
         '--strip-debug',
         '--compress', '2',

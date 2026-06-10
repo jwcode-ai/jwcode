@@ -8,15 +8,12 @@ import com.jwcode.core.hook.executor.AgentHookExecutor;
 import com.jwcode.core.hook.executor.PromptHookExecutor;
 import com.jwcode.core.tool.ToolExecutor;
 
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import java.util.regex.Pattern;
 
 /**
  * HookSystemInitializer — Hook 系统一键初始化器。
@@ -45,119 +42,14 @@ public class HookSystemInitializer {
     private static final String HOOKS_DIR = ".jwcode";
     private static final String HOOKS_FILE = ".jwcode/hooks.json";
 
-    // ──────────── 危险命令正则 ────────────
-
-    private static final Pattern DANGEROUS_CMD = Pattern.compile(
-        "rm\\s+-rf\\s+/|mkfs\\.|: *\\( *\\) *\\{ *:|DROP\\s+TABLE|DELETE\\s+FROM|" +
-        "format\\s+[a-z]:|del\\s+/[fF]\\s+/[sS]|shutdown\\s+-|>\\s*/dev/sd",
-        Pattern.CASE_INSENSITIVE);
-
     // ──────────── 钩子实现 ────────────
 
-    /** BashSafetyHook — 纯 Java 实现，拦截危险 shell 命令，支持60分钟审批指纹缓存 */
-    private static class BashSafetyExecutor implements HookExecutor {
-        private static final Set<String> TARGET_TOOLS = Set.of("BashTool", "PowerShellTool");
-
-        @Override
-        public CompletableFuture<HookResult> execute(HookContext context) {
-            return CompletableFuture.supplyAsync(() -> {
-                try {
-                    if (context.getToolName() == null
-                        || !TARGET_TOOLS.contains(context.getToolName())) {
-                        return HookResult.allow("BashSafetyHook");
-                    }
-                    String toolInput = context.getToolInput() != null
-                        ? context.getToolInput().toString() : "";
-                    if (DANGEROUS_CMD.matcher(toolInput).find()) {
-                        return HookResult.deny("BashSafetyHook",
-                            "Dangerous command pattern detected: " + truncate(toolInput, 80));
-                    }
-
-                    // 审批指纹缓存：相同命令60分钟内被批准过 → 自动放行
-                    String fingerprint = normalizeFingerprint(toolInput);
-                    if (HookApprovalManager.getInstance().isFingerprintCached(fingerprint)) {
-                        return HookResult.allow("BashSafetyHook",
-                            "Auto-approved (cached fingerprint): " + truncate(toolInput, 80));
-                    }
-
-                    // ASK 审批：将指纹编码到 askPayload 中，审批通过后在 HookApprovalManager 中自动缓存
-                    String displayText = truncate(toolInput, 100);
-                    String askPayload = fingerprint + "\n---\n" + displayText;
-                    return HookResult.ask("BashSafetyHook", askPayload,
-                        "审批 shell 命令执行");
-                } catch (Exception e) {
-                    return HookResult.allow("BashSafetyHook", "Hook error, fail-open");
-                }
-            });
-        }
-        @Override public HookImplementationType getType() { return HookImplementationType.SHELL; }
-        @Override public String getName() { return "BashSafetyHook"; }
-        @Override public HookPriority getPriority() { return HookPriority.SECURITY; }
-        @Override public boolean isFailOpen() { return false; }
-        @Override public long getTimeoutMs() { return 5000; }
-        @Override public boolean supportsEvent(HookEventType eventType) {
-            return eventType == HookEventType.PRE_TOOL_USE;
-        }
-
-        /**
-         * 标准化命令文本为指纹：去首尾空白、压缩连续空白、转小写。
-         */
-        private static String normalizeFingerprint(String command) {
-            if (command == null) return "";
-            return command.trim().replaceAll("\\s+", " ").toLowerCase();
-        }
-    }
-
-    /** FileWriteApprovalHook — Claude Code 风格: 文件修改前审批 */
-    private static class FileWriteAuditExecutor implements HookExecutor {
-        private static final Set<String> TARGET_TOOLS = Set.of("FileWriteTool", "FileEditTool");
-
-        @Override
-        public CompletableFuture<HookResult> execute(HookContext context) {
-            return CompletableFuture.supplyAsync(() -> {
-                try {
-                    if (context.getToolName() == null
-                        || !TARGET_TOOLS.contains(context.getToolName())) {
-                        return HookResult.allow("FileWriteApprovalHook");
-                    }
-                    String fp = extractFilePath(context);
-                    String tool = context.getToolName();
-                    return HookResult.ask("FileWriteApprovalHook",
-                        fp != null ? fp : "(unknown file)",
-                        "审批文件修改: " + tool);
-                } catch (Exception e) {
-                    return HookResult.allow("FileWriteApprovalHook", "Hook error, fail-open");
-                }
-            });
-        }
-        private String extractFilePath(HookContext ctx) {
-            if (ctx.getToolResult() != null) {
-                try {
-                    var fpNode = ctx.getToolResult().get("filePath");
-                    if (fpNode != null) return fpNode.asText();
-                } catch (Exception ignored) {}
-            }
-            if (ctx.getToolInput() != null) {
-                try {
-                    var fpNode = ctx.getToolInput().get("filePath");
-                    if (fpNode == null) fpNode = ctx.getToolInput().get("file_path");
-                    if (fpNode == null) fpNode = ctx.getToolInput().get("path");
-                    if (fpNode != null) return fpNode.asText();
-                } catch (Exception ignored) {}
-            }
-            return null;
-        }
-        @Override public HookImplementationType getType() { return HookImplementationType.SHELL; }
-        @Override public String getName() { return "FileWriteAuditHook"; }
-        @Override public HookPriority getPriority() { return HookPriority.PROJECT; }
-        @Override public boolean isFailOpen() { return true; }
-        @Override public long getTimeoutMs() { return 3000; }
-        @Override public boolean supportsEvent(HookEventType eventType) {
-            return eventType == HookEventType.PRE_TOOL_USE;
-        }
-    }
-
-    /** ToolUsageStatsHook — 纯 Java 实现，统计工具调用次数 */
+    /**
+     * ToolUsageStatsHook — 纯 Java 实现，统计工具调用次数。
+     *
+     * <p>BashSafetyHook 和 FileWriteAuditHook 已移至独立文件，
+     * 通过 {@link BashSafetyHook} 和 {@link FileWriteAuditHook} 注册。</p>
+     */
     private static class ToolUsageStatsExecutor implements HookExecutor {
         private final Path statsFile = Path.of(HOOKS_DIR, "hook-stats.json");
         @Override
@@ -248,10 +140,10 @@ public class HookSystemInitializer {
             HookSystemInitializer.registry = hookRegistry;
 
             // 3. 注册内置 Hook（纯 Java 实现，零外部依赖 — 无论 hooks.json 是否为空都生效）
-            hookRegistry.register(new BashSafetyExecutor());
-            hookRegistry.register(new FileWriteAuditExecutor());
+            hookRegistry.register(new BashSafetyHook());
+            hookRegistry.register(new FileWriteAuditHook());
             hookRegistry.register(new ToolUsageStatsExecutor());
-            logger.info("[HookInit] Registered 3 built-in hooks");
+            logger.info("[HookInit] Registered 3 built-in hooks (BashSafetyHook, FileWriteAuditHook, ToolUsageStatsHook)");
 
             // 4. 创建工厂并解析配置文件中的 Hook
             HookExecutorFactory factory = new HookExecutorFactory(llmCallback, agentCallback);
@@ -317,7 +209,4 @@ public class HookSystemInitializer {
         public boolean isSuccess() { return "OK".equals(status); }
     }
 
-    private static String truncate(String s, int maxLen) {
-        return s.length() <= maxLen ? s : s.substring(0, maxLen) + "...";
-    }
 }

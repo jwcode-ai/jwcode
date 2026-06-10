@@ -9,4 +9,5 @@ build.mjs
 *.tsbuildinfo
 *.conf
 proguard.map
-
+backend/jre/
+scripts/

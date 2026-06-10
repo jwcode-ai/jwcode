@@ -103,7 +103,7 @@ public class DockerSandboxExecutor implements BackgroundCommandExecutor {
             "--tmpfs", "/var/tmp:rw,noexec,nosuid,size=" + TMPFS_SIZE,
             "--security-opt=no-new-privileges",
             "--cap-drop=ALL",
-            "--cap-add=DAC_OVERRIDE",
+            // DAC_OVERRIDE removed: allows bypassing file permission checks in container
             "--ulimit", "nofile=256:512",
             "--ulimit", "nproc=128:256",
             "--cidfile", cidFile.toString(),

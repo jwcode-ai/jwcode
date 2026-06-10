@@ -14,6 +14,7 @@ interface Props {
   onDeny: () => void;
   onAllowSession: () => void;
   onAutoMode: () => void;
+  queuePosition?: { current: number; total: number };
 }
 
 const COUNTDOWN_S = 15;
@@ -72,7 +73,7 @@ function extractPreview(toolName: string, payload: string): string {
   return payload.length > 200 ? payload.slice(0, 200) + "..." : payload;
 }
 
-export function ApprovalModal({ toolName, payload, onAllow, onDeny, onAllowSession, onAutoMode }: Props) {
+export function ApprovalModal({ toolName, payload, onAllow, onDeny, onAllowSession, onAutoMode, queuePosition }: Props) {
   const [selected, setSelected] = useState(0);
   const [countdown, setCountdown] = useState(COUNTDOWN_S);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -137,6 +138,9 @@ export function ApprovalModal({ toolName, payload, onAllow, onDeny, onAllowSessi
         <Box gap={1}>
           <Text bold>Permission Required</Text>
           <Text dimColor>{"· "}{toolName}</Text>
+          {queuePosition && queuePosition.total > 1 && (
+            <Text dimColor>({queuePosition.current}/{queuePosition.total})</Text>
+          )}
         </Box>
         <Text color={countdownUrgent ? t.error : t.muted}>
           Auto {countdown}s

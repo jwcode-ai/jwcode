@@ -46,11 +46,20 @@ public class FileReadTool implements Tool<FileReadInput, FileReadOutput, FileRea
     private static class CacheEntry {
         final FileReadOutput output;
         final long timestamp;
-        CacheEntry(FileReadOutput output) {
+        final long fileLastModified;
+        CacheEntry(FileReadOutput output, long fileLastModified) {
             this.output = output;
             this.timestamp = System.currentTimeMillis();
+            this.fileLastModified = fileLastModified;
         }
         boolean isExpired() { return System.currentTimeMillis() - timestamp > CACHE_TTL_MS; }
+        boolean isStale(Path filePath) {
+            try {
+                return Files.getLastModifiedTime(filePath).toMillis() > fileLastModified;
+            } catch (IOException e) {
+                return true; // 无法检查时视为过期
+            }
+        }
     }
     
     // 支持的图片格式
@@ -152,7 +161,7 @@ public class FileReadTool implements Tool<FileReadInput, FileReadOutput, FileRea
                 String cacheKey = filePath.toAbsolutePath() + "#L" + input.getEffectiveStartLine()
                     + "-" + (input.endLine() != null ? input.endLine() : "END");
                 CacheEntry cached = readCache.get(cacheKey);
-                if (cached != null && !cached.isExpired()) {
+                if (cached != null && !cached.isExpired() && !cached.isStale(filePath)) {
                     logger.fine("FileRead cache hit: " + cacheKey);
                     return ToolResult.success(cached.output);
                 }
@@ -171,7 +180,8 @@ public class FileReadTool implements Tool<FileReadInput, FileReadOutput, FileRea
 
                 // 缓存成功结果
                 if (result.isSuccess()) {
-                    readCache.put(cacheKey, new CacheEntry(result.getData()));
+                    long lastMod = Files.getLastModifiedTime(filePath).toMillis();
+                    readCache.put(cacheKey, new CacheEntry(result.getData(), lastMod));
                 }
 
                 return result;

@@ -124,6 +124,13 @@ public class HookRegistry {
             logger.fine("[HookRegistry] Skipping disabled executor: " + executor.getName());
             return;
         }
+        // 按 name 去重，防止同一 Hook 被重复注册（如内联类和独立类共存时）
+        boolean exists = allExecutors.stream()
+            .anyMatch(e -> e.getName().equals(executor.getName()));
+        if (exists) {
+            logger.fine("[HookRegistry] Duplicate executor skipped: " + executor.getName());
+            return;
+        }
         allExecutors.add(executor);
         rebuildIndex();
         logger.info("[HookRegistry] Registered: " + executor.getName()
@@ -146,6 +153,18 @@ public class HookRegistry {
         allExecutors.removeIf(e -> e.getName().equals(executorName));
         rebuildIndex();
         logger.info("[HookRegistry] Unregistered: " + executorName);
+    }
+
+    /**
+     * 注册来自插件的钩子。
+     */
+    public void registerPluginHooks(com.jwcode.core.plugin.PluginManager pluginManager) {
+        var hookPlugins = pluginManager.getPluginsWithCapability(
+            com.jwcode.plugin.api.PluginCapability.HOOK);
+        for (var plugin : hookPlugins) {
+            logger.info("[HookRegistry] 注册插件钩子: " + plugin.getManifest().id());
+            // 插件通过 PluginContext.registerHook() 回调注册
+        }
     }
 
     /**

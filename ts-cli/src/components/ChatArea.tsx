@@ -1,13 +1,16 @@
 import { Box, Text } from 'ink';
-import { useState, useMemo, memo, useEffect } from 'react';
+import { useState, useMemo, useRef, useLayoutEffect, memo, forwardRef } from 'react';
+import { measureElement, type DOMElement } from 'ink';
 import { type Message, type ToolCall, type Step } from '../protocol.js';
 import { updateAppState, useAppChatArea, useAppSlice } from '../hooks/useAppState.js';
 import { setScrollGeometry } from '../hooks/useMouseWheel.js';
 import { DiffDisplay } from './DiffDisplay.js';
+import { MarkdownRenderer } from './MarkdownRenderer.js';
 import { t } from '../theme.js';
 
 const SEP = '-'.repeat(60);
 const MAX_VISIBLE_THINKING = 200;
+const RESERVED_ROWS = 6; // StatusLine 3-4 rows + TextInput 1 row + borders/padding
 
 interface Props {
   terminalCols: number;
@@ -58,20 +61,20 @@ function shouldStartCollapsed(toolCalls: ToolCall[], index: number): boolean {
 
 // ---- Scrollbar ----
 
-const SCROLLBAR_TRACK = '│';
-const SCROLLBAR_THUMB = '█';
-const SCROLLBAR_ARROW_UP = '▲';
-const SCROLLBAR_ARROW_DOWN = '▼';
+const SCROLLBAR_TRACK = '·';
+const SCROLLBAR_THUMB = '#';
+const SCROLLBAR_ARROW_UP = '^';
+const SCROLLBAR_ARROW_DOWN = 'v';
 
 function Scrollbar({
-  total, offset, maxVisible, trackHeight,
+  contentHeight, offset, viewportHeight,
 }: {
-  total: number; offset: number; maxVisible: number; trackHeight: number;
+  contentHeight: number; offset: number; viewportHeight: number;
 }) {
-  if (total <= maxVisible) return null;
-
-  const thumbH = Math.max(1, Math.floor(trackHeight * maxVisible / Math.max(total, 1)));
-  const maxOffset = Math.max(0, total - maxVisible);
+  // outer ChatArea decides whether to render this — we just draw the bar.
+  const trackHeight = Math.max(2, viewportHeight - 2);
+  const thumbH = Math.max(1, Math.floor(trackHeight * viewportHeight / Math.max(contentHeight, 1)));
+  const maxOffset = Math.max(0, contentHeight - viewportHeight);
   const thumbPos = maxOffset > 0
     ? Math.round((trackHeight - thumbH) * offset / maxOffset)
     : 0;
@@ -86,12 +89,12 @@ function Scrollbar({
   }
 
   return (
-    <Box flexDirection="column" width={2} flexShrink={0}>
-      <Text dimColor>{SCROLLBAR_ARROW_UP}</Text>
+    <Box flexDirection="column" width={2} flexShrink={0} minWidth={2}>
+      <Text color={t.border}>{SCROLLBAR_ARROW_UP}</Text>
       {chars.map((c, i) => (
-        <Text key={i} dimColor={c !== SCROLLBAR_THUMB}>{c}</Text>
+        <Text key={i} color={c === SCROLLBAR_THUMB ? t.text : t.border}>{c}</Text>
       ))}
-      <Text dimColor>{SCROLLBAR_ARROW_DOWN}</Text>
+      <Text color={t.border}>{SCROLLBAR_ARROW_DOWN}</Text>
     </Box>
   );
 }
@@ -106,7 +109,7 @@ function MessageContent({ content, terminalCols }: { content: string; terminalCo
   if (isDiffContent(content)) {
     return <DiffDisplay content={content} terminalCols={terminalCols} />;
   }
-  return <Text>{content}</Text>;
+  return <MarkdownRenderer content={content} terminalCols={terminalCols} />;
 }
 
 /**
@@ -193,10 +196,7 @@ const ToolCallDisplay = memo(function ToolCallDisplay({
   );
 });
 
-const MessageItem = memo(function MessageItem({
-  msg, expandedMessages, expandedTools, toolCallsExpanded,
-  onToggleTool, onToggleMessage, terminalCols,
-}: {
+const MessageItem = memo(forwardRef<DOMElement, {
   msg: Message;
   expandedMessages: Set<string>;
   expandedTools: Set<string>;
@@ -204,9 +204,12 @@ const MessageItem = memo(function MessageItem({
   onToggleTool: (id: string) => void;
   onToggleMessage: (id: string) => void;
   terminalCols: number;
-}) {
+}>(function MessageItem({
+  msg, expandedMessages, expandedTools, toolCallsExpanded,
+  onToggleTool, onToggleMessage, terminalCols,
+}, ref) {
   return (
-    <Box flexDirection="column" marginBottom={1}>
+    <Box flexDirection="column" marginBottom={1} ref={ref}>
       {msg.type === 'user' && (
         <Box flexDirection="column">
           <Text dimColor>{SEP}</Text>
@@ -261,7 +264,7 @@ const MessageItem = memo(function MessageItem({
       )}
     </Box>
   );
-}, (prev, next) => {
+}), (prev, next) => {
   return prev.msg.id === next.msg.id
     && prev.msg.content === next.msg.content
     && prev.msg.thinking === next.msg.thinking
@@ -271,17 +274,17 @@ const MessageItem = memo(function MessageItem({
     && prev.terminalCols === next.terminalCols;
 });
 
-const StreamingMessage = memo(function StreamingMessage({
-  msg, expandedTools, toolCallsExpanded, onToggleTool, terminalCols,
-}: {
+const StreamingMessage = memo(forwardRef<DOMElement, {
   msg: Message;
   expandedTools: Set<string>;
   toolCallsExpanded: boolean;
   onToggleTool: (id: string) => void;
   terminalCols: number;
-}) {
+}>(function StreamingMessage({
+  msg, expandedTools, toolCallsExpanded, onToggleTool, terminalCols,
+}, ref) {
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" ref={ref}>
       {msg.thinking && (
         <Text dimColor italic>{truncate(msg.thinking, MAX_VISIBLE_THINKING)}</Text>
       )}
@@ -306,7 +309,37 @@ const StreamingMessage = memo(function StreamingMessage({
       )}
     </Box>
   );
-});
+}));
+
+// Heuristic fallback height for a message whose DOM node has not been
+// measured yet. After the first useLayoutEffect the real measured height
+// replaces this value.
+function defaultMessageHeight(msg: Message, terminalCols: number): number {
+  if (msg.type === 'user') return 3; // sep + content + bottom margin
+  // assistant: thinking + step + tool call + content + separators
+  let h = 4;
+  if (msg.thinking) h += Math.ceil(msg.thinking.length / Math.max(1, terminalCols)) + 1;
+  h += msg.steps.length;
+  for (const tc of msg.toolCalls) {
+    h += 2;
+    if (tc.result) h += Math.min(20, Math.ceil(tc.result.length / Math.max(1, terminalCols)));
+  }
+  if (msg.content) h += Math.ceil(msg.content.length / Math.max(1, terminalCols));
+  return h;
+}
+
+// Walk up the Yoga tree to get the absolute top row of `node` in the terminal.
+function getAbsoluteTopRow(node: DOMElement | null): number {
+  let cur: DOMElement | null = node;
+  let top = 0;
+  while (cur) {
+    const y: any = (cur as any).yogaNode;
+    if (!y || typeof y.getComputedTop !== 'function') break;
+    top += y.getComputedTop();
+    cur = (cur as any).parentNode ?? null;
+  }
+  return top;
+}
 
 export const ChatArea = memo(function ChatArea({
   terminalCols, terminalRows,
@@ -315,6 +348,21 @@ export const ChatArea = memo(function ChatArea({
   const toolCallsExpanded = useAppSlice(s => s.toolCallsExpanded);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(new Set());
+  const [, setMeasureTick] = useState(0);
+
+  // viewport = visible area in terminal rows for the message list
+  const viewportHeight = Math.max(3, terminalRows - RESERVED_ROWS);
+
+  // Map<id, DOMElement> of currently rendered (sliced) message nodes.
+  // Plain ref so updating it does not cause a re-render.
+  const messageRefs = useRef<Map<string, DOMElement>>(new Map());
+  // Map<id, number> of last measured height per message.
+  const messageHeightsRef = useRef<Map<string, number>>(new Map());
+  // Last reported contentHeight — used to avoid redundant re-renders.
+  const lastTotalRef = useRef<number>(0);
+  // Ref to the outer row <Box> — used to compute absolute top row of the scrollbar.
+  const viewportRef = useRef<DOMElement | null>(null);
+  // Force re-measure on terminal resize (parent re-renders pass new terminalRows).
 
   const allMessages = useMemo(() =>
     currentMessage
@@ -322,35 +370,120 @@ export const ChatArea = memo(function ChatArea({
       : messages,
     [messages, currentMessage && currentMessage.id]);
 
-  const maxVisible = Math.max(5, terminalRows - 10);
-  const total = allMessages.length;
-  const maxScroll = Math.max(0, total - maxVisible);
-  const safeOffset = Math.min(scrollOffset, maxScroll);
+  // --- measurement loop ---
+  // Runs after every render where messages / currentMessage / measureTick change.
+  // measureElement() reads Yoga's computed height (Ink runs Yoga before
+  // useLayoutEffect), so values are accurate on the very first measurement.
+  useLayoutEffect(() => {
+    let total = 0;
+    const refs = messageRefs.current;
+    const heights = messageHeightsRef.current;
+    const cols = Math.max(10, terminalCols - 4);
 
-  // Keep scrollbar geometry up-to-date for mouse click/drag mapping
-  const welcomeRows = (total === 0 && !currentMessage) ? 6 : 1;
-  const scrollbarTopRow = welcomeRows;
+    // Sum measured heights for currently-sliced (rendered) messages.
+    for (const [id, node] of refs) {
+      try {
+        const { height } = measureElement(node);
+        if (height > 0) {
+          heights.set(id, height);
+          total += height;
+        }
+      } catch {
+        // node not yet attached — skip; previous value (or default) holds
+      }
+    }
+    // Add fallback heights for messages that exist but are NOT in the current
+    // slice (i.e. above the visible window). This lets the scrollbar's
+    // `contentHeight` reflect the full document even when only a subset is
+    // mounted.
+    for (const m of allMessages) {
+      if (!refs.has(m.id)) {
+        const h = heights.get(m.id) ?? defaultMessageHeight(m, cols);
+        heights.set(m.id, h);
+        total += h;
+      }
+    }
+    if (currentMessage) {
+      const cm = currentMessage;
+      const h = heights.get(cm.id) ?? defaultMessageHeight(cm, cols);
+      heights.set(cm.id, h);
+      total += h;
+    }
 
-  useEffect(() => {
+    // Reserve one extra line for the `[N/M]` header above the message list.
+    total += 1;
+
+    if (total !== lastTotalRef.current) {
+      lastTotalRef.current = total;
+      updateAppState(prev => (prev.contentHeight === total ? prev : { ...prev, contentHeight: total }));
+    }
+
+    // Publish geometry to mouse handler. The viewport's absolute top row is
+    // its own yogaNode top + 1 (for the [N/M] header line).
+    const topRow = getAbsoluteTopRow(viewportRef.current) + 1;
     setScrollGeometry({
-      topRow: scrollbarTopRow,
-      trackHeight: maxVisible - 2, // subtract ▲/▼ rows
-      total,
-      maxVisible,
+      topRow,
+      trackHeight: Math.max(2, viewportHeight - 2),
+      contentHeight: total,
+      viewportHeight,
       termCols: terminalCols,
     });
   });
 
-  useEffect(() => {
-    if (scrollOffset > maxScroll) {
-      updateAppState(prev => ({ ...prev, scrollOffset: maxScroll }));
+  // --- slicing ---
+  // Find the smallest startIdx such that messages[startIdx..end] covers the
+  // viewport at the current scrollOffset. We walk from the end backwards,
+  // accumulating heights, until we have `viewportHeight + safeOffset` lines.
+  const safeOffset = Math.min(scrollOffset, Math.max(0, lastTotalRef.current - viewportHeight));
+  const total = allMessages.length;
+  let startIdx = 0;
+  if (safeOffset === 0) {
+    // stick-to-bottom path: include as many trailing messages as the viewport
+    // can hold so a new stream frame doesn't blow out the slice.
+    let acc = 0;
+    for (let i = total - 1; i >= 0; i--) {
+      const h = messageHeightsRef.current.get(allMessages[i].id)
+        ?? defaultMessageHeight(allMessages[i], Math.max(10, terminalCols - 4));
+      acc += h;
+      if (acc > viewportHeight) { startIdx = i + 1; break; }
+      startIdx = i;
     }
-  }, [scrollOffset, maxScroll]);
+  } else {
+    // Scrolled up: from the last message, walk back until accumulated height
+    // exceeds safeOffset + viewportHeight. The first message we encounter
+    // that pushes us over is the start of the slice.
+    let acc = 0;
+    const needed = safeOffset + viewportHeight;
+    for (let i = total - 1; i >= 0; i--) {
+      const h = messageHeightsRef.current.get(allMessages[i].id)
+        ?? defaultMessageHeight(allMessages[i], Math.max(10, terminalCols - 4));
+      acc += h;
+      if (acc > needed) { startIdx = i; break; }
+      startIdx = i;
+    }
+  }
+  startIdx = Math.max(0, startIdx);
+  const visibleMessages = allMessages.slice(startIdx);
 
-  const startIdx = Math.max(0, total - maxVisible - safeOffset);
-  const endIdx = total - safeOffset;
-  const visibleMessages = allMessages.slice(startIdx, endIdx > 0 ? endIdx : undefined);
-  const visibleCount = visibleMessages.length;
+  // Clamp scrollOffset if the document shrank under it (e.g. /clear, /compact).
+  useLayoutEffect(() => {
+    const maxOff = Math.max(0, lastTotalRef.current - viewportHeight);
+    if (scrollOffset > maxOff) {
+      updateAppState(prev => ({ ...prev, scrollOffset: maxOff }));
+    }
+  }, [scrollOffset, viewportHeight]);
+
+  // Garbage-collect height entries for messages that no longer exist.
+  useLayoutEffect(() => {
+    const live = new Set(allMessages.map(m => m.id));
+    if (currentMessage) live.add(currentMessage.id);
+    for (const id of messageHeightsRef.current.keys()) {
+      if (!live.has(id)) {
+        messageHeightsRef.current.delete(id);
+        messageRefs.current.delete(id);
+      }
+    }
+  });
 
   const toggleExpandTool = (id: string) => {
     setExpandedTools(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
@@ -360,21 +493,35 @@ export const ChatArea = memo(function ChatArea({
     setExpandedMessages(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   };
 
-  const needsScrollbar = total > maxVisible;
+  const contentHeight = lastTotalRef.current;
+  const needsScrollbar = contentHeight > viewportHeight || scrollOffset > 0;
+
+  // Callback ref factory: registers the DOM node in messageRefs by message id.
+  const registerMessageRef = (id: string) => (node: DOMElement | null) => {
+    if (node) messageRefs.current.set(id, node);
+    else messageRefs.current.delete(id);
+  };
+
+  // Force a measurement re-run whenever the slice membership changes
+  // (so newly mounted nodes are measured on the next paint).
+  useLayoutEffect(() => {
+    setMeasureTick(t => t + 1);
+  }, [startIdx, visibleMessages.length, currentMessage && currentMessage.id, expandedTools.size, expandedMessages.size, toolCallsExpanded]);
 
   return (
-    <Box flexDirection="row" width="100%">
-      <Box flexGrow={1} flexDirection="column">
-        {needsScrollbar && (
-          <Box>
-            <Text dimColor>
-              [{safeOffset + 1}-{safeOffset + visibleCount} / {total}]
-            </Text>
-          </Box>
-        )}
+    <Box flexDirection="row" width="100%" overflow="hidden" ref={viewportRef}>
+      <Box flexGrow={1} flexDirection="column" overflow="hidden">
+        <Box>
+          <Text dimColor={!needsScrollbar} bold={needsScrollbar}>
+            {needsScrollbar
+              ? `[${startIdx + 1}-${total} / ${total}]`
+              : `[${total}]`}
+          </Text>
+        </Box>
         {visibleMessages.map(msg => (
           <MessageItem
             key={msg.id}
+            ref={registerMessageRef(msg.id)}
             msg={msg}
             expandedMessages={expandedMessages}
             expandedTools={expandedTools}
@@ -387,6 +534,7 @@ export const ChatArea = memo(function ChatArea({
         {currentMessage && (
           <StreamingMessage
             key={currentMessage.id}
+            ref={registerMessageRef(currentMessage.id)}
             msg={currentMessage}
             terminalCols={terminalCols}
             expandedTools={expandedTools}
@@ -397,10 +545,9 @@ export const ChatArea = memo(function ChatArea({
       </Box>
       {needsScrollbar && (
         <Scrollbar
-          total={total}
+          contentHeight={contentHeight}
           offset={safeOffset}
-          maxVisible={maxVisible}
-          trackHeight={maxVisible - 2}
+          viewportHeight={viewportHeight}
         />
       )}
     </Box>

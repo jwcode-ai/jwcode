@@ -273,6 +273,35 @@ public class LocalAgentDispatcher implements AgentDispatcher {
             .orElse(null);
     }
 
+    /**
+     * 按角色名称分派任务 — 为 AgentSwarm 提供便捷的分派入口。
+     *
+     * @param role 角色名称（如 "Coder", "Explorer", "Architect"）
+     * @param prompt 任务提示词
+     * @return 执行结果字符串
+     */
+    public String dispatchToRole(String role, String prompt) {
+        AgentCard card = findAgentByType(role);
+        if (card == null) {
+            // 尝试按名称模糊匹配
+            card = agentCards.values().stream()
+                .filter(c -> c.getName().toLowerCase().contains(role.toLowerCase()))
+                .findFirst()
+                .orElse(null);
+        }
+
+        if (card == null) {
+            logger.warning("[LocalAgentDispatcher] 未找到角色对应的 Agent: " + role);
+            return "[Swarm] 未找到角色 " + role + " 的执行者";
+        }
+
+        A2ATask task = A2ATask.create("swarm-task", prompt, Map.of());
+        TaskOutput output = submitTaskSync(card.getName(), task, 300_000, TimeUnit.MILLISECONDS);
+        return output.isSuccess() && output.getSummary() != null
+            ? output.getSummary()
+            : "[Swarm] " + card.getName() + " 完成任务（无文本输出）";
+    }
+
     @Override
     public CompletableFuture<TaskOutput> submitTask(String agentName, A2ATask task) {
         AgentCard card = agentCards.get(agentName);

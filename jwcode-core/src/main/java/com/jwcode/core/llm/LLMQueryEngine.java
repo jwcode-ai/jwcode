@@ -31,6 +31,8 @@ import com.jwcode.core.service.SimpleCompactionStrategy;
 import com.jwcode.core.aicl.AICLPromptBuilder;
 import com.jwcode.core.agent.BudgetExhaustedHandler;
 import com.jwcode.core.config.ConfigManager;
+import com.jwcode.core.llm.fragment.*;
+import com.jwcode.core.llm.fragment.impl.*;
 import com.jwcode.core.permission.PermissionManagerChecker;
 import com.jwcode.core.task.TaskLifecycleManager;
 
@@ -78,6 +80,9 @@ public class LLMQueryEngine {
     private com.jwcode.core.agent.AgentBridge agentBridge;
     // CompactorAgent 引用（用于语义级上下文压缩）
     private com.jwcode.core.agent.CompactorAgent compactorAgent;
+    // 片段注册表（ContextFragment 架构）
+    private final FragmentRegistry fragmentRegistry;
+    private boolean fragmentsInitialized = false;
     
     // BudgetExhaustedHandler 引用（用于Token预算监控）
     private com.jwcode.core.agent.BudgetExhaustedHandler budgetHandler;
@@ -87,6 +92,9 @@ public class LLMQueryEngine {
     private java.util.List<String> lastToolNames = new java.util.ArrayList<>();
     // 【优化】重复工具检测计数器
     private int repeatedToolPatternCount = 0;
+    // AgentSwarm 共享实例 + 锁
+    private com.jwcode.core.advanced.swarm.AgentSwarm sharedSwarm;
+    private final Object swarmLock = new Object();
     // 【修复】纯思考无行动检测：连续仅有 reasoning 但无文本/无工具调用的轮数
     private int consecutiveThinkingOnlyRounds = 0;
     // 【修复】连续失败工具轮数检测：连续 N 轮工具调用全部失败则强制终止
@@ -129,6 +137,9 @@ public class LLMQueryEngine {
         initCompactorAgent();
         // 创建 BudgetExhaustedHandler（用于Token预算监控）
         initBudgetHandler();
+        // 初始化片段注册表（ContextFragment 架构）
+        this.fragmentRegistry = FragmentRegistry.getInstance();
+        initDefaultFragments();
     }
 
     /**
@@ -157,6 +168,22 @@ public class LLMQueryEngine {
             logger.warning("[LLMQueryEngine] Failed to init BudgetExhaustedHandler: " + e.getMessage());
             this.budgetHandler = null;
         }
+    }
+
+    /**
+     * 初始化默认片段 — 向 FragmentRegistry 注册内置片段。
+     */
+    private void initDefaultFragments() {
+        if (fragmentsInitialized) return;
+        fragmentRegistry.registerAll(List.of(
+            new AgentRoleFragment(),
+            new FileEditGuidelinesFragment(),
+            new EnvironmentInfoFragment(),
+            new ToolDefinitionsFragment(),
+            new PermissionContextFragment()
+        ));
+        fragmentsInitialized = true;
+        logger.info("[LLMQueryEngine] 已注册 " + fragmentRegistry.getAllSorted().size() + " 个默认片段");
     }
 
     /**
@@ -290,6 +317,17 @@ public class LLMQueryEngine {
     /**
      * 执行查询
      */
+    private com.jwcode.core.advanced.swarm.AgentSwarm getSharedAgentSwarm() {
+        if (sharedSwarm == null) {
+            synchronized (swarmLock) {
+                if (sharedSwarm == null) {
+                    sharedSwarm = new com.jwcode.core.advanced.swarm.AgentSwarm(llmService);
+                }
+            }
+        }
+        return sharedSwarm;
+    }
+
     public CompletableFuture<QueryResult> query(String prompt) {
         Agent currentAgent = agentRegistry != null ? agentRegistry.getCurrent() : null;
         String agentName = currentAgent != null ? currentAgent.getName() : "default";
@@ -327,11 +365,8 @@ public class LLMQueryEngine {
         // 添加用户消息到会话
         session.addMessage(Message.createUserMessage(prompt));
 
-        // 添加系统提示，强调文件编辑前必须先读取
-        addFileEditGuidelines();
-
-        // 注入环境信息（操作系统、工作目录、系统时间等），让 AI 了解当前环境
-        injectEnvironmentInfo();
+        // 通过片段注册表注入上下文片段（文件编辑指南、环境信息等）
+        injectContextFragments();
         
         // 【优化】重置无进展检测计数器
         resetStagnationDetectors();
@@ -344,9 +379,34 @@ public class LLMQueryEngine {
     }
     
     /**
+     * 通过 FragmentRegistry 注入所有启用的上下文片段。
+     *
+     * <p>替代原来的分散注入方法（injectAgentSystemPrompt、addFileEditGuidelines、
+     * injectEnvironmentInfo），统一通过片段注册表管理。
+     */
+    private void injectContextFragments() {
+        Agent agent = agentRegistry != null ? agentRegistry.getCurrent() : null;
+        FragmentContext ctx = new FragmentContext(
+            session, agent, toolExecutor, null);
+        List<FragmentResult> results = fragmentRegistry.buildAndInject(ctx, session);
+
+        if (!results.isEmpty()) {
+            int totalTokens = results.stream().mapToInt(FragmentResult::tokenCount).sum();
+            logger.info("[LLMQueryEngine] 已注入 " + results.size() + " 个上下文片段，"
+                + "合计 ~" + totalTokens + " tokens | "
+                + results.stream()
+                    .map(r -> r.fragmentId() + "(" + r.tokenCount() + ")")
+                    .reduce((a, b) -> a + ", " + b).orElse(""));
+        }
+    }
+
+    /**
      * 【Phase 5】注入当前 Agent 的系统提示词
      * 在对话开始时注入，让 LLM 知晓自己的角色、职责和可用工具约束。
+     *
+     * @deprecated 已委托给 {@link AgentRoleFragment}，保留用于向后兼容。
      */
+    @Deprecated
     private void injectAgentSystemPrompt() {
         if (agentRegistry == null) return;
         Agent agent = agentRegistry.getCurrent();
@@ -399,7 +459,10 @@ public class LLMQueryEngine {
 
     /**
      * 添加文件编辑指南到系统提示
+     *
+     * @deprecated 已委托给 {@link FileEditGuidelinesFragment}，保留用于向后兼容。
      */
+    @Deprecated
     private void addFileEditGuidelines() {
         String guidelines = """
             【重要】文件编辑规则：
@@ -521,12 +584,9 @@ public class LLMQueryEngine {
     /**
      * 注入环境信息到系统提示
      *
-     * <p>让 AI 知晓当前的运行环境：操作系统、Java版本、系统时间、工作目录等。
-     * 这样 AI 在回答"当前工作目录是什么"等问题时能给出准确的答案，
-     * 而不是返回 JVM 启动目录。</p>
-     *
-     * <p>使用去重标记 [ENV_INFO] 避免每次迭代重复注入。</p>
+     * @deprecated 已委托给 {@link EnvironmentInfoFragment}，保留用于向后兼容。
      */
+    @Deprecated
     private void injectEnvironmentInfo() {
         String marker = "[ENV_INFO]";
         if (hasRecentSystemPrompt(marker)) {
@@ -890,11 +950,10 @@ public class LLMQueryEngine {
         pipeline.publish(new ObservationEvent.StepStart("LLM查询", "正在分析问题并制定解决方案..."));
         
         session.addMessage(Message.createUserMessage(prompt));
-        addFileEditGuidelines();
-        
-        // 注入环境信息（操作系统、工作目录、系统时间等），让 AI 了解当前环境
-        injectEnvironmentInfo();
-        
+
+        // 通过片段注册表注入上下文片段（文件编辑指南、环境信息等）
+        injectContextFragments();
+
         // 【优化】重置无进展检测计数器
         resetStagnationDetectors();
 
@@ -1902,9 +1961,9 @@ public class LLMQueryEngine {
                 QueryResult.error("连续" + consecutiveFailedToolRounds + "轮工具调用全部失败，已自动终止。请检查工具配置或网络连接后重试。")));
         }
 
-        // 9. Inject agent system prompt (first iteration only)
+        // 9. Inject context fragments (first iteration only)
         if (iteration == 0) {
-            injectAgentSystemPrompt();
+            injectContextFragments();
             checkTokenBudget();
         }
 
@@ -1935,8 +1994,8 @@ public class LLMQueryEngine {
         if (!Boolean.TRUE.equals(autoSwarmEnabled)) return;
 
         try {
-            com.jwcode.core.advanced.swarm.AgentSwarm swarm =
-                new com.jwcode.core.advanced.swarm.AgentSwarm(llmService);
+            // Use shared AgentSwarm instead of creating new one each query (prevents thread pool leak)
+            com.jwcode.core.advanced.swarm.AgentSwarm swarm = getSharedAgentSwarm();
             com.jwcode.core.advanced.swarm.AutoSwarmTrigger trigger =
                 new com.jwcode.core.advanced.swarm.AutoSwarmTrigger(swarm);
             com.jwcode.core.advanced.swarm.AutoSwarmTrigger.TaskAnalysis analysis = trigger.analyzeTask(prompt);

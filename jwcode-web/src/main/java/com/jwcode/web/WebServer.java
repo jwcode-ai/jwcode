@@ -7,6 +7,7 @@ import com.jwcode.core.config.YamlConfigLoader;
 import com.jwcode.core.index.CodebaseIndexer;
 import com.jwcode.core.index.EmbeddingService;
 import com.jwcode.core.index.IndexConfig;
+import com.jwcode.core.plugin.PluginManager;
 import com.jwcode.core.task.TaskStore;
 import com.jwcode.core.tool.ToolRegistry;
 import com.jwcode.core.api.AgentFlowBroadcaster;
@@ -92,6 +93,17 @@ public class WebServer {
             System.err.println("[WebServer] Sandbox init failed (non-fatal): " + e.getMessage());
         }
 
+        // 初始化插件系统 — 发现并加载 ~/.jwcode/plugins/ 和 ./.jwcode/plugins/ 中的插件
+        try {
+            int pluginCount = PluginManager.getInstance().discoverAndLoadAll();
+            if (pluginCount > 0) {
+                toolRegistry.registerPluginTools(PluginManager.getInstance());
+                System.out.println("[WebServer] Plugin system initialized: " + pluginCount + " plugins loaded");
+            }
+        } catch (Exception e) {
+            System.err.println("[WebServer] Plugin init failed (non-fatal): " + e.getMessage());
+        }
+
         // 启动 HTTP 服务器
         server = HttpServer.create(new InetSocketAddress(port), 0);
         
@@ -116,6 +128,9 @@ public class WebServer {
         server.createContext("/api/system/status", new SystemStatusHandler());
         server.createContext("/api/checkpoints", new CheckpointsHandler());
         server.createContext("/api/observability", new ObservabilityHandler());
+        MetricsHandler metricsHandler = new MetricsHandler();
+        server.createContext("/api/metrics", metricsHandler);
+        System.out.println("  ✓ Metrics API: /api/metrics (Prometheus + JSON)");
 
         // Logs API — browse and download server log files
         server.createContext("/api/logs", new LogsHandler());
@@ -180,6 +195,7 @@ public class WebServer {
         // 启动 WebSocket 服务器（流式响应）
         webSocketHandler = new StreamingWebSocketHandler(wsPort, toolRegistry);
         webSocketHandler.setCodebaseIndexer(codebaseIndexer);
+        webSocketHandler.setSessionManager(sessionManager);
         webSocketHandler.start();
 
         // 将 PlanTaskBroadcaster 接入主 WebSocket，使 plan_* 消息通过当前连接发送

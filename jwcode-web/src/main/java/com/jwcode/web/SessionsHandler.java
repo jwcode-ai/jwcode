@@ -27,18 +27,24 @@ public class SessionsHandler implements HttpHandler {
     public void handle(HttpExchange exchange) throws IOException {
         String method = exchange.getRequestMethod();
         String path = exchange.getRequestURI().getPath();
-        
+
         // 设置 CORS 头
         exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
         exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
         exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
-        
+
         if ("OPTIONS".equalsIgnoreCase(method)) {
             exchange.sendResponseHeaders(200, -1);
             return;
         }
-        
-        if ("GET".equalsIgnoreCase(method)) {
+
+        // 路由: /api/sessions/{id}/messages
+        if ("GET".equalsIgnoreCase(method) && path.matches("/api/sessions/[^/]+/messages")) {
+            String sessionId = path.replaceAll("/api/sessions/([^/]+)/messages", "$1");
+            getSessionMessages(exchange, sessionId);
+        } else if ("GET".equalsIgnoreCase(method) && !path.equals("/api/sessions")) {
+            getSession(exchange, path);
+        } else if ("GET".equalsIgnoreCase(method)) {
             listSessions(exchange);
         } else if ("POST".equalsIgnoreCase(method)) {
             createSession(exchange);
@@ -54,8 +60,7 @@ public class SessionsHandler implements HttpHandler {
      */
     private void listSessions(HttpExchange exchange) throws IOException {
         ArrayNode sessions = objectMapper.createArrayNode();
-        
-        // 从 WebSessionManager 获取真实会话数据
+
         for (WebSessionManager.WebSession session : sessionManager.getAllSessions()) {
             ObjectNode sessionNode = objectMapper.createObjectNode();
             sessionNode.put("id", session.getId());
@@ -63,15 +68,69 @@ public class SessionsHandler implements HttpHandler {
             sessionNode.put("createdAt", DateTimeFormatter.ISO_INSTANT.format(
                 Instant.ofEpochMilli(session.getCreatedAt())
             ));
-            sessionNode.put("updatedAt", DateTimeFormatter.ISO_INSTANT.format(Instant.now()));
-            sessionNode.put("messageCount", 0);
+            sessionNode.put("updatedAt", DateTimeFormatter.ISO_INSTANT.format(
+                Instant.ofEpochMilli(session.getUpdatedAt())
+            ));
+            sessionNode.put("messageCount", session.getMessageCount());
             sessions.add(sessionNode);
         }
-        
+
         ObjectNode response = objectMapper.createObjectNode();
         response.put("success", true);
         response.set("data", sessions);
-        
+
+        sendJsonResponse(exchange, 200, response);
+    }
+
+    /**
+     * 获取单个会话详情。
+     */
+    private void getSession(HttpExchange exchange, String path) throws IOException {
+        String sessionId = path.substring(path.lastIndexOf('/') + 1);
+        WebSessionManager.WebSession session = sessionManager.getSession(sessionId);
+        if (session == null) {
+            sendJsonResponse(exchange, 404, createError("Session not found: " + sessionId));
+            return;
+        }
+        ObjectNode data = objectMapper.createObjectNode();
+        data.put("id", session.getId());
+        data.put("title", session.getTitle());
+        data.put("createdAt", DateTimeFormatter.ISO_INSTANT.format(
+            Instant.ofEpochMilli(session.getCreatedAt())
+        ));
+        data.put("updatedAt", DateTimeFormatter.ISO_INSTANT.format(
+            Instant.ofEpochMilli(session.getUpdatedAt())
+        ));
+        data.put("messageCount", session.getMessageCount());
+
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("success", true);
+        response.set("data", data);
+        sendJsonResponse(exchange, 200, response);
+    }
+
+    /**
+     * 获取会话消息列表 — GET /api/sessions/{id}/messages
+     */
+    private void getSessionMessages(HttpExchange exchange, String sessionId) throws IOException {
+        WebSessionManager.WebSession session = sessionManager.getSession(sessionId);
+        if (session == null) {
+            sendJsonResponse(exchange, 404, createError("Session not found: " + sessionId));
+            return;
+        }
+
+        ArrayNode messages = objectMapper.createArrayNode();
+        for (String msgJson : session.getMessages()) {
+            try {
+                messages.add(objectMapper.readTree(msgJson));
+            } catch (Exception e) {
+                messages.add(msgJson);
+            }
+        }
+
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("success", true);
+        response.set("data", messages);
         sendJsonResponse(exchange, 200, response);
     }
     

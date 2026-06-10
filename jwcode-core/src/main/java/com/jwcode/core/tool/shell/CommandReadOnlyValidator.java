@@ -39,8 +39,8 @@ public class CommandReadOnlyValidator {
         "assoc", "ftype", "icacls", "cacls",
         "netstat", "ipconfig", "getmac", "arp -a", "nslookup", "ping",
         "tree", "comp", "fc",
-        "schtasks /query", "sc query", "wmic", "quser", "qwinsta",
-        "powershell", "pwsh"
+        "schtasks /query", "sc query", "wmic", "quser", "qwinsta"
+        // removed: powershell/pwsh can execute arbitrary code
     ));
 
     // 只读命令族（前缀 + 子命令模式）
@@ -88,10 +88,10 @@ public class CommandReadOnlyValidator {
             "list", "show", "freeze", "check", "config list"
         )),
         new CommandFamily("python", Set.of(
-            "-c", "-m http.server", "--version", "-V"
+            "--version", "-V"
         )),
         new CommandFamily("node", Set.of(
-            "-e", "-p", "--version", "-v"
+            "--version", "-v"
         ))
     ));
 

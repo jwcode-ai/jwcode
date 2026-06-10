@@ -42,6 +42,9 @@ public class ToolExecutionContext {
 
     // 工作区守卫绕过开关（允许临时取消工作目录限制）
     private boolean bypassWorkspaceGuard = false;
+
+    // 搜索取消令牌
+    private final com.jwcode.core.tool.search.SearchCancellationToken cancellationToken;
     
     public ToolExecutionContext(Session session, Path workingDirectory, 
                                  PermissionChecker permissionChecker) {
@@ -58,8 +61,30 @@ public class ToolExecutionContext {
         this.interactive = interactive;
         // 自动初始化工作区守卫
         this.workspaceGuard = initWorkspaceGuard(workingDirectory);
+        this.cancellationToken = com.jwcode.core.tool.search.SearchCancellationToken.none();
     }
-    
+
+    public ToolExecutionContext(Session session, Path workingDirectory,
+                                 PermissionChecker permissionChecker, boolean interactive,
+                                 com.jwcode.core.tool.search.SearchCancellationToken cancellationToken) {
+        this.session = session;
+        this.workingDirectory = workingDirectory;
+        this.permissionChecker = permissionChecker;
+        this.state = new ConcurrentHashMap<>();
+        this.startTime = System.currentTimeMillis();
+        this.interactive = interactive;
+        this.workspaceGuard = initWorkspaceGuard(workingDirectory);
+        this.cancellationToken = cancellationToken != null
+            ? cancellationToken : com.jwcode.core.tool.search.SearchCancellationToken.none();
+    }
+
+    /**
+     * 获取搜索取消令牌。
+     */
+    public com.jwcode.core.tool.search.SearchCancellationToken getCancellationToken() {
+        return cancellationToken;
+    }
+
     /**
      * 自动从 workingDirectory 初始化 WorkspaceGuard。
      */
@@ -258,12 +283,30 @@ public class ToolExecutionContext {
             Path workingDir = workingDirectory != null ? workingDirectory : Path.of("").toAbsolutePath();
             return workspaceGuard.resolveAndValidate(rawPath, workingDir, toolName);
         }
-        // 没有守卫或被绕过时，回退到简单解析
+        // 没有守卫时，回退到使用当前工作目录创建临时守卫
+        Path wd = workingDirectory != null ? workingDirectory : Path.of("").toAbsolutePath();
+        if (workspaceGuard == null) {
+            logger.warning("[ToolExecutionContext] workspaceGuard is null for " + toolName
+                + ", creating temporary guard at " + wd);
+            try {
+                WorkspaceGuard tempGuard = new WorkspaceGuard(wd);
+                return tempGuard.resolveAndValidate(rawPath, wd, toolName);
+            } catch (Exception e) {
+                logger.warning("[ToolExecutionContext] Failed to create temp WorkspaceGuard: " + e.getMessage()
+                    + ", falling back to simple resolve (restricted to wd)");
+            }
+        }
+        // 最终回退：限制到工作目录
         Path path = Path.of(rawPath);
         if (!path.isAbsolute() && workingDirectory != null) {
             path = workingDirectory.resolve(path);
         }
-        return path.normalize().toAbsolutePath();
+        path = path.normalize().toAbsolutePath();
+        // 在工作目录有守卫时回退也会检查
+        if (workspaceGuard != null) {
+            workspaceGuard.validateOrThrow(path, toolName);
+        }
+        return path;
     }
     
     /**

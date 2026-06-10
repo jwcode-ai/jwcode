@@ -302,7 +302,6 @@ export function cleanupBackend(proc: ChildProcess | null): void {
 
 // --- Daemon mode ---
 import { mkdirSync, writeFileSync, readFileSync, unlinkSync } from 'node:fs';
-import { homedir } from 'node:os';
 
 const DAEMON_DIR = join(homedir(), '.jwcode');
 const DAEMON_FILE = join(DAEMON_DIR, 'daemon.json');

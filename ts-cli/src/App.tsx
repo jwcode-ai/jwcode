@@ -11,6 +11,7 @@ import { debugLog } from './client.js';
 import { ChatArea } from './components/ChatArea.js';
 import { CommandPalette } from './components/CommandPalette.js';
 import { FilePalette } from './components/FilePalette.js';
+import { SessionPicker, type SessionInfo } from './components/SessionPicker.js';
 import { ApprovalModal } from './components/ApprovalModal.js';
 import { updateAppState, useAppSlice, getStore } from './hooks/useAppState.js';
 import { createMessage } from './protocol.js';
@@ -47,17 +48,32 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
   const referencedFilesRef = useRef<string[]>([]);
   const [showHelp, setShowHelp] = useState(false);
   const [helpScroll, setHelpScroll] = useState(0);
-  const [showApproval, setShowApproval] = useState<{
+  const [approvalQueue, setApprovalQueue] = useState<Array<{
     approvalId: string;
     toolName: string;
     payload: string;
-  } | null>(null);
+  }>>([]);
+  const currentApproval = approvalQueue.length > 0 ? approvalQueue[0] : null;
   const sessionAllowRef = useRef<Set<string>>(new Set());
 
   const clientRef = useRef<JwCodeClient | null>(null);
   const { stdout } = useStdout();
-  const terminalRows = (stdout as any)?.rows || 24;
-  const terminalCols = (stdout as any)?.columns || 80;
+  // Terminal size needs to be React state so the tree re-renders on resize
+  // (Ink's `stdout.on('resize')` does not bump React state on its own).
+  const [terminalRows, setTerminalRows] = useState<number>((stdout as any)?.rows || 24);
+  const [terminalCols, setTerminalCols] = useState<number>((stdout as any)?.columns || 80);
+  useEffect(() => {
+    const onResize = () => {
+      setTerminalRows((stdout as any)?.rows || 24);
+      setTerminalCols((stdout as any)?.columns || 80);
+    };
+    (stdout as any)?.on?.('resize', onResize);
+    return () => { (stdout as any)?.off?.('resize', onResize); };
+  }, [stdout]);
+
+  // Rows reserved by status line, prompt box, borders. ChatArea subtracts
+  // this from terminalRows to compute its own viewportHeight.
+  const RESERVED_ROWS = 6;
 
   const connected = useAppSlice(s => s.connected);
   const planWaiting = useAppSlice(s => s.planWaiting);
@@ -65,6 +81,10 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
   const messagesLen = useAppSlice(s => s.messages.length);
   const modelName = useAppSlice(s => s.modelName);
   const planMode = useAppSlice(s => s.planMode);
+  // Session history state
+  const [showSessionPicker, setShowSessionPicker] = useState(false);
+  const [sessionList, setSessionList] = useState<SessionInfo[]>([]);
+
   const [layoutVer, setLayoutVer] = useState(0);
   // Increment layout version when layout-affecting state changes to force full remount
   const prevKey = useRef("");
@@ -76,7 +96,7 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
     prevKey.current = key;
   }, [planMode, connected, messagesLen]);
 
-  const wireHandlers = useStreamHandlers(setShowApproval, sessionAllowRef);
+  const wireHandlers = useStreamHandlers(setApprovalQueue, sessionAllowRef);
 
   useEffect(() => {
     const client = new JwCodeClient(backendUrl, wsUrl);
@@ -133,7 +153,7 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
         case '__cancel_plan': updateAppState(prev => ({ ...prev, planWaiting: false })); return;
         case 'plan_mode': updateAppState(prev => ({ ...prev, planMode: !prev.planMode })); return;
         case 'auto_mode': debugLog('app', 'auto_mode toggle'); updateAppState(prev => ({ ...prev, autoMode: !prev.autoMode })); return;
-        case 'clear': updateAppState(prev => ({ ...prev, messages: [], currentMessage: null })); return;
+        case 'clear': updateAppState(prev => ({ ...prev, messages: [], currentMessage: null, contentHeight: 0, scrollOffset: 0 })); return;
         case 'model_change': if (needsArg && cmdArg) cl?.switchModel(cmdArg); return;
         case 'show_context':
           updateAppState(prev => ({
@@ -261,49 +281,117 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
     else { setShowPalette(false); setInput(''); }
   }, []);
 
+  const shiftApprovalQueue = useCallback(() => {
+    setApprovalQueue(prev => prev.length > 1 ? prev.slice(1) : []);
+  }, []);
+
   const handleApprovalAllow = useCallback((approvalId: string) => {
     clientRef.current?.approveHook(approvalId);
-    setShowApproval(null);
-  }, []);
+    shiftApprovalQueue();
+  }, [shiftApprovalQueue]);
 
   const handleApprovalDeny = useCallback((approvalId: string) => {
     clientRef.current?.denyHook(approvalId);
-    setShowApproval(null);
+    shiftApprovalQueue();
+  }, [shiftApprovalQueue]);
+
+  const paletteActive = showPalette || showFilePalette || showSessionPicker;
+
+  // Session history handlers
+  const handleNewSession = useCallback(() => {
+    updateAppState(prev => ({
+      ...prev,
+      messages: [],
+      currentMessage: null,
+      scrollOffset: 0,
+      contentHeight: 0,
+      statusText: 'New session started',
+    }));
+    // Re-create session on backend
+    if (clientRef.current) {
+      clientRef.current.send('create_session');
+    }
   }, []);
 
-  const paletteActive = showPalette || showFilePalette;
+  const handleOpenSessionHistory = useCallback(async () => {
+    if (clientRef.current) {
+      const sessions = await clientRef.current.listSessions();
+      setSessionList(sessions);
+      setShowSessionPicker(true);
+    }
+  }, []);
+
+  const handleSessionSelect = useCallback(async (session: SessionInfo | null) => {
+    setShowSessionPicker(false);
+    if (!session || !clientRef.current) return;
+    const msgs = await clientRef.current.getSessionMessages(session.id);
+    const messages: import('./protocol.js').Message[] = msgs.map((m: any) =>
+      createMessage(
+        (m.type === 'chat' || m.type === 'plan') ? 'user' : 'assistant',
+        m.data || m.message || JSON.stringify(m),
+      ),
+    );
+    updateAppState(prev => ({
+      ...prev,
+      messages: messages.length > 0 ? messages : prev.messages,
+      scrollOffset: 0,
+      contentHeight: 0,
+      statusText: `Loaded session: ${session.id} (${messages.length} msgs)`,
+    }));
+  }, []);
+
+  const handleSessionDelete = useCallback(async (sessionId: string) => {
+    if (clientRef.current) {
+      await clientRef.current.deleteSession(sessionId);
+      const sessions = await clientRef.current.listSessions();
+      setSessionList(sessions);
+    }
+  }, []);
+
+  const handleToggleHelp = () => {
+    if (showHelp) {
+      setShowHelp(false);
+    } else {
+      setShowHelp(true);
+      setHelpScroll(0);
+    }
+  };
   useKeyboardInput({
-    showApproval: showApproval !== null,
+    showApproval: currentApproval !== null,
     showHelp,
     isGenerating,
     terminalRows,
+    viewportHeight: Math.max(3, terminalRows - RESERVED_ROWS),
     paletteOpen: paletteActive,
     clientRef: clientRef as React.MutableRefObject<JwCodeClient | null>,
-    onDenyApproval: () => { if (showApproval) handleApprovalDeny(showApproval.approvalId); },
+    onDenyApproval: () => { if (currentApproval) handleApprovalDeny(currentApproval.approvalId); },
     onCloseHelp: () => setShowHelp(false),
     setHelpScroll,
+    onToggleHelp: handleToggleHelp,
+    onNewSession: handleNewSession,
+    onSessionHistory: handleOpenSessionHistory,
   });
 
   const handleApprovalAllowForModal = useCallback(() => {
-    if (showApproval) handleApprovalAllow(showApproval.approvalId);
-  }, [showApproval, handleApprovalAllow]);
+    if (currentApproval) handleApprovalAllow(currentApproval.approvalId);
+  }, [currentApproval, handleApprovalAllow]);
 
   const handleApprovalDenyForModal = useCallback(() => {
-    if (showApproval) handleApprovalDeny(showApproval.approvalId);
-  }, [showApproval, handleApprovalDeny]);
+    if (currentApproval) handleApprovalDeny(currentApproval.approvalId);
+  }, [currentApproval, handleApprovalDeny]);
 
   const handleAllowSession = useCallback(() => {
-    if (showApproval) {
-      sessionAllowRef.current.add(showApproval.toolName);
-      handleApprovalAllow(showApproval.approvalId);
+    if (currentApproval) {
+      sessionAllowRef.current.add(currentApproval.toolName);
+      handleApprovalAllow(currentApproval.approvalId);
     }
-  }, [showApproval, handleApprovalAllow]);
+  }, [currentApproval, handleApprovalAllow]);
 
   const handleAutoMode = useCallback(() => {
     debugLog('app', 'autoMode button pressed');
     updateAppState(prev => ({ ...prev, autoMode: true }));
-    if (showApproval) handleApprovalAllow(showApproval.approvalId);
-  }, [showApproval, handleApprovalAllow]);
+    if (currentApproval) handleApprovalAllow(currentApproval.approvalId);
+  }, [currentApproval, handleApprovalAllow]);
 
   const placeholder = 'Type a message or / for commands...';
 
@@ -330,6 +418,9 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
               <Box paddingLeft={3}>
                 <Text dimColor>Tip: Type / for commands, @ to reference files</Text>
               </Box>
+              <Box paddingLeft={3}>
+                <Text dimColor>TUI shortcuts: F1 help | Ctrl+L clear | Ctrl+S pause | Ctrl+N new | Ctrl+R history | Tab mode | PgUp/PgDn scroll</Text>
+              </Box>
             </Box>
           )}
           {/* flexGrow=0 when palette open: prevents Yoga layout overflow + Ink ghost content duplication */}
@@ -346,7 +437,7 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
               onChange={handleChange}
               onSubmit={handleSubmit}
               placeholder={placeholder}
-              disabled={showApproval !== null}
+              disabled={currentApproval !== null}
             />
           </Box>
           {/* flexDirection=column required: Ink 5 defaults to row, which miscalculates overlay heights */}
@@ -356,6 +447,14 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
             )}
             {showFilePalette && (
               <FilePalette key="file-palette" query={fileQuery} files={fileList} onSelect={handleFileSelect} />
+            )}
+            {showSessionPicker && (
+              <SessionPicker
+                key="session-picker"
+                sessions={sessionList}
+                onSelect={handleSessionSelect}
+                onDelete={handleSessionDelete}
+              />
             )}
             {showHelp && (() => {
               const helpLines = HELP_TEXT.split('\\n');
@@ -376,15 +475,16 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
                 </Box>
               );
             })()}
-            {showApproval && (
+            {currentApproval && (
               <ApprovalModal
                 key="approval-modal"
-                toolName={showApproval.toolName}
-                payload={showApproval.payload}
+                toolName={currentApproval.toolName}
+                payload={currentApproval.payload}
                 onAllow={handleApprovalAllowForModal}
                 onDeny={handleApprovalDenyForModal}
                 onAllowSession={handleAllowSession}
                 onAutoMode={handleAutoMode}
+                queuePosition={{ current: 1, total: approvalQueue.length }}
                 />
               )}
           </Box>

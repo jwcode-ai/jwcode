@@ -29,6 +29,10 @@ class CodebaseIndexerTest {
     @BeforeEach
     void setUp() {
         config = IndexConfig.forWorkspace(tempDir);
+        // 移除 "target"，因为 @TempDir 在 Maven 的 target/ 目录下
+        var excludeDirs = new java.util.HashSet<>(config.getExcludeDirs());
+        excludeDirs.remove("target");
+        config.setExcludeDirs(excludeDirs);
         // 使用本地 fallback embedding（无需 API Key）
         embeddingService = EmbeddingService.createLocalFallback(256);
     }

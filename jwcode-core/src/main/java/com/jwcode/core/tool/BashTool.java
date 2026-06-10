@@ -10,6 +10,9 @@ import com.jwcode.core.tool.ToolValidationResult;
 import com.jwcode.core.tool.context.ToolExecutionContext;
 import com.jwcode.core.tool.input.BashInput;
 import com.jwcode.core.tool.output.BashOutput;
+import com.jwcode.core.policy.ExecPolicyEngine;
+import com.jwcode.core.policy.PolicyDecision;
+import com.jwcode.core.policy.PolicyRule;
 import com.jwcode.core.tool.shell.CommandInjectionDetector;
 import com.jwcode.core.tool.shell.CommandInjectionDetector.InjectionResult;
 import com.jwcode.core.tool.shell.CommandReadOnlyValidator;
@@ -313,6 +316,24 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
             builder.addError("command 是必需的");
         } else {
             String cmd = input.command().trim();
+
+            // 策略引擎检查（纵深防御第零层 — 用户可配置的策略规则）
+            try {
+                PolicyDecision decision = ExecPolicyEngine.getInstance().decide(cmd);
+                if (decision.action() == PolicyRule.Action.DENY) {
+                    String msg = "⛔ 策略拒绝: " + decision.reason();
+                    if (decision.suggestedAlternative() != null) {
+                        msg += "\n  替代建议: " + decision.suggestedAlternative();
+                    }
+                    builder.addError(msg);
+                } else if (decision.requiresApproval()) {
+                    builder.addWarning("⚠️ 策略需要审批: " + decision.reason()
+                        + " [规则: " + decision.matchedRuleId() + "]");
+                }
+            } catch (Exception e) {
+                // 策略引擎异常不影响执行（fail-open）
+                logger.warning("[BashTool] 策略引擎检查异常: " + e.getMessage());
+            }
 
             // 命令注入检测（纵深防御第一层）
             InjectionResult injection = CommandInjectionDetector.detect(cmd, false);

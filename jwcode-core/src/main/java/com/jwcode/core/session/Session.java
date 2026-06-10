@@ -51,6 +51,7 @@ public class Session {
     private ActiveTask activeTask;
     private int maxMessageHistory = 0; // 默认 0 表示不限制
     private String currentAgentId; // 当前绑定的 Agent ID，用于子代理上下文隔离
+    private final Set<String> injectedFragmentIds = new java.util.HashSet<>(); // 已注入的片段 ID
     
     public Session(String id, String workingDirectory) {
         this.id = Preconditions.checkNotNull(id, "id cannot be null");
@@ -94,6 +95,35 @@ public class Session {
     public void setModel(String model) { this.model = model; this.updatedAt = Instant.now(); }
     public String getCurrentAgentId() { return currentAgentId; }
     public void setCurrentAgentId(String agentId) { this.currentAgentId = agentId; }
+
+    /**
+     * 获取已注入的片段 ID 集合（用于去重）。
+     */
+    public Set<String> getInjectedFragmentIds() {
+        return Collections.unmodifiableSet(new java.util.HashSet<>(injectedFragmentIds));
+    }
+
+    /**
+     * 记录片段已注入。
+     */
+    public void markFragmentInjected(String fragmentId) {
+        injectedFragmentIds.add(fragmentId);
+        this.updatedAt = Instant.now();
+    }
+
+    /**
+     * 检查片段是否已注入。
+     */
+    public boolean isFragmentInjected(String fragmentId) {
+        return injectedFragmentIds.contains(fragmentId);
+    }
+
+    /**
+     * 清除已注入片段记录（如上下文压缩后需要重新注入）。
+     */
+    public void clearInjectedFragmentIds() {
+        injectedFragmentIds.clear();
+    }
 
     public Session addMessage(Message message) {
         Preconditions.checkNotNull(message, "message cannot be null");

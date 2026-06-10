@@ -23,14 +23,14 @@ const MOUSE_DISABLE = '\x1b[?1006l\x1b[?1002l\x1b[?1000l';
 // ---- shared scrollbar geometry (updated by ChatArea) ----
 
 interface ScrollGeometry {
-  topRow: number;       // estimated terminal row of scrollbar top (0-indexed)
-  trackHeight: number;  // visible rows in scrollbar track
-  total: number;        // total messages
-  maxVisible: number;
-  termCols: number;     // terminal width in columns
+  topRow: number;          // absolute terminal row of scrollbar top (1-indexed via SGR)
+  trackHeight: number;     // visible rows in scrollbar track (viewportHeight - 2)
+  contentHeight: number;   // total measured content height in lines
+  viewportHeight: number;  // viewport height in lines
+  termCols: number;        // terminal width in columns
 }
 
-let _scrollGeo: ScrollGeometry = { topRow: 0, trackHeight: 0, total: 0, maxVisible: 0, termCols: 80 };
+let _scrollGeo: ScrollGeometry = { topRow: 0, trackHeight: 0, contentHeight: 0, viewportHeight: 0, termCols: 80 };
 
 export function setScrollGeometry(geo: ScrollGeometry): void {
   _scrollGeo = geo;
@@ -56,7 +56,7 @@ function parseSgr(data: string): SgrEvent | null {
   };
 }
 
-const SCROLLBAR_COL_WIDTH = 4; // rightmost N columns considered scrollbar area
+const SCROLLBAR_COL_WIDTH = 2; // rightmost N columns considered scrollbar area (matches Scrollbar width=2)
 
 export function useMouseWheel(): void {
   const { stdin, internal_eventEmitter } = useStdin();
@@ -85,7 +85,7 @@ export function useMouseWheel(): void {
         if (event.btn === 64 || event.btn === 65) {
           const scrollStep = event.btn === 64 ? 3 : -3;
           updateAppState(prev => {
-            const maxScroll = Math.max(0, prev.messages.length - _scrollGeo.maxVisible);
+            const maxScroll = Math.max(0, _scrollGeo.contentHeight - _scrollGeo.viewportHeight);
             const newOffset = Math.max(0, Math.min(prev.scrollOffset + scrollStep, maxScroll));
             return { ...prev, scrollOffset: newOffset };
           });
@@ -95,10 +95,12 @@ export function useMouseWheel(): void {
         if (event.btn === 0 && event.final === 'M') {
           const geo = _scrollGeo;
           const inScrollbarCol = event.col > geo.termCols - SCROLLBAR_COL_WIDTH;
-          if (inScrollbarCol && geo.trackHeight > 0 && geo.total > geo.maxVisible) {
-            const trackRow = event.row - geo.topRow - 2; // 0 = top of track (1-indexed SGR row → 0-indexed track row)
+          if (inScrollbarCol && geo.trackHeight > 0 && geo.contentHeight > geo.viewportHeight) {
+            // SGR rows are 1-indexed; topRow is the absolute row of the ▲ arrow.
+            // The track itself starts at topRow + 1 (just below the ▲), so:
+            const trackRow = event.row - geo.topRow - 1;
             if (trackRow >= 0 && trackRow < geo.trackHeight) {
-              const maxOffset = geo.total - geo.maxVisible;
+              const maxOffset = geo.contentHeight - geo.viewportHeight;
               const ratio = 1 - trackRow / Math.max(1, geo.trackHeight - 1);
               const newOffset = Math.round(ratio * maxOffset);
               updateAppState(prev => ({
@@ -121,8 +123,8 @@ export function useMouseWheel(): void {
           }
           lastDragTimeRef.current = now;
           const geo = _scrollGeo;
-          const trackRow = event.row - geo.topRow - 2;
-          const maxOffset = geo.total - geo.maxVisible;
+          const trackRow = event.row - geo.topRow - 1;
+          const maxOffset = geo.contentHeight - geo.viewportHeight;
           const ratio = 1 - Math.max(0, Math.min(1, trackRow / Math.max(1, geo.trackHeight - 1)));
           const newOffset = Math.round(ratio * maxOffset);
           updateAppState(prev => ({

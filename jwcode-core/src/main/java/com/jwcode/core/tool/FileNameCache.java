@@ -3,6 +3,7 @@ package com.jwcode.core.tool;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import com.jwcode.core.tool.search.FuzzyMatchCache;
 
 import java.io.IOException;
 import java.nio.file.*;
@@ -68,6 +69,9 @@ public class FileNameCache {
 
     /** 是否已脏（需要持久化） */
     private volatile boolean dirty;
+
+    /** 模糊匹配缓存（Trie 索引） */
+    private final FuzzyMatchCache fuzzyMatchCache;
 
     /** 定时清理任务 */
     private final ScheduledExecutorService cleanupScheduler;
@@ -161,6 +165,7 @@ public class FileNameCache {
             .enable(SerializationFeature.INDENT_OUTPUT);
         this.index = new ConcurrentHashMap<>();
         this.dirModTimeCache = new ConcurrentHashMap<>();
+        this.fuzzyMatchCache = new FuzzyMatchCache();
         this.lastAccessTime = System.currentTimeMillis();
         this.dirty = false;
 
@@ -202,6 +207,18 @@ public class FileNameCache {
      */
     public List<String> search(String pattern, boolean isRegex, String excludePattern, int maxResults) {
         lastAccessTime = System.currentTimeMillis();
+
+        // 快速路径：简单子串模式使用 Trie 模糊匹配
+        if (!isRegex && isSimpleSubstring(pattern) && (excludePattern == null || excludePattern.isEmpty())) {
+            ensureFuzzyIndex();
+            List<String> fuzzyResults = fuzzyMatchCache.fuzzySearch(pattern, maxResults).stream()
+                .map(Path::toString)
+                .toList();
+            if (!fuzzyResults.isEmpty()) {
+                return fuzzyResults;
+            }
+        }
+
         List<String> results = new ArrayList<>();
 
         java.util.regex.Pattern compiledPattern;
@@ -234,12 +251,59 @@ public class FileNameCache {
         return results;
     }
 
+    /** 纯文本子串（不含 glob 通配符），适合 Trie 快速匹配 */
+    private static boolean isSimpleSubstring(String pattern) {
+        for (int i = 0; i < pattern.length(); i++) {
+            char c = pattern.charAt(i);
+            if (c == '*' || c == '?' || c == '[' || c == '{') return false;
+        }
+        return true;
+    }
+
+    private void ensureFuzzyIndex() {
+        if (!fuzzyMatchCache.isBuilt()) {
+            buildFuzzyIndex();
+        }
+    }
+
     /**
      * 按扩展名过滤文件。
      *
      * @param extensions 扩展名列表（小写，不含点）
      * @return 匹配的绝对路径列表
      */
+    /**
+     * 模糊搜索文件名（基于 Trie 索引）。
+     */
+    public List<String> fuzzySearch(String query, int maxResults) {
+        if (!fuzzyMatchCache.isBuilt()) {
+            buildFuzzyIndex();
+        }
+        return fuzzyMatchCache.fuzzySearch(query, maxResults).stream()
+            .map(Path::toString)
+            .toList();
+    }
+
+    /**
+     * 前缀搜索文件名。
+     */
+    public List<String> searchByPrefix(String prefix) {
+        if (!fuzzyMatchCache.isBuilt()) {
+            buildFuzzyIndex();
+        }
+        return fuzzyMatchCache.searchByPrefix(prefix).stream()
+            .map(Path::toString)
+            .toList();
+    }
+
+    private void buildFuzzyIndex() {
+        Set<Path> allPaths = index.values().stream()
+            .map(e -> workspaceRoot.resolve(e.relativePath))
+            .collect(Collectors.toSet());
+        fuzzyMatchCache.buildIndex(allPaths);
+        logger.fine("[FileNameCache] 已构建模糊匹配索引: " + allPaths.size() + " 个文件");
+    }
+
     public List<String> searchByExtension(Set<String> extensions) {
         lastAccessTime = System.currentTimeMillis();
         return index.values().stream()

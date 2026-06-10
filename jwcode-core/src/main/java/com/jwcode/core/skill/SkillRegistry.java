@@ -17,9 +17,54 @@ public class SkillRegistry {
     private final Map<String, Skill> skills = new ConcurrentHashMap<>();
     private final Map<Skill.Category, List<Skill>> skillsByCategory = new ConcurrentHashMap<>();
     private final List<Skill> builtinSkills = new ArrayList<>();
-    
+    private final List<SkillProvider> providers = new ArrayList<>();
+
     public SkillRegistry() {
         registerBuiltinSkills();
+        // 初始化 SkillProvider 链
+        providers.add(new SystemSkillProvider());
+        providers.add(new UserSkillProvider());
+        // 从所有 Provider 加载 .skill.md 文件
+        loadFromProviders();
+    }
+
+    /**
+     * 从所有 SkillProvider 加载技能定义。
+     */
+    public void loadFromProviders() {
+        // 按优先级排序
+        providers.sort(Comparator.comparingInt(SkillProvider::priority));
+
+        for (SkillProvider provider : providers) {
+            try {
+                List<SkillDefinition> definitions = provider.discover();
+                for (SkillDefinition def : definitions) {
+                    if (!skills.containsKey(def.id())) {
+                        register(def.toSkill());
+                    }
+                }
+                logger.info("[SkillRegistry] 从 " + provider.getName()
+                    + " 加载 " + definitions.size() + " 个技能");
+            } catch (Exception e) {
+                logger.warning("[SkillRegistry] 加载提供者失败: " + provider.getName()
+                    + " — " + e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * 添加技能提供者。
+     */
+    public void addProvider(SkillProvider provider) {
+        providers.add(provider);
+        providers.sort(Comparator.comparingInt(SkillProvider::priority));
+    }
+
+    /**
+     * 获取所有技能提供者。
+     */
+    public List<SkillProvider> getProviders() {
+        return Collections.unmodifiableList(new ArrayList<>(providers));
     }
     
     /**
@@ -49,6 +94,18 @@ public class SkillRegistry {
         }
     }
     
+    /**
+     * 注册来自插件的技能。
+     */
+    public void registerPluginSkills(com.jwcode.core.plugin.PluginManager pluginManager) {
+        var skillPlugins = pluginManager.getPluginsWithCapability(
+            com.jwcode.plugin.api.PluginCapability.SKILL);
+        for (var plugin : skillPlugins) {
+            logger.info("[SkillRegistry] 注册插件技能: " + plugin.getManifest().id());
+            // 插件通过 PluginContext.registerSkill() 回调注册
+        }
+    }
+
     /**
      * 获取技能
      */

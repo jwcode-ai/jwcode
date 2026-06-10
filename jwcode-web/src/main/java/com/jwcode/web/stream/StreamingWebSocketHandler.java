@@ -19,6 +19,7 @@ import com.jwcode.core.service.ContextWindowManager;
 import com.jwcode.core.tool.Tool;
 import com.jwcode.core.tool.ToolExecutor;
 import com.jwcode.core.tool.ToolRegistry;
+import com.jwcode.web.WebSessionManager;
 
 import org.java_websocket.WebSocket;
 import org.java_websocket.handshake.ClientHandshake;
@@ -87,7 +88,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     private static final long CONNECTION_TIMEOUT_MS = 300000; // 5分钟无活动则断开
     
     // 认证配置（从系统配置读取）
-    private String validToken = "default-token"; // 默认 token，生产环境应从配置读取
+    private String validToken = "default-token"; // 默认与前端一致，可通过系统属性/环境变量覆盖
     
     // 已认证的连接集合
     private final Map<WebSocket, Boolean> authenticatedConnections;
@@ -135,6 +136,8 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     // 默认工作目录（前端可动态切换）
     private String defaultWorkingDirectory = System.getProperty("user.dir");
 
+    private WebSessionManager sessionStore;
+
     /**
      * 设置代码库索引器（由 WebServer 初始化后注入）
      */
@@ -144,6 +147,11 @@ public class StreamingWebSocketHandler extends WebSocketServer {
 
     public void setHookChain(com.jwcode.core.hook.HookChain hookChain) {
         this.hookChain = hookChain;
+    }
+
+    /** Inject session manager for message persistence. */
+    public void setSessionManager(WebSessionManager mgr) {
+        this.sessionStore = mgr;
     }
     
     // 查询线程池：核心 4 线程，最大 16 线程，60 秒回收
@@ -271,6 +279,12 @@ public class StreamingWebSocketHandler extends WebSocketServer {
      * 处理认证消息
      */
     private void handleAuthMessage(WebSocket conn, ClientMessage msg) {
+        // 防御：validToken 不应为空（正常启动后应已加载或生成）
+        if (validToken == null || validToken.isEmpty()) {
+            logger.severe("认证失败: validToken 未配置");
+            sendMessage(conn, MessageType.AUTH_FAILED, "Server configuration error: token not set");
+            return;
+        }
         String token = msg.token;
         
         if (token == null || token.isEmpty()) {
@@ -361,8 +375,26 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             logger.fine("无法从 YAML 配置加载: " + e.getMessage());
         }
 
-        // 4. 使用默认值（已经在构造函数中设置）
-        logger.info("使用默认 WebSocket token");
+        // 4. 所有配置源均未提供 token，使用默认值（与前端 'default-token' 一致）
+        //    生产环境请通过 -Djwcode.websocket.token=xxx 或 JWCODE_WEBSOCKET_TOKEN=xxx 配置自定义 token
+        try {
+            java.nio.file.Path jwcodeDir = java.nio.file.Paths.get(
+                System.getProperty("user.home"), ".jwcode");
+            java.nio.file.Path tokenFile = jwcodeDir.resolve(".websocket_token");
+            if (java.nio.file.Files.exists(tokenFile)) {
+                String fileToken = java.nio.file.Files.readString(tokenFile).trim();
+                if (!fileToken.isEmpty()) {
+                    this.validToken = fileToken;
+                    logger.info("从 " + tokenFile + " 加载 WebSocket token");
+                    return;
+                }
+            }
+            logger.info("使用默认 WebSocket token (default-token)，可通过系统属性/环境变量覆盖");
+            java.nio.file.Files.createDirectories(jwcodeDir);
+            java.nio.file.Files.writeString(tokenFile, this.validToken);
+        } catch (Exception e) {
+            logger.info("使用默认 WebSocket token (default-token)");
+        }
     }
     
     /**
@@ -450,7 +482,35 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     @Override
     public void onOpen(WebSocket conn, ClientHandshake handshake) {
         logger.info("WebSocket 连接打开: " + conn.getRemoteSocketAddress());
-        
+
+        // 检查 Origin 头，防止跨站 WebSocket 劫持（CSRF）
+        if (handshake != null) {
+            String origin = handshake.getFieldValue("Origin");
+            String host = handshake.getFieldValue("Host");
+            if (origin != null && !origin.isEmpty() && !origin.equals("null")) {
+                boolean allowed = false;
+                if (host != null && !host.isEmpty()) {
+                    String expectedOrigin = "http://" + host;
+                    String expectedOriginHttps = "https://" + host;
+                    if (origin.equals(expectedOrigin) || origin.equals(expectedOriginHttps)
+                        || origin.startsWith("http://localhost") || origin.startsWith("https://localhost")
+                        || origin.startsWith("http://127.0.0.1") || origin.startsWith("https://127.0.0.1")) {
+                        allowed = true;
+                    }
+                } else {
+                    if (origin.startsWith("http://localhost") || origin.startsWith("https://localhost")
+                        || origin.startsWith("http://127.0.0.1") || origin.startsWith("https://127.0.0.1")) {
+                        allowed = true;
+                    }
+                }
+                if (!allowed) {
+                    logger.warning("WebSocket 连接被拒绝: Origin=" + origin + " 不被允许 (Host=" + host + ")");
+                    conn.close(4003, "Origin not allowed");
+                    return;
+                }
+            }
+        }
+
         // 初始化心跳时间
         lastPongTime.put(conn, System.currentTimeMillis());
         lastActivityTime.put(conn, System.currentTimeMillis());
@@ -2516,8 +2576,44 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             logger.warning("发送消息失败: " + conn.getRemoteSocketAddress() + ", error=" + e.getMessage());
             conn.close(4003, "Send error");
         }
+
+        // 会话消息持久化：存储有意义的对话消息
+        if (sessionStore != null && sessionId != null) {
+            storeMessageIfRelevant(sessionId, type, data);
+        }
     }
-    
+
+    /** 仅持久化对会话回放有意义的消息类型。 */
+    private void storeMessageIfRelevant(String sessionId, MessageType type, String data) {
+        switch (type) {
+            case START:
+            case CONTENT:
+            case THINKING:
+            case TOOL_CALL:
+            case TOOL_RESULT:
+            case COMPLETE:
+            case ERROR:
+            case PLAN_START:
+            case PLAN_THINKING:
+            case PLAN_TASKS:
+            case PLAN_TASK_START:
+            case PLAN_TASK_UPDATE:
+            case PLAN_TASK_RESULT:
+            case PLAN_COMPLETE:
+            case PLAN_ERROR:
+            case STEP_START:
+            case STEP_THINKING:
+            case STEP_ACTION:
+            case STEP_COMPLETE:
+            case NOTIFICATION:
+            case LOG:
+                sessionStore.appendMessage(sessionId, type.name().toLowerCase(), data);
+                break;
+            default:
+                break; // PING, PONG, AUTH_* 等不持久化
+        }
+    }
+
     /**
      * 发送消息到客户端（不带 sessionId 版本，向后兼容）
      */

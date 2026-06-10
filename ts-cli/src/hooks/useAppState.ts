@@ -23,6 +23,7 @@ export interface AppState {
   pdcaPhase: string;
   degradation: import("../protocol.js").DegradationStatus;
   compactionProgress: { stage: string; percent: number; message: string } | null;
+  contentHeight: number;
 }
 
 const initialState: AppState = {
@@ -42,6 +43,7 @@ const initialState: AppState = {
   pdcaPhase: '',
   degradation: { active: false, retryCount: 0, maxRetries: 0, mode: "normal", message: "" },
   compactionProgress: null,
+  contentHeight: 0,
 };
 
 let _store: Store<AppState> | null = null;
@@ -70,11 +72,12 @@ const selPlanTasks = (s: AppState) => s.planTasks;
 const selPdcaPhase = (s: AppState) => s.pdcaPhase;
 const selDegradation = (s: AppState) => s.degradation;
 
-// ChatArea compound selector: all three change together during streaming
+// ChatArea compound selector: all fields that change together during streaming / layout
 const selChatArea = (s: AppState) => ({
   messages: s.messages,
   currentMessage: s.currentMessage,
   scrollOffset: s.scrollOffset,
+  contentHeight: s.contentHeight,
 } as const);
 
 // StatusLine compound selector: all status fields

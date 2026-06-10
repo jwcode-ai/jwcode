@@ -40,3 +40,6 @@ npm-debug.log*
 # === Session / Temp ===
 session_*/
 *.session/
+
+# === JRE (downloaded by postinstall) ===
+backend/jre/

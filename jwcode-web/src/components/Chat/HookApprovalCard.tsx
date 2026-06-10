@@ -3,50 +3,12 @@ import { Shield, Check, X, AlertTriangle, Clock } from 'lucide-react';
 import { HookApprovalInfo } from '../../types';
 import wsService from '../../services/websocket';
 import { useHookApprovalStore } from '../../stores/useHookApprovalStore';
+import { classifyRisk, RISK_CONFIG, extractPreview } from '../../utils/hookRisk';
 
 interface HookApprovalCardProps {
   approval: HookApprovalInfo;
   onResolved?: (approvalId: string, status: 'approved' | 'denied') => void;
 }
-
-type RiskLevel = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
-
-function classifyRisk(toolName: string, askPayload: string): { level: RiskLevel; reason: string } {
-  const name = toolName.toLowerCase();
-  if (/\b(rm|del|delete|drop|truncate|format|mkfs)\b/.test(name)) {
-    return { level: 'CRITICAL', reason: '破坏性操作 - 可能删除数据' };
-  }
-  if (/\b(bash|shell|exec|cmd|powershell|terminal)\b/.test(name)) {
-    if (/\b(rm\s+-rf|sudo|chmod\s+777|curl.*\|\s*(ba)?sh|wget.*-O|>\/dev\/|mkfs)\b/i.test(askPayload)) {
-      return { level: 'CRITICAL', reason: '高危命令 - 包含系统级操作' };
-    }
-    return { level: 'HIGH', reason: 'Shell 命令执行' };
-  }
-  if (/\b(Write|Edit|save|upload|deploy|publish)\b/i.test(name)) {
-    return { level: 'HIGH', reason: '文件写入操作' };
-  }
-  if (/\b(install|uninstall|npm|pip|cargo|gem|apt|brew|choco|yum|dnf)\b/i.test(name)) {
-    return { level: 'HIGH', reason: '包管理操作' };
-  }
-  if (/\b(git|commit|push|merge|rebase)\b/i.test(name)) {
-    const isDestructive = /\b(push|force|hard\s*reset|rebase)\b/i.test(askPayload);
-    return { level: isDestructive ? 'HIGH' : 'MEDIUM', reason: isDestructive ? 'Git 强制操作' : 'Git 操作' };
-  }
-  if (/\b(http|fetch|curl|wget|api|request|download)\b/i.test(name)) {
-    return { level: 'MEDIUM', reason: '网络请求' };
-  }
-  if (/\b(read|open|list|ls|dir|cat|view|search|find|grep|glob)\b/i.test(name)) {
-    return { level: 'LOW', reason: '只读操作' };
-  }
-  return { level: 'MEDIUM', reason: '工具调用' };
-}
-
-const RISK_CONFIG: Record<RiskLevel, { bg: string; border: string; text: string; badge: string; icon: string }> = {
-  CRITICAL: { bg: 'bg-red-900/20', border: 'border-red-500/40', text: 'text-red-400', badge: 'bg-red-500/20 text-red-400 border-red-500/30', icon: '⛔' },
-  HIGH:     { bg: 'bg-orange-900/15', border: 'border-orange-500/30', text: 'text-orange-400', badge: 'bg-orange-500/20 text-orange-400 border-orange-500/30', icon: '⚠️' },
-  MEDIUM:   { bg: 'bg-yellow-900/10', border: 'border-yellow-500/25', text: 'text-yellow-400', badge: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/25', icon: '⚡' },
-  LOW:      { bg: 'bg-blue-900/10', border: 'border-blue-500/25', text: 'text-blue-400', badge: 'bg-blue-500/15 text-blue-400 border-blue-500/25', icon: '📋' },
-};
 
 const COUNTDOWN_SECONDS = 15;
 
@@ -67,6 +29,8 @@ export const HookApprovalCard = memo(function HookApprovalCard({
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const isPending = approval.status === 'pending';
+  const isModalActive = useHookApprovalStore((s) => s.pendingApprovals.length > 0
+    && s.pendingApprovals.some(a => a.approvalId === approval.approvalId));
   const { level, reason } = classifyRisk(approval.toolName, approval.askPayload);
   const rc = RISK_CONFIG[level];
 
@@ -222,52 +186,42 @@ export const HookApprovalCard = memo(function HookApprovalCard({
           </div>
         )}
 
-        {/* Numbered option list */}
-        <div className="space-y-0.5 pt-1">
-          {options.map((opt) => (
-            <button
-              key={opt.id}
-              onClick={opt.action}
-              disabled={resolving}
-              className="w-full text-left px-2 py-1.5 rounded hover:bg-dark-hover transition-colors disabled:opacity-50 group"
-            >
-              <div className="flex items-baseline gap-1.5">
-                <span className="text-xs text-dark-muted font-mono shrink-0">
-                  {opt.index}.
-                </span>
-                <span className="text-xs text-dark-text group-hover:text-white transition-colors">
-                  {opt.label}
-                </span>
-              </div>
-              <div className="text-[10px] text-dark-muted/60 ml-5 mt-0.5">
-                {opt.hint}
-              </div>
-            </button>
-          ))}
-        </div>
-
-        {/* Footer shortcut hints */}
-        <div className="text-[10px] text-dark-muted/50 pt-0.5 border-t border-dark-border/50">
-          Click to select · 1/2/3/4 keyboard shortcuts
-        </div>
+        {isModalActive ? (
+          /* 弹窗模式 — 卡片仅保留历史记录，无操作按钮 */
+          <div className="flex items-center gap-2 px-2 py-2 text-xs text-dark-muted bg-dark-surface rounded border border-dark-border/50">
+            <span>请在弹窗中处理此审批请求 · 快捷键: 1-4 选择 · Enter 允许 · Esc 拒绝</span>
+          </div>
+        ) : (
+          /* 内联模式 — 显示操作按钮（当弹窗不可用时） */
+          <>
+            <div className="space-y-0.5 pt-1">
+              {options.map((opt) => (
+                <button
+                  key={opt.id}
+                  onClick={opt.action}
+                  disabled={resolving}
+                  className="w-full text-left px-2 py-1.5 rounded hover:bg-dark-hover transition-colors disabled:opacity-50 group"
+                >
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-xs text-dark-muted font-mono shrink-0">
+                      {opt.index}.
+                    </span>
+                    <span className="text-xs text-dark-text group-hover:text-white transition-colors">
+                      {opt.label}
+                    </span>
+                  </div>
+                  <div className="text-[10px] text-dark-muted/60 ml-5 mt-0.5">
+                    {opt.hint}
+                  </div>
+                </button>
+              ))}
+            </div>
+            <div className="text-[10px] text-dark-muted/50 pt-0.5 border-t border-dark-border/50">
+              Click to select · 1/2/3/4 keyboard shortcuts
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
 });
-
-function extractPreview(toolName: string, askPayload: string): string | null {
-  if (/\b(bash|shell|exec|cmd|powershell|terminal)\b/i.test(toolName)) {
-    return askPayload || null;
-  }
-  if (/\b(write|edit|save|create)\b/i.test(toolName)) {
-    const fileMatch = askPayload.match(/(?:file_path|path|file)["\s:=]+([^\s",}]+)/i);
-    if (fileMatch) {
-      return `📄 ${fileMatch[1]}\n${askPayload.slice(0, 200)}`;
-    }
-    return askPayload.slice(0, 200) || null;
-  }
-  if (askPayload && askPayload.length > 0) {
-    return askPayload.length > 200 ? askPayload.slice(0, 200) + '...' : askPayload;
-  }
-  return null;
-}

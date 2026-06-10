@@ -106,7 +106,7 @@ public class AutoPermissionClassifier {
 
         // 3. 用户已批准过的模式匹配
         for (String pattern : userApprovedPatterns) {
-            if (lower.contains(pattern.toLowerCase())) {
+            if (matchesWithWordBoundary(lower, pattern.toLowerCase())) {
                 return ClassificationResult.allow(
                     "用户已批准类似操作: " + pattern, 0.80);
             }
@@ -114,7 +114,7 @@ public class AutoPermissionClassifier {
 
         // 4. 用户已拒绝的模式
         for (String pattern : userDeniedPatterns) {
-            if (lower.contains(pattern.toLowerCase())) {
+            if (matchesWithWordBoundary(lower, pattern.toLowerCase())) {
                 return ClassificationResult.deny(
                     "用户已拒绝类似操作: " + pattern, 0.85);
             }
@@ -313,4 +313,24 @@ public class AutoPermissionClassifier {
 
     public Set<String> getUserApprovedPatterns() { return Collections.unmodifiableSet(userApprovedPatterns); }
     public Set<String> getUserDeniedPatterns() { return Collections.unmodifiableSet(userDeniedPatterns); }
+
+    /**
+     * 带词边界的模式匹配，防止子串劫持（如 rm file.txt 不应匹配 rm file.txt && rm -rf /）
+     */
+    private boolean matchesWithWordBoundary(String text, String pattern) {
+        if (pattern.isEmpty()) return false;
+        // 对模式中的每个单词进行边界匹配，要求所有单词都在文本中出现且符合边界
+        String[] words = pattern.split("\\s+");
+        for (String word : words) {
+            if (word.isEmpty()) continue;
+            // 使用正则的 \b 词边界进行匹配
+            java.util.regex.Pattern p = java.util.regex.Pattern.compile(
+                "\\b" + java.util.regex.Pattern.quote(word) + "\\b",
+                java.util.regex.Pattern.CASE_INSENSITIVE);
+            if (!p.matcher(text).find()) {
+                return false;
+            }
+        }
+        return true;
+    }
 }

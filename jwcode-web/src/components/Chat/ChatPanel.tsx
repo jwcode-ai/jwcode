@@ -10,6 +10,7 @@ import { useSlashCommands, SlashCommand } from '../../hooks/useSlashCommands';
 import { useInputHistory, addToHistory } from '../../hooks/useInputHistory';
 import { usePlanStore } from '../../stores/planStore';
 import { useTokenStore } from '../../stores/tokenStore';
+import { useHookApprovalStore } from '../../stores/useHookApprovalStore';
 import { api } from '../../services/api';
 import { ContextManager } from './ContextManager';
 import { SessionTaskBoard } from './SessionTaskBoard';
@@ -62,6 +63,7 @@ export const ChatPanel = memo(function ChatPanel({
   const { t } = useTranslation();
   const planMode = usePlanStore((s) => s.mode);
   const toggleMode = usePlanStore((s) => s.toggleMode);
+  const hasPendingApproval = useHookApprovalStore((s) => s.pendingApprovals.length > 0);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const isComposingRef = useRef(false);
@@ -371,11 +373,13 @@ export const ChatPanel = memo(function ChatPanel({
             <textarea
               ref={textareaRef} value={input} onChange={handleChange} onKeyDown={handleKeyDown}
               placeholder={
+                hasPendingApproval ? '请先在弹窗中处理审批请求...' :
                 planMode === "plan" ? t('plan.planTitle') :
                 planMode === "act" ? t('plan.actTitle') :
                 t('chat.inputPlaceholder')
               }
-              rows={1} disabled={isGenerating} className={`flex-1 bg-dark-bg border rounded-lg px-3 sm:px-4 py-2.5 sm:py-3 text-dark-text placeholder-dark-muted resize-none focus:outline-none focus:border-accent-green text-sm min-h-[40px] max-h-[40vh] transition-colors ${
+              rows={1} disabled={isGenerating || hasPendingApproval} className={`flex-1 bg-dark-bg border rounded-lg px-3 sm:px-4 py-2.5 sm:py-3 text-dark-text placeholder-dark-muted resize-none focus:outline-none focus:border-accent-green text-sm min-h-[40px] max-h-[40vh] transition-colors ${
+                hasPendingApproval ? "border-accent-yellow/50 opacity-60" :
                 planMode === "plan" ? "border-accent-purple/50" :
                 planMode === "act" ? "border-accent-green/50" :
                 "border-dark-border"

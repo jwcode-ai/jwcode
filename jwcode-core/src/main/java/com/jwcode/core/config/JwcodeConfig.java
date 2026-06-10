@@ -84,14 +84,16 @@ public class JwcodeConfig {
     /**
      * 获取默认提供商名称
      */
+    @JsonIgnore
     public String getDefaultProviderName() {
         return defaultProvider;
     }
-    
+
     /**
      * 获取默认提供商配置
      * 如果未设置 defaultProvider，则取 providers 中第一个；都没有则返回空配置
      */
+    @JsonIgnore
     public ProviderConfig getDefaultProvider() {
         if (defaultProvider != null && providers.containsKey(defaultProvider)) {
             return providers.get(defaultProvider);
@@ -107,6 +109,7 @@ public class JwcodeConfig {
     /**
      * 获取默认模型配置
      */
+    @JsonIgnore
     public ModelDefinition getDefaultModel() {
         ProviderConfig provider = getDefaultProvider();
         if (provider != null && !provider.getModels().isEmpty()) {

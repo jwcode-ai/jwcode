@@ -14,6 +14,7 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.logging.Logger;
 
 /**
  * 文件管理 API 处理器
@@ -48,18 +49,85 @@ public class FilesHandler implements HttpHandler {
 
     private static final ObjectMapper objectMapper = new ObjectMapper();
 
+    // ==== auth ====
+
+    private static String getServerToken() {
+        String token = System.getProperty("jwcode.websocket.token");
+        if (token != null && !token.isEmpty()) return token;
+        token = System.getenv("JWCODE_WEBSOCKET_TOKEN");
+        if (token != null && !token.isEmpty()) return token;
+        try {
+            java.nio.file.Path tokenFile = java.nio.file.Paths.get(
+                System.getProperty("user.home"), ".jwcode", ".websocket_token");
+            if (java.nio.file.Files.exists(tokenFile)) {
+                return java.nio.file.Files.readString(tokenFile).trim();
+            }
+        } catch (Exception e) {
+        }
+        return null;
+    }
+
+    private boolean authenticateRequest(HttpExchange exchange) throws IOException {
+        String authHeader = exchange.getRequestHeaders().getFirst("Authorization");
+        String token = null;
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            token = authHeader.substring(7);
+        }
+        if (token == null || token.isEmpty()) {
+            token = exchange.getRequestHeaders().getFirst("X-API-Key");
+        }
+        if (token == null || token.isEmpty()) {
+            String query = exchange.getRequestURI().getQuery();
+            if (query != null) {
+                for (String param : query.split("&")) {
+                    int eq = param.indexOf("=");
+                    if (eq > 0 && "token".equals(param.substring(0, eq))) {
+                        token = java.net.URLDecoder.decode(param.substring(eq + 1), StandardCharsets.UTF_8);
+                        break;
+                    }
+                }
+            }
+        }
+        String validToken = getServerToken();
+        if (validToken == null || validToken.isEmpty()) {
+            if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendError(exchange, 401, "Authentication required: server token not configured");
+                return false;
+            }
+            return true;
+        }
+        if (token == null || token.isEmpty() || !validToken.equals(token)) {
+            sendError(exchange, 401, "Invalid or missing API token");
+            return false;
+        }
+        return true;
+    }
+
     @Override
     public void handle(HttpExchange exchange) throws IOException {
         String method = exchange.getRequestMethod();
         String path = exchange.getRequestURI().getPath();
 
         // 设置 CORS 头
-        exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+        String origin = exchange.getRequestHeaders().getFirst("Origin");
+        if (origin != null && (origin.equals("http://localhost:8080")
+            || origin.startsWith("http://localhost") || origin.startsWith("https://localhost")
+            || origin.startsWith("http://127.0.0.1") || origin.startsWith("https://127.0.0.1"))) {
+            exchange.getResponseHeaders().set("Access-Control-Allow-Origin", origin);
+        } else if (origin != null && !origin.isEmpty()) {
+            Logger.getLogger(FilesHandler.class.getName()).warning("FilesHandler: cors reject origin=" + origin);
+        }
+        exchange.getResponseHeaders().set("Access-Control-Allow-Credentials", "true");
+        exchange.getResponseHeaders().set("Vary", "Origin");
         exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
         exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
 
         if ("OPTIONS".equalsIgnoreCase(method)) {
             exchange.sendResponseHeaders(200, -1);
+            return;
+        }
+
+        if (!authenticateRequest(exchange)) {
             return;
         }
 
@@ -95,7 +163,20 @@ public class FilesHandler implements HttpHandler {
      */
     private Path resolveAndValidate(String userPath) {
         Path resolved = PROJECT_ROOT.resolve(userPath).normalize();
-        if (!resolved.startsWith(PROJECT_ROOT)) {
+        try {
+            if (java.nio.file.Files.exists(resolved)) {
+                resolved = resolved.toRealPath();
+            }
+        } catch (IOException e) {
+            Logger.getLogger(FilesHandler.class.getName()).warning("FilesHandler: toRealPath failed " + resolved);
+        }
+        Path rootReal;
+        try {
+            rootReal = PROJECT_ROOT.toRealPath();
+        } catch (IOException e) {
+            rootReal = PROJECT_ROOT;
+        }
+        if (!resolved.startsWith(rootReal)) {
             throw new SecurityException("Path escapes project root: " + userPath);
         }
         return resolved;

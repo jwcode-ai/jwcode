@@ -72,6 +72,11 @@
             <!-- JWCode 内部模块 -->
             <dependency>
                 <groupId>com.jwcode</groupId>
+                <artifactId>jwcode-plugin-api</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.jwcode</groupId>
                 <artifactId>jwcode-core</artifactId>
                 <version>${project.version}</version>
             </dependency>
@@ -466,6 +471,7 @@
         <module>jwcode-web</module>
         <module>jwcode-mcp</module>
         <module>jwcode-parser</module>
+        <module>jwcode-plugin-api</module>
     </modules>
 
     <distributionManagement>

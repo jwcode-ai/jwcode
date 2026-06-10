@@ -259,6 +259,31 @@ export class JwCodeClient {
     } catch { return null; }
   }
 
+  // Session history API
+  async listSessions(): Promise<Array<{ id: string; title: string; createdAt: string; updatedAt: string; messageCount: number }>> {
+    try {
+      const resp = await fetch(`${this.backendUrl}/api/sessions`);
+      const data = await resp.json() as any;
+      return (data?.data || data || []);
+    } catch { return []; }
+  }
+
+  async deleteSession(sessionId: string): Promise<boolean> {
+    try {
+      const resp = await fetch(`${this.backendUrl}/api/sessions/${sessionId}`, { method: 'DELETE' });
+      const data = await resp.json() as any;
+      return data?.success === true;
+    } catch { return false; }
+  }
+
+  async getSessionMessages(sessionId: string): Promise<any[]> {
+    try {
+      const resp = await fetch(`${this.backendUrl}/api/sessions/${sessionId}/messages`);
+      const data = await resp.json() as any;
+      return (data?.data || []);
+    } catch { return []; }
+  }
+
   async close(): Promise<void> {
     this._running = false;
     this._reconnecting = false;

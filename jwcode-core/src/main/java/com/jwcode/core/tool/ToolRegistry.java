@@ -76,6 +76,18 @@ public class ToolRegistry {
     }
     
     /**
+     * 注册来自插件的工具（委托给 register）。
+     */
+    public void registerPluginTools(com.jwcode.core.plugin.PluginManager pluginManager) {
+        var toolPlugins = pluginManager.getPluginsWithCapability(
+            com.jwcode.plugin.api.PluginCapability.TOOL);
+        for (var plugin : toolPlugins) {
+            logger.info("[ToolRegistry] 注册插件工具: " + plugin.getManifest().id());
+            // 插件通过 PluginContext.registerTool() 回调注册
+        }
+    }
+
+    /**
      * 根据名称查找工具
      * 
      * @param name 工具名称
@@ -297,7 +309,8 @@ public class ToolRegistry {
         registry.register(new EnterWorktreeTool());
         registry.register(new ExitWorktreeTool());
         registry.register(new WorktreeListTool());
-        
+        registry.register(new com.jwcode.core.tool.browser.BrowserTool());
+
         // 注意：SemanticSearchTool 需要 CodebaseIndexer 实例，
         // 无法在此处注册。请使用 registerSemanticSearch() 方法。
         

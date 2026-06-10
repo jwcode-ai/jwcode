@@ -145,14 +145,16 @@ public class PermissionManager {
                 case AUTO_ALLOW -> PermissionCheckResult.allowed();
                 case AUTO_DENY -> PermissionCheckResult.denied(cr.reason());
                 case ASK_USER -> {
-                    if (!autoApproveDestructive) {
-                        String operationKey = "cmd:" + command;
-                        if (!approvedOperations.contains(operationKey)) {
-                            yield PermissionCheckResult.needsConfirmation(
-                                PermissionLevel.DANGEROUS, cr.reason());
-                        }
+                    // ASK_USER in auto mode still requires confirmation unless explicitly approved
+                    if (autoApproveDestructive) {
+                        yield PermissionCheckResult.allowed();
                     }
-                    yield PermissionCheckResult.allowed();
+                    String operationKey = "cmd:" + command;
+                    if (approvedOperations.contains(operationKey)) {
+                        yield PermissionCheckResult.allowed();
+                    }
+                    yield PermissionCheckResult.needsConfirmation(
+                        PermissionLevel.DANGEROUS, cr.reason());
                 }
             };
         }
@@ -278,8 +280,13 @@ public class PermissionManager {
     public void setYoloMode(boolean enabled) {
         this.autoApproveWrite = enabled;
         this.autoApproveDelete = enabled;
-        this.autoApproveDestructive = enabled;
-        this.autoMode = enabled;
+        if (enabled) {
+            this.autoApproveDestructive = enabled;
+            this.autoMode = enabled;
+        } else {
+            this.autoApproveDestructive = enabled;
+            this.autoMode = enabled;
+        }
     }
 
     /** 获取自动分类器（用于记录学习反馈） */

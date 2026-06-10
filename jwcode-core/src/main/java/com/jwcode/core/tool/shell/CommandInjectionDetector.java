@@ -87,7 +87,7 @@ public class CommandInjectionDetector {
         }
 
         // 2. 环境变量 / Shell 变量展开注入
-        if (command.contains("${") && !command.contains("${")) {
+        if (command.contains("${")) {
             // 包含 ${...} 展开
             if (command.matches(".*\\$\\{[^}]+\\}.*")) {
                 for (String dangerousVar : DANGEROUS_ENV_VARS) {

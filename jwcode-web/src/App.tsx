@@ -1001,7 +1001,6 @@ function App() {
       <Suspense fallback={null}>
         <HookApprovalModal
           isOpen={hookModalOpen}
-          onClose={() => setHookModalOpen(false)}
         />
       </Suspense>
 

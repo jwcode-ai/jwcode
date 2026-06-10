@@ -21,6 +21,10 @@
             <groupId>com.jwcode</groupId>
             <artifactId>jwcode-common</artifactId>
         </dependency>
+        <dependency>
+            <groupId>com.jwcode</groupId>
+            <artifactId>jwcode-plugin-api</artifactId>
+        </dependency>
 
         <!-- SLF4J API -->
         <dependency>

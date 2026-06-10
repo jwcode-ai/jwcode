@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.*;
+import java.util.logging.Logger;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -17,7 +18,9 @@ import java.util.stream.Stream;
  * 4. 优先级排序：配置文件 > 入口类 > 核心服务类 > 测试类
  */
 public class EvidenceCollector {
-    
+
+    private static final Logger logger = Logger.getLogger(EvidenceCollector.class.getName());
+
     private final Path root;
     private final ProjectFingerprint fingerprint;
     
@@ -34,12 +37,12 @@ public class EvidenceCollector {
      */
     public List<EvidenceFile> collect(int maxFiles) {
         List<EvidenceFile> evidence = new ArrayList<>();
-        
+
         // 阶段 1：直接匹配高价值模式（glob）
         List<String> patterns = fingerprint.getHighValueFilePatterns();
         for (String pattern : patterns) {
             try (Stream<Path> stream = Files.find(root, 8, (path, attrs) -> {
-                if (!Files.isRegularFile(path) || NoiseFilter.isNoise(path)) {
+                if (!Files.isRegularFile(path) || NoiseFilter.isNoise(root.relativize(path))) {
                     return false;
                 }
                 String relative = root.relativize(path).toString().replace('\\', '/');
@@ -49,21 +52,43 @@ public class EvidenceCollector {
                     evidence.add(new EvidenceFile(p, calculatePriority(p), "pattern-match"));
                 });
             } catch (Exception e) {
-                // 忽略 glob 匹配错误
+                logger.fine("[EvidenceCollector] glob匹配异常: " + pattern + " — " + e.getMessage());
             }
         }
-        
+
         // 阶段 2：按项目类型补充特定目录下的关键文件
         evidence.addAll(collectByProjectType());
-        
+
+        // 回退：如果模式匹配没有找到文件，直接扫描根目录下的关键文件
+        if (evidence.isEmpty()) {
+            evidence.addAll(fallbackCollect());
+        }
+
         // 去重并按优先级排序
         List<EvidenceFile> result = evidence.stream()
             .distinct()
             .sorted(Comparator.comparingInt(EvidenceFile::priority).reversed())
             .limit(maxFiles)
             .collect(Collectors.toList());
-        
+
         return result;
+    }
+
+    /**
+     * 回退收集 — 当 glob 模式匹配失效时，直接遍历根目录收集源码文件。
+     */
+    private List<EvidenceFile> fallbackCollect() {
+        List<EvidenceFile> fallback = new ArrayList<>();
+        try (Stream<Path> stream = Files.walk(root, 6)) {
+            stream.filter(Files::isRegularFile)
+                .filter(p -> !NoiseFilter.isNoise(root.relativize(p)))
+                .limit(30)
+                .forEach(p -> fallback.add(
+                    new EvidenceFile(p, calculatePriority(p), "fallback")));
+        } catch (Exception e) {
+            logger.warning("[EvidenceCollector] 回退扫描失败: " + e.getMessage());
+        }
+        return fallback;
     }
     
     /**
@@ -116,7 +141,7 @@ public class EvidenceCollector {
         if (!Files.exists(base)) return found;
         
         try (Stream<Path> stream = Files.find(base, 4, (path, attrs) -> {
-            if (!Files.isRegularFile(path) || NoiseFilter.isNoise(path)) return false;
+            if (!Files.isRegularFile(path) || NoiseFilter.isNoise(root.relativize(path))) return false;
             String rel = base.relativize(path).toString().toLowerCase().replace('\\', '/');
             return rel.contains(subDirHint.toLowerCase());
         })) {
@@ -130,7 +155,7 @@ public class EvidenceCollector {
     private List<EvidenceFile> scanRootByExtension(String ext, int limit) {
         List<EvidenceFile> found = new ArrayList<>();
         try (Stream<Path> stream = Files.find(root, 2, (path, attrs) -> {
-            if (!Files.isRegularFile(path) || NoiseFilter.isNoise(path)) return false;
+            if (!Files.isRegularFile(path) || NoiseFilter.isNoise(root.relativize(path))) return false;
             String name = path.getFileName().toString().toLowerCase();
             return name.endsWith("." + ext);
         })) {

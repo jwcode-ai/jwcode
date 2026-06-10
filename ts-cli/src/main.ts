@@ -58,6 +58,7 @@ function printUsage(): void {
   console.log('  jwcode start [options]        Start backend + interactive terminal');
   console.log('  jwcode run [options]          Connect to existing backend');
   console.log('  jwcode stop                   Stop running daemon');
+  console.log('  jwcode update                 Check for updates / update CLI');
   console.log('  jwcode version                Print version');
   console.log('');
   console.log('Options:');
@@ -74,10 +75,16 @@ function printUsage(): void {
   console.log('Keyboard shortcuts (in TUI):');
   console.log('  /             Open command palette');
   console.log('  Tab           Toggle Plan/Act mode');
+  console.log('  F1            Toggle help panel');
+  console.log('  Ctrl+N        New session');
+  console.log('  Ctrl+R        Session history picker');
+  console.log('  Ctrl+L        Clear screen');
+  console.log('  Ctrl+S        Pause/resume generation');
+  console.log('  Ctrl+E        Toggle expand all tool calls');
   console.log('  Up/Down       Browse input history (last 30)');
   console.log('  PgUp/PgDn     Scroll message history');
   console.log('  Home/End      Jump to oldest/newest message');
-  console.log('  Esc           Close palette / deny approval');
+  console.log('  Esc           Close palette / pause gen. / deny approval');
 }
 
 function parseArgs(): Record<string, string | boolean> {
@@ -181,7 +188,37 @@ async function cmdStart(args: Record<string, string | boolean>): Promise<void> {
   // Wait for backend to be ready
   await waitForBackend(httpPort);
 
+  // Background update check (non-blocking, fire-and-forget)
+  import('./update.js').then(({ checkForUpdates }) => {
+    checkForUpdates(VERSION).then(info => {
+      if (info?.updateAvailable) {
+        console.log(`\n  Update available: v${info.current} → v${info.latest}`);
+        console.log(`  Run 'jwcode update' (or '${info.url}') to upgrade.\n`);
+      }
+    }).catch(() => {});
+  });
+
+  // Daemon health monitor — auto-restart on crash
+  const healthTimer = setInterval(() => {
+    import('./launcher.js').then(({ readDaemonInfo, isDaemonAlive, startDaemon, writeDaemonInfo }) => {
+      const info = readDaemonInfo();
+      if (info && !isDaemonAlive(info)) {
+        console.error('\n[daemon] Daemon process died. Attempting auto-restart...');
+        try {
+          const daemonProc = startDaemon({
+            installDir, workspaceDir, port: httpPort, wsPort, forceKill: true, idleTimeout: 300,
+          });
+          writeDaemonInfo(daemonProc.pid!, httpPort, wsPort, workspaceDir);
+          console.error('[daemon] Daemon restarted successfully.');
+        } catch (e) {
+          console.error('[daemon] Auto-restart failed:', String(e));
+        }
+      }
+    }).catch(() => {});
+  }, 30_000);
+
   await startTUI(httpPort, wsPort, workspaceDir, installDir);
+  clearInterval(healthTimer);
 }
 
 async function startTUI(httpPort: number, wsPort: number, workspaceDir: string, installDir: string): Promise<void> {
@@ -299,6 +336,49 @@ async function cmdStop(): Promise<void> {
   }
 }
 
+async function cmdUpdate(): Promise<void> {
+  const { checkForUpdates, runNpmUpdate } = await import('./update.js');
+  console.log('Checking for updates...');
+  const info = await checkForUpdates(VERSION);
+  if (!info) {
+    console.log('Could not check for updates. Try again later or install manually:');
+    console.log('  npm install -g @jwcode/cli@latest');
+    return;
+  }
+  if (!info.updateAvailable) {
+    console.log(`JWCode CLI is up to date (v${info.current}).`);
+    return;
+  }
+  console.log(`Update available: v${info.current} → v${info.latest}`);
+  console.log('');
+  if (info.body) {
+    // Show first 3 non-empty lines of release notes
+    const lines = info.body.split('\n').filter((l: string) => l.trim()).slice(0, 3);
+    for (const line of lines) console.log('  ' + line);
+    console.log('');
+  }
+  // In non-TTY mode (piped), auto-update; in TTY mode ask interactively
+  const readline = await import('node:readline');
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  rl.question('Update now? [Y/n] ', (answer: string) => {
+    rl.close();
+    if (answer.toLowerCase() === 'n' || answer.toLowerCase() === 'no') {
+      console.log('Skipped. Run "jwcode update" later or: npm install -g @jwcode/cli@latest');
+      process.exit(0);
+      return;
+    }
+    console.log('Updating...');
+    const result = runNpmUpdate();
+    if (result.ok) {
+      console.log('Updated successfully. Restart jwcode to use the new version.');
+    } else {
+      console.error('Update failed:', result.message);
+      console.log('Try manually: npm install -g @jwcode/cli@latest');
+    }
+    process.exit(result.ok ? 0 : 1);
+  });
+}
+
 async function main(): Promise<void> {
   // Handle --help / --version first regardless of command position
   if (process.argv.includes('--help') || process.argv.includes('-h') || process.argv.includes('help')) {
@@ -322,6 +402,9 @@ async function main(): Promise<void> {
       break;
     case 'stop':
       await cmdStop();
+      break;
+    case 'update':
+      await cmdUpdate();
       break;
     default:
       console.error(`Unknown command: ${cmd}`);

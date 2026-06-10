@@ -85,6 +85,17 @@ public class Skill {
     private String source;
     
     /**
+     * 触发模式（关键词匹配）
+     */
+    private String triggerPattern;
+
+    /**
+     * 注入策略（LAZY / EAGER / HYBRID）
+     */
+    @Builder.Default
+    private SkillDefinition.InjectionStrategy injectionStrategy = SkillDefinition.InjectionStrategy.LAZY;
+
+    /**
      * 加载状态
      */
     @Builder.Default
