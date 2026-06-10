@@ -134,25 +134,16 @@ jobs:
           name: npm-package
           path: npm-package
 
-      - name: Debug — list downloaded artifacts
-        run: |
-          echo "=== jre-artifacts ==="
-          ls -laR jre-artifacts/ || echo "(empty)"
-          echo "=== npm-package ==="
-          ls -laR npm-package/ || echo "(empty)"
-
-      - name: Create GitHub Release (JRE tarballs)
-        uses: softprops/action-gh-release@v2
-        with:
-          files: jre-artifacts/**/*.tar.gz
-          generate_release_notes: true
-          fail_on_unmatched_files: false
-
-      - name: Upload npm package with gh CLI
+      - name: Create GitHub Release & upload all assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload v3.0.0 npm-package/*.tgz --clobber
+          # Delete existing release for this tag to start fresh
+          gh release delete v3.0.0 --yes 2>/dev/null || true
+          # Upload all artifacts and create release
+          ASSETS=$(find jre-artifacts npm-package -type f | tr '\n' ' ')
+          echo "Uploading assets: $ASSETS"
+          gh release create v3.0.0 $ASSETS --generate-notes --title "v3.0.0"
 
       - name: Publish to npm
         working-directory: ts-cli
