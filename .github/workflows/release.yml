@@ -145,6 +145,10 @@ jobs:
           echo "Uploading assets: $ASSETS"
           gh release create v3.0.0 $ASSETS --generate-notes --title "v3.0.0"
 
+      - name: Install dependencies for publish
+        working-directory: ts-cli
+        run: npm ci
+
       - name: Publish to npm
         working-directory: ts-cli
         env:
