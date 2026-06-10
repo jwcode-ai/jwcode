@@ -123,8 +123,7 @@ async function main() {
   console.log(`  output:   ${JRE_DIR}`);
   console.log(`  modules:  ${MODULES.length}`);
 
-  // Step 1: jlink
-  mkdirSync(JRE_DIR, { recursive: true });
+  // Step 1: jlink (creates output directory itself, must not pre-exist)
   console.log('\n[1/3] Running jlink...');
   execSync(
     `"${jlinkPath}" --module-path "${jmodsPath}"` +
