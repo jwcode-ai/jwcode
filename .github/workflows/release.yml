@@ -97,11 +97,16 @@ jobs:
         working-directory: ts-cli
         run: npm pack
 
+      - name: Rename npm tarball to stable name
+        working-directory: ts-cli
+        run: |
+          mv jwcode-cli-*.tgz "jwcode-cli-${{ github.ref_name }}.tgz"
+
       - name: Upload npm package artifact
         uses: actions/upload-artifact@v4
         with:
           name: npm-package
-          path: ts-cli/jwcode-cli-*.tgz
+          path: ts-cli/jwcode-cli-${{ github.ref_name }}.tgz
           compression-level: 0
 
   # ============================================================================
@@ -138,20 +143,20 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Delete existing release for this tag to start fresh
-          gh release delete v3.0.0 --yes 2>/dev/null || true
-          # Upload all artifacts and create release
+          TAG="v${{ github.ref_name }}"
           ASSETS=$(find jre-artifacts npm-package -type f | tr '\n' ' ')
+          echo "Tag: $TAG"
           echo "Uploading assets: $ASSETS"
-          gh release create v3.0.0 $ASSETS --generate-notes --title "v3.0.0"
+          # --clobber overwrites an existing release (e.g. on workflow re-run)
+          gh release create "$TAG" $ASSETS --generate-notes --title "$TAG" --clobber
 
       - name: Install dependencies for publish
         working-directory: ts-cli
         run: npm ci
 
-      - name: Publish to npm
+      - name: Publish to all 15 npm orgs
         working-directory: ts-cli
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish
+        run: npm run publish:all
 

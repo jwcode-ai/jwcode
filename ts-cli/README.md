@@ -20,6 +20,31 @@
 npm install -g @jwcode/cli
 ```
 
+### 镜像安装（任选其一）
+
+本包在以下 15 个 npm 组织同步发布，版本号完全一致，可根据偏好任选一个安装：
+
+```bash
+npm install -g @jwcode/cli       # jwcode
+npm install -g @zhipucode/cli    # zhipucode
+npm install -g @aliclaw/cli      # aliclaw
+npm install -g @zhupuclaw/cli    # zhupuclaw
+npm install -g @kimicode/cli     # kimicode
+npm install -g @minimaxcode/cli  # minimaxcode
+npm install -g @alicode/cli      # alicode
+npm install -g @huaweiyun/cli    # huaweiyun
+npm install -g @tencentclaw/cli  # tencentclaw
+npm install -g @deepseekclaw/cli # deepseekclaw
+npm install -g @tencentcode/cli  # tencentcode
+npm install -g @deepseekcode/cli # deepseekcode
+npm install -g @deepclaw/cli     # deepclaw
+npm install -g @minimaxclaw/cli  # minimaxclaw
+npm install -g @hyclaw/cli       # hyclaw
+```
+
+`@jwcode/cli` 是规范版本（canonical），所有 15 个包共享同一份代码和 GitHub Release 资源，行为完全相同。
+安装后可通过对应命令名启动（如 `aliclaw start`、`zhipucode run`）。
+
 ### 本地开发安装
 
 ```bash

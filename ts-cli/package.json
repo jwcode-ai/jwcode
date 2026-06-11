@@ -1,6 +1,6 @@
 {
   "name": "@jwcode/cli",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "JWCode — Java AI Coding Tool TypeScript CLI",
   "type": "module",
   "main": "dist/cli.js",
@@ -15,7 +15,8 @@
     "start": "node build.mjs && node dist/cli.js start",
     "prepublishOnly": "node build.mjs --publish",
     "postinstall": "node scripts/download-jre.js",
-    "build:jre": "node scripts/build-jre-zip.js"
+    "build:jre": "node scripts/build-jre-zip.js",
+    "publish:all": "node scripts/publish-all.mjs"
   },
   "dependencies": {
     "esbuild": "^0.28.0",

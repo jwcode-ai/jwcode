@@ -43,3 +43,6 @@ session_*/
 
 # === JRE (downloaded by postinstall) ===
 backend/jre/
+
+# === Multi-org publish staging ===
+.publish-staging/
