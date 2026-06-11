@@ -53,6 +53,7 @@ const ORGS = [
   'deepclaw',
   'minimaxclaw',
   'hyclaw',
+  'mimocode',
 ];
 
 // --- CLI arg parsing -------------------------------------------------------
