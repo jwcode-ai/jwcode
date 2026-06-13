@@ -90,8 +90,8 @@ jobs:
       - name: Verify build output
         working-directory: ts-cli
         run: |
-          test -f dist/cli.js && echo "dist/cli.js OK"
-          test -f backend/jwcode-web.jar && echo "backend/jwcode-web.jar OK"
+          ls -la dist/cli.js
+          ls -la backend/jwcode-web.jar
 
       - name: Create npm tarball
         working-directory: ts-cli
@@ -107,6 +107,13 @@ jobs:
         with:
           name: npm-package
           path: ts-cli/jwcode-cli-${{ github.ref_name }}.tgz
+          compression-level: 0
+
+      - name: Upload backend JAR as separate artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-jar
+          path: ts-cli/backend/jwcode-web.jar
           compression-level: 0
 
   # ============================================================================
@@ -139,12 +146,18 @@ jobs:
           name: npm-package
           path: npm-package
 
+      - name: Download backend JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-jar
+          path: backend-jar
+
       - name: Create GitHub Release & upload all assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="v${{ github.ref_name }}"
-          ASSETS=$(find jre-artifacts npm-package -type f | tr '\n' ' ')
+          ASSETS=$(find jre-artifacts npm-package backend-jar -type f | tr '\n' ' ')
           echo "Tag: $TAG"
           echo "Uploading assets: $ASSETS"
           # Delete existing release for this tag to start fresh (e.g. on workflow re-run)
