@@ -104,16 +104,29 @@ function stageOrg(org) {
   cpSync(join(PKG_DIR, 'dist'), join(dir, 'dist'), { recursive: true });
   cpSync(join(PKG_DIR, 'backend'), join(dir, 'backend'), { recursive: true });
 
-  // scripts/download-jre.js — REQUIRED for end-user postinstall.
-  // The ts-cli/.npmignore excludes scripts/ but we ship it explicitly
-  // via the synthetic `files` field, so the published tarball always
-  // contains it.
+  // Remove platform-specific JRE from package — it's downloaded by postinstall
+  const jreDir = join(dir, 'backend', 'jre');
+  if (existsSync(jreDir)) rmSync(jreDir, { recursive: true, force: true });
+
+  // Safety check: backend/jwcode-web.jar is REQUIRED in the published package
+  const jarPath = join(dir, 'backend', 'jwcode-web.jar');
+  if (!existsSync(jarPath)) {
+    console.error(`[publish-all] FATAL: backend/jwcode-web.jar not found for ${org}.`);
+    console.error('[publish-all] Run "node build.mjs --publish" first to bundle the backend JAR.');
+    process.exit(1);
+  }
+
+  // scripts/ — REQUIRED for end-user postinstall.
+  // The ts-cli/.npmignore excludes scripts/ but we ship them explicitly
+  // via the synthetic `files` field, so the published tarball always contains them.
   mkdirSync(join(dir, 'scripts'), { recursive: true });
-  copyFileSync(
-    join(PKG_DIR, 'scripts', 'download-jre.js'),
-    join(dir, 'scripts', 'download-jre.js'),
-  );
-  chmodSync(join(dir, 'scripts', 'download-jre.js'), 0o755);
+  for (const script of ['download-jre.js', 'download-jar.js']) {
+    copyFileSync(
+      join(PKG_DIR, 'scripts', script),
+      join(dir, 'scripts', script),
+    );
+    chmodSync(join(dir, 'scripts', script), 0o755);
+  }
 
   // Optional: README + LICENSE
   const readmeSrc = join(PKG_DIR, 'README.md');
@@ -127,6 +140,7 @@ function stageOrg(org) {
     'dist/',
     'backend/',
     'scripts/download-jre.js',
+    'scripts/download-jar.js',
   ];
   if (existsSync(join(dir, 'README.md'))) files.push('README.md');
   if (existsSync(join(dir, 'LICENSE'))) files.push('LICENSE');
@@ -139,7 +153,7 @@ function stageOrg(org) {
     main: main || 'dist/cli.js',
     bin: { [org]: './dist/cli.js' },
     scripts: {
-      postinstall: 'node scripts/download-jre.js',
+      postinstall: 'node scripts/download-jar.js && node scripts/download-jre.js',
       // NO prepublishOnly — staging dir has no build.mjs
     },
     dependencies: { ...dependencies },

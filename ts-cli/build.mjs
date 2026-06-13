@@ -1,30 +1,15 @@
-﻿/**
- * Bundle script -- produces single dist/cli.js with esbuild.
- * Uses packages=external to avoid CJS/ESM interop issues.
+#!/usr/bin/env bun
+/**
+ * Build script -- produces single dist/cli.js with Bun bundler + Solid JSX transform.
+ * Uses @opentui/solid/bun-plugin for Solid JSX compilation.
+ * Preserves ProGuard + JLink bundling from the previous esbuild pipeline.
  */
-import * as esbuild from 'esbuild';
-
-await esbuild.build({
-  entryPoints: ['src/main.ts'],
-  bundle: true,
-  platform: 'node',
-  target: 'node18',
-  format: 'esm',
-  outfile: 'dist/cli.js',
-  packages: 'external',
-  resolveExtensions: ['.tsx', '.ts', '.js', '.json'],
-  minify: true,
-  keepNames: true,
-  logLevel: 'info',
-});
-
-console.log('[build] Bundle: dist/cli.js');
-
-// Copy fat JAR from Maven build if it exists (dev convenience)
-import { existsSync, mkdirSync, copyFileSync, unlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, copyFileSync, unlinkSync, readdirSync, statSync, createWriteStream, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { pipeline } from 'node:stream/promises';
+import { createSolidTransformPlugin } from '@opentui/solid/bun-plugin';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fatJarSource = join(__dirname, '..', 'jwcode-web', 'target', 'jwcode-web.jar');
@@ -33,10 +18,60 @@ const proguardConf = join(__dirname, 'proguard.conf');
 const backendDir = join(__dirname, 'backend');
 const obfJar = join(backendDir, 'jwcode-web-obf.jar');
 
+// Entry point: solid-only build for the new OpenTUI UI.
+// Pass --legacy to build the old Ink entry (kept temporarily for fallback).
+const useSolid = !process.argv.includes('--legacy');
+
+// Clean dist/ before building to avoid stale artifacts
+rmSync(join(__dirname, 'dist'), { recursive: true, force: true });
+
+// ── Step 1: Bundle with Bun + Solid plugin ─────────────────────
+if (useSolid) {
+  console.log('[build] Bundling Solid + OpenTUI app with Bun ...');
+  const buildResult = await Bun.build({
+    entrypoints: ['src/main.tsx'],
+    outdir: 'dist',
+    target: 'bun',
+    format: 'esm',
+    minify: false,
+    naming: 'cli.js',
+    packages: 'external',
+    plugins: [createSolidTransformPlugin()],
+    loader: {
+      '.json': 'json',
+      '.css': 'text',
+    },
+  });
+  if (!buildResult.success) {
+    console.error('[build] Bun build failed:');
+    for (const log of buildResult.logs) console.error(log);
+    process.exit(1);
+  }
+  console.log('[build] Bundle: dist/cli.js (Solid+OpenTUI)');
+} else {
+  // Legacy Ink entry — solid/placeholder.
+  console.log('[build] --legacy: bundling Ink entry (Ink fallback)');
+  const buildResult = await Bun.build({
+    entrypoints: ['src/solid/main.tsx'],
+    outdir: 'dist',
+    target: 'node',
+    format: 'esm',
+    minify: false,
+    naming: 'cli.ink.js',
+    packages: 'external',
+  });
+  if (!buildResult.success) {
+    console.error('[build] Bun legacy build failed:');
+    for (const log of buildResult.logs) console.error(log);
+    process.exit(1);
+  }
+  console.log('[build] Bundle: dist/cli.ink.js (legacy Ink)');
+}
+
+// ── Step 2: ProGuard obfuscate fat JAR ──────────────────────────
 if (existsSync(fatJarSource)) {
   if (!existsSync(backendDir)) mkdirSync(backendDir, { recursive: true });
 
-  // Step 3: ProGuard 混淆 fat JAR
   if (existsSync(proguardJar)) {
     console.log('[build] Running ProGuard obfuscation...');
     try {
@@ -49,7 +84,6 @@ if (existsSync(fatJarSource)) {
         '-printmapping', join(backendDir, 'proguard.map')
       ], { stdio: 'inherit' });
       console.log('[build] ProGuard obfuscation completed: backend/jwcode-web-obf.jar');
-      // Rename obfuscated JAR to final name
       const finalJar = join(backendDir, 'jwcode-web.jar');
       if (existsSync(finalJar)) unlinkSync(finalJar);
       copyFileSync(obfJar, finalJar);
@@ -59,12 +93,9 @@ if (existsSync(fatJarSource)) {
       copyFileSync(fatJarSource, join(backendDir, 'jwcode-web.jar'));
     }
   } else {
-    // Auto-download ProGuard if not present
-    const proguardUrl = 'https://github.com/Guardsquare/proguard/releases/download/v7.4.1/proguard-7.4.1.jar';
+    const proguardUrl = 'https://github.com/Guardsquare/proguard/releases/download/v7.6.1/proguard-7.6.1.jar';
     console.log('[build] ProGuard JAR not found locally. Downloading from GitHub...');
     try {
-      const { createWriteStream } = await import('node:fs');
-      const { pipeline } = await import('node:stream/promises');
       const resp = await fetch(proguardUrl);
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       const dest = createWriteStream(proguardJar);
@@ -78,10 +109,10 @@ if (existsSync(fatJarSource)) {
         '@' + proguardConf,
         '-printmapping', join(backendDir, 'proguard.map')
       ], { stdio: 'inherit' });
-      console.log('[build] ProGuard obfuscation completed.');
       const finalJar = join(backendDir, 'jwcode-web.jar');
       if (existsSync(finalJar)) unlinkSync(finalJar);
       copyFileSync(obfJar, finalJar);
+      console.log('[build] ProGuard obfuscation completed.');
     } catch (err) {
       console.error('[build] ProGuard download/run failed, falling back to un-obfuscated JAR:', err.message);
       copyFileSync(fatJarSource, join(backendDir, 'jwcode-web.jar'));
@@ -91,7 +122,14 @@ if (existsSync(fatJarSource)) {
   console.log('[build] JAR not found (skip Maven build first, or use --build flag).');
 }
 
-// ── JLink: bundle minimal JRE ──────────────────────────────────
+// In --publish mode, the JAR is REQUIRED — exit with error if missing
+if (process.argv.includes('--publish') && !existsSync(join(backendDir, 'jwcode-web.jar'))) {
+  console.error('[build] FATAL: backend/jwcode-web.jar is required for npm publish.');
+  console.error('[build] Run "mvn package -pl jwcode-web -am -q -DskipTests" first.');
+  process.exit(1);
+}
+
+// ── Step 3: JLink minimal JRE bundle ─────────────────────────────
 function getJavaHome() {
   return process.env.JAVA_HOME || process.env.JDK_HOME || '';
 }
@@ -103,7 +141,6 @@ function getJlinkPath() {
     const p = join(home, 'bin', 'jlink' + ext);
     if (existsSync(p)) return p;
   }
-  // Try PATH
   try {
     const which = execFileSync(process.platform === 'win32' ? 'where' : 'which', ['jlink'], { encoding: 'utf-8' }).trim();
     if (which) return which;
@@ -131,7 +168,6 @@ const skipJlink = process.argv.includes('--publish');
 if (skipJlink) {
   console.log('[build] --publish flag set, skipping JRE bundle.');
 } else if (jlinkPath && jmodsPath) {
-  // Only build JRE if the JAR step succeeded
   const jarExists = existsSync(join(backendDir, 'jwcode-web.jar'));
   if (!jarExists) {
     console.log('[build] JAR not found, skipping JRE bundle.');
@@ -148,13 +184,11 @@ if (skipJlink) {
         '--no-man-pages',
         '--vm', 'server',
       ], { stdio: 'inherit' });
-      // Verify
       const javaExe = join(jreDir, 'bin', process.platform === 'win32' ? 'java.exe' : 'java');
       if (existsSync(javaExe)) {
         const ver = execFileSync(javaExe, ['-version'], { encoding: 'utf-8', stderr: 'pipe' });
         console.log('[build] JRE bundled successfully at backend/jre/');
         console.log('[build]   ' + ver.replace('\n', ' ').trim());
-        // Strip the jmods from the output to save space
         console.log('[build]   Size: ~' + Math.round(getDirSize(jreDir) / 1024 / 1024) + ' MB');
       }
     } catch (err) {
