@@ -173,6 +173,15 @@ jobs:
         working-directory: ts-cli
         run: npm ci
 
+      - name: Build CLI before publish
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Build CLI (dist/ required by publish-all.mjs)
+        working-directory: ts-cli
+        run: bun run build.mjs --publish
+
       - name: Publish to all 15 npm orgs
         working-directory: ts-cli
         env:
