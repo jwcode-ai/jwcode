@@ -72,7 +72,7 @@ export function findJar(installDir: string): string | null {
 }
 
 export function findMvn(): string {
-  const paths = process.env.PATH?.split(';') || [];
+  const paths = process.env.PATH?.split(path.delimiter) || [];
   for (const dir of paths) {
     for (const name of ['mvn.cmd', 'mvn.bat', 'mvn']) {
       const full = join(dir, name);
@@ -283,10 +283,15 @@ export function cleanupBackend(proc: ChildProcess | null): void {
   if (!proc) return;
   console.log('\n[jwcode] Shutting down...');
   if (process.platform === 'win32') {
+    // Graceful shutdown first, then force kill if needed
     try {
-      execSync(`taskkill /F /T /PID ${proc.pid}`, { stdio: 'ignore' });
+      execSync(`taskkill /T /PID ${proc.pid}`, { stdio: 'ignore', timeout: 3000 });
     } catch {
-      try { proc.kill(); } catch {}
+      try {
+        execSync(`taskkill /F /T /PID ${proc.pid}`, { stdio: 'ignore', timeout: 3000 });
+      } catch {
+        try { proc.kill(); } catch {}
+      }
     }
   } else {
     try { process.kill(-proc.pid!, 'SIGTERM'); } catch {}

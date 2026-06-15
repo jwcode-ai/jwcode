@@ -208,7 +208,7 @@ function getDirSize(dir) {
     const entries = readdirSync(dir, { recursive: true, withFileTypes: true });
     for (const entry of entries) {
       if (entry.isFile()) {
-        size += statSync(join(entry.parentPath || entry.path, entry.name)).size;
+        size += statSync(join(entry.parentPath, entry.name)).size;
       }
     }
   } catch {}

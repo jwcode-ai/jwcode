@@ -1,20 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import { estimateTokens } from '../solid/components/TextInput.js';
 
-// Replicate the token estimation logic from TextInput.tsx
-function estimateTokens(text: string): number {
-  let cjk = 0;
-  let other = 0;
-  for (const ch of text) {
-    if (/[一-鿿㐀-䶿豈-﫿　-〿＀-￯]/.test(ch)) {
-      cjk++;
-    } else {
-      other++;
-    }
-  }
-  return Math.ceil(cjk / 1.5 + other / 4);
-}
-
-describe('tokenEstimate', () => {
+describe('estimateTokens', () => {
   it('empty string is 0', () => {
     expect(estimateTokens('')).toBe(0);
   });
@@ -50,5 +37,13 @@ describe('tokenEstimate', () => {
     const long = 'x'.repeat(400_000);
     const tokens = estimateTokens(long);
     expect(tokens).toBeGreaterThanOrEqual(100_000);
+  });
+
+  it('handles grapheme clusters (emoji + ZWJ sequences)', () => {
+    // Each emoji is a single grapheme but multi-codepoint; the function
+    // iterates by code unit, so an emoji counts as 2 chars (surrogate pair).
+    // Just assert it returns a positive number, not throw.
+    const tokens = estimateTokens('👨‍👩‍👧‍👦 family');
+    expect(tokens).toBeGreaterThan(0);
   });
 });
