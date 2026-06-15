@@ -83,9 +83,14 @@ jobs:
       - name: Build Java backend (fat JAR)
         run: mvn package -pl jwcode-web -am -q -DskipTests
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
       - name: Build CLI (skip jlink, JRE is downloaded by postinstall)
         working-directory: ts-cli
-        run: node build.mjs --publish
+        run: bun run build.mjs --publish
 
       - name: Verify build output
         working-directory: ts-cli
