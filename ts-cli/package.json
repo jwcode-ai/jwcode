@@ -1,6 +1,6 @@
 {
   "name": "@jwcode/cli",
-  "version": "3.0.3",
+  "version": "3.0.4",
   "description": "JWCode — Java AI Coding Tool TypeScript CLI",
   "type": "module",
   "main": "dist/cli.js",
@@ -23,7 +23,7 @@
     "@opentui/solid": "^0.4.0",
     "@solid-primitives/i18n": "2.2.1",
     "marked": "^14.1.0",
-    "solid-js": "^1.9.13",
+    "solid-js": "1.9.12",
     "ws": "^8.18.0"
   },
   "files": [
