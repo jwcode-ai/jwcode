@@ -157,6 +157,11 @@ jobs:
           name: backend-jar
           path: backend-jar
 
+      - name: Copy JAR to ts-cli/backend for publish
+        run: |
+          mkdir -p ts-cli/backend
+          cp backend-jar/jwcode-web.jar ts-cli/backend/jwcode-web.jar
+
       - name: Create GitHub Release & upload all assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
