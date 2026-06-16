@@ -10,6 +10,11 @@ let _locale: Locale | null = null;
 function detectLocale(): Locale {
   const lang = process.env.LANG || process.env.LC_ALL || '';
   if (/^zh/i.test(lang)) return 'zh';
+  // Windows: check system locale (LANG is often unset)
+  try {
+    const locale = Intl.DateTimeFormat().resolvedOptions().locale;
+    if (/^zh/i.test(locale)) return 'zh';
+  } catch {}
   return 'en';
 }
 

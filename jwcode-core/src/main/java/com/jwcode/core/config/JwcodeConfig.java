@@ -447,7 +447,7 @@ public class JwcodeConfig {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class EngineSettings {
         @JsonProperty("max-iterations")
-        private int maxIterations = 50;  // 最大迭代次数，默认 50 轮，0 表示使用引擎默认值
+        private int maxIterations = 50;  // 最大迭代次数，默认 50 轮，设为 0 表示无限制，设为 -1 表示使用引擎默认值
         
         @JsonProperty("timeout-minutes")
         private int timeoutMinutes = 5;   // 超时时间（分钟）

@@ -2048,9 +2048,9 @@ public class LLMQueryEngine {
             if (config != null && config.getSettings() != null) {
                 JwcodeConfig.EngineSettings engine = config.getSettings().getEngine();
                 if (engine != null) {
-                    // 当配置值 > 0 时覆盖默认值 (50)，配置值 = 0 表示使用引擎默认值
+                    // 当配置值 >= 0 时覆盖默认值 (50)；配置值 = 0 表示无限制，配置值 < 0 表示使用引擎默认值
                     int configuredMaxIterations = engine.getMaxIterations();
-                    if (configuredMaxIterations > 0) {
+                    if (configuredMaxIterations >= 0) {
                         engineConfig.setMaxIterations(configuredMaxIterations);
                     }
                     // 否则保持默认值 50
