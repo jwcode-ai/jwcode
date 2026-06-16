@@ -20,101 +20,139 @@ function formatElapsed(sec: number): string {
   if (sec >= 60) {
     const m = Math.floor(sec / 60);
     const s = sec % 60;
-    return m + 'm' + s + 's';
+    return `${m}m${s}s`;
   }
-  return sec + 's';
+  return `${sec}s`;
 }
-
-function formatCost(cost: number): string {
-  if (cost <= 0) return '';
-  return '$' + cost.toFixed(4);
-}
-
-// Inner presentational component (pure)
-const StatusLineInner = memo(function StatusLineInner({
-  connected,
-  statusText,
-  modelName,
-  tokenRate,
-  usage,
-  planMode,
-  autoMode,
-  degradation,
-  pdcaPhase,
-  planTasks,
-}: {
-  connected: boolean;
-  statusText: string;
-  modelName: string;
-  tokenRate: number;
-  usage: { tokensIn: number; tokensOut: number; costDollars: number };
-  planMode: boolean;
-  autoMode: boolean;
-  degradation: boolean;
-  pdcaPhase: string;
-  planTasks: Array<{ status: string }>;
-}) {
-  const connectColor = connected ? 'green' : 'red';
-  const connectLabel = connected ? '●' : '○';
-  const modeColor = planMode ? 'yellow' : autoMode ? 'magenta' : 'cyan';
-  const modeLabel = planMode ? '[PLAN]' : autoMode ? '[AUTO]' : '[CHAT]';
-
-  const statusItems: string[] = [];
-  if (modelName) statusItems.push(modelName);
-  if (usage.tokensIn + usage.tokensOut > 0) {
-    statusItems.push(formatTokens(usage.tokensIn + usage.tokensOut) + 't');
-  }
-  const rateStr = formatRate(tokenRate);
-  if (rateStr) statusItems.push(rateStr);
-  const costStr = formatCost(usage.costDollars);
-  if (costStr) statusItems.push(costStr);
-
-  // PDCA phase
-  const phaseStr = pdcaPhase ? ` PDCA:${pdcaPhase}` : '';
-
-  // Plan task summary
-  const planTaskSummary = planTasks.length > 0
-    ? ` tasks:${planTasks.filter(t => t.status === 'completed').length}/${planTasks.length}`
-    : '';
-
-  return (
-    <Box>
-      <Text color={connectColor}>{connectLabel}</Text>
-      <Text> </Text>
-      <Text color={modeColor}>{modeLabel}</Text>
-      <Text> </Text>
-      {statusItems.length > 0 && (
-        <Text dimColor>{statusItems.join(' | ')}</Text>
-      )}
-      {degradation && (
-        <Text color="red"> ⚠ degraded</Text>
-      )}
-      {statusText && (
-        <Text color="yellow"> {statusText}</Text>
-      )}
-      <Text dimColor>{phaseStr}{planTaskSummary}</Text>
-    </Box>
-  );
-});
 
 export const StatusLine = memo(function StatusLine() {
-  const status = useAppStatusLine();
+  const { usage, modelName, planMode, autoMode, connected, statusText, messagesLen,
+          tokenRate, compactionProgress, isGenerating, currentMessageTimestamp } = useAppStatusLine();
   const degradation = useAppDegradation();
   const pdcaPhase = useAppPdcaPhase();
   const planTasks = useAppPlanTasks();
+  const msgCount = messagesLen;
+
+  // Elapsed computed inline from Date.now() at render time.
+  // currentMessageTimestamp is a stable primitive — doesn't change per flush.
+  const generationElapsed = isGenerating && currentMessageTimestamp
+    ? Math.floor((Date.now() - currentMessageTimestamp) / 1000)
+    : 0;
+
+  const pct = Math.min(100, Math.round(usage.usageRatio * 100));
+  const filled = Math.round(pct / 10);
+  const bar = '█'.repeat(filled) + '░'.repeat(10 - filled);
+  const model = modelName || (connected ? 'ready' : 'connecting...');
+
+  const modeLabel = planMode ? ' Plan ' : ' Act ';
+  const modeColor = planMode ? 'cyan' : 'green';
+
+  const connIcon = connected ? '●' : '○';
+  const connColor = connected ? 'green' : 'red';
+
+  const isError = statusText.startsWith('Error:');
+  const barColor = pct > 90 ? 'red' : pct > 70 ? 'yellow' : 'white';
+  const rateStr = formatRate(tokenRate);
+  const elapsedStr = formatElapsed(generationElapsed);
+
+  // Prompt vs completion breakdown
+  const p = usage.promptTokens;
+  const c = usage.completionTokens;
 
   return (
-    <StatusLineInner
-      connected={status.connected}
-      statusText={status.statusText}
-      modelName={status.modelName}
-      tokenRate={status.tokenRate}
-      usage={status.usage}
-      planMode={status.planMode}
-      autoMode={status.autoMode}
-      degradation={degradation}
-      pdcaPhase={pdcaPhase}
-      planTasks={planTasks}
-    />
+    <Box flexDirection="column" width="100%" paddingRight={1}>
+      <Box height={1}>
+        <Text bold color="cyan">jwcode</Text>
+        <Text>  </Text>
+        <Text backgroundColor={modeColor} color="black"> {modeLabel} </Text>
+        <Text>  </Text>
+        {autoMode && (
+          <>
+            <Text backgroundColor="magenta" color="black"> AUTO </Text>
+            <Text>  </Text>
+          </>
+        )}
+        {pdcaPhase && (
+          <>
+            <Text backgroundColor="yellow" color="black"> {pdcaPhase} </Text>
+            <Text>  </Text>
+          </>
+        )}
+        {planTasks.length > 0 && (
+          <>
+            <Text color="cyan">{planTasks.filter(t => t.status === 'completed').length}</Text>
+            <Text dimColor>/</Text>
+            <Text color="white">{planTasks.length}</Text>
+            <Text dimColor> tasks</Text>
+            <Text>  </Text>
+          </>
+        )}
+        <Text color={connColor}>{connIcon} </Text>
+        <Text color="green">{model}</Text>
+        <Text>  </Text>
+        <Text dimColor>{msgCount}msgs</Text>
+
+        {/* Prompt + Completion breakdown */}
+        {p > 0 || c > 0 ? (
+          <>
+            <Text>  </Text>
+            <Text color="blue">{formatTokens(p)}</Text>
+            <Text dimColor>+</Text>
+            <Text color="green">{formatTokens(c)}</Text>
+            <Text dimColor>=</Text>
+            <Text color="yellow">{formatTokens(usage.totalTokens)}</Text>
+          </>
+        ) : (
+          <>
+            <Text>  t:</Text>
+            <Text color="yellow">{formatTokens(usage.totalTokens)}</Text>
+          </>
+        )}
+        <Text>  </Text>
+        <Text color={barColor}>{bar} {pct}%</Text>
+
+        {/* Token rate during streaming */}
+        {isGenerating && rateStr && (
+          <>
+            <Text>  </Text>
+            <Text color="magenta">{rateStr}</Text>
+          </>
+        )}
+
+        {/* Elapsed timer */}
+        {isGenerating && elapsedStr && (
+          <>
+            <Text>  </Text>
+            <Text color="cyan">{elapsedStr}</Text>
+          </>
+        )}
+      </Box>
+      {degradation.active && (
+        <Box height={1}>
+          <Text color="yellow" dimColor>
+            [{degradation.mode.toUpperCase()}] {degradation.message}
+            {degradation.retryCount > 0 ? ` (${degradation.retryCount}/${degradation.maxRetries})` : ''}
+          </Text>
+        </Box>
+      )}
+      {/* Compaction progress bar */}
+      {compactionProgress && (
+        <Box height={1}>
+          <Text color={compactionProgress.percent >= 100 ? 'green' : 'cyan'}>
+            {compactionProgress.percent >= 100 ? '✓' : '🗜'} {compactionProgress.message}
+          </Text>
+          <Text> </Text>
+          <Text color="yellow">{'█'.repeat(Math.round(compactionProgress.percent / 10))}{'░'.repeat(10 - Math.round(compactionProgress.percent / 10))}</Text>
+          <Text dimColor> {compactionProgress.percent}%</Text>
+        </Box>
+      )}
+      {statusText && statusText !== 'connecting...' && (
+        <Box height={1}>
+          <Text color={isError ? 'red' : 'grey'} dimColor={!isError}>
+            {statusText.slice(0, 100)}
+          </Text>
+        </Box>
+      )}
+    </Box>
   );
 });

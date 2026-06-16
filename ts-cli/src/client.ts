@@ -81,10 +81,10 @@ export class JwCodeClient {
           return;
         }
         if (data.type === 'auth_success') {
+          if (settled) return;
           this._createSession().then(sid => {
             this.sessionId = sid;
             this._startHeartbeat();
-            this._startReadLoop();
             this._reconnecting = false;
             this._reconnectRetries = 0;
             this.reconnectDelay = 1000;
@@ -93,9 +93,11 @@ export class JwCodeClient {
           return;
         }
         if (data.type === 'auth_failed') {
+          if (settled) return;
           settle(reject, new Error(`Auth failed: ${JSON.stringify(data)}`));
           return;
         }
+        this.dispatch(data);
       });
 
       this.ws.on('error', (err) => {
@@ -123,16 +125,6 @@ export class JwCodeClient {
     const sid = (inner.sessionId as string) || (data.sessionId as string) || (data.id as string) || 'default-session';
     stderr(`[ws] Session: ${sid}\n`);
     return sid;
-  }
-
-  private _startReadLoop(): void {
-    if (!this.ws) return;
-    this.ws.on('message', (raw: WebSocket.Data) => {
-      let data: WSMessage;
-      try { data = JSON.parse(raw.toString()); } catch { return; }
-      if (data.type === 'auth_required' || data.type === 'auth_success' || data.type === 'auth_failed') return;
-      this.dispatch(data);
-    });
   }
 
   private _startHeartbeat(): void {

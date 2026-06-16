@@ -1,11 +1,8 @@
 /**
  * Application state management — selector-based subscriptions via useSyncExternalStore.
  * Components only re-render when their specific slice changes.
- *
- * Optimized with shallow-equal caching for reference-type selectors to prevent
- * unnecessary re-renders when the underlying data hasn't changed.
  */
-import { useSyncExternalStore, useRef, useMemo } from 'react';
+import { useSyncExternalStore, useRef } from 'react';
 import { createStore, type Store } from '../store.js';
 import type { Message, PlanTask, TokenUsage } from '../protocol.js';
 
@@ -24,79 +21,38 @@ export interface AppState {
   toolCallsExpanded: boolean;
   planTasks: PlanTask[];
   pdcaPhase: string;
-  terminalRows: number;
+  degradation: import("../protocol.js").DegradationStatus;
+  compactionProgress: { stage: string; percent: number; message: string } | null;
 }
 
-const DEFAULT_STATE: AppState = {
+const initialState: AppState = {
   messages: [],
   currentMessage: null,
-  usage: { tokensIn: 0, tokensOut: 0, costDollars: 0 },
+  usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0, usageRatio: 0 },
   planMode: false,
   autoMode: false,
   planWaiting: false,
   scrollOffset: 0,
   modelName: '',
   connected: false,
-  statusText: '',
+  statusText: 'connecting...',
   tokenRate: 0,
   toolCallsExpanded: false,
   planTasks: [],
   pdcaPhase: '',
-  terminalRows: 0,
+  degradation: { active: false, retryCount: 0, maxRetries: 0, mode: "normal", message: "" },
+  compactionProgress: null,
 };
 
-const store = createStore<AppState>(DEFAULT_STATE);
+let _store: Store<AppState> | null = null;
 
 export function getStore(): Store<AppState> {
-  return store;
+  if (!_store) _store = createStore<AppState>(initialState);
+  return _store;
 }
 
-export function updateAppState(updater: (prev: AppState) => AppState): void {
-  store.setState(updater);
-}
+// ---- stable module-level selectors ----
 
-// ---------------------------------------------------------------------------
-// Cached selector helpers — avoid creating new references on every call
-// ---------------------------------------------------------------------------
-function cacheKey(prefix: string, version: number): string {
-  return `${prefix}_${version}`;
-}
-
-// Simple version counter for cache invalidation
-let _version = 0;
-function bumpVersion(): number {
-  return ++_version;
-}
-
-// We override the original setState to bump version on changes
-const origSetState = store.setState.bind(store);
-store.setState = (updater: (prev: AppState) => AppState) => {
-  origSetState((prev) => {
-    const next = updater(prev);
-    if (next !== prev) bumpVersion();
-    return next;
-  });
-};
-
-// ---------------------------------------------------------------------------
-// Selector hooks — each subscribes only to its specific slice
-// ---------------------------------------------------------------------------
-
-/**
- * Generic selector hook with optional shallow-equal cache for array/object types.
- */
-function useAppSelector<T>(selector: (state: AppState) => T): T {
-  const prevRef = useRef<T | undefined>(undefined);
-  const subscribe = useMemo(() => {
-    return (callback: () => void) => store.subscribe(callback);
-  }, []);
-  const getSnapshot = useMemo(() => {
-    return () => selector(store.getState());
-  }, [selector]);
-  return useSyncExternalStore(subscribe, getSnapshot);
-}
-
-// Predefined selectors (stable references to avoid recreation)
 const selMessages = (s: AppState) => s.messages;
 const selCurrentMessage = (s: AppState) => s.currentMessage;
 const selUsage = (s: AppState) => s.usage;
@@ -108,141 +64,104 @@ const selModelName = (s: AppState) => s.modelName;
 const selConnected = (s: AppState) => s.connected;
 const selStatusText = (s: AppState) => s.statusText;
 const selTokenRate = (s: AppState) => s.tokenRate;
+const selIsGenerating = (s: AppState) => s.currentMessage !== null;
 const selToolCallsExpanded = (s: AppState) => s.toolCallsExpanded;
 const selPlanTasks = (s: AppState) => s.planTasks;
 const selPdcaPhase = (s: AppState) => s.pdcaPhase;
-const selTerminalRows = (s: AppState) => s.terminalRows;
+const selDegradation = (s: AppState) => s.degradation;
 
-// Composite selectors (memoized via closures)
-function makeCompositeSelector<T>(selector: (s: AppState) => T): () => T {
-  let cached: { state: AppState; value: T } | null = null;
-  return () => {
-    const state = store.getState();
-    if (cached && cached.state === state) return cached.value;
-    const value = selector(state);
-    cached = { state, value };
-    return value;
-  };
-}
+// ChatArea compound selector: messages + currentMessage change together during streaming.
+// scrollOffset intentionally excluded — ChatArea doesn't use it, and bundling it would
+// cause unnecessary re-renders on every scroll event.
+const selChatArea = (s: AppState) => ({
+  messages: s.messages,
+  currentMessage: s.currentMessage,
+} as const);
 
-/** Messages + currentMessage (for ChatArea) */
-function selChatArea(state: AppState) {
-  return { messages: state.messages, currentMessage: state.currentMessage };
-}
-const getChatAreaSnapshot = makeCompositeSelector(selChatArea);
+// StatusLine compound selector: all status fields
+// Includes isGenerating/currentMessageTimestamp as primitives so the selector
+// is stable during streaming (timestamp doesn't change per flush) —
+// StatusLine avoids re-rendering 5×/s just for the elapsed counter.
+const selStatusLine = (s: AppState) => ({
+  usage: s.usage,
+  modelName: s.modelName,
+  planMode: s.planMode,
+  autoMode: s.autoMode,
+  connected: s.connected,
+  statusText: s.statusText,
+  messagesLen: s.messages.length,
+  tokenRate: s.tokenRate,
+  compactionProgress: s.compactionProgress,
+  isGenerating: s.currentMessage !== null,
+  currentMessageTimestamp: s.currentMessage?.timestamp ?? null,
+} as const);
 
-/** Status line slice */
-function selStatusLine(state: AppState) {
-  return {
-    connected: state.connected,
-    statusText: state.statusText,
-    modelName: state.modelName,
-    tokenRate: state.tokenRate,
-    usage: state.usage,
-    planMode: state.planMode,
-    autoMode: state.autoMode,
-  };
-}
-const getStatusLineSnapshot = makeCompositeSelector(selStatusLine);
+// ---- shallow equality for selector cache ----
 
-// ---------------------------------------------------------------------------
-// Exported hooks
-// ---------------------------------------------------------------------------
-
-export function useAppMessages(): Message[] {
-  return useAppSelector(selMessages);
-}
-
-export function useAppCurrentMessage(): Message | null {
-  return useAppSelector(selCurrentMessage);
-}
-
-export function useAppUsage(): TokenUsage {
-  return useAppSelector(selUsage);
-}
-
-export function useAppPlanMode(): boolean {
-  return useAppSelector(selPlanMode);
-}
-
-export function useAppAutoMode(): boolean {
-  return useAppSelector(selAutoMode);
-}
-
-export function useAppPlanWaiting(): boolean {
-  return useAppSelector(selPlanWaiting);
-}
-
-export function useAppScrollOffset(): number {
-  return useAppSelector(selScrollOffset);
-}
-
-export function useAppModelName(): string {
-  return useAppSelector(selModelName);
-}
-
-export function useAppConnected(): boolean {
-  return useAppSelector(selConnected);
-}
-
-export function useAppStatusText(): string {
-  return useAppSelector(selStatusText);
-}
-
-export function useAppTokenRate(): number {
-  return useAppSelector(selTokenRate);
-}
-
-export function useAppToolCallsExpanded(): boolean {
-  return useAppSelector(selToolCallsExpanded);
-}
-
-export function useAppPlanTasks(): PlanTask[] {
-  return useAppSelector(selPlanTasks);
-}
-
-export function useAppPdcaPhase(): string {
-  return useAppSelector(selPdcaPhase);
-}
-
-export function useAppTerminalRows(): number {
-  return useAppSelector(selTerminalRows);
-}
-
-// ---------------------------------------------------------------------------
-// Composite hooks (for components that need multiple slices)
-// ---------------------------------------------------------------------------
-
-export function useAppChatArea(): { messages: Message[]; currentMessage: Message | null } {
-  const subscribe = useMemo(
-    () => (cb: () => void) => store.subscribe(cb),
-    [],
+function shallowEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (a === null || b === null) return false;
+  if (typeof a !== 'object' || typeof b !== 'object') return false;
+  const keysA = Object.keys(a as Record<string, unknown>);
+  const keysB = Object.keys(b as Record<string, unknown>);
+  if (keysA.length !== keysB.length) return false;
+  return keysA.every(k =>
+    Object.is(
+      (a as Record<string, unknown>)[k],
+      (b as Record<string, unknown>)[k],
+    ),
   );
-  return useSyncExternalStore(subscribe, getChatAreaSnapshot);
 }
 
-export function useAppStatusLine(): {
-  connected: boolean;
-  statusText: string;
-  modelName: string;
-  tokenRate: number;
-  usage: TokenUsage;
-  planMode: boolean;
-  autoMode: boolean;
-} {
-  const subscribe = useMemo(
-    () => (cb: () => void) => store.subscribe(cb),
-    [],
-  );
-  return useSyncExternalStore(subscribe, getStatusLineSnapshot);
+/**
+ * Subscribe to a single slice of AppState.
+ * Component re-renders only when the selected value changes (shallow equality).
+ */
+export function useAppSlice<T>(selector: (state: AppState) => T): T {
+  const store = getStore();
+  const cacheRef = useRef<{ value: T } | null>(null);
+
+  const getSnapshot = () => {
+    const next = selector(store.getState());
+    const cached = cacheRef.current;
+    if (cached !== null && shallowEqual(next, cached.value)) {
+      return cached.value;
+    }
+    cacheRef.current = { value: next };
+    return next;
+  };
+
+  return useSyncExternalStore(store.subscribe, getSnapshot, getSnapshot);
 }
 
-export function useAppDegradation(): boolean {
-  return useAppSelector((s) => {
-    // Simple heuristic: if status text indicates degradation
-    return s.statusText.includes('降级') || s.statusText.includes('degrad');
-  });
+// ---- convenience hooks ----
+
+export const useAppMessages = () => useAppSlice(selMessages);
+export const useAppCurrentMessage = () => useAppSlice(selCurrentMessage);
+export const useAppUsage = () => useAppSlice(selUsage);
+export const useAppPlanMode = () => useAppSlice(selPlanMode);
+export const useAppAutoMode = () => useAppSlice(selAutoMode);
+export const useAppPlanWaiting = () => useAppSlice(selPlanWaiting);
+export const useAppScrollOffset = () => useAppSlice(selScrollOffset);
+export const useAppModelName = () => useAppSlice(selModelName);
+export const useAppConnected = () => useAppSlice(selConnected);
+export const useAppStatusText = () => useAppSlice(selStatusText);
+export const useAppTokenRate = () => useAppSlice(selTokenRate);
+export const useAppIsGenerating = () => useAppSlice(selIsGenerating);
+export const useAppChatArea = () => useAppSlice(selChatArea);
+export const useAppStatusLine = () => useAppSlice(selStatusLine);
+export const useAppToolCallsExpanded = () => useAppSlice(selToolCallsExpanded);
+export const useAppPlanTasks = () => useAppSlice(selPlanTasks);
+export const useAppPdcaPhase = () => useAppSlice(selPdcaPhase);
+export const useAppDegradation = () => useAppSlice(selDegradation);
+
+/** @deprecated Use specific hooks (useAppMessages, useAppConnected, etc.) */
+export function useAppState(): AppState {
+  return useAppSlice(s => s);
 }
 
-// Alias for consistency
-export { useAppPlanMode as useAppPlanModeAlias };
+// ---- imperative updates (for non-React contexts) ----
+
+export function updateAppState(updater: (prev: AppState) => AppState): void {
+  getStore().setState(updater);
+}

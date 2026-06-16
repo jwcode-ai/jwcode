@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Java backend launcher.
  *
  * Production mode (npm global install):
@@ -12,8 +12,7 @@
 import { spawn, spawnSync, execSync, execFileSync, type ChildProcess } from 'node:child_process';
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname, delimiter } from 'node:path';
-import { homedir, platform, EOL } from 'node:os';
-import { logger } from './logger.js';
+import { homedir, platform } from 'node:os';
 import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -27,7 +26,7 @@ const __dirname = dirname(__filename);
  */
 export function findInstallDir(): string {
   // Production: look for bundled JAR relative to dist/cli.js
-  // dist/cli.js 鈫?../backend/jwcode-web.jar
+  // dist/cli.js → ../backend/jwcode-web.jar
   const bundledJar = join(__dirname, '..', 'backend', 'jwcode-web.jar');
   if (existsSync(bundledJar)) {
     return join(__dirname, '..');
@@ -53,7 +52,7 @@ export function findJar(installDir: string): string | null {
   const bundledJar = join(installDir, 'backend', 'jwcode-web.jar');
   if (existsSync(bundledJar)) {
     if (!isProguardOutput(bundledJar)) return bundledJar;
-    // Bundled JAR looks like a broken ProGuard output 鈥?fall through to dev
+    // Bundled JAR looks like a broken ProGuard output — fall through to dev
     // location, but only if dev JAR is newer so we don't regress.
   }
 
@@ -153,7 +152,7 @@ export function findJava(): string {
 export function buildBackend(projectRoot: string): void {
   const mvn = findMvn();
   const cmd = `"${mvn}" package -pl jwcode-web -am -q -DskipTests`;
-  logger.info(`[launcher] Building: ${cmd}`);
+  console.log(`[launcher] Building: ${cmd}`);
   try {
     const result = spawnSync(cmd, [], {
       cwd: projectRoot,
@@ -165,11 +164,11 @@ export function buildBackend(projectRoot: string): void {
       throw new Error(result.stderr.toString() || result.stdout.toString());
     }
   } catch (e: unknown) {
-    logger.errorStderr('[launcher] Build failed:', String(e));
+    console.error('[launcher] Build failed:', String(e));
     process.exit(1);
   }
   if (!findJar(projectRoot)) {
-    logger.errorStderr('[launcher] Build succeeded but jar not found');
+    console.error('[launcher] Build succeeded but jar not found');
     process.exit(1);
   }
 }
@@ -215,7 +214,7 @@ export function killPort(port: number): void {
         if (pid) {
           try {
             execSync(`taskkill /F /PID ${pid}`, { stdio: 'ignore' });
-            logger.info(`[launcher] Killed process on port ${port} (PID ${pid})`);
+            console.log(`[launcher] Killed process on port ${port} (PID ${pid})`);
           } catch {}
         }
       }
@@ -223,7 +222,7 @@ export function killPort(port: number): void {
       execSync(`lsof -ti:${port} | xargs kill -9 2>/dev/null`, { stdio: 'ignore' });
     }
   } catch {
-    // Nothing listening on that port 鈥?good
+    // Nothing listening on that port — good
   }
 }
 
@@ -234,7 +233,7 @@ export function waitForBackend(port: number, timeout = 60): Promise<void> {
   return new Promise((resolve) => {
     function check() {
       if (Date.now() - start > timeout * 1000) {
-        logger.info(`[launcher] WARNING: Backend not responding after ${timeout}s`);
+        console.log(`[launcher] WARNING: Backend not responding after ${timeout}s`);
         resolve();
         return;
       }
@@ -242,7 +241,7 @@ export function waitForBackend(port: number, timeout = 60): Promise<void> {
         .then(async r => {
           const text = await r.text();
           if (r.status === 200 && (text.includes('running') || text.includes('status'))) {
-            logger.info(`[launcher] Backend ready on port ${port}`);
+            console.log(`[launcher] Backend ready on port ${port}`);
             resolve();
           } else {
             setTimeout(check, 1000);
@@ -268,9 +267,9 @@ export function startBackend(opts: StartOptions): ChildProcess {
   const java = findJava();
   const jarPath = findJar(installDir);
   if (!jarPath) {
-    logger.errorStderr('[launcher] Backend JAR not found.');
-    logger.errorStderr('[launcher]   Reinstall: npm install -g @jwcode/cli');
-    logger.errorStderr('[launcher]   Or build from source: cd jwcode && mvn package -pl jwcode-web -am -DskipTests');
+    console.error('[launcher] Backend JAR not found.');
+    console.error('[launcher]   Reinstall: npm install -g @jwcode/cli');
+    console.error('[launcher]   Or build from source: cd jwcode && mvn package -pl jwcode-web -am -DskipTests');
     process.exit(1);
   }
 
@@ -278,9 +277,9 @@ export function startBackend(opts: StartOptions): ChildProcess {
   try {
     execSync(`"${java}" -version 2>&1`, { stdio: 'ignore' });
   } catch {
-    logger.errorStderr('[launcher] Java is required but not found on this system.');
-    logger.errorStderr('[launcher]   Install Java 17+: https://adoptium.net/');
-    logger.errorStderr('[launcher]   Or set JAVA_HOME and ensure java is on your PATH.');
+    console.error('[launcher] Java is required but not found on this system.');
+    console.error('[launcher]   Install Java 17+: https://adoptium.net/');
+    console.error('[launcher]   Or set JAVA_HOME and ensure java is on your PATH.');
     process.exit(1);
   }
 
@@ -289,8 +288,8 @@ export function startBackend(opts: StartOptions): ChildProcess {
     killPort(wsPort);
   }
 
-  logger.info(`[launcher] Starting backend: ${java} -jar ${jarPath}`);
-  logger.info(`[launcher] Workspace: ${workspaceDir}`);
+  console.log(`[launcher] Starting backend: ${java} -jar ${jarPath}`);
+  console.log(`[launcher] Workspace: ${workspaceDir}`);
 
   const args = ['-jar', jarPath, String(port), String(wsPort), workspaceDir];
   const proc = spawn(java, args, {
@@ -305,13 +304,13 @@ export function startBackend(opts: StartOptions): ChildProcess {
     const msg = data.toString('utf-8').trim();
     if (!msg) return;
     if (msg.includes('Address already in use') || msg.includes('BindException')) {
-      logger.errorStderr(`[backend] ERROR: Port ${port} is in use.`);
+      console.error(`[backend] ERROR: Port ${port} is in use.`);
     }
   });
 
   proc.on('exit', (code) => {
     if (code !== 0 && code !== null) {
-      logger.errorStderr(`[launcher] Backend process exited with code ${code}`);
+      console.error(`[launcher] Backend process exited with code ${code}`);
     }
   });
 

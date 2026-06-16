@@ -1,6 +1,7 @@
 /**
- * Command execution hook — handles /commands and normal chat dispatch.
- * Extracted from App.tsx to keep the root component focused on layout.
+ * Command execution hook — handles /commands, normal chat dispatch,
+ * @ file references, and paste expansion. Single entry point for all
+ * input submitted from the prompt.
  */
 import { useCallback } from 'react';
 import type { JwCodeClient } from '../client.js';
@@ -13,6 +14,7 @@ import { expandPastes, clearAllPastes } from '../pasteBuffer.js';
 interface CommandHandlerOptions {
   clientRef: React.MutableRefObject<JwCodeClient | null>;
   planModeRef: React.MutableRefObject<boolean>;
+  referencedFilesRef: React.MutableRefObject<string[]>;
   onExit: () => void;
   setInput: (v: string) => void;
   setShowHelp: (v: boolean, scroll?: number) => void;
@@ -20,9 +22,9 @@ interface CommandHandlerOptions {
 }
 
 export function useCommandHandler(opts: CommandHandlerOptions) {
-  const { clientRef, planModeRef, onExit, setInput, setShowHelp, setShowPalette } = opts;
+  const { clientRef, planModeRef, referencedFilesRef, onExit, setInput, setShowHelp, setShowPalette } = opts;
 
-  const executeCommand = useCallback((value: string) => {
+  const executeCommand = useCallback(async (value: string) => {
     const text = value.trim();
     if (!text || !clientRef.current) return;
     setInput('');
@@ -63,7 +65,6 @@ export function useCommandHandler(opts: CommandHandlerOptions) {
           updateAppState(prev => ({ ...prev, autoMode: !prev.autoMode }));
           return;
         case 'clear':
-          console.clear();
           clearAllPastes();
           updateAppState(prev => ({
             ...prev,
@@ -76,7 +77,7 @@ export function useCommandHandler(opts: CommandHandlerOptions) {
         case 'show_context':
           updateAppState(prev => ({
             ...prev,
-            statusText: '会话消息: ' + prev.messages.length + ' | 模式: ' + (prev.planMode ? '规划' : '执行') + ' | 自动: ' + (prev.autoMode ? '开' : '关') + ' | 模型: ' + (prev.modelName || '未连接'),
+            statusText: `会话消息: ${prev.messages.length} | 模式: ${prev.planMode ? '规划' : '执行'} | 自动: ${prev.autoMode ? '开' : '关'} | 模型: ${prev.modelName || '未连接'}`,
           }));
           return;
         case 'stop': client?.stop(); return;
@@ -94,6 +95,7 @@ export function useCommandHandler(opts: CommandHandlerOptions) {
         case 'config': if (cmdArg) client?.config(cmdArg); return;
         case 'plugin': if (cmdArg) client?.plugin(cmdArg); return;
         case 'tokens': client?.send('tokens'); return;
+        case 'memory': client?.send('memory'); return;
         case 'export': if (cmdArg) client?.send('export', undefined, { path: cmdArg }); return;
         case 'checkpoint': client?.send('checkpoint'); return;
         case 'test': client?.send('test'); return;
@@ -106,14 +108,39 @@ export function useCommandHandler(opts: CommandHandlerOptions) {
 
     // Normal chat — ignore unmatched / prefixes
     if (text.startsWith('/') && !(cmd && cmd in SLASH_COMMANDS)) return;
+
+    const client = clientRef.current;
+    if (!client) return;
+
+    // Resolve @ file references → attach as <context> blocks
+    const files = referencedFilesRef.current;
+    referencedFilesRef.current = [];
+    let finalText = text;
+    const fileCtxs: string[] = [];
+    for (const filePath of files) {
+      try {
+        const content = await client.readFileContent(filePath);
+        if (content) {
+          finalText = finalText.replace(filePath, '').trim();
+          const ext = filePath.split('.').pop() || '';
+          fileCtxs.push(
+            `<context ref="${filePath}">\n\`\`\`${ext}\n${content}\n\`\`\`\n</context>`
+          );
+        }
+      } catch { /* file not readable, leave path in text */ }
+    }
+    if (fileCtxs.length > 0) {
+      finalText = fileCtxs.join('\n\n') + '\n\n' + finalText.trim();
+      finalText = finalText.trim();
+    }
+
     // Expand "[Pasted text #N ...]" tokens to the real clipboard content
-    const expanded = expandPastes(text);
-    saveToHistory(text); // save the compact view, not the expanded text
+    const expanded = expandPastes(finalText);
+    saveToHistory(finalText); // save the compact view, not the expanded text
     const msg = createMessage('user', expanded);
     updateAppState(prev => ({ ...prev, messages: [...prev.messages, msg] }));
-    clientRef.current!.chat(expanded, planModeRef.current);
-  }, [clientRef, planModeRef, onExit, setInput, setShowHelp, setShowPalette]);
+    client.chat(expanded, planModeRef.current);
+  }, [clientRef, planModeRef, referencedFilesRef, onExit, setInput, setShowHelp, setShowPalette]);
 
   return { executeCommand };
 }
-

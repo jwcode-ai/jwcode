@@ -61,7 +61,13 @@ export function useStreamHandlers(
     function scheduleStreamFlush() {
       if (_flushScheduled) return;
       _flushScheduled = true;
-      _flushTimer = setTimeout(doStreamFlush, 200);
+      // First flush after flushNow/start: immediate (reduces perceived latency).
+      // Pending content > 100 chars: immediate (avoids visible chunking at the
+      // 200ms boundary). Otherwise: 200ms throttle.
+      const isFirst = !_flushTimer;
+      const tooLong = _pendingContent.length > 100;
+      const delay = isFirst || tooLong ? 0 : 200;
+      _flushTimer = setTimeout(doStreamFlush, delay);
     }
 
     function flushNow() {
