@@ -71,7 +71,7 @@ if (existsSync(fatJarSource)) {
 
 function downloadProguard(dest) {
   return new Promise((resolve, reject) => {
-    const url = 'https://repo1.maven.org/maven2/com/guardsquare/proguard/proguard-base/7.6.1/proguard-base-7.6.1.jar';
+    const url = 'https://repo1.maven.org/maven2/com/guardsquare/proguard/proguard-base/7.4.2/proguard-base-7.4.2.jar';
     const file = createWriteStream(dest);
     get(url, (res) => {
       if (res.statusCode === 302 || res.statusCode === 301) {
