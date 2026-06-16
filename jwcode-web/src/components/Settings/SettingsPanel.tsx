@@ -2,7 +2,7 @@ import { memo, useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Settings, Palette, RefreshCw, Globe, Search,
-  Zap, FileCode, Server, Info, ExternalLink, Cpu,
+  Zap, FileCode, Server, Info, ExternalLink, Cpu, Power,
 } from 'lucide-react';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { useSessionStore } from '../../stores/sessionStore';
@@ -56,6 +56,7 @@ export const SettingsPanel = memo(function SettingsPanel({ onNavigate }: Setting
   const [showCustomTheme, setShowCustomTheme] = useState(customThemeEnabled);
   const [uptime, setUptime] = useState(0);
   const [restarting, setRestarting] = useState(false);
+  const [shuttingDown, setShuttingDown] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
   const matchesSearch = useCallback((sectionId: string) => {
@@ -94,6 +95,24 @@ export const SettingsPanel = memo(function SettingsPanel({ onNavigate }: Setting
     } catch {
       toast.error('Failed to send restart request');
       setRestarting(false);
+    }
+  }, []);
+
+  const handleShutdown = useCallback(async () => {
+    if (!window.confirm('Shut down the server? This will stop the entire backend process.')) return;
+    if (!window.confirm('Are you sure? All active sessions and unsaved work will be lost.')) return;
+    setShuttingDown(true);
+    try {
+      const res = await api.system.shutdown();
+      if (res.success) {
+        toast.info('Server shutting down...');
+      } else {
+        toast.error(res.error || 'Shutdown failed');
+        setShuttingDown(false);
+      }
+    } catch {
+      toast.error('Failed to send shutdown request');
+      setShuttingDown(false);
     }
   }, []);
 
@@ -338,6 +357,18 @@ export const SettingsPanel = memo(function SettingsPanel({ onNavigate }: Setting
               >
                 <RefreshCw size={14} className={restarting ? 'animate-spin' : ''} />
                 {restarting ? 'Restarting...' : 'Restart Server'}
+              </button>
+              <button
+                onClick={handleShutdown}
+                disabled={shuttingDown}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-all ${
+                  shuttingDown
+                    ? 'bg-dark-hover text-dark-muted cursor-wait'
+                    : 'bg-accent-red/10 text-accent-red hover:bg-accent-red/20 border border-accent-red/30'
+                }`}
+              >
+                <Power size={14} className={shuttingDown ? 'animate-pulse' : ''} />
+                {shuttingDown ? 'Shutting Down...' : 'Shutdown Server'}
               </button>
             </div>
           </Section>

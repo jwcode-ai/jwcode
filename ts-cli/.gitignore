@@ -10,6 +10,7 @@ dist/
 # === Backend build artifacts ===
 backend/target/
 backend/*.jar
+backend/jre/
 
 # === OS files ===
 .DS_Store
@@ -40,9 +41,3 @@ npm-debug.log*
 # === Session / Temp ===
 session_*/
 *.session/
-
-# === JRE (downloaded by postinstall) ===
-backend/jre/
-
-# === Multi-org publish staging ===
-.publish-staging/

@@ -1,6 +1,6 @@
 # @jwcode/cli — JWCode TypeScript CLI
 
-> **JWCode** 是一款 AI 编程助手 CLI 工具，基于 TypeScript + Solid/OpenTUI 构建，提供交互式终端界面（TUI），与 Java 后端通过 WebSocket 通信，实现 AI 驱动的代码辅助能力。
+> **JWCode** 是一款 AI 编程助手 CLI 工具，基于 TypeScript + React/Ink 构建，提供交互式终端界面（TUI），与 Java 后端通过 WebSocket 通信，实现 AI 驱动的代码辅助能力。
 
 ---
 
@@ -19,31 +19,6 @@
 ```bash
 npm install -g @jwcode/cli
 ```
-
-### 镜像安装（任选其一）
-
-本包在以下 15 个 npm 组织同步发布，版本号完全一致，可根据偏好任选一个安装：
-
-```bash
-npm install -g @jwcode/cli       # jwcode
-npm install -g @zhipucode/cli    # zhipucode
-npm install -g @aliclaw/cli      # aliclaw
-npm install -g @zhupuclaw/cli    # zhupuclaw
-npm install -g @kimicode/cli     # kimicode
-npm install -g @minimaxcode/cli  # minimaxcode
-npm install -g @alicode/cli      # alicode
-npm install -g @huaweiyun/cli    # huaweiyun
-npm install -g @tencentclaw/cli  # tencentclaw
-npm install -g @deepseekclaw/cli # deepseekclaw
-npm install -g @tencentcode/cli  # tencentcode
-npm install -g @deepseekcode/cli # deepseekcode
-npm install -g @deepclaw/cli     # deepclaw
-npm install -g @minimaxclaw/cli  # minimaxclaw
-npm install -g @hyclaw/cli       # hyclaw
-```
-
-`@jwcode/cli` 是规范版本（canonical），所有 15 个包共享同一份代码和 GitHub Release 资源，行为完全相同。
-安装后可通过对应命令名启动（如 `aliclaw start`、`zhipucode run`）。
 
 ### 本地开发安装
 
@@ -160,61 +135,61 @@ export JWCODE_THEME_COLORS='{"primary":"#00ff00","bg":"#1a1a2e"}'
 ```
 ts-cli/
 ├── src/
-│   ├── main.tsx                  # 入口 (Bun 打包, Solid+OpenTUI)
-│   ├── client.ts                 # WebSocket 客户端
-│   ├── config.ts                 # 配置加载
-│   ├── launcher.ts               # Java 后端进程管理
-│   ├── pasteBuffer.ts            # 粘贴缓冲
-│   ├── fuzzyMatch.ts             # 文件名模糊匹配
-│   ├── textInputGrapheme.ts      # grapheme 感知输入
-│   ├── protocol.ts               # WebSocket 消息协议
-│   ├── update.ts                 # npm 版本自检
-│   ├── commands/                 # 斜杠命令定义
-│   ├── solid/
-│   │   ├── components/           # 17 个 UI 组件 (含 messages/ 子目录)
-│   │   ├── hooks/                # AppStateProvider, ClientProvider, ...
-│   │   ├── context/              # theme, kv, language, route, ...
-│   │   ├── ui/                   # dialog, toast
-│   │   ├── util/                 # clipboard, keybind, ...
-│   │   ├── i18n/                 # en, zh
-│   │   └── theme/                # 33 个 JSON 主题
-│   └── __tests__/                # vitest
-├── backend/                      # 打包后的 Java jar + jre/
-├── .github/workflows/ci.yml      # CI 工作流配置
-├── build.mjs                     # Bun + ProGuard + jlink 构建
+│   ├── main.ts                  # 入口文件
+│   ├── App.tsx                  # React 根组件 (Ink)
+│   ├── client.ts                # WebSocket 客户端
+│   ├── config.ts                # 配置管理
+│   ├── launcher.ts              # 后端进程启动器
+│   ├── pasteBuffer.ts           # 粘贴缓冲区
+│   ├── protocol.ts              # WebSocket 消息协议
+│   ├── store.ts                 # 全局状态管理
+│   ├── theme.ts                 # 主题系统
+│   ├── commands/                # CLI 命令实现
+│   ├── components/              # React/Ink UI 组件
+│   │   ├── SetupWizard.tsx       # 安装向导
+│   │   ├── CommandPalette.tsx    # 命令面板
+│   │   ├── StatusLine.tsx        # 状态栏
+│   │   ├── TextInput.tsx         # 文本输入框
+│   │   ├── ApprovalModal.tsx     # 审批弹窗
+│   │   ├── FilePalette.tsx       # 文件选择面板
+│   │   └── PlanTaskBoard.tsx     # 计划任务面板
+│   ├── hooks/                   # React Hooks
+│   │   ├── useMouseWheel.ts
+│   │   ├── useStreamHandlers.ts
+│   │   └── useWebSocket.ts
+│   └── __tests__/               # 单元测试
+├── backend/                     # Java 后端（独立项目）
+├── .github/workflows/ci.yml     # CI 工作流配置
+├── build.mjs                    # esbuild 构建脚本
 ├── package.json
 ├── tsconfig.json
-└── proguard.conf                 # Java 后端混淆配置
+└── proguard.conf                # Java 后端混淆配置
 ```
 
 ### 架构流程图
 
 ```
-┌────────────────────────────────────────────┐
-│          终端用户 (Terminal)                 │
-└──────────────────┬─────────────────────────┘
+┌─────────────────────────────────────────────┐
+│          终端用户 (Terminal)                  │
+└──────────────────┬──────────────────────────┘
                    │ stdin/stdout
-┌──────────────────▼─────────────────────────┐
-│      @jwcode/cli (TypeScript TUI)           │
-│  ┌──────────┐  ┌───────────────────────┐   │
-│  │  Commands │  │  Solid/OpenTUI UI     │   │
-│  │  (CLI)    │  │  (12 个组件 + 33 主题) │   │
-│  └─────┬────┘  └──────────┬────────────┘   │
-│        │                  │                  │
-│  ┌─────▼──────────────────▼────────────┐   │
-│  │  Providers: AppState/Client/KV/Theme │   │
-│  └─────────────────┬───────────────────┘   │
-│                    │                        │
-│  ┌─────────────────▼───────────────────┐   │
-│  │        JwCodeClient                  │   │
-│  │     (WebSocket 客户端)               │   │
-│  └─────────────────┬───────────────────┘   │
-└────────────────────┼──────────────────────┘
-                     │ WebSocket (ws://)
-┌────────────────────┼──────────────────────┐
-│                    ▼                       │
-│          Java 后端服务 (WebSocket + AI)     │
-└───────────────────────────────────────────┘
+┌──────────────────▼──────────────────────────┐
+│       @jwcode/cli (TypeScript TUI)           │
+│   ┌──────────┐  ┌──────────────────────┐    │
+│   │  Commands │  │  React/Ink UI       │    │
+│   │  (CLI)    │  │  (组件树)            │    │
+│   └─────┬────┘  └──────────┬───────────┘    │
+│         │                  │                  │
+│   ┌─────▼──────────────────▼───────────┐    │
+│   │        JwCodeClient                │    │
+│   │     (WebSocket 客户端)              │    │
+│   └─────────────────┬──────────────────┘    │
+└─────────────────────┼───────────────────────┘
+                      │ WebSocket (ws://)
+┌─────────────────────▼───────────────────────┐
+│          Java 后端服务                       │
+│     (WebSocket Server + AI 引擎)            │
+└─────────────────────────────────────────────┘
 ```
 
 ---
@@ -258,7 +233,7 @@ npm run build
 node dist/cli.js version
 ```
 
-构建产物输出到 `dist/cli.js`，使用 **Bun bundler** + `@opentui/solid/bun-plugin` 打包，外部依赖不打包。
+构建产物输出到 `dist/cli.js`，使用 **esbuild** 打包为单个 ESM 文件，外部依赖不打包。
 
 ### 代码风格
 
@@ -282,10 +257,10 @@ node dist/cli.js version
 
 | 测试文件 | 覆盖模块 | 说明 |
 |---------|---------|------|
-| `store.test.ts` | `useStreamHandlers` | appendMessage 队列及 cleanArgs 测试 |
-| `theme.test.ts` | `context/theme` | 33 主题 JSON 校验及颜色引用验证 |
+| `store.test.ts` | `store.ts` | 全局状态管理单元测试 |
+| `theme.test.ts` | `theme.ts` | 主题系统单元测试 |
 | `pasteBuffer.test.ts` | `pasteBuffer.ts` | 粘贴缓冲区测试 |
-| `tokenEstimate.test.ts` | `TextInput` | Token 估算测试 (CJK/English) |
+| `tokenEstimate.test.ts` | 工具函数 | Token 估算测试 |
 
 ### 编写新测试
 
@@ -344,27 +319,7 @@ jwcode start -p 8080
 jwcode run -b http://localhost:17340
 ```
 
-### 3. 鼠标右键/粘贴
-
-- **有选中文本时右键**：复制选中内容到剪贴板
-- **无选中文本时右键**：从剪贴板粘贴内容到输入框
-- **长按左键（300ms）**：选中光标处单词并自动复制
-
-### 4. @ 文件引用
-
-输入 @ 后自动弹出文件选择面板，支持：
-- 通过后端 API 获取文件列表
-- API 不可用时自动回退到本地文件系统扫描（最多 3 层，跳过 node_modules/.git 等目录）
-
-### 5. 退出行为
-
-CLI 退出时（Ctrl+C 或 /exit）自动执行：
-1. 通过 WebSocket 发送 exit 信号通知后端清理会话
-2. 优雅关闭 WebSocket 连接
-3. 优雅关闭 Java 后端进程（先 taskkill 再 /F 兜底）
-4. 清理 daemon 缓存文件
-
-### 6. 构建后运行报错
+### 3. 构建后运行报错
 
 ```bash
 # 清理后重新构建
@@ -372,7 +327,7 @@ rm -rf dist
 npm run build
 ```
 
-### 7. `EPIPE` / `ECONNRESET` 错误
+### 4. `EPIPE` / `ECONNRESET` 错误
 
 这是终端断开时的正常行为，不影响程序运行。项目已自动处理这些信号。
 
@@ -388,7 +343,6 @@ npm run build
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
-| 3.1.0 | 2026-06 | 消息组件拆分、输入框修复、右键粘贴、退出同步 |
-| 3.0.0 | — | 当前版本，TypeScript 重写，Solid/OpenTUI TUI |
+| 3.0.0 | — | 当前版本，TypeScript 重写，React/Ink TUI |
 | 2.x | — | Python 版本 CLI |
 | 1.x | — | 初版 CLI |

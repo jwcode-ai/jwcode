@@ -137,11 +137,18 @@ public class ToolExecutor {
             Consumer<ToolProgress<?>> onProgress) {
         
         Tool<?, ?, ?> tool = toolRegistry.getTool(toolName);
-                if (tool == null) {
+        if (tool == null) {
             return CompletableFuture.completedFuture(
                 ToolExecutionResult.error("未知工具: " + toolName)
             );
-        }        
+        }
+
+        // Tool whitelist check: reject if current thread has a restricted whitelist
+        if (!ToolWhitelistManager.getInstance().isAllowed(toolName)) {
+            return CompletableFuture.completedFuture(ToolExecutionResult.error(toolName,
+                "[Whitelist] " + toolName + " is not in the allowed tools for this context."));
+        }
+
         // Plan Mode isolation: reject write/execute tools
         if (!planModeManager.isToolAllowedInCurrentMode(tool.getCategory(), tool.getSideEffects().stream().findFirst().orElse(null), toolName)) {
             return CompletableFuture.completedFuture(ToolExecutionResult.error(toolName,

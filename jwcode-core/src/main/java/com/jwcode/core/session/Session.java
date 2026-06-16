@@ -9,6 +9,8 @@ import com.jwcode.common.util.Preconditions;
 import com.jwcode.core.model.Message;
 import com.jwcode.core.task.ActiveTask;
 
+import com.jwcode.core.event.EventSystemFactory.EventSystem;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -52,6 +54,7 @@ public class Session {
     private int maxMessageHistory = 0; // 默认 0 表示不限制
     private String currentAgentId; // 当前绑定的 Agent ID，用于子代理上下文隔离
     private final Set<String> injectedFragmentIds = new java.util.HashSet<>(); // 已注入的片段 ID
+    private EventSystem eventSystem; // 事件系统（EventBus + EventStore + SessionProjector）
     
     public Session(String id, String workingDirectory) {
         this.id = Preconditions.checkNotNull(id, "id cannot be null");
@@ -95,6 +98,9 @@ public class Session {
     public void setModel(String model) { this.model = model; this.updatedAt = Instant.now(); }
     public String getCurrentAgentId() { return currentAgentId; }
     public void setCurrentAgentId(String agentId) { this.currentAgentId = agentId; }
+
+    public EventSystem getEventSystem() { return eventSystem; }
+    public void setEventSystem(EventSystem eventSystem) { this.eventSystem = eventSystem; }
 
     /**
      * 获取已注入的片段 ID 集合（用于去重）。

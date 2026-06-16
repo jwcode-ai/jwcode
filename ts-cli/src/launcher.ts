@@ -9,7 +9,7 @@
  *   Walks up from script dir to find pom.xml, builds with Maven,
  *   launches via `java -jar` from target/.
  */
-import { spawn, spawnSync, execSync, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, execSync, execFileSync, type ChildProcess } from 'node:child_process';
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
@@ -50,29 +50,54 @@ export function findInstallDir(): string {
 export function findJar(installDir: string): string | null {
   // Production: bundled JAR
   const bundledJar = join(installDir, 'backend', 'jwcode-web.jar');
-  if (existsSync(bundledJar)) return bundledJar;
+  if (existsSync(bundledJar)) {
+    if (!isProguardOutput(bundledJar)) return bundledJar;
+    // Bundled JAR looks like a broken ProGuard output — fall through to dev
+    // location, but only if dev JAR is newer so we don't regress.
+  }
 
   // Development: Maven-built JAR in target/
-  const devJar = join(installDir, 'jwcode-web', 'target', 'jwcode-web.jar');
-  if (existsSync(devJar)) return devJar;
-
-  // Also check for classifier variant from maven-assembly-plugin
+  // Prefer the versioned SNAPSHOT JAR (the proper Maven fat JAR), then
+  // fall back to the unversioned name (with appendAssemblyId=false in pom).
   const targetDir = join(installDir, 'jwcode-web', 'target');
+  const devJarSnap = join(targetDir, 'jwcode-web-1.0.0-SNAPSHOT.jar');
+  const devJarUnversioned = join(targetDir, 'jwcode-web.jar');
+
+  if (existsSync(devJarSnap)) return devJarSnap;
+  if (existsSync(devJarUnversioned) && !isProguardOutput(devJarUnversioned)) return devJarUnversioned;
+
+  // Also check for any other matching JAR in target/
   if (existsSync(targetDir)) {
     try {
       const jars = readdirSync(targetDir)
         .filter(f => f.startsWith('jwcode-web') && f.endsWith('.jar'))
         .map(f => ({ name: f, mtime: statSync(join(targetDir, f)).mtimeMs }))
         .sort((a, b) => b.mtime - a.mtime);
-      if (jars.length > 0) return join(targetDir, jars[0].name);
+      for (const j of jars) {
+        const p = join(targetDir, j.name);
+        if (!isProguardOutput(p)) return p;
+      }
     } catch { /* ignore */ }
   }
 
   return null;
 }
 
+/**
+ * Detect whether a JAR looks like a broken ProGuard output:
+ * has META-INF/proguard/ but no com/jwcode/ classes.
+ */
+function isProguardOutput(jarPath: string): boolean {
+  try {
+    const out = execFileSync('unzip', ['-l', jarPath, 'META-INF/proguard/', 'com/jwcode/'], { stdio: ['ignore', 'pipe', 'ignore'] }).toString();
+    return out.includes('META-INF/proguard/') && !out.includes('com/jwcode/');
+  } catch {
+    return false;
+  }
+}
+
 export function findMvn(): string {
-  const paths = process.env.PATH?.split(path.delimiter) || [];
+  const paths = process.env.PATH?.split(';') || [];
   for (const dir of paths) {
     for (const name of ['mvn.cmd', 'mvn.bat', 'mvn']) {
       const full = join(dir, name);
@@ -92,14 +117,7 @@ export function findMvn(): string {
   return 'mvn';
 }
 
-export function findJava(installDir?: string): string {
-  // 1. Bundled JRE (npm global install)
-  if (installDir) {
-    const bundled = join(installDir, 'backend', 'jre', 'bin', process.platform === 'win32' ? 'java.exe' : 'java');
-    if (existsSync(bundled)) return bundled;
-  }
-
-  // 2. PATH
+export function findJava(): string {
   const paths = process.env.PATH?.split(';') || [];
   for (const dir of paths) {
     for (const name of ['java.exe', 'java']) {
@@ -107,8 +125,7 @@ export function findJava(installDir?: string): string {
       if (existsSync(full)) return full;
     }
   }
-
-  // 3. Common install locations (Windows)
+  // Common install locations
   for (const root of ['C:\\Program Files\\Java', 'C:\\Program Files (x86)\\Java', homedir()]) {
     try {
       for (const entry of readdirSync(root, { withFileTypes: true })) {
@@ -119,7 +136,6 @@ export function findJava(installDir?: string): string {
       }
     } catch {}
   }
-
   return 'java';
 }
 
@@ -238,7 +254,7 @@ export interface StartOptions {
 
 export function startBackend(opts: StartOptions): ChildProcess {
   const { installDir, workspaceDir, port, wsPort, forceKill } = opts;
-  const java = findJava(installDir);
+  const java = findJava();
   const jarPath = findJar(installDir);
   if (!jarPath) {
     console.error('[launcher] Backend JAR not found. Run with --build first, or ensure backend/jwcode-web.jar exists.');
@@ -283,15 +299,10 @@ export function cleanupBackend(proc: ChildProcess | null): void {
   if (!proc) return;
   console.log('\n[jwcode] Shutting down...');
   if (process.platform === 'win32') {
-    // Graceful shutdown first, then force kill if needed
     try {
-      execSync(`taskkill /T /PID ${proc.pid}`, { stdio: 'ignore', timeout: 3000 });
+      execSync(`taskkill /F /T /PID ${proc.pid}`, { stdio: 'ignore' });
     } catch {
-      try {
-        execSync(`taskkill /F /T /PID ${proc.pid}`, { stdio: 'ignore', timeout: 3000 });
-      } catch {
-        try { proc.kill(); } catch {}
-      }
+      try { proc.kill(); } catch {}
     }
   } else {
     try { process.kill(-proc.pid!, 'SIGTERM'); } catch {}
@@ -303,106 +314,4 @@ export function cleanupBackend(proc: ChildProcess | null): void {
       }
     }, 5000);
   }
-}
-
-// --- Daemon mode ---
-import { mkdirSync, writeFileSync, readFileSync, unlinkSync } from 'node:fs';
-
-const DAEMON_DIR = join(homedir(), '.jwcode');
-const DAEMON_FILE = join(DAEMON_DIR, 'daemon.json');
-
-interface DaemonInfo {
-  pid: number;
-  httpPort: number;
-  wsPort: number;
-  workspaceDir: string;
-  startedAt: string;
-  lastActivity: string;
-}
-
-export function writeDaemonInfo(pid: number, httpPort: number, wsPort: number, workspaceDir: string): void {
-  try { mkdirSync(DAEMON_DIR, { recursive: true }); } catch {}
-  const info: DaemonInfo = {
-    pid, httpPort, wsPort, workspaceDir,
-    startedAt: new Date().toISOString(),
-    lastActivity: new Date().toISOString(),
-  };
-  writeFileSync(DAEMON_FILE, JSON.stringify(info, null, 2), 'utf-8');
-}
-
-export function readDaemonInfo(): DaemonInfo | null {
-  try {
-    if (!existsSync(DAEMON_FILE)) return null;
-    return JSON.parse(readFileSync(DAEMON_FILE, 'utf-8')) as DaemonInfo;
-  } catch { return null; }
-}
-
-export function clearDaemonInfo(): void {
-  try { unlinkSync(DAEMON_FILE); } catch {}
-}
-
-export function isDaemonAlive(info: DaemonInfo): boolean {
-  try {
-    if (process.platform === 'win32') {
-      const out = execSync(`tasklist /FI "PID eq ${info.pid}" /NH`, { encoding: 'utf-8', timeout: 3000 });
-      return out.includes(String(info.pid));
-    } else {
-      execSync(`kill -0 ${info.pid}`, { stdio: 'ignore' });
-      return true;
-    }
-  } catch {
-    return false;
-  }
-}
-
-export interface DaemonOptions extends StartOptions {
-  idleTimeout?: number;
-}
-
-export function startDaemon(opts: DaemonOptions): ChildProcess {
-  const { installDir, workspaceDir, port, wsPort, forceKill } = opts;
-  const java = findJava(installDir);
-  const jarPath = findJar(installDir);
-  if (!jarPath) {
-    console.error('[launcher] Backend JAR not found. Run: npm install -g @jwcode/cli');
-    process.exit(1);
-  }
-
-  if (forceKill) {
-    killPort(port);
-    killPort(wsPort);
-  }
-
-  const javaArgs = ['-jar', jarPath, String(port), String(wsPort), workspaceDir];
-  const idleSec = opts.idleTimeout ?? 300;
-
-  const proc = spawn(java, javaArgs, {
-    cwd: workspaceDir,
-    env: {
-      ...process.env,
-      JWCODE_WS_PORT: String(wsPort),
-      JWCODE_DAEMON_IDLE_TIMEOUT: String(idleSec),
-    },
-    stdio: 'ignore',
-    detached: true,
-    windowsHide: true,
-  });
-  proc.unref();
-
-  writeDaemonInfo(proc.pid!, port, wsPort, workspaceDir);
-  console.log(`[daemon] Started JWCode daemon (PID ${proc.pid}) on ports ${port}/${wsPort}`);
-  return proc;
-}
-
-export function findRunningDaemon(workspaceDir?: string): DaemonInfo | null {
-  const info = readDaemonInfo();
-  if (!info) return null;
-  if (!isDaemonAlive(info)) {
-    clearDaemonInfo();
-    return null;
-  }
-  if (workspaceDir && info.workspaceDir !== workspaceDir) {
-    return null;
-  }
-  return info;
 }

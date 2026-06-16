@@ -56,6 +56,36 @@ public class SkillSelector {
     }
 
     /**
+     * 使用摘要进行快速匹配 — 不涉及完整技能加载。
+     *
+     * @param userInput 用户输入
+     * @param maxSkills 最多返回的技能数
+     * @return 按匹配度降序排列的技能摘要列表
+     */
+    public List<SkillSummary> selectSummaries(String userInput, int maxSkills) {
+        if (userInput == null || userInput.isBlank()) return List.of();
+
+        List<SkillSummary> allSummaries = registry.listSummaries();
+        if (allSummaries.isEmpty()) return List.of();
+
+        List<ScoredSummary> scored = new ArrayList<>();
+        for (SkillSummary summary : allSummaries) {
+            int score = computeSummaryScore(summary, userInput);
+            if (score > 0) {
+                scored.add(new ScoredSummary(summary, score));
+            }
+        }
+
+        scored.sort((a, b) -> Integer.compare(b.score, a.score));
+
+        List<SkillSummary> result = new ArrayList<>();
+        for (int i = 0; i < Math.min(maxSkills, scored.size()); i++) {
+            result.add(scored.get(i).summary);
+        }
+        return result;
+    }
+
+    /**
      * 选择单个最佳匹配技能。
      */
     public Optional<Skill> selectBest(String userInput) {
@@ -119,5 +149,45 @@ public class SkillSelector {
         return score;
     }
 
+    /**
+     * 对技能摘要计算匹配分数（与 computeScore 逻辑一致，但操作 Summary）。
+     */
+    private int computeSummaryScore(SkillSummary summary, String input) {
+        String lowerInput = input.toLowerCase();
+        int score = 0;
+
+        // 名称匹配
+        if (summary.name() != null && lowerInput.contains(summary.name().toLowerCase())) {
+            score += 50;
+        }
+
+        // ID 匹配
+        if (summary.id() != null && lowerInput.contains(summary.id().toLowerCase())) {
+            score += 40;
+        }
+
+        // 标签匹配
+        if (summary.tags() != null) {
+            for (String tag : summary.tags()) {
+                if (lowerInput.contains(tag.toLowerCase())) {
+                    score += 25;
+                }
+            }
+        }
+
+        // 描述关键词匹配
+        if (summary.description() != null) {
+            String[] words = summary.description().toLowerCase().split("\\s+");
+            for (String word : words) {
+                if (word.length() > 2 && lowerInput.contains(word)) {
+                    score += 10;
+                }
+            }
+        }
+
+        return score;
+    }
+
     private record ScoredSkill(Skill skill, int score) {}
+    private record ScoredSummary(SkillSummary summary, int score) {}
 }

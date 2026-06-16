@@ -44,6 +44,12 @@ public class SystemStatusHandler implements HttpHandler {
             return;
         }
 
+        // POST /api/system/shutdown
+        if (path.endsWith("/shutdown") && "POST".equalsIgnoreCase(method)) {
+            handleShutdown(exchange);
+            return;
+        }
+
         // POST /api/system/restart
         if (path.endsWith("/restart") && "POST".equalsIgnoreCase(method)) {
             handleRestart(exchange);
@@ -123,6 +129,37 @@ public class SystemStatusHandler implements HttpHandler {
                 System.err.println("Restart failed: " + e.getMessage());
             }
         }, "server-restart").start();
+    }
+
+    private void handleShutdown(HttpExchange exchange) throws IOException {
+        if (webServer == null) {
+            sendError(exchange, 500, "WebServer reference not available");
+            return;
+        }
+
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("success", true);
+        response.put("message", "Server shutting down...");
+
+        byte[] bytes = objectMapper.writeValueAsBytes(response);
+        exchange.getResponseHeaders().set("Content-Type", "application/json");
+        exchange.sendResponseHeaders(200, bytes.length);
+        try (OutputStream os = exchange.getResponseBody()) {
+            os.write(bytes);
+        }
+
+        // Shutdown in a new thread so the HTTP response is sent first
+        new Thread(() -> {
+            try {
+                Thread.sleep(500);
+                webServer.stop();
+                System.out.println("Server stopped. Exiting JVM...");
+            } catch (Exception e) {
+                System.err.println("Shutdown failed: " + e.getMessage());
+            } finally {
+                System.exit(0);
+            }
+        }, "server-shutdown").start();
     }
 
     private void sendSuccess(HttpExchange exchange, int statusCode, Object data) throws IOException {

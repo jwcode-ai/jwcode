@@ -60,12 +60,15 @@ public class AnthropicMessageConverter {
     public List<JsonNode> toAnthropicMessages(List<LLMMessage> messages) {
         List<JsonNode> result = new ArrayList<>();
         if (messages == null || messages.isEmpty()) return result;
-        
+
+        // 预验证：移除孤立的 tool_use 和 tool_result，避免 DeepSeek 等 API 报错
+        List<LLMMessage> validated = preValidateToolPairs(messages);
+
         List<LLMMessage> nonSystem = new ArrayList<>();
-        for (LLMMessage msg : messages) {
+        for (LLMMessage msg : validated) {
             if (msg.getRole() != LLMMessage.Role.SYSTEM) nonSystem.add(msg);
         }
-        
+
         for (LLMMessage msg : nonSystem) {
             if (msg.getRole() == LLMMessage.Role.USER) {
                 ArrayNode contentArray = mapper.createArrayNode();
@@ -213,6 +216,83 @@ public class AnthropicMessageConverter {
         ObjectNode block = mapper.createObjectNode();
         block.put("type", "thinking"); block.put("thinking", thinking != null ? thinking : ""); block.put("signature", "");
         return block;
+    }
+
+    /**
+     * 预验证 tool_use ↔ tool_result 配对，移除孤立的条目。
+     * 防止 DeepSeek Anthropic 兼容 API 报错：
+     * "tool_use ids were found without tool_result blocks immediately after"
+     */
+    private List<LLMMessage> preValidateToolPairs(List<LLMMessage> messages) {
+        if (messages == null || messages.isEmpty()) return messages;
+
+        // Phase 1: 收集所有被 tool_result 引用的 tool_call_id
+        java.util.Set<String> resultIds = new java.util.HashSet<>();
+        for (LLMMessage msg : messages) {
+            if (msg.getRole() == LLMMessage.Role.TOOL && msg.getToolCallId() != null) {
+                resultIds.add(msg.getToolCallId());
+            }
+        }
+
+        // Phase 2: 遍历并清理
+        List<LLMMessage> cleaned = new ArrayList<>();
+        for (LLMMessage msg : messages) {
+            if (msg.getRole() == LLMMessage.Role.ASSISTANT && msg.hasToolCalls()) {
+                // 只保留有对应 tool_result 的 tool_use
+                List<LLMMessage.ToolCall> valid = new ArrayList<>();
+                for (LLMMessage.ToolCall tc : msg.getToolCalls()) {
+                    if (tc.getId() != null && resultIds.contains(tc.getId())) {
+                        valid.add(tc);
+                    } else {
+                        log.warning("[AnthropicConverter] Removing orphaned tool_use: " + tc.getId());
+                    }
+                }
+                if (valid.isEmpty()) {
+                    // 所有 tool_use 都是孤儿，转为纯文本消息
+                    cleaned.add(LLMMessage.assistant(
+                        msg.getContent() != null ? msg.getContent() : "",
+                        msg.getReasoningContent()));
+                } else if (valid.size() < msg.getToolCalls().size()) {
+                    // 部分有效，部分孤儿
+                    cleaned.add(LLMMessage.assistantWithTools(
+                        msg.getContent(), valid, msg.getReasoningContent()));
+                } else {
+                    cleaned.add(msg);
+                }
+            } else if (msg.getRole() == LLMMessage.Role.TOOL) {
+                // 移除没有对应 tool_use 的 tool_result
+                if (msg.getToolCallId() == null || !hasMatchingToolUse(messages, msg.getToolCallId())) {
+                    log.warning("[AnthropicConverter] Removing orphaned tool_result: " + msg.getToolCallId());
+                    continue; // 跳过这个 tool_result
+                }
+                cleaned.add(msg);
+            } else {
+                cleaned.add(msg);
+            }
+        }
+
+        // Phase 3: 移除开头孤立的 TOOL 消息（截断后可能残留）
+        while (!cleaned.isEmpty() && cleaned.get(0).getRole() == LLMMessage.Role.TOOL) {
+            log.warning("[AnthropicConverter] Removing leading TOOL message");
+            cleaned.remove(0);
+        }
+
+        if (cleaned.size() != messages.size()) {
+            log.info("[AnthropicConverter] Pre-validation: " + messages.size() + " -> " + cleaned.size() + " messages");
+        }
+        return cleaned;
+    }
+
+    private boolean hasMatchingToolUse(List<LLMMessage> messages, String toolCallId) {
+        if (toolCallId == null) return false;
+        for (LLMMessage msg : messages) {
+            if (msg.getRole() == LLMMessage.Role.ASSISTANT && msg.hasToolCalls()) {
+                for (LLMMessage.ToolCall tc : msg.getToolCalls()) {
+                    if (toolCallId.equals(tc.getId())) return true;
+                }
+            }
+        }
+        return false;
     }
 
     private ObjectNode createToolUseBlock(LLMMessage.ToolCall tc) {

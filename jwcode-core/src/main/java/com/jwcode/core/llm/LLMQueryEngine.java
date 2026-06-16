@@ -35,6 +35,7 @@ import com.jwcode.core.llm.fragment.*;
 import com.jwcode.core.llm.fragment.impl.*;
 import com.jwcode.core.permission.PermissionManagerChecker;
 import com.jwcode.core.task.TaskLifecycleManager;
+import com.jwcode.core.context.ContextReconcilerBridge;
 
 /**
  * 基于 LLM 服务的查询引擎
@@ -83,7 +84,10 @@ public class LLMQueryEngine {
     // 片段注册表（ContextFragment 架构）
     private final FragmentRegistry fragmentRegistry;
     private boolean fragmentsInitialized = false;
-    
+
+    // ContextReconcilerBridge — 上下文增量更新集成
+    private ContextReconcilerBridge contextReconcilerBridge;
+
     // BudgetExhaustedHandler 引用（用于Token预算监控）
     private com.jwcode.core.agent.BudgetExhaustedHandler budgetHandler;
     // 【优化】无进展检测：连续仅工具调用无文本回复的轮数
@@ -1827,6 +1831,12 @@ public class LLMQueryEngine {
      *         to decide whether to terminate or proceed with the LLM call
      */
     private PreFlightResult runPreFlightChecks(int iteration, Consumer<String> contentConsumer) {
+        // 0. ContextReconciler 增量更新 — 在每次 LLM 调用前注入增量上下文
+        if (contextReconcilerBridge != null) {
+            String agentId = session.getCurrentAgentId();
+            contextReconcilerBridge.beforeLlmCall(session, agentId != null ? agentId : "default");
+        }
+
         // 1. Detect external compact (e.g. /compact command) and reset TokenBudget
         if (session.getCompactCount() > lastSeenCompactCount) {
             resetTokenBudget();
@@ -1852,6 +1862,12 @@ public class LLMQueryEngine {
                 session.setMessages(compacted);
                 session.markCompacted();
                 lastCompactTime = now;
+
+                // 通知 ContextReconciler 创建新 epoch
+                if (contextReconcilerBridge != null) {
+                    String agentId = session.getCurrentAgentId();
+                    contextReconcilerBridge.afterCompaction(session, agentId != null ? agentId : "default");
+                }
 
                 int messagesRemoved = beforeCount - compacted.size();
                 long tokensSaved;
@@ -1961,9 +1977,8 @@ public class LLMQueryEngine {
                 QueryResult.error("连续" + consecutiveFailedToolRounds + "轮工具调用全部失败，已自动终止。请检查工具配置或网络连接后重试。")));
         }
 
-        // 9. Inject context fragments (first iteration only)
+        // 9. Token budget check (first iteration only)
         if (iteration == 0) {
-            injectContextFragments();
             checkTokenBudget();
         }
 
@@ -1973,8 +1988,8 @@ public class LLMQueryEngine {
 
         logger.info("[LLMQueryEngine] Iteration " + iteration + ", messages: " + llmMessages.size());
 
-        // 11. FINISH reminder
-        if (iteration % FINISH_REMINDER_INTERVAL == 0 && !hasRecentSystemPrompt("[FINISH]")) {
+        // 11. FINISH reminder (skip iteration 0 — first call of a new user query)
+        if (iteration > 0 && iteration % FINISH_REMINDER_INTERVAL == 0 && !hasRecentSystemPrompt("[FINISH]")) {
             session.addMessage(Message.createSystemMessage(
                 "⛔ 【强制提醒】请在回复最后一行输出 [FINISH] 结束对话！"
                 + "不输出 [FINISH] = 任务未完成 = 无限循环。"));
@@ -2164,6 +2179,9 @@ public class LLMQueryEngine {
     public String getModelName() { return llmService != null ? llmService.getModelName() : "unknown"; }
     public AgentRegistry getAgentRegistry() { return agentRegistry; }
     public void setAgentRegistry(AgentRegistry agentRegistry) { this.agentRegistry = agentRegistry; }
+
+    public ContextReconcilerBridge getContextReconcilerBridge() { return contextReconcilerBridge; }
+    public void setContextReconcilerBridge(ContextReconcilerBridge bridge) { this.contextReconcilerBridge = bridge; }
     
     // ==================== Builder ====================
     

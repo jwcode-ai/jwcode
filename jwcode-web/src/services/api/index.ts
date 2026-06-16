@@ -120,6 +120,7 @@ export const api = {
       timestamp: number;
     }>('/api/system/status'),
     restart: () => apiClient.post<{ message: string }>('/api/system/restart'),
+    shutdown: () => apiClient.post<{ message: string }>('/api/system/shutdown'),
   },
 
   // Observability

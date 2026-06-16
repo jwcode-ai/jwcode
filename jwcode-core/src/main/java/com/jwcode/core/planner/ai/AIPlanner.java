@@ -400,9 +400,13 @@ public class AIPlanner {
      */
     private CompletableFuture<String> callAI(String prompt) {
         List<LLMMessage> messages = List.of(LLMMessage.user(prompt));
-        
-        return llmService.chat(messages)
-            .thenApply(response -> {
+
+        CompletableFuture<LLMResponse> future = llmService.chat(messages);
+        if (future == null) {
+            return CompletableFuture.failedFuture(
+                new IllegalStateException("LLMService.chat() returned null"));
+        }
+        return future.thenApply(response -> {
                 if (response.hasError()) {
                     throw new RuntimeException("AI 调用失败: " + response.getErrorMessage());
                 }

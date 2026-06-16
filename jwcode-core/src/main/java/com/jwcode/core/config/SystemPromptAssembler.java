@@ -76,8 +76,10 @@ public class SystemPromptAssembler {
     private boolean includeMemoryTypes = false;
     private boolean includeSessionMemory = true;
     private boolean includeTools = true;
+    private boolean includeSkillsCatalog = true;
     private List<String> claudeMdContents = Collections.emptyList();
     private Map<String, String> memoryManifest = Collections.emptyMap();
+    private String skillsCatalog = "";
 
     // ==================== 构造函数 ====================
 
@@ -147,6 +149,16 @@ public class SystemPromptAssembler {
         return this;
     }
 
+    public SystemPromptAssembler withSkillsCatalog(String catalog) {
+        this.skillsCatalog = catalog != null ? catalog : "";
+        return this;
+    }
+
+    public SystemPromptAssembler includeSkillsCatalog(boolean include) {
+        this.includeSkillsCatalog = include;
+        return this;
+    }
+
     // ==================== 组装 ====================
 
     /**
@@ -169,6 +181,13 @@ public class SystemPromptAssembler {
         } else {
             // 默认 assembly
             sb.append(buildDefaultPrompt());
+        }
+
+        // 技能目录（非 default 路径也追加）
+        if (includeSkillsCatalog && !skillsCatalog.isEmpty()
+            && (agentSystemPrompt != null && !agentSystemPrompt.isEmpty()
+                || customSystemPrompt != null && !customSystemPrompt.isEmpty())) {
+            sb.append("\n\n").append(skillsCatalog);
         }
 
         // 始终追加 append（如果有）
@@ -302,6 +321,11 @@ public class SystemPromptAssembler {
                 manifestSection = msb.toString();
             }
             sb.append("\n\n").append(manifestSection);
+        }
+
+        // 5b. 技能目录（同会话内稳定）
+        if (includeSkillsCatalog && !skillsCatalog.isEmpty()) {
+            sb.append("\n\n").append(skillsCatalog);
         }
 
         // ========== 可变后缀（每次调用可能变，30s TTL） ==========

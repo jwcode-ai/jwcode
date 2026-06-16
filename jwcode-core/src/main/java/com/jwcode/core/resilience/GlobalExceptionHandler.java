@@ -46,13 +46,16 @@ public class GlobalExceptionHandler {
         ErrorStats stats = errorStats.computeIfAbsent(errorType, k -> new ErrorStats());
         stats.record(throwable, context);
         
-        // 记录日志
+        // 记录日志（含完整堆栈）
+        StringWriter sw = new StringWriter();
+        throwable.printStackTrace(new PrintWriter(sw));
         log.error(String.format(
-            "[ExceptionHandler] 异常: %s, 来源: %s, 上下文: %s, 次数: %d",
+            "[ExceptionHandler] 异常: %s, 来源: %s, 上下文: %s, 次数: %d\n%s",
             errorType,
             source,
             context,
-            stats.getCount()
+            stats.getCount(),
+            sw.toString()
         ));
         
         // 尝试恢复

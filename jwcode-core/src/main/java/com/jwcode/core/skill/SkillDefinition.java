@@ -16,7 +16,8 @@ public record SkillDefinition(
     List<String> requiredTools,
     List<String> tags,
     InjectionStrategy injectionStrategy,
-    String source
+    String source,
+    Skill.Provenance provenance
 ) {
     public enum InjectionStrategy {
         /** 按需注入 — 仅当 AI 请求该技能时 */
@@ -38,6 +39,7 @@ public record SkillDefinition(
             .systemPrompt(systemPrompt)
             .requiredTools(requiredTools != null ? requiredTools : List.of())
             .source(source)
+            .provenance(provenance != null ? provenance : Skill.Provenance.USER_MANUAL)
             .build();
     }
 

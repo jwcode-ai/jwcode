@@ -127,9 +127,15 @@ public class EnhancedOrchestratorAgent {
     
     /** Agent 唯一标识 */
     private final String agentId;
-    
+
     /** Agent 名称 */
     private final String agentName;
+
+    /** 背景回顾调度器 — 每 N 轮触发记忆/技能回顾 */
+    private com.jwcode.core.skill.BackgroundReviewScheduler backgroundReviewScheduler;
+
+    /** 对话历史缓冲区（用于背景回顾快照） */
+    private final java.util.List<String> conversationHistory = new java.util.ArrayList<>();
 
     /**
      * 默认构造器（无 LLMService — 子Agent将回退到模拟执行）
@@ -272,28 +278,44 @@ public class EnhancedOrchestratorAgent {
         }
 
         // Step 4: dispatch by task type
+        String response;
         switch (analysis.getTaskType()) {
             case CHAT:
-                return handleChat(userInput);
+                response = handleChat(userInput);
+                break;
             case FEATURE:
-                return startNewTask(analysis, "feature-dev");
+                response = startNewTask(analysis, "feature-dev");
+                break;
             case BUGFIX:
-                return startNewTask(analysis, "bug-fix");
+                response = startNewTask(analysis, "bug-fix");
+                break;
             case REFACTOR:
-                return startNewTask(analysis, "refactoring");
+                response = startNewTask(analysis, "refactoring");
+                break;
             case REVIEW:
-                return startNewTask(analysis, "code-review");
+                response = startNewTask(analysis, "code-review");
+                break;
             case TEST:
-                return startNewTask(analysis, null);
+                response = startNewTask(analysis, null);
+                break;
             case DOC:
-                return startNewTask(analysis, null);
+                response = startNewTask(analysis, null);
+                break;
             case ANALYZE:
-                return startNewTask(analysis, null);
+                response = startNewTask(analysis, null);
+                break;
             case DEBUG:
-                return startNewTask(analysis, "bug-fix");
+                response = startNewTask(analysis, "bug-fix");
+                break;
             default:
-                return startNewTask(analysis, null);
+                response = startNewTask(analysis, null);
+                break;
         }
+
+        // Step 5: 背景回顾 — 记录对话历史并触发回顾调度器
+        triggerBackgroundReview(userInput, response);
+
+        return response;
     }
 
     /**
@@ -467,6 +489,22 @@ public class EnhancedOrchestratorAgent {
     /**
      * 处理闲聊
      */
+    /**
+     * 触发背景回顾 — 记录对话到缓冲区，并通知调度器检查是否需要回顾。
+     */
+    private void triggerBackgroundReview(String userInput, String response) {
+        if (backgroundReviewScheduler == null || llmService == null) return;
+
+        conversationHistory.add("用户: " + userInput + "\n助手: " + response);
+        // 保留最近 20 轮对话
+        while (conversationHistory.size() > 20) {
+            conversationHistory.remove(0);
+        }
+
+        String snapshot = String.join("\n---\n", conversationHistory);
+        backgroundReviewScheduler.onTurnComplete(llmService, snapshot);
+    }
+
     private String handleChat(String userInput) {
         StringBuilder sb = new StringBuilder();
         sb.append("👋 你好！我是 JWCode Orchestrator，你的 AI 软件工程助手。\n\n");
@@ -1299,6 +1337,13 @@ public class EnhancedOrchestratorAgent {
      */
     public void setSessionId(String sessionId) {
         this.sessionId = sessionId;
+    }
+
+    /**
+     * 设置背景回顾调度器 — 每 N 轮对话后触发记忆/技能回顾。
+     */
+    public void setBackgroundReviewScheduler(com.jwcode.core.skill.BackgroundReviewScheduler scheduler) {
+        this.backgroundReviewScheduler = scheduler;
     }
 
     /**

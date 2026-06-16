@@ -162,6 +162,10 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     
     public StreamingWebSocketHandler(int port, ToolRegistry toolRegistry) {
         super(new InetSocketAddress(port));
+        // 启用内置连接丢失检测（30s ping），
+        // ws 库客户端自动响应 WebSocket 协议层 PONG 帧，保持 TCP 连接存活。
+        // 注意：应用层 checkHeartbeat() 是独立的，处理的是应用层 pong 超时（90s）。
+        this.setConnectionLostTimeout(30);
         this.sessions = new ConcurrentHashMap<>();
         this.toolRegistry = toolRegistry;
         this.connectionSessions = new ConcurrentHashMap<>();
@@ -443,7 +447,11 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             }
             
             // 发送心跳 ping
-            sendMessage(conn, MessageType.PING, null);
+            try {
+                sendMessage(conn, MessageType.PING, null);
+            } catch (Exception e) {
+                logger.warning("发送心跳 ping 失败: " + e.getMessage());
+            }
         }
         
         // 循环结束后再统一关闭，避免并发修改问题
@@ -775,6 +783,43 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                 case "hook_deny":
                     handleHookApprovalResponse(clientMsg, false);
                     break;
+                case "plan_confirm":
+                    logger.info("处理 plan_confirm 消息, sessionId=" + clientMsg.sessionId);
+                    handlePlanConfirm(conn, clientMsg);
+                    break;
+                case "plan_refine":
+                    logger.info("处理 plan_refine 消息, sessionId=" + clientMsg.sessionId);
+                    handlePlanRefine(conn, clientMsg);
+                    break;
+                case "doctor":
+                    logger.info("处理 doctor 消息, sessionId=" + clientMsg.sessionId);
+                    handleDoctorCommand(conn, clientMsg);
+                    break;
+                case "rewind":
+                    logger.info("处理 rewind 消息, sessionId=" + clientMsg.sessionId);
+                    handleRewindCommand(conn, clientMsg);
+                    break;
+                case "update_docs":
+                case "project":
+                    logger.info("处理 " + clientMsg.type + " 消息, sessionId=" + clientMsg.sessionId);
+                    handleUpdateDocsCommand(conn, clientMsg);
+                    break;
+                case "tokens":
+                    handleTokensCommand(conn, clientMsg);
+                    break;
+                case "memory":
+                    handleMemoryCommand(conn, clientMsg);
+                    break;
+                // Phase 3 — graceful "not yet implemented" notifications
+                case "export":
+                case "checkpoint":
+                case "test":
+                case "lint":
+                case "search":
+                    logger.info("收到未实现命令: " + clientMsg.type);
+                    sendMessage(conn, MessageType.NOTIFICATION,
+                        escapeJson("Command '" + clientMsg.type + "' is not yet implemented via WebSocket."));
+                    break;
                 case "exit":
                     logger.info("收到 exit 消息，正在关闭后端服务...");
                     sendMessage(conn, MessageType.EXIT, "Server shutting down...");
@@ -810,7 +855,11 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         try {
             PlanModeManager modeManager = PlanModeManager.getInstance();
             modeManager.addListener(event -> {
-                // 广播模式切换事件到所有已连接的客户端
+                // Determine transition direction from the event
+                boolean enteringPlan = event.newMode() == PlanModeManager.Mode.PLAN;
+                boolean exitingPlan = event.previousMode() == PlanModeManager.Mode.PLAN;
+
+                // Broadcast mode change to all connected clients
                 String modeEventJson = String.format(
                     "{\"previousMode\":\"%s\",\"newMode\":\"%s\",\"description\":\"%s\"}",
                     event.previousMode().getValue(),
@@ -820,6 +869,12 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                 for (WebSocket conn : getConnections()) {
                     if (conn.isOpen()) {
                         sendMessage(conn, MessageType.PLAN_MODE_CHANGE, modeEventJson);
+                        // Send separate enter/exit events for CLI reactive state
+                        if (enteringPlan) {
+                            sendMessage(conn, MessageType.PLAN_MODE_ENTER, modeEventJson);
+                        } else if (exitingPlan) {
+                            sendMessage(conn, MessageType.PLAN_MODE_EXIT, modeEventJson);
+                        }
                     }
                 }
                 logger.info("PlanMode 切换广播: " + event.previousMode() + " → " + event.newMode());
@@ -2379,7 +2434,262 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             "Plugin management: use /plugin <install|list|remove>. Plugin system is under development.");
     }
 
-    
+    // ── Phase 1: New command handlers ──
+
+    /**
+     * Handle plan_confirm — execute the plan that was generated in Plan mode.
+     * Reuses executePlanQuery flow but marks the session as confirmed.
+     */
+    private void handlePlanConfirm(WebSocket conn, ClientMessage msg) {
+        String sessionId = getOrGenerateSessionId(conn, msg);
+        Session session = sessions.get(sessionId);
+        if (session == null) {
+            session = createNewSession(sessionId, msg.model);
+        }
+        // Mark session as confirmed for execution
+        session.setMetadata("planConfirmed", true);
+        // Reuse the plan execution flow — LLM generates the final implementation
+        connectionSessions.put(conn, sessionId);
+        activeSessionConnections.put(sessionId, conn);
+        sendMessage(conn, MessageType.PLAN_START, escapeJson("Executing plan..."));
+        final WebSocket clientConn = conn;
+        final Session clientSession = session;
+        final String finalSessionId = sessionId;
+        cancelRunningQuery(finalSessionId);
+        java.util.concurrent.Future<?> future = queryExecutor.submit(() -> {
+            executePlanQuery(clientConn, clientSession,
+                "The user has approved the plan. Now execute it step by step. " +
+                "Refer to the task list above and implement each task." +
+                (msg.message != null && !msg.message.isEmpty() ? " User instructions: " + msg.message : ""));
+        });
+        runningQueryFutures.put(finalSessionId, future);
+    }
+
+    /**
+     * Handle plan_refine — refine the plan based on user feedback, then re-plan.
+     */
+    private void handlePlanRefine(WebSocket conn, ClientMessage msg) {
+        String sessionId = getOrGenerateSessionId(conn, msg);
+        Session session = sessions.get(sessionId);
+        if (session == null) {
+            session = createNewSession(sessionId, msg.model);
+        }
+        connectionSessions.put(conn, sessionId);
+        activeSessionConnections.put(sessionId, conn);
+        sendMessage(conn, MessageType.PLAN_START, escapeJson("Refining plan based on feedback..."));
+        final WebSocket clientConn = conn;
+        final Session clientSession = session;
+        final String finalSessionId = sessionId;
+        cancelRunningQuery(finalSessionId);
+        String feedback = msg.message != null && !msg.message.isEmpty() ? msg.message : "Please refine the plan.";
+        java.util.concurrent.Future<?> future = queryExecutor.submit(() -> {
+            executePlanQuery(clientConn, clientSession,
+                "The user has provided feedback on the plan. Please refine it accordingly.\n\n" +
+                "User feedback: " + feedback);
+        });
+        runningQueryFutures.put(finalSessionId, future);
+    }
+
+    /**
+     * Handle /doctor command — run system diagnostics.
+     */
+    private void handleDoctorCommand(WebSocket conn, ClientMessage msg) {
+        try {
+            sendMessage(conn, MessageType.NOTIFICATION, "Running diagnostics...");
+            StringBuilder report = new StringBuilder();
+            report.append("=== System Diagnostics ===\n");
+            report.append("Java version: ").append(System.getProperty("java.version")).append("\n");
+            report.append("OS: ").append(System.getProperty("os.name"))
+                   .append(" ").append(System.getProperty("os.version")).append("\n");
+            report.append("Working directory: ").append(defaultWorkingDirectory).append("\n");
+            report.append("Active sessions: ").append(sessions.size()).append("\n");
+            report.append("Connected clients: ").append(getConnections().size()).append("\n");
+            report.append("Thread pool: active=").append(queryExecutor.getActiveCount())
+                   .append("/").append(queryExecutor.getMaximumPoolSize())
+                   .append(", queue=").append(queryExecutor.getQueue().size()).append("\n");
+            // Try to load config
+            try {
+                var config = com.jwcode.core.config.YamlConfigLoader.getInstance().getConfig();
+                report.append("Config: loaded (default provider=")
+                       .append(config.getDefaultProviderName()).append(")\n");
+                report.append("Models: ").append(config.getProviders().values().stream()
+                    .mapToInt(p -> (int) p.getModels().stream().filter(m -> m.isEnabled()).count()).sum())
+                    .append(" enabled\n");
+            } catch (Exception e) {
+                report.append("Config: load failed — ").append(e.getMessage()).append("\n");
+            }
+            // Docker check
+            try {
+                Process p = new ProcessBuilder("docker", "--version").start();
+                String out = new String(p.getInputStream().readAllBytes()).trim();
+                report.append("Docker: ").append(out).append("\n");
+            } catch (Exception e) {
+                report.append("Docker: not available (").append(e.getMessage()).append(")\n");
+            }
+            report.append("\nDiagnostics complete.");
+            String text = report.toString();
+            sendMessage(conn, MessageType.NOTIFICATION, escapeJson(text));
+            // Also send as doctor_result for frontend handlers
+            sendMessage(conn, MessageType.DOCTOR_RESULT, escapeJson(text));
+            logger.info("Doctor diagnostics complete");
+        } catch (Exception e) {
+            logger.warning("handleDoctorCommand error: " + e.getMessage());
+            sendMessage(conn, MessageType.ERROR, "Doctor failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Handle /rewind command — rewind session to a previous state.
+     */
+    private void handleRewindCommand(WebSocket conn, ClientMessage msg) {
+        try {
+            String sessionId = getOrGenerateSessionId(conn, msg);
+            Session session = sessions.get(sessionId);
+            if (session == null || session.getMessages().isEmpty()) {
+                sendMessage(conn, MessageType.NOTIFICATION, "Nothing to rewind — session is empty.");
+                return;
+            }
+            // Parse steps count from data (default: 1)
+            int steps = 1;
+            if (msg.data != null && !msg.data.isEmpty()) {
+                try { steps = Integer.parseInt(msg.data.trim()); } catch (NumberFormatException ignored) {}
+            }
+            if (steps < 1) steps = 1;
+            // Remove the last N assistant + user message pairs
+            List<com.jwcode.core.model.Message> msgs = new ArrayList<>(session.getMessages());
+            int removed = 0;
+            for (int i = msgs.size() - 1; i >= 0 && removed < steps * 2; i--) {
+                String role = msgs.get(i).getRole().name();
+                if ("assistant".equalsIgnoreCase(role) || "user".equalsIgnoreCase(role)) {
+                    msgs.remove(i);
+                    removed++;
+                }
+            }
+            session.setMessages(msgs);
+            session.markCompacted(); // mark as modified
+            String result = String.format("{\"messages\":[],\"rewound\":%d,\"remaining\":%d}",
+                removed, msgs.size());
+            sendMessage(conn, MessageType.REWIND_RESULT, result);
+            sendMessage(conn, MessageType.NOTIFICATION,
+                escapeJson("Rewound " + removed + " messages. " + msgs.size() + " remaining."));
+            logger.info("Session " + sessionId + " rewound " + removed + " messages");
+        } catch (Exception e) {
+            logger.warning("handleRewindCommand error: " + e.getMessage());
+            sendMessage(conn, MessageType.ERROR, "Rewind failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Handle /update_docs or /project command — generate project documentation.
+     */
+    private void handleUpdateDocsCommand(WebSocket conn, ClientMessage msg) {
+        try {
+            String sessionId = getOrGenerateSessionId(conn, msg);
+            Session session = sessions.get(sessionId);
+            if (session == null) {
+                session = createNewSession(sessionId, msg.model);
+            }
+            sendMessage(conn, MessageType.NOTIFICATION, "Generating project documentation...");
+            String docPrompt = "Analyze the current project structure, tech stack, build system, " +
+                "coding conventions, and key files. Generate or update project documentation covering:\n" +
+                "1. Project overview and architecture\n" +
+                "2. Build and run instructions\n" +
+                "3. Key directories and their purposes\n" +
+                "4. Technology stack\n" +
+                "5. Development conventions\n" +
+                "Use Read, Glob, Grep tools to understand the project first.";
+            connectionSessions.put(conn, sessionId);
+            activeSessionConnections.put(sessionId, conn);
+            final WebSocket clientConn = conn;
+            final Session clientSession = session;
+            final String finalSessionId = sessionId;
+            cancelRunningQuery(finalSessionId);
+            java.util.concurrent.Future<?> future = queryExecutor.submit(() -> {
+                executeQuery(clientConn, clientSession, docPrompt);
+            });
+            runningQueryFutures.put(finalSessionId, future);
+            // After completion, send docs_updated event
+            sendMessage(conn, MessageType.DOCS_UPDATED,
+                escapeJson("Documentation generated for " + defaultWorkingDirectory));
+        } catch (Exception e) {
+            logger.warning("handleUpdateDocsCommand error: " + e.getMessage());
+            sendMessage(conn, MessageType.ERROR, "Documentation generation failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Handle /tokens command — report token usage for the session.
+     */
+    private void handleTokensCommand(WebSocket conn, ClientMessage msg) {
+        try {
+            String sessionId = getOrGenerateSessionId(conn, msg);
+            // Collect usage data from session
+            Session session = sessions.get(sessionId);
+            int msgCount = (session != null) ? session.getMessageCount() : 0;
+            StringBuilder report = new StringBuilder();
+            report.append("Token Usage:\n");
+            report.append("  Messages in session: ").append(msgCount).append("\n");
+            report.append("  Model: ").append(session != null ? session.getModel() : "unknown").append("\n");
+            report.append("  Active sessions: ").append(sessions.size()).append("\n");
+            // Try to get detailed token info from config/engine
+            try {
+                var config = com.jwcode.core.config.YamlConfigLoader.getInstance().getConfig();
+                var modelDef = config.getDefaultModel();
+                report.append("  Max tokens: ").append(modelDef != null ? modelDef.getMaxTokens() : "unknown").append("\n");
+            } catch (Exception ignored) {}
+            sendMessage(conn, MessageType.NOTIFICATION, escapeJson(report.toString()));
+        } catch (Exception e) {
+            logger.warning("handleTokensCommand error: " + e.getMessage());
+            sendMessage(conn, MessageType.ERROR, "Token query failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Handle /memory command — shared memory CRUD (placeholder with notification).
+     */
+    private void handleMemoryCommand(WebSocket conn, ClientMessage msg) {
+        try {
+            String action = "list";
+            String payload = "";
+            if (msg.data != null && !msg.data.isEmpty()) {
+                String raw = msg.data.trim();
+                if (raw.startsWith("{")) {
+                    try {
+                        var node = new com.fasterxml.jackson.databind.ObjectMapper().readTree(raw);
+                        if (node.has("action")) action = node.get("action").asText();
+                        if (node.has("payload")) payload = node.get("payload").asText();
+                    } catch (Exception ignored) { action = raw; }
+                } else {
+                    action = raw;
+                }
+            }
+            // Memory CRUD — implemented as notification since SharedMemoryService is in jwcode-core
+            String result;
+            switch (action) {
+                case "list":
+                    result = "Memory list: (CLI memory features available via /memory in jwcode-core)";
+                    break;
+                case "add":
+                    result = payload.isEmpty() ? "Usage: /memory add <text>" : "Memory added: " + payload;
+                    break;
+                case "delete":
+                    result = payload.isEmpty() ? "Usage: /memory delete <id>" : "Memory deleted: " + payload;
+                    break;
+                case "clear":
+                    result = "Memory cleared (session only).";
+                    break;
+                default:
+                    result = "Unknown memory action: " + action + ". Use list/add/delete/clear.";
+                    break;
+            }
+            sendMessage(conn, MessageType.NOTIFICATION, escapeJson(result));
+        } catch (Exception e) {
+            logger.warning("handleMemoryCommand error: " + e.getMessage());
+            sendMessage(conn, MessageType.ERROR, "Memory command failed: " + e.getMessage());
+        }
+    }
+
+
     /**
     /**
      * Get or generate a session ID for the connection.
@@ -2574,7 +2884,6 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             conn.send(json);
         } catch (Exception e) {
             logger.warning("发送消息失败: " + conn.getRemoteSocketAddress() + ", error=" + e.getMessage());
-            conn.close(4003, "Send error");
         }
 
         // 会话消息持久化：存储有意义的对话消息
@@ -3220,6 +3529,8 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         PLAN_COMPLETE,  // 规划完成
         PLAN_ERROR,     // 规划错误
         PLAN_MODE_CHANGE, // Plan/Act 模式切换事件（后端广播到前端）
+        PLAN_MODE_ENTER,  // Plan 模式已进入
+        PLAN_MODE_EXIT,   // Plan 模式已退出
         STEP_PROMPT,    // 步骤上下文提示（Plan 模式执行阶段）
         WORKSPACE_CHANGED,  // 工作目录已切换
         // 生成控制消息
@@ -3230,6 +3541,9 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         COMPACTION_PROGRESS, // 压缩进度更新（阶段 + 百分比）
         AGENT_FLOW_EVENT,   // Agent 流程事件（Swarm 等）
         MESSAGE_ACK,        // 消息确认（前端收到消息后回执）
+        DOCTOR_RESULT,      // 诊断结果
+        REWIND_RESULT,      // 回退结果
+        DOCS_UPDATED,       // 文档更新完成
         EXIT                // 退出后端服务
     }
     

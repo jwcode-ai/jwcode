@@ -96,6 +96,12 @@ public class Skill {
     private SkillDefinition.InjectionStrategy injectionStrategy = SkillDefinition.InjectionStrategy.LAZY;
 
     /**
+     * 来源（用于区分系统/用户/Agent 创建的技能）
+     */
+    @Builder.Default
+    private Provenance provenance = Provenance.USER_MANUAL;
+
+    /**
      * 加载状态
      */
     @Builder.Default
@@ -119,7 +125,18 @@ public class Skill {
         DEVOPS,     // 运维相关
         CUSTOM      // 自定义
     }
-    
+
+    /**
+     * 技能来源类型
+     */
+    public enum Provenance {
+        SYSTEM,         // 系统内置（通过 .skill.md 打包）
+        USER_MANUAL,    // 用户手动创建
+        AGENT_CREATED,  // Agent 自动创建（自改进）
+        HUB_INSTALLED,  // 从技能市场安装
+        PLUGIN          // 插件注册
+    }
+
     public enum LoadStatus {
         UNLOADED,   // 未加载
         LOADING,    // 加载中

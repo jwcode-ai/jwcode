@@ -80,6 +80,14 @@ public class JwcodeConfig {
     public ProviderConfig getProvider(String name) {
         return providers.get(name);
     }
+
+    /**
+     * 获取所有提供商配置（不可修改）。
+     */
+    @JsonIgnore
+    public Map<String, ProviderConfig> getAllProviders() {
+        return java.util.Collections.unmodifiableMap(providers);
+    }
     
     /**
      * 获取默认提供商名称

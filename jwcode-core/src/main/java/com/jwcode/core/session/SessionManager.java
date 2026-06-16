@@ -17,6 +17,8 @@ import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.jwcode.core.event.EventSystemFactory;
+
 /**
  * SessionManager - 会话管理器
  * 
@@ -130,6 +132,13 @@ public class SessionManager {
         
         String sessionId = UUID.randomUUID().toString();
         Session session = new Session(sessionId, workingDirectory);
+        // 初始化事件系统
+        try {
+            var eventSystem = EventSystemFactory.create(sessionId);
+            session.setEventSystem(eventSystem);
+        } catch (Exception e) {
+            logger.warn("Failed to initialize event system for session " + sessionId, e);
+        }
         sessions.put(sessionId, session);
         activeSessionId = sessionId;
         saveSession(session);

@@ -16,14 +16,23 @@ public class DefaultSkillExecutor implements SkillExecutor {
     
     private final LLMService llmService;
     private final SkillExecutorConfig config;
-    
+    private final SkillTemplateResolver templateResolver;
+
     public DefaultSkillExecutor(LLMService llmService) {
         this(llmService, SkillExecutorConfig.defaultConfig());
     }
-    
+
     public DefaultSkillExecutor(LLMService llmService, SkillExecutorConfig config) {
         this.llmService = llmService;
         this.config = config;
+        this.templateResolver = new SkillTemplateResolver();
+    }
+
+    /**
+     * 获取模板变量解析器，可用于设置会话 ID、项目根目录等。
+     */
+    public SkillTemplateResolver getTemplateResolver() {
+        return templateResolver;
     }
     
     @Override
@@ -79,15 +88,20 @@ public class DefaultSkillExecutor implements SkillExecutor {
      */
     private String buildSystemPrompt(Skill skill) {
         StringBuilder prompt = new StringBuilder();
-        
-        // 技能描述
+        String source = skill.getSource();
+
+        // 技能描述（支持模板变量）
         if (skill.getDescription() != null && !skill.getDescription().isEmpty()) {
-            prompt.append("# 任务描述\n").append(skill.getDescription()).append("\n\n");
+            prompt.append("# 任务描述\n")
+                  .append(templateResolver.resolve(skill.getDescription(), source))
+                  .append("\n\n");
         }
-        
-        // 系统提示词
+
+        // 系统提示词（支持模板变量）
         if (skill.getSystemPrompt() != null && !skill.getSystemPrompt().isEmpty()) {
-            prompt.append("# 执行指南\n").append(skill.getSystemPrompt()).append("\n\n");
+            prompt.append("# 执行指南\n")
+                  .append(templateResolver.resolve(skill.getSystemPrompt(), source))
+                  .append("\n\n");
         }
         
         // 输出格式要求

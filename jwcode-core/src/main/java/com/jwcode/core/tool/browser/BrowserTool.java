@@ -52,7 +52,7 @@ public class BrowserTool implements Tool<String, String, Void> {
     }
 
     @Override
-    public String getName() { return "browser"; }
+    public String getName() { return "Browser"; }
 
     @Override
     public String getDescription() {

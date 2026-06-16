@@ -20,10 +20,10 @@ public class ServiceConfig {
     private List<String> apiKeys;
     private Double temperature;
     private Integer maxTokens;
-    private int timeoutSeconds = 300;
-    private int contextWindow = 1000000;
-    private String apiType = "openai-completions";
-    private String anthropicVersion = "2023-06-01";
+    @Builder.Default private int timeoutSeconds = 300;
+    @Builder.Default private int contextWindow = 1000000;
+    @Builder.Default private String apiType = "openai-completions";
+    @Builder.Default private String anthropicVersion = "2023-06-01";
 
     public ServiceConfig() {}
 

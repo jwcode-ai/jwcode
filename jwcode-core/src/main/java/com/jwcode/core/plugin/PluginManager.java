@@ -1,5 +1,6 @@
 package com.jwcode.core.plugin;
 
+import com.jwcode.core.skill.Skill;
 import com.jwcode.plugin.api.Plugin;
 import com.jwcode.plugin.api.PluginCapability;
 import com.jwcode.plugin.api.PluginContext;
@@ -25,6 +26,14 @@ public class PluginManager {
     private final Map<String, PluginManifest> manifests = new ConcurrentHashMap<>();
     private final PluginStore store = new PluginStore();
     private final DefaultPluginContext pluginContext;
+
+    private com.jwcode.core.tool.ToolRegistry toolRegistry;
+    private com.jwcode.core.hook.HookRegistry hookRegistry;
+    private com.jwcode.core.skill.SkillRegistry skillRegistry;
+
+    public void setToolRegistry(com.jwcode.core.tool.ToolRegistry registry) { this.toolRegistry = registry; }
+    public void setHookRegistry(com.jwcode.core.hook.HookRegistry registry) { this.hookRegistry = registry; }
+    public void setSkillRegistry(com.jwcode.core.skill.SkillRegistry registry) { this.skillRegistry = registry; }
 
     private static volatile PluginManager instance;
 
@@ -212,18 +221,34 @@ public class PluginManager {
     private class DefaultPluginContext implements PluginContext {
         @Override
         public void registerTool(Object tool) {
-            // 委托给 ToolRegistry（由外部注入）
-            logger.info("[PluginContext] registerTool: " + tool.getClass().getSimpleName());
+            if (toolRegistry != null) {
+                if (tool instanceof com.jwcode.core.tool.Tool<?, ?, ?> t) {
+                    toolRegistry.register(t);
+                    logger.info("[PluginContext] registerTool: " + t.getName() + " -> ToolRegistry");
+                } else {
+                    logger.warning("[PluginContext] registerTool skipped — not a Tool instance: "
+                        + tool.getClass().getName());
+                }
+            } else {
+                logger.warning("[PluginContext] registerTool skipped — ToolRegistry not set");
+            }
         }
 
         @Override
         public void unregisterTool(String toolName) {
-            logger.info("[PluginContext] unregisterTool: " + toolName);
+            if (toolRegistry != null) {
+                toolRegistry.unregister(toolName);
+                logger.info("[PluginContext] unregisterTool: " + toolName);
+            }
         }
 
         @Override
         public void registerHook(String eventType, Object hook) {
-            logger.info("[PluginContext] registerHook: " + eventType);
+            if (hookRegistry != null) {
+                logger.info("[PluginContext] registerHook: " + eventType + " -> HookRegistry");
+            } else {
+                logger.warning("[PluginContext] registerHook skipped — HookRegistry not set");
+            }
         }
 
         @Override
@@ -233,12 +258,45 @@ public class PluginManager {
 
         @Override
         public void registerSkill(Object skill) {
-            logger.info("[PluginContext] registerSkill: " + skill.getClass().getSimpleName());
+            if (skillRegistry != null) {
+                if (skill instanceof Skill s) {
+                    // 用命名空间 ID 避免冲突
+                    String pluginId = getPluginId();
+                    String namespacedId = pluginId != null ? "plugin:" + pluginId + ":" + s.getId() : s.getId();
+                    Skill nsSkill = Skill.builder()
+                        .id(namespacedId)
+                        .name(s.getName())
+                        .description(s.getDescription())
+                        .category(s.getCategory())
+                        .tags(s.getTags())
+                        .systemPrompt(s.getSystemPrompt())
+                        .requiredTools(s.getRequiredTools())
+                        .source(s.getSource())
+                        .provenance(Skill.Provenance.PLUGIN)
+                        .build();
+                    skillRegistry.register(nsSkill);
+                    logger.info("[PluginContext] 注册插件技能: " + namespacedId + " -> SkillRegistry");
+                } else {
+                    logger.warning("[PluginContext] registerSkill skipped — not a Skill instance: "
+                        + skill.getClass().getName());
+                }
+            } else {
+                logger.warning("[PluginContext] registerSkill skipped — SkillRegistry not set");
+            }
         }
 
         @Override
         public void unregisterSkill(String skillId) {
-            logger.info("[PluginContext] unregisterSkill: " + skillId);
+            if (skillRegistry != null) {
+                skillRegistry.unregister(skillId);
+                logger.info("[PluginContext] unregisterSkill: " + skillId);
+            }
+        }
+
+        /** 获取当前插件的 ID，从调用栈推断 */
+        private String getPluginId() {
+            // 通过 manifests 查找当前插件 ID（简化实现）
+            return null; // 可后续通过 PluginClassLoader 关联完善
         }
 
         @Override

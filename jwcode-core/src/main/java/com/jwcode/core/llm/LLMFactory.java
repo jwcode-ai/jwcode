@@ -1,6 +1,7 @@
 package com.jwcode.core.llm;
 
 import com.jwcode.core.config.JwcodeConfig;
+import com.jwcode.core.llm.route.RouteRegistry;
 
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -17,9 +18,10 @@ public class LLMFactory {
     private static final String DEFAULT_CONFIG_PATH = ".jwcode/config.yaml";
     
     private final ServiceRegistry registry;
+    private final RouteRegistry routeRegistry;
     private JwcodeConfig config;
     private LLMService llmService;
-    
+
     private com.jwcode.core.agent.CompactorAgent sharedCompactorAgent;
     private com.jwcode.core.agent.BudgetExhaustedHandler sharedBudgetHandler;
     private ModelRouter modelRouter;
@@ -30,12 +32,14 @@ public class LLMFactory {
     
     public LLMFactory(JwcodeConfig config) {
         this.registry = createDefaultRegistry();
+        this.routeRegistry = new RouteRegistry();
         if (config != null) {
             this.config = config;
         } else {
             loadDefaultConfig();
         }
         this.modelRouter = new ModelRouter(this.config);
+        initRouteRegistry();
     }
     
     private ServiceRegistry createDefaultRegistry() {
@@ -251,7 +255,24 @@ public class LLMFactory {
     
     public JwcodeConfig getConfig() { return config; }
     public ModelRouter getModelRouter() { return modelRouter; }
-    
+    public RouteRegistry getRouteRegistry() { return routeRegistry; }
+
+    /**
+     * 从配置初始化 RouteRegistry：为每个 provider 注册路由和模型映射。
+     */
+    private void initRouteRegistry() {
+        if (config == null || config.getAllProviders() == null) return;
+        int count = 0;
+        for (var entry : config.getAllProviders().entrySet()) {
+            String name = entry.getKey();
+            JwcodeConfig.ProviderConfig provider = entry.getValue();
+            ServiceConfig serviceConfig = createServiceConfig(name, provider);
+            routeRegistry.registerFromConfig(name, serviceConfig);
+            count++;
+        }
+        logger.info("[LLMFactory] RouteRegistry initialized with " + count + " provider routes");
+    }
+
     private static volatile LLMFactory globalInstance;
     
     public static void setGlobalInstance(LLMFactory factory) { globalInstance = factory; }

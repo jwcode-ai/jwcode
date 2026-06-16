@@ -318,18 +318,17 @@ public class OpenAIRequestBuilder {
         if (originalMessages.isEmpty()) {
             throw new IllegalArgumentException("At least one message is required");
         }
-        
+
         List<LLMMessage> result = new ArrayList<>();
-        
-        // 1. 提取系统消息（必须在第一位）
-        LLMMessage systemMsg = null;
+
+        // 1. 提取所有系统消息（保留顺序）
+        List<LLMMessage> systemMessages = new ArrayList<>();
         for (LLMMessage msg : originalMessages) {
             if (msg.getRole() == LLMMessage.Role.SYSTEM) {
-                systemMsg = msg;
-                break;
+                systemMessages.add(msg);
             }
         }
-        
+
         // 2. 收集非系统消息
         List<LLMMessage> nonSystemMessages = new ArrayList<>();
         for (LLMMessage msg : originalMessages) {
@@ -337,23 +336,22 @@ public class OpenAIRequestBuilder {
                 nonSystemMessages.add(msg);
             }
         }
-        
+
         // 3. 智能截断消息（保留 tool_calls 上下文）
-        int keepCount = MAX_MESSAGES - (systemMsg != null ? 1 : 0);
+        int keepCount = MAX_MESSAGES - systemMessages.size();
+        if (keepCount < 0) keepCount = 0;
         if (nonSystemMessages.size() > keepCount) {
             logger.info("[OpenAI] Smart truncating messages from " + nonSystemMessages.size() + " to " + keepCount);
             nonSystemMessages = smartTruncate(nonSystemMessages, keepCount);
         }
-        
-        // 4. 组装最终消息列表
-        if (systemMsg != null) {
-            result.add(systemMsg);
-        }
+
+        // 4. 组装最终消息列表：所有系统消息在前，非系统消息在后
+        result.addAll(systemMessages);
         result.addAll(nonSystemMessages);
-        
+
         // 5. 验证消息顺序（user -> assistant -> tool）
         validateMessageSequence(result);
-        
+
         return result;
     }
     
@@ -553,14 +551,18 @@ public class OpenAIRequestBuilder {
      */
     private void validateMessageSequence(List<LLMMessage> messages) {
         LLMMessage.Role lastRole = null;
-        
+        boolean hasSeenNonSystem = false;
+
         for (int i = 0; i < messages.size(); i++) {
             LLMMessage msg = messages.get(i);
             LLMMessage.Role role = msg.getRole();
             
-            // 系统消息只能在第一位
-            if (role == LLMMessage.Role.SYSTEM && i != 0) {
-                logger.warning("[OpenAI] System message should be at position 0, found at " + i);
+            // 系统消息只允许在开头连续出现
+            if (role == LLMMessage.Role.SYSTEM && hasSeenNonSystem) {
+                logger.warning("[OpenAI] System message found after non-system messages at position " + i);
+            }
+            if (role != LLMMessage.Role.SYSTEM) {
+                hasSeenNonSystem = true;
             }
             
             // 检查消息序列

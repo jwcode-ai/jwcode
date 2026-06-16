@@ -101,8 +101,6 @@ export const EVENT_TYPES = [
   'doctor_result',
   'degradation_update',
   "plan_mode_enter", "plan_mode_exit",
-  "step_prompt", "agent_flow_event", "message_ack", "exit",
-  "rewind_result", "docs_updated",
   "todo_update", "todo_item_done", "todo_progress",
   "hook_response_ack",
   "toggle_workspace_guard",

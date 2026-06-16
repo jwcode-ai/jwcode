@@ -9,6 +9,16 @@ import java.util.concurrent.CountDownLatch;
 public class WebLauncher {
 
     public static void main(String[] args) {
+        try {
+            run(args);
+        } catch (Throwable t) {
+            System.err.println("[WebLauncher] 致命错误: " + t.getMessage());
+            t.printStackTrace();
+            System.exit(1);
+        }
+    }
+
+    private static void run(String[] args) {
         int httpPort = 8080;
         int wsPort = 8081;
         String workspaceDir = null;
@@ -63,6 +73,7 @@ public class WebLauncher {
 
         } catch (Exception e) {
             System.err.println("Startup failed: " + e.getMessage());
+            e.printStackTrace();
         }
     }
 }
