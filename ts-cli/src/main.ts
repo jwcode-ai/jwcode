@@ -137,7 +137,9 @@ async function cmdStart(args: Record<string, string | boolean>): Promise<void> {
   // Start Java backend
   const backendProc = startBackend({ installDir, workspaceDir, port: httpPort, wsPort, forceKill });
 
-  // Cleanup on exit
+  // Cleanup on exit — don't register competing SIGINT handlers here;
+  // Ink 5 manages its own SIGINT handling for terminal restore.
+  // We hook into `exit` so cleanup runs regardless of how the process stops.
   let stopping = false;
   const cleanup = () => {
     if (stopping) return;
@@ -145,9 +147,6 @@ async function cmdStart(args: Record<string, string | boolean>): Promise<void> {
     console.log('\n[jwcode] Shutting down...');
     cleanupBackend(backendProc);
   };
-
-  process.on('SIGINT', () => { cleanup(); process.exit(0); });
-  process.on('SIGTERM', () => { cleanup(); process.exit(0); });
   process.on('exit', cleanup);
 
   // Wait for backend or detect early exit
@@ -194,15 +193,12 @@ async function cmdStart(args: Record<string, string | boolean>): Promise<void> {
     });
   }
 
-  const { unmount } = render(
+  const { waitUntilExit } = render(
     createElement(App, { backendUrl, wsUrl, onExit: () => { cleanup(); process.exit(0); } }),
   );
 
-  // Keep alive
-  await new Promise<void>((resolve) => {
-    process.on('SIGINT', () => resolve());
-    process.on('SIGTERM', () => resolve());
-  });
+  // Ink manages process lifecycle via waitUntilExit (handles SIGINT internally).
+  await waitUntilExit();
 }
 
 async function cmdRun(args: Record<string, string | boolean>): Promise<void> {

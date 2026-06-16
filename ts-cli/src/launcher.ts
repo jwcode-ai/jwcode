@@ -11,8 +11,8 @@
  */
 import { spawn, spawnSync, execSync, execFileSync, type ChildProcess } from 'node:child_process';
 import { existsSync, readdirSync, statSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { homedir } from 'node:os';
+import { join, dirname, delimiter } from 'node:path';
+import { homedir, platform } from 'node:os';
 import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -97,18 +97,23 @@ function isProguardOutput(jarPath: string): boolean {
 }
 
 export function findMvn(): string {
-  const paths = process.env.PATH?.split(';') || [];
+  const pathSep = delimiter;
+  const paths = process.env.PATH?.split(pathSep) || [];
   for (const dir of paths) {
     for (const name of ['mvn.cmd', 'mvn.bat', 'mvn']) {
       const full = join(dir, name);
       if (existsSync(full)) return full;
     }
   }
-  for (const root of ['C:\\Program Files', homedir()]) {
+  // Search common install locations across platforms
+  const mvnRoots = platform() === 'win32'
+    ? ['C:\\Program Files', homedir()]
+    : ['/usr/local', '/opt', homedir()];
+  for (const root of mvnRoots) {
     try {
       for (const entry of readdirSync(root, { withFileTypes: true })) {
         if (entry.isDirectory() && entry.name.startsWith('apache-maven')) {
-          const mvn = join(root, entry.name, 'bin', 'mvn.cmd');
+          const mvn = join(root, entry.name, 'bin', platform() === 'win32' ? 'mvn.cmd' : 'mvn');
           if (existsSync(mvn)) return mvn;
         }
       }
@@ -118,19 +123,24 @@ export function findMvn(): string {
 }
 
 export function findJava(): string {
-  const paths = process.env.PATH?.split(';') || [];
+  const pathSep = delimiter;
+  const paths = process.env.PATH?.split(pathSep) || [];
   for (const dir of paths) {
     for (const name of ['java.exe', 'java']) {
       const full = join(dir, name);
       if (existsSync(full)) return full;
     }
   }
-  // Common install locations
-  for (const root of ['C:\\Program Files\\Java', 'C:\\Program Files (x86)\\Java', homedir()]) {
+  // Common install locations across platforms
+  const javaRoots = platform() === 'win32'
+    ? ['C:\\Program Files\\Java', 'C:\\Program Files (x86)\\Java', homedir()]
+    : ['/usr/lib/jvm', '/usr/local', '/opt', homedir()];
+  const javaExe = platform() === 'win32' ? 'java.exe' : 'java';
+  for (const root of javaRoots) {
     try {
       for (const entry of readdirSync(root, { withFileTypes: true })) {
-        if (entry.isDirectory() && (entry.name.startsWith('jdk') || entry.name.startsWith('openjdk'))) {
-          const java = join(root, entry.name, 'bin', 'java.exe');
+        if (entry.isDirectory() && (entry.name.startsWith('jdk') || entry.name.startsWith('openjdk') || entry.name.startsWith('java-'))) {
+          const java = join(root, entry.name, 'bin', javaExe);
           if (existsSync(java)) return java;
         }
       }
@@ -168,7 +178,7 @@ export function buildBackend(projectRoot: string): void {
  */
 export function portInUse(port: number): boolean {
   try {
-    if (process.platform === 'win32') {
+    if (platform() === 'win32') {
       const out = execSync(`netstat -ano | findstr :${port} | findstr LISTENING`, { encoding: 'utf-8' });
       return out.trim().length > 0;
     } else {
@@ -197,9 +207,9 @@ export function findAvailablePorts(startPort = 8080, maxAttempts = 20): { httpPo
 
 export function killPort(port: number): void {
   try {
-    if (process.platform === 'win32') {
-      const out = execSync(`netstat -ano | findstr :${port} | findstr LISTENING`, { encoding: 'utf-8' });
-      for (const line of out.trim().split('\n')) {
+    if (platform() === 'win32') {
+      const out = execSync(`netstat -ano | findstr /C:":${port} " | findstr LISTENING`, { encoding: 'utf-8' });
+      for (const line of out.trim().split(/\r?\n/)) {
         const pid = line.trim().split(/\s+/).pop();
         if (pid) {
           try {
@@ -257,7 +267,19 @@ export function startBackend(opts: StartOptions): ChildProcess {
   const java = findJava();
   const jarPath = findJar(installDir);
   if (!jarPath) {
-    console.error('[launcher] Backend JAR not found. Run with --build first, or ensure backend/jwcode-web.jar exists.');
+    console.error('[launcher] Backend JAR not found.');
+    console.error('[launcher]   Reinstall: npm install -g @jwcode/cli');
+    console.error('[launcher]   Or build from source: cd jwcode && mvn package -pl jwcode-web -am -DskipTests');
+    process.exit(1);
+  }
+
+  // Verify Java is available before spawning
+  try {
+    execSync(`"${java}" -version 2>&1`, { stdio: 'ignore' });
+  } catch {
+    console.error('[launcher] Java is required but not found on this system.');
+    console.error('[launcher]   Install Java 17+: https://adoptium.net/');
+    console.error('[launcher]   Or set JAVA_HOME and ensure java is on your PATH.');
     process.exit(1);
   }
 
@@ -297,21 +319,21 @@ export function startBackend(opts: StartOptions): ChildProcess {
 
 export function cleanupBackend(proc: ChildProcess | null): void {
   if (!proc) return;
+  const pid = proc.pid;
+  if (!pid) { proc.kill(); return; }
   console.log('\n[jwcode] Shutting down...');
-  if (process.platform === 'win32') {
-    try {
-      execSync(`taskkill /F /T /PID ${proc.pid}`, { stdio: 'ignore' });
-    } catch {
-      try { proc.kill(); } catch {}
+  try {
+    if (platform() === 'win32') {
+      execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore' });
+    } else {
+      // Kill the entire process group, then force kill synchronously.
+      // No setTimeout: it would never fire if process.exit() is called right after.
+      try { process.kill(-pid, 'SIGTERM'); } catch {}
+      try { proc.kill('SIGTERM'); } catch {}
+      try { process.kill(-pid, 'SIGKILL'); } catch {}
+      try { proc.kill('SIGKILL'); } catch {}
     }
-  } else {
-    try { process.kill(-proc.pid!, 'SIGTERM'); } catch {}
-    proc.kill('SIGTERM');
-    setTimeout(() => {
-      if (proc && !proc.killed) {
-        try { process.kill(-proc.pid!, 'SIGKILL'); } catch {}
-        proc.kill('SIGKILL');
-      }
-    }, 5000);
+  } catch {
+    try { proc.kill(); } catch {}
   }
 }
