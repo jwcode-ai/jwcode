@@ -33,9 +33,11 @@ interface Props {
   onSubmit: (value: string) => void;
   placeholder?: string;
   disabled?: boolean;
+  /** When true, ↑/↓ skip input history recall so CommandPalette/FilePalette can handle navigation exclusively. */
+  isPaletteActive?: boolean;
 }
 
-export const TextInput = memo(function TextInput({ value, onChange, onSubmit, placeholder, disabled }: Props) {
+export const TextInput = memo(function TextInput({ value, onChange, onSubmit, placeholder, disabled, isPaletteActive }: Props) {
   const cursorRef = useRef(value.length);
   // Local re-render trigger for cursor-only changes (arrow keys); the parent's
   // `value` prop doesn't change in that case, so memo would otherwise skip us.
@@ -109,8 +111,9 @@ export const TextInput = memo(function TextInput({ value, onChange, onSubmit, pl
       return;
     }
 
-    // Up/down: input history recall
+    // Up/down: input history recall (skip when palette is open — CommandPalette/FilePalette handle their own navigation)
     if (key.upArrow) {
+      if (isPaletteActive) return;
       if (_history.length === 0) return;
       if (histIdxRef.current === -1) {
         draftRef.current = valueRef.current;
@@ -125,6 +128,7 @@ export const TextInput = memo(function TextInput({ value, onChange, onSubmit, pl
       return;
     }
     if (key.downArrow) {
+      if (isPaletteActive) return;
       if (histIdxRef.current === -1) return;
       histIdxRef.current = histIdxRef.current - 1;
       if (histIdxRef.current < 0) {

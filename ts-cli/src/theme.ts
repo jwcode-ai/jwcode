@@ -12,6 +12,7 @@ export interface ThemeColors {
   warning: string;
   error: string;
   info: string;
+  brand: string;
   user: string;
   assistant: string;
   system: string;
@@ -35,6 +36,7 @@ const dark: ThemeColors = {
   warning: 'yellow',
   error: 'red',
   info: 'blue',
+  brand: 'cyan',
   user: 'green',
   assistant: '',
   system: 'red',

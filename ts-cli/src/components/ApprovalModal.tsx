@@ -1,9 +1,11 @@
 /**
- * ApprovalModal — numbered option list style, inspired by Claude Code plan approval prompt.
+ * ApprovalModal — numbered option list style, i18n support.
+ * Language auto-detected from LANG/LC_ALL env var.
  */
 import { useState, useEffect, useRef } from "react";
 import { Box, Text, useInput } from "ink";
-import { t } from "../theme.js";
+import { t as th } from "../theme.js";
+import { t as tr } from "../locale.js";
 
 type RiskLevel = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
 
@@ -21,37 +23,37 @@ const COUNTDOWN_S = 15;
 function classifyRisk(toolName: string, payload: string): { level: RiskLevel; reason: string } {
   const name = toolName.toLowerCase();
   if (/\b(rm|del|delete|drop|truncate|format|mkfs)\b/.test(name)) {
-    return { level: "CRITICAL", reason: "Destructive - may delete data" };
+    return { level: "CRITICAL", reason: tr("riskDestructive") };
   }
   if (/\b(bash|shell|exec|cmd|powershell|terminal)\b/.test(name)) {
     if (/\b(rm\s+-rf|sudo|chmod\s+777|curl.*\|\s*(ba)?sh|wget.*-O|>\/dev\/|mkfs)\b/i.test(payload)) {
-      return { level: "CRITICAL", reason: "High-risk command - system-level operation" };
+      return { level: "CRITICAL", reason: tr("riskHighCmd") };
     }
-    return { level: "HIGH", reason: "Shell command execution" };
+    return { level: "HIGH", reason: tr("riskShell") };
   }
   if (/\b(write|edit|save|upload|deploy|publish)\b/i.test(name)) {
-    return { level: "HIGH", reason: "File write operation" };
+    return { level: "HIGH", reason: tr("riskFileWrite") };
   }
   if (/\b(install|uninstall|npm|pip|cargo|gem|apt|brew)\b/i.test(name)) {
-    return { level: "HIGH", reason: "Package manager operation" };
+    return { level: "HIGH", reason: tr("riskPackageMgr") };
   }
   if (/\b(git)\b/.test(name) && /\b(push|force|hard\s*reset|rebase)\b/i.test(payload)) {
-    return { level: "HIGH", reason: "Git destructive operation" };
+    return { level: "HIGH", reason: tr("riskGitDestructive") };
   }
   if (/\b(http|fetch|curl|wget|api|request|download)\b/i.test(name)) {
-    return { level: "MEDIUM", reason: "Network request" };
+    return { level: "MEDIUM", reason: tr("riskNetwork") };
   }
   if (/\b(read|open|list|ls|dir|cat|view|search|find|grep|glob)\b/i.test(name)) {
-    return { level: "LOW", reason: "Read-only operation" };
+    return { level: "LOW", reason: tr("riskReadOnly") };
   }
-  return { level: "MEDIUM", reason: "Tool invocation" };
+  return { level: "MEDIUM", reason: tr("riskTool") };
 }
 
 const RISK_COLOR: Record<RiskLevel, string> = {
-  CRITICAL: t.error,
-  HIGH: t.warning,
-  MEDIUM: t.warning,
-  LOW: t.info,
+  CRITICAL: th.error,
+  HIGH: th.warning,
+  MEDIUM: th.warning,
+  LOW: th.info,
 };
 
 const RISK_ICON: Record<RiskLevel, string> = {
@@ -67,7 +69,7 @@ function extractPreview(toolName: string, payload: string): string {
   }
   if (/\b(write|edit|save|create)\b/i.test(toolName)) {
     const match = payload.match(/(?:file_path|path|file)["\s:=]+([^\s",}]+)/i);
-    if (match) return "File: " + match[1] + "\n" + payload.slice(0, 160);
+    if (match) return tr("previewFile") + match[1] + "\n" + payload.slice(0, 160);
   }
   return payload.length > 200 ? payload.slice(0, 200) + "..." : payload;
 }
@@ -101,11 +103,14 @@ export function ApprovalModal({ toolName, payload, onAllow, onDeny, onAllowSessi
 
   const countdownUrgent = countdown <= 5;
 
+  const levelLabelKey = `risk${level.charAt(0) + level.slice(1).toLowerCase()}` as const;
+  const levelKey = level.toLowerCase() as "critical" | "high" | "medium" | "low";
+
   const options = [
-    { label: "Allow — execute this command", hint: "Press Enter or y to confirm", action: onAllow },
-    { label: "Deny — cancel this operation", hint: "Press Esc or n to cancel", action: onDeny },
-    { label: "Allow always this session", hint: "Don't ask again for " + toolName, action: onAllowSession },
-    { label: "Auto mode — allow all hooks", hint: "All future hooks will be auto-approved", action: onAutoMode },
+    { label: tr("allowExec"), hint: tr("confirmHint"), action: onAllow },
+    { label: tr("denyCancel"), hint: tr("denyHint"), action: onDeny },
+    { label: tr("allowSession"), hint: tr("sessionHint", { tool: toolName }), action: onAllowSession },
+    { label: tr("autoMode"), hint: tr("autoHint"), action: onAutoMode },
   ];
 
   const execSelected = () => options[selected]!.action();
@@ -123,7 +128,7 @@ export function ApprovalModal({ toolName, payload, onAllow, onDeny, onAllowSessi
     if (_input === "n" || _input === "N") { onDeny(); return; }
   });
 
-  const borderColor = level === "CRITICAL" ? t.error : t.warning;
+  const borderColor = level === "CRITICAL" ? th.error : th.warning;
 
   return (
     <Box
@@ -135,18 +140,18 @@ export function ApprovalModal({ toolName, payload, onAllow, onDeny, onAllowSessi
       {/* Title row */}
       <Box paddingLeft={1} paddingRight={1} justifyContent="space-between">
         <Box gap={1}>
-          <Text bold>Permission Required</Text>
+          <Text bold>{tr("permissionRequired")}</Text>
           <Text dimColor>{"· "}{toolName}</Text>
         </Box>
-        <Text color={countdownUrgent ? t.error : t.muted}>
-          Auto {countdown}s
+        <Text color={countdownUrgent ? th.error : th.muted}>
+          {tr("auto")} {countdown}{tr("s")}
         </Text>
       </Box>
 
       {/* Risk description */}
       <Box paddingLeft={1} paddingRight={1}>
         <Text color={riskColor} bold={level === "CRITICAL"}>
-          {RISK_ICON[level]} {level}
+          {RISK_ICON[level]} {level === "CRITICAL" ? tr("critical") : level === "HIGH" ? tr("high") : level === "MEDIUM" ? tr("medium") : tr("low")}
         </Text>
         <Text dimColor> — {reason}</Text>
       </Box>
@@ -155,7 +160,7 @@ export function ApprovalModal({ toolName, payload, onAllow, onDeny, onAllowSessi
       {preview ? (
         <Box flexDirection="column" paddingLeft={1} paddingRight={1} marginTop={1}>
           <Box marginLeft={2}>
-            <Text color={t.tool}>{preview}</Text>
+            <Text color={th.tool}>{preview}</Text>
           </Box>
         </Box>
       ) : null}
@@ -163,7 +168,7 @@ export function ApprovalModal({ toolName, payload, onAllow, onDeny, onAllowSessi
       {/* Critical warning */}
       {level === "CRITICAL" && (
         <Box paddingLeft={1} paddingRight={1} marginTop={1}>
-          <Text color={t.error}>This may cause irreversible changes — verify carefully</Text>
+          <Text color={th.error}>{tr("criticalWarning")}</Text>
         </Box>
       )}
 
@@ -172,7 +177,7 @@ export function ApprovalModal({ toolName, payload, onAllow, onDeny, onAllowSessi
         {options.map((opt, i) => (
           <Box key={i} flexDirection="column" paddingLeft={1} paddingRight={1}>
             <Box>
-              <Text color={selected === i ? t.brand : t.muted}>
+              <Text color={selected === i ? th.brand : th.muted}>
                 {selected === i ? "❯" : " "} {i + 1}. {opt.label}
               </Text>
             </Box>
@@ -186,7 +191,7 @@ export function ApprovalModal({ toolName, payload, onAllow, onDeny, onAllowSessi
       {/* Footer */}
       <Box paddingLeft={1} paddingRight={1} marginTop={1}>
         <Text dimColor>
-          1/2/3/4 to select · ↑↓ to navigate · Enter to confirm · Esc to deny
+          {tr("selectHint")}
         </Text>
       </Box>
     </Box>

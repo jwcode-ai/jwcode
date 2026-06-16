@@ -70,14 +70,18 @@ const selPlanTasks = (s: AppState) => s.planTasks;
 const selPdcaPhase = (s: AppState) => s.pdcaPhase;
 const selDegradation = (s: AppState) => s.degradation;
 
-// ChatArea compound selector: all three change together during streaming
+// ChatArea compound selector: messages + currentMessage change together during streaming.
+// scrollOffset intentionally excluded — ChatArea doesn't use it, and bundling it would
+// cause unnecessary re-renders on every scroll event.
 const selChatArea = (s: AppState) => ({
   messages: s.messages,
   currentMessage: s.currentMessage,
-  scrollOffset: s.scrollOffset,
 } as const);
 
 // StatusLine compound selector: all status fields
+// Includes isGenerating/currentMessageTimestamp as primitives so the selector
+// is stable during streaming (timestamp doesn't change per flush) —
+// StatusLine avoids re-rendering 5×/s just for the elapsed counter.
 const selStatusLine = (s: AppState) => ({
   usage: s.usage,
   modelName: s.modelName,
@@ -88,6 +92,8 @@ const selStatusLine = (s: AppState) => ({
   messagesLen: s.messages.length,
   tokenRate: s.tokenRate,
   compactionProgress: s.compactionProgress,
+  isGenerating: s.currentMessage !== null,
+  currentMessageTimestamp: s.currentMessage?.timestamp ?? null,
 } as const);
 
 // ---- shallow equality for selector cache ----

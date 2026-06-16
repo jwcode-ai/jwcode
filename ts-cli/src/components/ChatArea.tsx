@@ -1,6 +1,8 @@
-﻿import { Box, Text } from "ink";
+﻿import { Box, Text, Static } from "ink";
 import { useState, useMemo, memo } from "react";
+import { useStdout } from "ink";
 import { type Message, type ToolCall, type Step } from "../protocol.js";
+import { useAppChatArea, useAppToolCallsExpanded } from "../hooks/useAppState.js";
 
 const SEP = "-".repeat(60);
 const MAX_THINKING = 200;
@@ -221,17 +223,21 @@ export const ChatArea = memo(function ChatArea({
 
   return (
     <Box flexDirection="column" width="100%">
-      {allMessages.map(msg => (
-        <MessageItem
-          key={msg.id}
-          msg={msg}
-          expandedMessages={expandedMessages}
-          expandedTools={expandedTools}
-          toolCallsExpanded={toolCallsExpanded}
-          onToggleTool={toggleExpandTool}
-          onToggleMessage={toggleExpandMessage}
-        />
-      ))}
+      {/* Static renders each finalized message once — no per-frame Ink diffing.
+          Only the streaming message (below) updates during generation. */}
+      <Static items={allMessages}>
+        {msg => (
+          <MessageItem
+            key={msg.id}
+            msg={msg}
+            expandedMessages={expandedMessages}
+            expandedTools={expandedTools}
+            toolCallsExpanded={toolCallsExpanded}
+            onToggleTool={toggleExpandTool}
+            onToggleMessage={toggleExpandMessage}
+          />
+        )}
+      </Static>
       {currentMessage && (
         <StreamingMessage
           key={currentMessage.id}
@@ -256,3 +262,23 @@ function truncate(s: unknown, max: number): string {
   if (str.length <= max) return str;
   return str.slice(0, max) + "...";
 }
+
+/**
+ * Standalone container that subscribes to store slices for ChatArea.
+ * Keeps App.tsx from re-rendering on every stream flush.
+ */
+export const ChatAreaContainer = memo(function ChatAreaContainer() {
+  const { messages, currentMessage } = useAppChatArea();
+  const toolCallsExpanded = useAppToolCallsExpanded();
+  const { stdout } = useStdout();
+  const terminalCols = (stdout as any)?.columns || 80;
+
+  return (
+    <ChatArea
+      messages={messages}
+      currentMessage={currentMessage}
+      terminalCols={terminalCols}
+      toolCallsExpanded={toolCallsExpanded}
+    />
+  );
+});

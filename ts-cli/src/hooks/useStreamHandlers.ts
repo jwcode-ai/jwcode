@@ -61,7 +61,7 @@ export function useStreamHandlers(
     function scheduleStreamFlush() {
       if (_flushScheduled) return;
       _flushScheduled = true;
-      _flushTimer = setTimeout(doStreamFlush, 32);
+      _flushTimer = setTimeout(doStreamFlush, 200);
     }
 
     function flushNow() {
@@ -384,7 +384,7 @@ export function useStreamHandlers(
         _pendingToken = d;
         if (!_tokenScheduled) {
           _tokenScheduled = true;
-          setTimeout(flushToken, 100);
+          setTimeout(flushToken, 500);
         }
       }
     });

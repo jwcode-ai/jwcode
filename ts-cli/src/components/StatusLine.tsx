@@ -1,6 +1,6 @@
-import { memo, useState, useEffect } from 'react';
+import { memo } from 'react';
 import { Box, Text } from 'ink';
-import { useAppStatusLine, useAppIsGenerating, useAppCurrentMessage, useAppDegradation, useAppPdcaPhase, useAppPlanTasks } from '../hooks/useAppState.js';
+import { useAppStatusLine, useAppDegradation, useAppPdcaPhase, useAppPlanTasks } from '../hooks/useAppState.js';
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -27,23 +27,16 @@ function formatElapsed(sec: number): string {
 
 export const StatusLine = memo(function StatusLine() {
   const { usage, modelName, planMode, autoMode, connected, statusText, messagesLen,
-          tokenRate, compactionProgress } = useAppStatusLine();
+          tokenRate, compactionProgress, isGenerating, currentMessageTimestamp } = useAppStatusLine();
   const degradation = useAppDegradation();
   const pdcaPhase = useAppPdcaPhase();
   const planTasks = useAppPlanTasks();
   const msgCount = messagesLen;
 
-  // Local elapsed timer — avoids global state updates every second
-  const isGenerating = useAppIsGenerating();
-  const currentMessage = useAppCurrentMessage();
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    if (!currentMessage) return;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [currentMessage?.id]);
-  const generationElapsed = currentMessage
-    ? Math.floor((now - (currentMessage.timestamp || Date.now())) / 1000)
+  // Elapsed computed inline from Date.now() at render time.
+  // currentMessageTimestamp is a stable primitive — doesn't change per flush.
+  const generationElapsed = isGenerating && currentMessageTimestamp
+    ? Math.floor((Date.now() - currentMessageTimestamp) / 1000)
     : 0;
 
   const pct = Math.min(100, Math.round(usage.usageRatio * 100));

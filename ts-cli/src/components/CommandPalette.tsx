@@ -2,7 +2,7 @@
  * CommandPalette — / filterable popup.
  * Character input is handled by TextInput; this only handles navigation.
  */
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, memo } from 'react';
 import { Box, Text, useInput, useStdout } from 'ink';
 import { ALL_COMMANDS, type CmdEntry } from '../commands/index.js';
 
@@ -11,7 +11,7 @@ interface Props {
   onSelect: (cmd: string | null) => void;
 }
 
-export function CommandPalette({ filter, onSelect }: Props) {
+export const CommandPalette = memo(function CommandPalette({ filter, onSelect }: Props) {
   const [selected, setSelected] = useState(0);
   const [scrollOffset, setScrollOffset] = useState(0);
   const { stdout } = useStdout();
@@ -78,4 +78,4 @@ export function CommandPalette({ filter, onSelect }: Props) {
       )}
     </Box>
   );
-}
+});

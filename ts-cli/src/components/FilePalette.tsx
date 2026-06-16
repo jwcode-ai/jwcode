@@ -2,7 +2,7 @@
  * FilePalette — @ file reference popup.
  * Shows matching files when user types @ in the input.
  */
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, memo } from 'react';
 import { Box, Text, useInput, useStdout } from 'ink';
 
 interface Props {
@@ -24,7 +24,7 @@ function dirname(path: string): string {
   return parts.join('/') || '.';
 }
 
-export function FilePalette({ query, files, onSelect }: Props) {
+export const FilePalette = memo(function FilePalette({ query, files, onSelect }: Props) {
   const [selected, setSelected] = useState(0);
   const [scrollOffset, setScrollOffset] = useState(0);
   const { stdout } = useStdout();
@@ -103,4 +103,4 @@ export function FilePalette({ query, files, onSelect }: Props) {
       )}
     </Box>
   );
-}
+});

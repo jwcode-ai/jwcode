@@ -7,11 +7,11 @@ import { TextInput, saveToHistory } from './components/TextInput.js';
 import { t } from './theme.js';
 import { JwCodeClient } from './client.js';
 import { StatusLine } from './components/StatusLine.js';
-import { ChatArea } from './components/ChatArea.js';
+import { ChatAreaContainer } from './components/ChatArea.js';
 import { CommandPalette } from './components/CommandPalette.js';
 import { FilePalette } from './components/FilePalette.js';
 import { ApprovalModal } from './components/ApprovalModal.js';
-import { updateAppState, useAppSlice, useAppChatArea, useAppToolCallsExpanded } from './hooks/useAppState.js';
+import { updateAppState, useAppSlice } from './hooks/useAppState.js';
 import { createMessage } from './protocol.js';
 import { SLASH_COMMANDS, HELP_TEXT } from './commands/index.js';
 import { useStreamHandlers } from './hooks/useStreamHandlers.js';
@@ -54,11 +54,8 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
   const sessionAllowRef = useRef<Set<string>>(new Set());
 
   const clientRef = useRef<JwCodeClient | null>(null);
-  const { messages, currentMessage } = useAppChatArea();
-  const toolCallsExpanded = useAppToolCallsExpanded();
   const { stdout } = useStdout();
   const terminalRows = (stdout as any)?.rows || 24;
-  const terminalCols = (stdout as any)?.columns || 80;
 
   const planMode = useAppSlice(s => s.planMode);
   const connected = useAppSlice(s => s.connected);
@@ -323,13 +320,28 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
           )}
           {/* flexGrow=0 when palette open: prevents Yoga layout overflow + Ink ghost content duplication */}
           <Box flexGrow={paletteActive ? 0 : 1} flexDirection="column">
-            <ChatArea
-              messages={messages}
-              currentMessage={currentMessage}
-              terminalCols={terminalCols}
-              toolCallsExpanded={toolCallsExpanded}
-            />
+            <ChatAreaContainer />
           </Box>
+          {/* Help box — rendered above input so text appears between messages and input */}
+          {showHelp && (() => {
+            const helpLines = HELP_TEXT.split('\\n');
+            const helpMax = Math.max(5, Math.min(terminalRows - 12, 10));
+            const helpEnd = Math.max(0, helpLines.length - helpScroll);
+            const helpStart = Math.max(0, helpEnd - helpMax);
+            const visibleHelp = helpLines.slice(helpStart, helpEnd);
+            return (
+              <Box key="help-box" flexDirection="column" borderStyle="single" borderColor={t.primary} paddingX={1}>
+                {helpLines.length > helpMax && (
+                  <Box>
+                    <Text dimColor>{'  ' + (helpStart + 1) + '-' + helpEnd + ' / ' + helpLines.length + '  PgUp/PgDn scroll / Esc close'}</Text>
+                  </Box>
+                )}
+                {visibleHelp.map((line, i) => (
+                  <Text key={i} color={t.primary}>{line}</Text>
+                ))}
+              </Box>
+            );
+          })()}
           <Box flexDirection="row" borderStyle="single" borderColor={t.primary} paddingLeft={1}>
             <Text color={t.success} bold>&gt; </Text>
             <TextInput
@@ -338,6 +350,7 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
               onSubmit={handleSubmit}
               placeholder={placeholder}
               disabled={showApproval !== null}
+              isPaletteActive={paletteActive}
             />
           </Box>
           {/* flexDirection=column required: Ink 5 defaults to row, which miscalculates overlay heights */}
@@ -348,25 +361,6 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
             {showFilePalette && (
               <FilePalette key="file-palette" query={fileQuery} files={fileList} onSelect={handleFileSelect} />
             )}
-            {showHelp && (() => {
-              const helpLines = HELP_TEXT.split('\\n');
-              const helpMax = Math.max(5, Math.min(terminalRows - 12, 10));
-              const helpEnd = Math.max(0, helpLines.length - helpScroll);
-              const helpStart = Math.max(0, helpEnd - helpMax);
-              const visibleHelp = helpLines.slice(helpStart, helpEnd);
-              return (
-                <Box key="help-box" flexDirection="column" borderStyle="single" borderColor={t.primary} paddingX={1}>
-                  {helpLines.length > helpMax && (
-                    <Box>
-                      <Text dimColor>{'  ' + (helpStart + 1) + '-' + helpEnd + ' / ' + helpLines.length + '  PgUp/PgDn scroll / Esc close'}</Text>
-                    </Box>
-                  )}
-                  {visibleHelp.map((line, i) => (
-                    <Text key={i} color={t.primary}>{line}</Text>
-                  ))}
-                </Box>
-              );
-            })()}
             {showApproval && (
               <ApprovalModal
                 key="approval-modal"
@@ -383,12 +377,7 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
       ) : (
         <Box flexDirection="column">
           <Box flexGrow={1} flexDirection="column">
-            <ChatArea
-              messages={messages}
-              currentMessage={currentMessage}
-              terminalCols={terminalCols}
-              toolCallsExpanded={toolCallsExpanded}
-            />
+            <ChatAreaContainer />
           </Box>
           <Box paddingLeft={1}>
             <Text dimColor>Connecting...</Text>
