@@ -1,43 +1,37 @@
 import { describe, it, expect } from 'vitest';
-import { pasteSummary, expandPastes, clearAllPastes, getPaste } from '../pasteBuffer.js';
+import { storePaste, getPaste, clearPastes, pasteSummary } from '../pasteBuffer.js';
 
 describe('pasteBuffer', () => {
-  it('stores paste and returns summary label', () => {
-    const { id, label } = pasteSummary('hello world');
-    expect(id).toBeGreaterThan(0);
-    expect(label).toContain('Pasted text');
-    expect(label).toContain('+11 chars');
+  it('storePaste 返回递增的 ID', () => {
+    const id1 = storePaste('hello');
+    const id2 = storePaste('world');
+    expect(id2).toBe(id1 + 1);
   });
 
-  it('summary includes line count for multi-line paste', () => {
-    const { label } = pasteSummary('line1\nline2\nline3');
-    expect(label).toContain('+3 lines');
+  it('getPaste 返回存储的内容', () => {
+    const id = storePaste('test content');
+    expect(getPaste(id)).toBe('test content');
   });
 
-  it('expandPastes replaces token with stored content', () => {
-    clearAllPastes();
-    const { id } = pasteSummary('some pasted code');
-    const text = `Review this: [Pasted text #${id} +17 chars]`;
-    const expanded = expandPastes(text);
-    expect(expanded).toBe('Review this: some pasted code');
+  it('getPaste 对不存在的 ID 返回 null', () => {
+    expect(getPaste(99999)).toBeNull();
   });
 
-  it('expandPastes handles multiple paste tokens', () => {
-    clearAllPastes();
-    const a = pasteSummary('AAA');
-    const b = pasteSummary('BBB');
-    const text = `x [Pasted text #${a.id} +3 chars] y [Pasted text #${b.id} +3 chars]`;
-    expect(expandPastes(text)).toBe('x AAA y BBB');
+  it('pasteSummary 生成正确的摘要', () => {
+    const id = storePaste('hello\nworld\nfoo');
+    const summary = pasteSummary(id);
+    expect(summary).toContain(`#${id}`);
+    expect(summary).toContain('3 lines');
+    expect(summary).toContain('15 chars');
   });
 
-  it('expandPastes leaves unknown tokens as-is', () => {
-    const result = expandPastes('[Pasted text #99999 +5 chars]');
-    expect(result).toBe('[Pasted text #99999 +5 chars]');
+  it('pasteSummary 对不存在的 ID 返回 null', () => {
+    expect(pasteSummary(99999)).toBeNull();
   });
 
-  it('clearAllPastes removes all stored pastes', () => {
-    const { id } = pasteSummary('test');
-    clearAllPastes();
-    expect(getPaste(id)).toBeUndefined();
+  it('clearPastes 清空所有缓存', () => {
+    storePaste('data');
+    clearPastes();
+    expect(getPaste(1)).toBeNull();
   });
 });

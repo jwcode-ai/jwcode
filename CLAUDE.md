@@ -194,16 +194,11 @@ Auto mode bypasses permission prompts; session learning accumulates approved/den
 
 ## Slash Commands
 
-Registered via `CommandRegistry.createDefault()` — 7 user-facing commands:
+Registered via `CommandRegistry.createDefault()` — user-facing commands:
 | Command | Purpose |
 |---------|---------|
 | `/doctor` | System diagnostic: Java env, OS, session, Docker check |
 | `/cost` | Token usage + estimated cost by model (prompt/completion/total) |
-| `/compact` | Context compaction: normal(30)/aggressive(10)/summary(20+summary) |
-| `/review` | Code review: logic, security, performance, style, completeness |
-| `/security-review` | OWASP Top 10 check + injection/path-traversal/privilege/sql risks |
-| `/memory` | Persistent memory CRUD: list/add/delete/clear for user/feedback/project/reference |
-| `/tasks` | Background task management: list/stop/output |
 
 ## Team Collaboration & Config
 

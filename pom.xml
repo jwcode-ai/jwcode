@@ -63,6 +63,7 @@
         <expressly.version>5.0.0</expressly.version>
         <jsoup.version>1.17.2</jsoup.version>
         <sqlite.version>3.46.1.0</sqlite.version>
+        <playwright.version>1.48.0</playwright.version>
         <jacoco.version>0.8.12</jacoco.version>
         <checkstyle.version>10.17.0</checkstyle.version>
     </properties>
@@ -264,6 +265,13 @@
                 <groupId>org.jsoup</groupId>
                 <artifactId>jsoup</artifactId>
                 <version>${jsoup.version}</version>
+            </dependency>
+
+            <!-- Playwright 浏览器自动化 -->
+            <dependency>
+                <groupId>com.microsoft.playwright</groupId>
+                <artifactId>playwright</artifactId>
+                <version>${playwright.version}</version>
             </dependency>
 
             <!-- SQLite JDBC -->

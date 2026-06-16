@@ -296,7 +296,19 @@
     "hookConfigTitle": "自定义 Hook 配置说明",
     "hookConfigDesc": "你可以在项目根目录的 .jwcode/hooks.json 文件中添加或修改 Hook 拦截规则。",
     "hookConfigDetail": "Hook 支持 SHELL（外部脚本）和 HTTP（REST 端点）两种类型，可以在工具执行前（PRE_TOOL_USE）或执行后（POST_TOOL_USE）触发。",
-    "hookConfigBuiltin": "内置了 BashSafetyHook（危险命令拦截）、FileWriteAuditHook（文件写入审计）、ToolUsageStatsHook（工具调用统计）三套 Hook。设置 enabled: false 可禁用任意 Hook。"
+    "hookConfigBuiltin": "内置了 BashSafetyHook（危险命令拦截）、FileWriteAuditHook（文件写入审计）、ToolUsageStatsHook（工具调用统计）三套 Hook。设置 enabled: false 可禁用任意 Hook。",
+    "optionAllow": "允许 — 执行此操作",
+    "optionAllowHint": "点击或按 Enter 确认",
+    "optionDeny": "拒绝 — 取消此操作",
+    "optionDenyHint": "点击或按 Esc 取消",
+    "optionAllowAlways": "本次会话始终允许",
+    "optionAllowAlwaysHint": "不再询问 {{tool}}",
+    "optionAutoMode": "自动模式 — 全部允许",
+    "optionAutoModeHint": "之后所有 Hook 将自动批准",
+    "shortcutHint": "快捷键: 1-4 选择 · Enter 允许 · Esc 拒绝",
+    "lastItem": "最后一项",
+    "modalHint": "请在弹窗中处理此审批请求",
+    "clickToSelect": "点击选择 · 1/2/3/4 键盘快捷键"
   },
   "step": {
     "pending": "等待",

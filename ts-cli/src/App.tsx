@@ -1,7 +1,14 @@
-﻿/**
+/**
  * Root Ink component -- layout, WS connection, and event dispatch.
+ *
+ * Performance optimizations:
+ * 1. Input state (text input, palettes) isolated from global state to prevent
+ *    re-rendering the entire tree on every keystroke.
+ * 2. Heavy sub-trees (ChatArea, StatusLine) receive data via selectors only
+ *    when their specific slice changes.
+ * 3. Palette overlays are conditionally rendered with stable keys.
  */
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, memo } from 'react';
 import { Box, Text, useStdout } from 'ink';
 import { TextInput, saveToHistory } from './components/TextInput.js';
 import { t } from './theme.js';
@@ -11,39 +18,273 @@ import { ChatAreaContainer } from './components/ChatArea.js';
 import { CommandPalette } from './components/CommandPalette.js';
 import { FilePalette } from './components/FilePalette.js';
 import { ApprovalModal } from './components/ApprovalModal.js';
-import { updateAppState, useAppSlice } from './hooks/useAppState.js';
-import { createMessage } from './protocol.js';
-import { SLASH_COMMANDS, HELP_TEXT } from './commands/index.js';
-import { useStreamHandlers } from './hooks/useStreamHandlers.js';
+import { updateAppState, useAppConnected, useAppCurrentMessage, useAppModelName, useAppMessages } from './hooks/useAppState.js';
+import { setClient, getClient } from './hooks/useWebSocket.js';
 import { useKeyboardInput } from './hooks/useKeyboardInput.js';
-import { setClient } from './hooks/useWebSocket.js';
+import { PlanTaskBoard } from './components/PlanTaskBoard.js';
+import type { PlanTask } from './protocol.js';
 
-interface AppProps {
-  backendUrl: string;
-  wsUrl: string;
-  onExit: () => void;
-}
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+const HELP_TEXT = `JWCode CLI — Help
+${'-'.repeat(40)}
+Commands:
+  /help          Show this help
+  /model         Switch AI model
+  /plan          Toggle plan mode
+  /auto          Toggle auto mode
+  /clear         Clear chat
+  /exit          Exit
+  /reset         Reset session
 
-/** Find last @ not preceded by a word char (to exclude emails). Returns index or -1. */
-function findAtTrigger(value: string): number {
-  for (let i = value.length - 1; i >= 0; i--) {
-    if (value[i] === '@') {
-      if (i > 0 && /\w/.test(value[i - 1])) continue; // email part, skip
-      return i;
+Shortcuts:
+  Ctrl+C         Cancel generation
+  Ctrl+D         Exit
+  Ctrl+L         Clear screen
+  Tab            Insert file reference (@)
+  ↑↓             Input history
+  Esc            Close palette / modal
+
+Tips:
+  @filename      Reference a file in the workspace
+  /cmd           Quick command access
+`;
+
+// ---------------------------------------------------------------------------
+// findAtTrigger helper
+// ---------------------------------------------------------------------------
+function findAtTrigger(input: string): number {
+  for (let i = input.length - 1; i >= 0; i--) {
+    const ch = input[i];
+    if (ch === '@') {
+      // Must not be preceded by a word char
+      if (i === 0 || !/[a-zA-Z0-9_\u4e00-\u9fff]/.test(input[i - 1])) {
+        return i;
+      }
     }
+    if (/[\s\n]/.test(ch)) break;
   }
   return -1;
 }
 
-export function App({ backendUrl, wsUrl, onExit }: AppProps) {
+// ---------------------------------------------------------------------------
+// InputBar — isolated component to prevent App re-render on keystroke
+// ---------------------------------------------------------------------------
+interface InputBarProps {
+  onSubmit: (value: string) => void;
+  disabled: boolean;
+  isPaletteActive: boolean;
+  placeholder: string;
+}
+
+const InputBar = memo(function InputBar({ onSubmit, disabled, isPaletteActive, placeholder }: InputBarProps) {
   const [input, setInput] = useState('');
   const [showPalette, setShowPalette] = useState(false);
-  // @ file reference state
   const [showFilePalette, setShowFilePalette] = useState(false);
   const [fileQuery, setFileQuery] = useState('');
   const [fileList, setFileList] = useState<string[]>([]);
   const fileDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const referencedFilesRef = useRef<string[]>([]);
+
+  const handleChange = useCallback((value: string) => {
+    setInput(value);
+    setShowPalette(value.startsWith('/'));
+
+    // @ file reference detection
+    const atIdx = findAtTrigger(value);
+    if (atIdx >= 0) {
+      const query = value.slice(atIdx + 1);
+      if (/^[\w.\-\\\/\s]*$/.test(query) && query.length < 200) {
+        setFileQuery(query);
+        setShowFilePalette(true);
+        if (fileDebounceRef.current) clearTimeout(fileDebounceRef.current);
+        fileDebounceRef.current = setTimeout(() => {
+          const client = getClient();
+          if (client) {
+            client.listFiles(query.trim() || undefined).then((files: string[]) => {
+              setFileList(files);
+            }).catch(() => {});
+          }
+        }, 150);
+      }
+    } else {
+      setShowFilePalette(false);
+      setFileQuery('');
+      referencedFilesRef.current = [];
+    }
+  }, []);
+
+  const handleSubmit = useCallback((value: string) => {
+    if (!value.trim()) return;
+    saveToHistory(value);
+    setInput('');
+    setShowPalette(false);
+    setShowFilePalette(false);
+    // Build @ file references
+    const files = referencedFilesRef.current;
+    let refStr = '';
+    for (const filePath of files) {
+      refStr += ' @' + filePath;
+    }
+    onSubmit(value + refStr);
+  }, [onSubmit]);
+
+  const handlePaletteSelect = useCallback((cmd: string | null) => {
+    if (cmd) {
+      setInput(cmd + ' ');
+      setShowPalette(false);
+    } else {
+      setShowPalette(false);
+    }
+  }, []);
+
+  const handleFileSelect = useCallback((path: string | null) => {
+    if (path) {
+      const atIdx = findAtTrigger(input);
+      if (atIdx >= 0) {
+        const before = input.slice(0, atIdx);
+        const newInput = before + path + ' ';
+        setInput(newInput);
+        referencedFilesRef.current.push(path);
+      }
+    }
+    setShowFilePalette(false);
+  }, [input]);
+
+  const paletteActive = showPalette || showFilePalette;
+
+  return (
+    <Box flexDirection="column">
+      {/* Input line */}
+      <Box flexDirection="row" borderStyle="single" borderColor={t.primary} paddingLeft={1}>
+        <Text color={t.success} bold>&gt; </Text>
+        <TextInput
+          value={input}
+          onChange={handleChange}
+          onSubmit={handleSubmit}
+          placeholder={placeholder}
+          disabled={disabled}
+          isPaletteActive={paletteActive}
+        />
+      </Box>
+      {/* Overlays */}
+      <Box flexDirection="column">
+        {showPalette && (
+          <CommandPalette key="command-palette" filter={input} onSelect={handlePaletteSelect} />
+        )}
+        {showFilePalette && (
+          <FilePalette key="file-palette" query={fileQuery} files={fileList} onSelect={handleFileSelect} />
+        )}
+      </Box>
+    </Box>
+  );
+});
+
+// ---------------------------------------------------------------------------
+// ApprovalBar — isolated approval modal
+// ---------------------------------------------------------------------------
+interface ApprovalBarProps {
+  approval: {
+    approvalId: string;
+    toolName: string;
+    payload: string;
+    onAllow: () => void;
+    onDeny: () => void;
+    onAllowSession: () => void;
+    onAutoMode: () => void;
+  } | null;
+}
+
+const ApprovalBar = memo(function ApprovalBar({ approval }: ApprovalBarProps) {
+  if (!approval) return null;
+  return (
+    <ApprovalModal
+      key="approval-modal"
+      toolName={approval.toolName}
+      payload={approval.payload}
+      onAllow={approval.onAllow}
+      onDeny={approval.onDeny}
+      onAllowSession={approval.onAllowSession}
+      onAutoMode={approval.onAutoMode}
+    />
+  );
+});
+
+// ---------------------------------------------------------------------------
+// HelpPanel — isolated help view
+// ---------------------------------------------------------------------------
+interface HelpPanelProps {
+  visible: boolean;
+  terminalRows: number;
+  onClose: () => void;
+  scroll: number;
+  onScroll: (s: number) => void;
+}
+
+const HelpPanel = memo(function HelpPanel({ visible, terminalRows, onClose, scroll, onScroll }: HelpPanelProps) {
+  if (!visible) return null;
+
+  const helpLines = HELP_TEXT.split('\n');
+  const helpMax = Math.max(10, terminalRows - 6);
+  const helpEnd = Math.min(scroll + helpMax, helpLines.length);
+  const helpStart = Math.max(0, helpEnd - helpMax);
+  const visibleHelp = helpLines.slice(helpStart, helpEnd);
+
+  return (
+    <Box key="help-box" flexDirection="column" borderStyle="single" borderColor={t.primary} paddingX={1}>
+      {helpLines.length > helpMax && (
+        <Box>
+          <Text dimColor>
+            {'  ' + (helpStart + 1) + '-' + helpEnd + ' / ' + helpLines.length + '  PgUp/PgDn scroll / Esc close'}
+          </Text>
+        </Box>
+      )}
+      {visibleHelp.map((line, i) => (
+        <Text key={i} color={t.primary}>{line}</Text>
+      ))}
+    </Box>
+  );
+});
+
+// ---------------------------------------------------------------------------
+// WelcomeBanner
+// ---------------------------------------------------------------------------
+const WelcomeBanner = memo(function WelcomeBanner({ modelName }: { modelName: string }) {
+  if (!modelName) return null;
+  return (
+    <Box key="welcome-banner" flexDirection="column" borderStyle="round" borderColor={t.primary} paddingX={1} marginBottom={1}>
+      <Box>
+        <Text color={t.primary} bold>&gt;_ JWCode v3.0.0</Text>
+      </Box>
+      <Box>
+        <Text dimColor>model:     </Text>
+        <Text color={t.success}>{modelName}</Text>
+        <Text dimColor>   /model to change</Text>
+      </Box>
+      <Box>
+        <Text dimColor>directory: </Text>
+        <Text color={t.warning}>{process.cwd()}</Text>
+      </Box>
+    </Box>
+  );
+});
+
+// ---------------------------------------------------------------------------
+// App (Root Component)
+// ---------------------------------------------------------------------------
+interface AppProps {
+  backendUrl?: string;
+  wsUrl?: string;
+  onExit: () => void;
+}
+
+export function App({ backendUrl, wsUrl, onExit }: AppProps) {
+  // --- Client ref ---
+  const clientRef = useRef<JwCodeClient | null>(null);
+  const sessionAllowRef = useRef<Set<string>>(new Set());
+
+  // --- Only global states that affect the root layout ---
   const [showHelp, setShowHelp] = useState(false);
   const [helpScroll, setHelpScroll] = useState(0);
   const [showApproval, setShowApproval] = useState<{
@@ -51,203 +292,69 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
     toolName: string;
     payload: string;
   } | null>(null);
-  const sessionAllowRef = useRef<Set<string>>(new Set());
+  const [planTasks, setPlanTasks] = useState<PlanTask[]>([]);
 
-  const clientRef = useRef<JwCodeClient | null>(null);
+  // --- Global state (via selectors — only re-render when these change) ---
+  const messages = useAppMessages();
+  const currentMessage = useAppCurrentMessage();
+  const connected = useAppConnected();
+  const modelName = useAppModelName();
+
+  // --- Terminal dimensions ---
   const { stdout } = useStdout();
-  const terminalRows = (stdout as any)?.rows || 24;
+  const terminalCols = (stdout as unknown as { columns: number })?.columns ?? 80;
+  const terminalRows = (stdout as unknown as { rows: number })?.rows ?? 24;
 
-  const planMode = useAppSlice(s => s.planMode);
-  const connected = useAppSlice(s => s.connected);
-  const planWaiting = useAppSlice(s => s.planWaiting);
-  const isGenerating = useAppSlice(s => s.currentMessage !== null);
-  const messagesLen = useAppSlice(s => s.messages.length);
-  const modelName = useAppSlice(s => s.modelName);
-
-  const wireHandlers = useStreamHandlers(setShowApproval, sessionAllowRef);
-
+  // --- WebSocket connection ---
   useEffect(() => {
-    const client = new JwCodeClient(backendUrl, wsUrl);
+    const client = new JwCodeClient(wsUrl || 'ws://localhost:8080/ws');
     clientRef.current = client;
     setClient(client);
-    wireHandlers(client);
 
-    client.connect().then(async () => {
-      try {
-        const r = await fetch(backendUrl + '/api/models');
-        const d = await r.json();
-        const models = (d as any).data?.models;
-        const name = models?.[0]?.name || '';
-        updateAppState(s => ({ ...s, connected: true, modelName: name }));
-      } catch {
-        updateAppState(s => ({ ...s, connected: true }));
-      }
-    }).catch((err: Error) => {
-      updateAppState(s => ({ ...s, statusText: 'Connection failed: ' + err.message }));
+    // Register handlers
+    client.on('message', (msg) => {
+      import('./hooks/useStreamHandlers.js').then(({ handleStreamMessage }) => {
+        handleStreamMessage(msg, client, {
+          onApproval: (approvalId, toolName, payload) => {
+            setShowApproval({ approvalId, toolName, payload });
+          },
+          onPlanTasks: (tasks) => {
+            setPlanTasks(tasks);
+          },
+        });
+      });
     });
 
-    return () => { client.close(); };
-  }, [backendUrl, wsUrl, wireHandlers]);
+    client.on('connected', () => {
+      updateAppState((prev) => ({ ...prev, connected: true }));
+    });
 
+    client.on('disconnected', () => {
+      updateAppState((prev) => ({ ...prev, connected: false }));
+    });
+
+    client.connect();
+
+    return () => {
+      client.disconnect();
+      clientRef.current = null;
+    };
+  }, [wsUrl]);
+
+  // --- Command execution ---
   const executeCommand = useCallback((value: string) => {
-    const text = value.trim();
-    if (!text || !clientRef.current) return;
-    setInput('');
-    setShowHelp(false);
-    setShowPalette(false);
+    const client = clientRef.current;
+    if (!client) return;
 
-    const parts = text.startsWith('/') ? text.split(/\s+/) : [];
-    const cmd = parts[0] || null;
-    const cmdArg = parts.slice(1).join(' ');
+    updateAppState((prev) => ({ ...prev, statusText: 'generating...' }));
 
-    if (cmd && cmd in SLASH_COMMANDS) {
-      const def = (SLASH_COMMANDS as Record<string, { action: string; needsArg?: boolean } | null>)[cmd];
-      if (def === null) {
-        setShowHelp(true);
-        setHelpScroll(0);
-        return;
-      }
-      const { action, needsArg } = def;
-      const cl = clientRef.current;
-      switch (action) {
-        case '__exit__': onExit(); return;
-        case '__confirm_plan':
-          updateAppState(prev => {
-            if (!prev.planWaiting) return prev;
-            cl?.planConfirm();
-            return { ...prev, planWaiting: false };
-          });
-          return;
-        case '__cancel_plan': updateAppState(prev => ({ ...prev, planWaiting: false })); return;
-        case 'plan_mode': updateAppState(prev => ({ ...prev, planMode: !prev.planMode })); return;
-        case 'auto_mode': updateAppState(prev => ({ ...prev, autoMode: !prev.autoMode })); return;
-        case 'clear': updateAppState(prev => ({ ...prev, messages: [], currentMessage: null })); return;
-        case 'model_change': if (needsArg && cmdArg) cl?.switchModel(cmdArg); return;
-        case 'show_context':
-          updateAppState(prev => ({
-            ...prev,
-            statusText: 'Messages: ' + prev.messages.length + ' | Plan: ' + (prev.planMode ? 'On' : 'Off') + ' | Model: ' + (prev.modelName || 'N/A'),
-          }));
-          return;
-        case 'stop': cl?.stop(); return;
-        case 'pause': cl?.pause(); return;
-        case 'resume': cl?.resume(); return;
-        case 'doctor': cl?.doctor(); return;
-        case 'rewind': cl?.rewind(); return;
-        case 'compact': cl?.compact(); return;
-        case 'init': cl?.init(); return;
-        case 'effort': if (cmdArg) cl?.effort(cmdArg); return;
-        case 'branch': if (cmdArg) cl?.branch(cmdArg); return;
-        case 'mcp': if (cmdArg) cl?.mcp(cmdArg); return;
-        case 'skills': cl?.skills(); return;
-        case 'agents': cl?.agents(); return;
-        case 'config': if (cmdArg) cl?.config(cmdArg); return;
-        case 'plugin': if (cmdArg) cl?.plugin(cmdArg); return;
-        case 'tokens': cl?.send('tokens'); return;
-        case 'memory': cl?.send('memory'); return;
-        case 'export': if (cmdArg) cl?.send('export', undefined, { path: cmdArg }); return;
-        case 'checkpoint': cl?.send('checkpoint'); return;
-        case 'test': cl?.send('test'); return;
-        case 'lint': cl?.send('lint'); return;
-        case 'search': if (cmdArg) cl?.send('search', undefined, { query: cmdArg }); return;
-        case 'project': cl?.send('project'); return;
-      }
-      return;
-    }
-
-    if (text.startsWith('/') && !(cmd && cmd in SLASH_COMMANDS)) return;
-    // Resolve @ file references
-    resolveAndSend(text, planMode);
-  }, [onExit, planMode]);
-
-  // Resolve @-referenced file contents and send message
-  const resolveAndSend = useCallback(async (text: string, planMode: boolean) => {
-    const cl = clientRef.current;
-    if (!cl) return;
-
-    let finalText = text;
-    const files = referencedFilesRef.current;
-    referencedFilesRef.current = [];
-
-    const fileCtxs: string[] = [];
-    for (const filePath of files) {
-      try {
-        const content = await cl.readFileContent(filePath);
-        if (content) {
-          // Remove the raw path reference from the message
-          finalText = finalText.replace(filePath, '').trim();
-          const ext = filePath.split('.').pop() || '';
-          fileCtxs.push(
-            `<context ref="${filePath}">\n\`\`\`${ext}\n${content}\n\`\`\`\n</context>`
-          );
-        }
-      } catch { /* file not readable, leave path in text */ }
-    }
-    if (fileCtxs.length > 0) {
-      finalText = fileCtxs.join('\n\n') + '\n\n' + finalText.trim();
-      finalText = finalText.trim();
-    }
-
-    saveToHistory(finalText);
-    const msg = createMessage('user', finalText);
-    updateAppState(prev => ({ ...prev, messages: [...prev.messages, msg] }));
-    cl.chat(finalText, planMode);
+    client.send({
+      type: 'message',
+      data: { role: 'user', content: value },
+    });
   }, []);
 
-  const handleSubmit = useCallback((value: string) => {
-    if (showPalette || showFilePalette) return;
-    executeCommand(value);
-  }, [executeCommand, showPalette, showFilePalette]);
-
-  const handleChange = useCallback((value: string) => {
-    setInput(value);
-    setShowPalette(value.startsWith('/'));
-
-    // @ file reference detection: find last @ not preceded by word char
-    const atIdx = findAtTrigger(value);
-    if (atIdx >= 0) {
-      const query = value.slice(atIdx + 1);
-      // Only trigger if query looks like a file path
-      if (/^[\w.\-\\\/\s]*$/.test(query) && query.length < 200) {
-        setFileQuery(query);
-        setShowFilePalette(true);
-        // Debounced file fetch
-        if (fileDebounceRef.current) clearTimeout(fileDebounceRef.current);
-        fileDebounceRef.current = setTimeout(async () => {
-          const cl = clientRef.current;
-          if (cl) {
-            const files = await cl.listFiles(query.trim() || undefined);
-            setFileList(files);
-          }
-        }, 150);
-        return;
-      }
-    }
-    // Close file palette when no valid @ trigger
-    setShowFilePalette(false);
-    setFileQuery('');
-  }, []);
-
-  const handleFileSelect = useCallback((path: string | null) => {
-    if (path) {
-      // Replace @query with file path
-      const atIdx = findAtTrigger(input);
-      if (atIdx >= 0) {
-        const newValue = input.slice(0, atIdx) + path + ' ';
-        setInput(newValue);
-        referencedFilesRef.current.push(path);
-      }
-    }
-    setShowFilePalette(false);
-    setFileQuery('');
-    setFileList([]);
-  }, [input]);
-
-  const handlePaletteSelect = useCallback((cmd: string | null) => {
-    if (cmd) { setInput(cmd); setShowPalette(false); }
-    else { setShowPalette(false); setInput(''); }
-  }, []);
-
+  // --- Approval handlers ---
   const handleApprovalAllow = useCallback((approvalId: string) => {
     clientRef.current?.approveHook(approvalId);
     setShowApproval(null);
@@ -257,19 +364,6 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
     clientRef.current?.denyHook(approvalId);
     setShowApproval(null);
   }, []);
-
-  const paletteActive = showPalette || showFilePalette;
-  useKeyboardInput({
-    showApproval: showApproval !== null,
-    showHelp,
-    isGenerating,
-    terminalRows,
-    paletteOpen: paletteActive,
-    clientRef: clientRef as React.MutableRefObject<JwCodeClient | null>,
-    onDenyApproval: () => { if (showApproval) handleApprovalDeny(showApproval.approvalId); },
-    onCloseHelp: () => setShowHelp(false),
-    setHelpScroll,
-  });
 
   const handleApprovalAllowForModal = useCallback(() => {
     if (showApproval) handleApprovalAllow(showApproval.approvalId);
@@ -287,114 +381,90 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
   }, [showApproval, handleApprovalAllow]);
 
   const handleAutoMode = useCallback(() => {
-    updateAppState(prev => ({ ...prev, autoMode: true }));
-    if (showApproval) handleApprovalAllow(showApproval.approvalId);
+    if (showApproval) {
+      updateAppState((prev) => ({ ...prev, autoMode: true }));
+      handleApprovalAllow(showApproval.approvalId);
+    }
   }, [showApproval, handleApprovalAllow]);
 
-  const placeholder = 'Type a message or / for commands...';
+  // --- Keyboard input ---
+  const isGenerating = currentMessage !== null;
+  const paletteActive = false; // palette managed inside InputBar
+
+  useKeyboardInput({
+    showApproval: showApproval !== null,
+    showHelp,
+    isGenerating,
+    terminalRows,
+    paletteOpen: paletteActive,
+    clientRef: clientRef as React.MutableRefObject<JwCodeClient | null>,
+    onDenyApproval: () => { if (showApproval) handleApprovalDeny(showApproval.approvalId); },
+    onCloseHelp: () => setShowHelp(false),
+    setHelpScroll,
+  });
+
+  const messagesLen = messages.length;
+
+  // Build approval modal data
+  const approvalData = showApproval ? {
+    approvalId: showApproval.approvalId,
+    toolName: showApproval.toolName,
+    payload: showApproval.payload,
+    onAllow: handleApprovalAllowForModal,
+    onDeny: handleApprovalDenyForModal,
+    onAllowSession: handleAllowSession,
+    onAutoMode: handleAutoMode,
+  } : null;
 
   return (
-    <Box flexDirection="column" width="100%">
-      {connected ? (
-        <Box flexDirection="column">
-          {messagesLen === 0 && !isGenerating && !!modelName && (
-            <Box key="welcome-banner" flexDirection="column" borderStyle="round" borderColor={t.primary} paddingX={1} marginBottom={1}>
-              <Box>
-                <Text color={t.primary} bold>&gt;_ JWCode v3.0.0</Text>
-              </Box>
-              <Box>
-                <Text dimColor>model:     </Text>
-                <Text color={t.success}>{modelName || 'connecting...'}</Text>
-                <Text dimColor>   /model to change</Text>
-              </Box>
-              <Box>
-                <Text dimColor>directory: </Text>
-                <Text color={t.warning}>{process.cwd()}</Text>
-              </Box>
-            </Box>
-          )}
-          {messagesLen === 0 && !isGenerating && !!modelName && (
-            <Box key="tip-line" paddingLeft={3} marginBottom={1}>
-              <Text dimColor>Tip: Type / for commands, @ to reference files, ↑↓ for history</Text>
-            </Box>
-          )}
-          {/* flexGrow=0 when palette open: prevents Yoga layout overflow + Ink ghost content duplication */}
-          <Box flexGrow={paletteActive ? 0 : 1} flexDirection="column">
-            <ChatAreaContainer />
-          </Box>
-          {/* Help box — rendered above input so text appears between messages and input */}
-          {showHelp && (() => {
-            const helpLines = HELP_TEXT.split('\\n');
-            const helpMax = Math.max(5, Math.min(terminalRows - 12, 10));
-            const helpEnd = Math.max(0, helpLines.length - helpScroll);
-            const helpStart = Math.max(0, helpEnd - helpMax);
-            const visibleHelp = helpLines.slice(helpStart, helpEnd);
-            return (
-              <Box key="help-box" flexDirection="column" borderStyle="single" borderColor={t.primary} paddingX={1}>
-                {helpLines.length > helpMax && (
-                  <Box>
-                    <Text dimColor>{'  ' + (helpStart + 1) + '-' + helpEnd + ' / ' + helpLines.length + '  PgUp/PgDn scroll / Esc close'}</Text>
-                  </Box>
-                )}
-                {visibleHelp.map((line, i) => (
-                  <Text key={i} color={t.primary}>{line}</Text>
-                ))}
-              </Box>
-            );
-          })()}
-          <Box flexDirection="row" borderStyle="single" borderColor={t.primary} paddingLeft={1}>
-            <Text color={t.success} bold>&gt; </Text>
-            <TextInput
-              value={input}
-              onChange={handleChange}
-              onSubmit={handleSubmit}
-              placeholder={placeholder}
-              disabled={showApproval !== null}
-              isPaletteActive={paletteActive}
-            />
-          </Box>
-          {/* flexDirection=column required: Ink 5 defaults to row, which miscalculates overlay heights */}
-          <Box flexDirection="column">
-            {showPalette && (
-              <CommandPalette key="command-palette" filter={input} onSelect={handlePaletteSelect} />
-            )}
-            {showFilePalette && (
-              <FilePalette key="file-palette" query={fileQuery} files={fileList} onSelect={handleFileSelect} />
-            )}
-            {showApproval && (
-              <ApprovalModal
-                key="approval-modal"
-                toolName={showApproval.toolName}
-                payload={showApproval.payload}
-                onAllow={handleApprovalAllowForModal}
-                onDeny={handleApprovalDenyForModal}
-                onAllowSession={handleAllowSession}
-                onAutoMode={handleAutoMode}
-                />
-              )}
-          </Box>
-        </Box>
-      ) : (
-        <Box flexDirection="column">
-          <Box flexGrow={1} flexDirection="column">
-            <ChatAreaContainer />
-          </Box>
-          <Box paddingLeft={1}>
-            <Text dimColor>Connecting...</Text>
-          </Box>
-        </Box>
-      )}
+    <Box flexDirection="column" height="100%">
+      {/* Status line — top bar */}
       <StatusLine />
-      <Box height={1}>
-        {!connected && (
-          <Text color={t.error}>Backend not connected -- WebSocket reconnecting.</Text>
+
+      {/* Main content area — scrollable */}
+      <Box flexGrow={1} flexDirection="column" overflow="hidden">
+        {/* Welcome banner */}
+        {messagesLen === 0 && !isGenerating && !!modelName && (
+          <WelcomeBanner modelName={modelName} />
+        )}
+
+        {/* Tip line */}
+        {messagesLen === 0 && !isGenerating && !!modelName && (
+          <Box key="tip-line" paddingLeft={3} marginBottom={1}>
+            <Text dimColor>Tip: Type / for commands, @ to reference files, ↑↓ for history</Text>
+          </Box>
+        )}
+
+        {/* Chat area */}
+        <Box flexGrow={1} flexDirection="column">
+          <ChatAreaContainer />
+        </Box>
+
+        {/* Plan task board */}
+        {planTasks.length > 0 && (
+          <PlanTaskBoard tasks={planTasks} terminalCols={terminalCols} />
         )}
       </Box>
-      <Box height={1}>
-        {planWaiting && (
-          <Text color={t.warning} bold>Plan ready -- /confirm to execute, /cancel to discard.</Text>
-        )}
-      </Box>
+
+      {/* Help panel overlay */}
+      <HelpPanel
+        visible={showHelp}
+        terminalRows={terminalRows}
+        onClose={() => setShowHelp(false)}
+        scroll={helpScroll}
+        onScroll={setHelpScroll}
+      />
+
+      {/* Input bar — isolated, won't re-render App on keystroke */}
+      <InputBar
+        onSubmit={executeCommand}
+        disabled={showApproval !== null}
+        isPaletteActive={false}
+        placeholder={isGenerating ? 'Generating...' : connected ? 'Type your message...' : 'Connecting...'}
+      />
+
+      {/* Approval modal overlay */}
+      <ApprovalBar approval={approvalData} />
     </Box>
   );
 }

@@ -1,7 +1,7 @@
 {
   "name": "@jwcode/cli",
   "version": "3.0.6",
-  "description": "JWCode \u2014 Java AI Coding Tool TypeScript CLI",
+  "description": "JWCode — Java AI Coding Tool TypeScript CLI",
   "type": "module",
   "main": "dist/cli.js",
   "bin": {
@@ -10,10 +10,15 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/ --ext .ts,.tsx",
+    "lint:fix": "eslint src/ --ext .ts,.tsx --fix",
     "build": "node build.mjs",
+    "build:fast": "node build.mjs --skip-typecheck",
     "go": "node build.mjs && node dist/cli.js run",
     "start": "node build.mjs && node dist/cli.js start",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run typecheck && npm test && npm run build",
+    "precommit": "npm run typecheck && npm test"
   },
   "dependencies": {
     "ink": "^5.0.0",
@@ -23,15 +28,16 @@
   },
   "files": [
     "dist/",
-    "backend/"
+    "README.md",
+    "LICENSE"
   ],
-  "engines": {
-    "node": ">=18"
-  },
   "devDependencies": {
     "@types/react": "^18.3.12",
     "@types/ws": "^8.5.13",
+    "@typescript-eslint/eslint-plugin": "^8.61.1",
+    "@typescript-eslint/parser": "^8.61.1",
     "esbuild": "^0.28.0",
+    "eslint": "^10.5.0",
     "typescript": "^5.6.3",
     "vitest": "^4.1.7"
   }

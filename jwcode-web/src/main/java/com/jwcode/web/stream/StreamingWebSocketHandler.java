@@ -807,9 +807,6 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                 case "tokens":
                     handleTokensCommand(conn, clientMsg);
                     break;
-                case "memory":
-                    handleMemoryCommand(conn, clientMsg);
-                    break;
                 // Phase 3 — graceful "not yet implemented" notifications
                 case "export":
                 case "checkpoint":
@@ -2643,52 +2640,6 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             sendMessage(conn, MessageType.ERROR, "Token query failed: " + e.getMessage());
         }
     }
-
-    /**
-     * Handle /memory command — shared memory CRUD (placeholder with notification).
-     */
-    private void handleMemoryCommand(WebSocket conn, ClientMessage msg) {
-        try {
-            String action = "list";
-            String payload = "";
-            if (msg.data != null && !msg.data.isEmpty()) {
-                String raw = msg.data.trim();
-                if (raw.startsWith("{")) {
-                    try {
-                        var node = new com.fasterxml.jackson.databind.ObjectMapper().readTree(raw);
-                        if (node.has("action")) action = node.get("action").asText();
-                        if (node.has("payload")) payload = node.get("payload").asText();
-                    } catch (Exception ignored) { action = raw; }
-                } else {
-                    action = raw;
-                }
-            }
-            // Memory CRUD — implemented as notification since SharedMemoryService is in jwcode-core
-            String result;
-            switch (action) {
-                case "list":
-                    result = "Memory list: (CLI memory features available via /memory in jwcode-core)";
-                    break;
-                case "add":
-                    result = payload.isEmpty() ? "Usage: /memory add <text>" : "Memory added: " + payload;
-                    break;
-                case "delete":
-                    result = payload.isEmpty() ? "Usage: /memory delete <id>" : "Memory deleted: " + payload;
-                    break;
-                case "clear":
-                    result = "Memory cleared (session only).";
-                    break;
-                default:
-                    result = "Unknown memory action: " + action + ". Use list/add/delete/clear.";
-                    break;
-            }
-            sendMessage(conn, MessageType.NOTIFICATION, escapeJson(result));
-        } catch (Exception e) {
-            logger.warning("handleMemoryCommand error: " + e.getMessage());
-            sendMessage(conn, MessageType.ERROR, "Memory command failed: " + e.getMessage());
-        }
-    }
-
 
     /**
     /**

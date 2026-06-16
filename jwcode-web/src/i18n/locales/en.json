@@ -296,7 +296,19 @@
     "hookConfigTitle": "Custom Hook Configuration",
     "hookConfigDesc": "You can add or modify hook interception rules in the .jwcode/hooks.json file in the project root directory.",
     "hookConfigDetail": "Hooks support SHELL (external scripts) and HTTP (REST endpoints) types, and can be triggered before (PRE_TOOL_USE) or after (POST_TOOL_USE) tool execution.",
-    "hookConfigBuiltin": "Built-in hooks: BashSafetyHook (dangerous command interception), FileWriteAuditHook (file write audit), ToolUsageStatsHook (tool usage statistics). Set enabled: false to disable any hook."
+    "hookConfigBuiltin": "Built-in hooks: BashSafetyHook (dangerous command interception), FileWriteAuditHook (file write audit), ToolUsageStatsHook (tool usage statistics). Set enabled: false to disable any hook.",
+    "optionAllow": "Allow — execute this operation",
+    "optionAllowHint": "Click or press Enter to confirm",
+    "optionDeny": "Deny — cancel this operation",
+    "optionDenyHint": "Click or press Esc to cancel",
+    "optionAllowAlways": "Allow always this session",
+    "optionAllowAlwaysHint": "Don't ask again for {{tool}}",
+    "optionAutoMode": "Auto mode — allow all hooks",
+    "optionAutoModeHint": "All future hooks will be auto-approved",
+    "shortcutHint": "Shortcuts: 1-4 select · Enter allow · Esc deny",
+    "lastItem": "Last item",
+    "modalHint": "Please handle this approval request in the popup modal",
+    "clickToSelect": "Click to select · 1/2/3/4 keyboard shortcuts"
   },
   "step": {
     "pending": "Waiting",

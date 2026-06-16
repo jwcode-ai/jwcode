@@ -50,6 +50,11 @@ public class EditTool implements Tool<EditTool.Input, EditTool.Output, EditTool.
 
 
     @Override
+    public TypeReference<Input> getInputType() { return new TypeReference<Input>() {}; }
+    @Override
+    public TypeReference<Output> getOutputType() { return new TypeReference<Output>() {}; }
+
+    @Override
     public CompletableFuture<ToolResult<Output>> call(
             Input args,
             ToolExecutionContext context,

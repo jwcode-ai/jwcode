@@ -1,4 +1,5 @@
 import { memo, useState, useCallback, useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Shield, Check, X, AlertTriangle, Clock } from 'lucide-react';
 import { HookApprovalInfo } from '../../types';
 import wsService from '../../services/websocket';
@@ -24,6 +25,7 @@ export const HookApprovalCard = memo(function HookApprovalCard({
   approval,
   onResolved,
 }: HookApprovalCardProps) {
+  const { t } = useTranslation('hook');
   const [resolving, setResolving] = useState(false);
   const [countdown, setCountdown] = useState(COUNTDOWN_SECONDS);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -31,7 +33,7 @@ export const HookApprovalCard = memo(function HookApprovalCard({
   const isPending = approval.status === 'pending';
     // Always show inline buttons; the modal is a separate component shown via App.tsx
   const isModalActive = false;
-  const { level, reason } = classifyRisk(approval.toolName, approval.askPayload);
+  const { level, reasonKey } = classifyRisk(approval.toolName, approval.askPayload);
   const rc = RISK_CONFIG[level];
 
   useEffect(() => {
@@ -113,9 +115,9 @@ export const HookApprovalCard = memo(function HookApprovalCard({
           : 'bg-accent-red/10 border border-accent-red/30 text-accent-red'
       }`}>
         {isApproved ? (
-          <><Check size={14} /><span>已允许：{approval.toolName}</span></>
+          <><Check size={14} /><span>{t('alreadyAllowed')}{approval.toolName}</span></>
         ) : (
-          <><X size={14} /><span>已拒绝：{approval.toolName}</span></>
+          <><X size={14} /><span>{t('alreadyDenied')}{approval.toolName}</span></>
         )}
       </div>
     );
@@ -125,10 +127,10 @@ export const HookApprovalCard = memo(function HookApprovalCard({
   const countdownUrgent = countdown <= 5;
 
   const options: OptionItem[] = [
-    { id: 'allow', index: 1, label: 'Allow — execute this command', hint: 'Click or press Enter to confirm', action: handleAllow },
-    { id: 'deny', index: 2, label: 'Deny — cancel this operation', hint: 'Click or press Esc to cancel', action: handleDeny },
-    { id: 'allow_session', index: 3, label: 'Allow always this session', hint: `Don't ask again for ${approval.toolName}`, action: handleAllowSession },
-    { id: 'auto_mode', index: 4, label: 'Auto mode — allow all hooks', hint: 'All future hooks will be auto-approved', action: handleAutoMode },
+    { id: 'allow', index: 1, label: t('optionAllow'), hint: t('optionAllowHint'), action: handleAllow },
+    { id: 'deny', index: 2, label: t('optionDeny'), hint: t('optionDenyHint'), action: handleDeny },
+    { id: 'allow_session', index: 3, label: t('optionAllowAlways'), hint: t('optionAllowAlwaysHint', { tool: approval.toolName }), action: handleAllowSession },
+    { id: 'auto_mode', index: 4, label: t('optionAutoMode'), hint: t('optionAutoModeHint'), action: handleAutoMode },
   ];
 
   return (
@@ -139,8 +141,8 @@ export const HookApprovalCard = memo(function HookApprovalCard({
           {rc.icon} {level}
         </span>
         <Shield size={14} className={rc.text} />
-        <span className="text-xs font-medium text-dark-text">权限申请</span>
-        <span className="text-[10px] text-dark-muted ml-auto">{reason}</span>
+        <span className="text-xs font-medium text-dark-text">{t('permissionRequest')}</span>
+        <span className="text-[10px] text-dark-muted ml-auto">{t(reasonKey)}</span>
 
         {/* Countdown bar */}
         <div className="flex items-center gap-1.5 ml-2">
@@ -163,7 +165,7 @@ export const HookApprovalCard = memo(function HookApprovalCard({
       <div className="px-3 py-2.5 space-y-2">
         {/* Tool name */}
         <div className="flex items-center gap-2 text-xs">
-          <span className="text-dark-muted shrink-0">工具：</span>
+          <span className="text-dark-muted shrink-0">{t('tool')}</span>
           <code className="text-accent-blue font-mono text-xs bg-dark-surface px-1.5 py-0.5 rounded">
             {approval.toolName}
           </code>
@@ -182,14 +184,14 @@ export const HookApprovalCard = memo(function HookApprovalCard({
         {(level === 'CRITICAL' || level === 'HIGH') && (
           <div className={`flex items-center gap-1.5 text-[11px] px-2 py-1 rounded ${rc.bg} ${rc.text}`}>
             <AlertTriangle size={12} />
-            <span>{level === 'CRITICAL' ? '此操作可能造成不可逆的影响，请仔细确认' : '请确认此操作为预期行为'}</span>
+            <span>{level === 'CRITICAL' ? t('highRiskWarning') : t('mediumRiskConfirm')}</span>
           </div>
         )}
 
         {isModalActive ? (
           /* 弹窗模式 — 卡片仅保留历史记录，无操作按钮 */
           <div className="flex items-center gap-2 px-2 py-2 text-xs text-dark-muted bg-dark-surface rounded border border-dark-border/50">
-            <span>请在弹窗中处理此审批请求 · 快捷键: 1-4 选择 · Enter 允许 · Esc 拒绝</span>
+            <span>{t('modalHint')} · {t('shortcutHint')}</span>
           </div>
         ) : (
           /* 内联模式 — 显示操作按钮（当弹窗不可用时） */
@@ -217,7 +219,7 @@ export const HookApprovalCard = memo(function HookApprovalCard({
               ))}
             </div>
             <div className="text-[10px] text-dark-muted/50 pt-0.5 border-t border-dark-border/50">
-              Click to select · 1/2/3/4 keyboard shortcuts
+              {t('clickToSelect')}
             </div>
           </>
         )}

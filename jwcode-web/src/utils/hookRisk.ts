@@ -1,33 +1,33 @@
 export type RiskLevel = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
 
-export function classifyRisk(toolName: string, askPayload: string): { level: RiskLevel; reason: string } {
+export function classifyRisk(toolName: string, askPayload: string): { level: RiskLevel; reasonKey: string } {
   const name = toolName.toLowerCase();
   if (/\b(rm|del|delete|drop|truncate|format|mkfs)\b/.test(name)) {
-    return { level: 'CRITICAL', reason: '破坏性操作 - 可能删除数据' };
+    return { level: 'CRITICAL', reasonKey: 'risk_critical' };
   }
   if (/\b(bash|shell|exec|cmd|powershell|terminal)\b/.test(name)) {
     if (/\b(rm\s+-rf|sudo|chmod\s+777|curl.*\|\s*(ba)?sh|wget.*-O|>\/dev\/|mkfs)\b/i.test(askPayload)) {
-      return { level: 'CRITICAL', reason: '高危命令 - 包含系统级操作' };
+      return { level: 'CRITICAL', reasonKey: 'risk_critical_cmd' };
     }
-    return { level: 'HIGH', reason: 'Shell 命令执行' };
+    return { level: 'HIGH', reasonKey: 'risk_high_shell' };
   }
   if (/\b(Write|Edit|save|upload|deploy|publish)\b/i.test(name)) {
-    return { level: 'HIGH', reason: '文件写入操作' };
+    return { level: 'HIGH', reasonKey: 'risk_high_file' };
   }
   if (/\b(install|uninstall|npm|pip|cargo|gem|apt|brew|choco|yum|dnf)\b/i.test(name)) {
-    return { level: 'HIGH', reason: '包管理操作' };
+    return { level: 'HIGH', reasonKey: 'risk_high_pkg' };
   }
   if (/\b(git|commit|push|merge|rebase)\b/i.test(name)) {
     const isDestructive = /\b(push|force|hard\s*reset|rebase)\b/i.test(askPayload);
-    return { level: isDestructive ? 'HIGH' : 'MEDIUM', reason: isDestructive ? 'Git 强制操作' : 'Git 操作' };
+    return { level: isDestructive ? 'HIGH' : 'MEDIUM', reasonKey: isDestructive ? 'risk_git_force' : 'risk_git' };
   }
   if (/\b(http|fetch|curl|wget|api|request|download)\b/i.test(name)) {
-    return { level: 'MEDIUM', reason: '网络请求' };
+    return { level: 'MEDIUM', reasonKey: 'risk_network' };
   }
   if (/\b(read|open|list|ls|dir|cat|view|search|find|grep|glob)\b/i.test(name)) {
-    return { level: 'LOW', reason: '只读操作' };
+    return { level: 'LOW', reasonKey: 'risk_low' };
   }
-  return { level: 'MEDIUM', reason: '工具调用' };
+  return { level: 'MEDIUM', reasonKey: 'risk_default' };
 }
 
 export const RISK_CONFIG: Record<RiskLevel, { bg: string; border: string; text: string; badge: string; icon: string }> = {

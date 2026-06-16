@@ -24,20 +24,22 @@ public class PowerShellTool implements Tool<PowerShellTool.Input, PowerShellTool
     @Override public String getName() { return "PowerShell"; }
     @Override public String getDescription() { return "执行 PowerShell 命令"; }
     @Override public String getPrompt() { return "Use PowerShellTool to execute Windows PowerShell commands."; }
+    @Override public TypeReference<Input> getInputType() { return new TypeReference<Input>() {}; }
+    @Override public TypeReference<Output> getOutputType() { return new TypeReference<Output>() {}; }
 
-public static class Input { 
-        public String command; 
-        
+public static class Input {
+        public String command;
+
         public Input() {}
         public Input(String command) { this.command = command; }
     }
-    
-    public static class Output { 
-        public boolean success; 
-        public String output; 
+
+    public static class Output {
+        public boolean success;
+        public String output;
         public String error;
         public int exitCode;
     }
-    
+
     public static class Progress {}
 }

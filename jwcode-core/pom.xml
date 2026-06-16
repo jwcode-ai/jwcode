@@ -160,6 +160,12 @@
             <version>${jsoup.version}</version>
         </dependency>
 
+        <!-- Playwright 浏览器自动化 -->
+        <dependency>
+            <groupId>com.microsoft.playwright</groupId>
+            <artifactId>playwright</artifactId>
+        </dependency>
+
         <!-- Java-WebSocket -->
         <dependency>
             <groupId>org.java-websocket</groupId>

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Shield, Clock, AlertTriangle } from 'lucide-react';
 import { Modal } from '../common/Modal';
 import { useHookApprovalStore } from '../../stores/useHookApprovalStore';
@@ -13,6 +14,7 @@ interface HookApprovalModalProps {
 const COUNTDOWN_SECONDS = 15;
 
 export function HookApprovalModal({ isOpen, onCloseModal }: HookApprovalModalProps) {
+  const { t } = useTranslation('hook');
   const approvalStore = useHookApprovalStore();
   const pendingApprovals = approvalStore.pendingApprovals;
 
@@ -158,7 +160,7 @@ export function HookApprovalModal({ isOpen, onCloseModal }: HookApprovalModalPro
   }, [currentApproval, resolving, advanceQueue, setAutoMode]);
 
   // ── 风险等级 ──
-  const { level, reason } = classifyRisk(currentApproval.toolName, currentApproval.askPayload);
+  const { level, reasonKey } = classifyRisk(currentApproval.toolName, currentApproval.askPayload);
   const rc = RISK_CONFIG[level];
 
   // ── 预览 ──
@@ -175,7 +177,7 @@ export function HookApprovalModal({ isOpen, onCloseModal }: HookApprovalModalPro
       title={
         <div className="flex items-center gap-2">
           <Shield className="w-5 h-5 text-yellow-400" />
-          <span>Hook 拦截审批</span>
+          <span>{t('hookApproval')}</span>
           {total > 1 && (
             <span className="text-xs text-dark-muted font-normal">
               ({currentIndex + 1}/{total})
@@ -191,7 +193,7 @@ export function HookApprovalModal({ isOpen, onCloseModal }: HookApprovalModalPro
           <span className={`px-1.5 py-0.5 rounded text-xs font-bold border ${rc.badge}`}>
             {rc.icon} {level}
           </span>
-          <span className="text-xs text-dark-muted">{reason}</span>
+          <span className="text-xs text-dark-muted">{t(reasonKey)}</span>
 
           {/* 倒计时条 */}
           <div className="flex items-center gap-1.5 ml-auto">
@@ -213,7 +215,7 @@ export function HookApprovalModal({ isOpen, onCloseModal }: HookApprovalModalPro
         {/* ── 审批信息 ── */}
         <div className="bg-dark-bg rounded-lg p-4 border border-dark-border space-y-2">
           <div className="flex items-center gap-2 text-sm">
-            <span className="text-dark-muted shrink-0">工具：</span>
+            <span className="text-dark-muted shrink-0">{t('tool')}</span>
             <code className="text-blue-400 font-mono text-xs bg-dark-surface px-1.5 py-0.5 rounded">
               {currentApproval.toolName}
             </code>
@@ -232,7 +234,7 @@ export function HookApprovalModal({ isOpen, onCloseModal }: HookApprovalModalPro
           {(level === 'CRITICAL' || level === 'HIGH') && (
             <div className={`flex items-center gap-1.5 text-xs px-2 py-1.5 rounded ${rc.bg} ${rc.text}`}>
               <AlertTriangle size={13} />
-              <span>{level === 'CRITICAL' ? '此操作可能造成不可逆的影响，请仔细确认' : '请确认此操作为预期行为'}</span>
+              <span>{level === 'CRITICAL' ? t('highRiskWarning') : t('mediumRiskConfirm')}</span>
             </div>
           )}
         </div>
@@ -240,10 +242,10 @@ export function HookApprovalModal({ isOpen, onCloseModal }: HookApprovalModalPro
         {/* ── 编号选项列表 ── */}
         <div className="space-y-0.5">
           {[
-            { id: 'allow', label: 'Allow — 执行此操作', hint: '允许本次操作', action: handleAllow },
-            { id: 'deny', label: 'Deny — 取消此操作', hint: '拒绝本次操作', action: handleDeny },
-            { id: 'allow_session', label: 'Allow always this session — 本次会话允许', hint: `不再询问 ${currentApproval.toolName}`, action: handleAllowSession },
-            { id: 'auto_mode', label: 'Auto mode — 自动批准所有 Hook', hint: '之后所有 Hook 将自动批准', action: handleAutoMode },
+            { id: 'allow', label: t('optionAllow'), hint: t('optionAllowHint'), action: handleAllow },
+            { id: 'deny', label: t('optionDeny'), hint: t('optionDenyHint'), action: handleDeny },
+            { id: 'allow_session', label: t('optionAllowAlways'), hint: t('optionAllowAlwaysHint', { tool: currentApproval.toolName }), action: handleAllowSession },
+            { id: 'auto_mode', label: t('optionAutoMode'), hint: t('optionAutoModeHint'), action: handleAutoMode },
           ].map((opt, i) => (
             <button
               key={opt.id}
@@ -262,19 +264,19 @@ export function HookApprovalModal({ isOpen, onCloseModal }: HookApprovalModalPro
 
         {/* ── 底部提示 ── */}
         <div className="flex items-center justify-between text-xs text-dark-muted/50">
-          <span>快捷键: 1-4 选择 · Enter 允许 · Esc 拒绝</span>
+          <span>{t('shortcutHint')}</span>
           {remaining > 0 ? (
-            <span>还有 {remaining} 项待审批 · 共 {total} 项</span>
+            <span>{t('morePending', { n: remaining })}</span>
           ) : (
-            <span>最后一项</span>
+            <span>{t('lastItem')}</span>
           )}
         </div>
 
         {/* ── 自动模式开关 ── */}
         <div className="flex items-center justify-between px-3 py-2 bg-dark-bg rounded-lg border border-dark-border">
           <div className="flex flex-col">
-            <span className="text-sm text-dark-text">自动模式</span>
-            <span className="text-xs text-dark-muted">自动批准所有 Hook 请求</span>
+            <span className="text-sm text-dark-text">{t('autoMode')}</span>
+            <span className="text-xs text-dark-muted">{t('autoModeDesc')}</span>
           </div>
           <button
             onClick={() => setAutoMode(!autoMode)}
@@ -296,7 +298,7 @@ export function HookApprovalModal({ isOpen, onCloseModal }: HookApprovalModalPro
             onClick={() => setShowConfigHint(!showConfigHint)}
             className="w-full flex items-center justify-between px-3 py-2 text-xs text-dark-muted hover:text-dark-text hover:bg-dark-surface/50 transition-colors"
           >
-            <span>自定义 Hook 配置说明</span>
+            <span>{t('hookConfigTitle')}</span>
             <span>{showConfigHint ? '▲' : '▼'}</span>
           </button>
           {showConfigHint && (

@@ -25,7 +25,9 @@ public class MCPTool implements Tool<MCPTool.Input, MCPTool.Output, MCPTool.Prog
     @Override public String getPrompt() {
         return "使用此工具与 MCP 服务器交互。action 支持: list（列出所有服务器）, status（查看服务器状态）, call（调用指定服务器的工具）。";
     }
-    
+    @Override public TypeReference<Input> getInputType() { return new TypeReference<Input>() {}; }
+    @Override public TypeReference<Output> getOutputType() { return new TypeReference<Output>() {}; }
+
     @Override
     public JsonNode getInputSchema() {
         try { return MAPPER.readTree("""

@@ -1,16 +1,13 @@
 # =============================================================================
 # JWCode CLI — CI 工作流
 #
-# 【重要说明】
-# 本项目使用本地 Git 管理，不推送远程仓库。
-# 此 CI 配置作为标准化构建流程的参考文档，
-# 开发者在本地提交前应手动执行以下步骤：
+# 在 GitHub Actions 上运行。本地提交前请执行：
+#   npm run precommit
 #
-#   npm ci          # 安装依赖
-#   npx tsc --noEmit # 类型检查
-#   npm test        # 运行测试
-#   npm run build   # 构建打包
-#
+# 或手动执行：
+#   npx tsc --noEmit    # 类型检查
+#   npm test            # 运行测试
+#   npm run build       # 构建打包
 # =============================================================================
 
 name: CI
@@ -22,56 +19,30 @@ on:
     branches: [main, master]
 
 jobs:
-  # ---------------------------------------------------------------
-  # 主任务：验证代码质量和构建
-  # ---------------------------------------------------------------
   build:
-    name: Build & Test (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
 
     strategy:
       matrix:
         node-version: [18, 20, 22]
-      # 一个版本失败不阻塞其他版本
-      fail-fast: false
 
     steps:
-      # 1. 检出代码
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # 2. 设置 Node.js
-      - name: Setup Node.js ${{ matrix.node-version }}
+      - name: Use Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
-          cache-dependency-path: package-lock.json
 
-      # 3. 安装依赖（严格锁定版本）
       - name: Install dependencies
         run: npm ci
 
-      # 4. 类型检查（编译但不输出文件）
       - name: Type check
         run: npx tsc --noEmit
 
-      # 5. 运行单元测试
       - name: Run tests
         run: npm test
 
-      # 6. 构建打包
-      - name: Build bundle
+      - name: Build
         run: npm run build
-
-      # 7. 验证构建产物
-      - name: Verify dist output
-        run: |
-          if [ ! -f dist/cli.js ]; then
-            echo "❌ dist/cli.js not found!"
-            exit 1
-          fi
-          echo "✅ dist/cli.js exists ($(wc -c < dist/cli.js) bytes)"
-
-      # ⚠️ 注意：本项目为内部项目，无远程部署步骤
-      # 所有构建产物仅供本地使用

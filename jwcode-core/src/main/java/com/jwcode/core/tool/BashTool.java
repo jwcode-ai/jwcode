@@ -424,16 +424,19 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
         String lower = command.toLowerCase();
         String trimmed = command.trim();
         
-        // 【修复】检测 PowerShell 不兼容的链式命令语法
+        // 【修复】检测 Windows PowerShell (5.1-) 不兼容的链式命令语法
+        // cmd.exe 支持 &&/|| 从 Windows XP 起就有；PowerShell 7+ 也支持。
+        // 只有 Windows PowerShell 5.1 及以下版本不支持。
         if (trimmed.contains(" && ") || trimmed.contains("&&")) {
-            return "⚠️ PowerShell / cmd.exe 不支持 '&&' 链式命令！建议：\n" +
-                   "  - 使用 ';' 分隔多个命令（顺序执行）\n" +
-                   "  - 或使用 PowerShell: 'if ($?) { command2 }' 条件执行";
+            return "⚠️ Windows PowerShell 5.1 及以下版本不支持 '&&' 链式命令！\n" +
+                   "  - cmd.exe 支持 &&，多数命令直接运行没问题\n" +
+                   "  - 若在 PowerShell 中执行，建议改用: ';' 分隔 或 'if ($?) { cmd2 }'";
         }
-        
+
         if (trimmed.contains(" || ") || (trimmed.contains("||") && !trimmed.contains("|"))) {
-            return "⚠️ PowerShell / cmd.exe 不支持 '||' 链式命令！建议：\n" +
-                   "  - 使用 PowerShell: 'if (-not $?) { command2 }' 条件执行";
+            return "⚠️ Windows PowerShell 5.1 及以下版本不支持 '||' 链式命令！\n" +
+                   "  - cmd.exe 支持 ||，多数命令直接运行没问题\n" +
+                   "  - 若在 PowerShell 中执行，建议改用: 'if (-not $?) { cmd2 }'";
         }
         
         // 【修复】检测反引号转义序列（JSON 传递后易解析失败）

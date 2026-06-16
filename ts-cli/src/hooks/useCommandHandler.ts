@@ -63,6 +63,7 @@ export function useCommandHandler(opts: CommandHandlerOptions) {
           updateAppState(prev => ({ ...prev, autoMode: !prev.autoMode }));
           return;
         case 'clear':
+          console.clear();
           clearAllPastes();
           updateAppState(prev => ({
             ...prev,
@@ -75,7 +76,7 @@ export function useCommandHandler(opts: CommandHandlerOptions) {
         case 'show_context':
           updateAppState(prev => ({
             ...prev,
-            statusText: `会话消息: ${prev.messages.length} | 模式: ${prev.planMode ? '规划' : '执行'} | 自动: ${prev.autoMode ? '开' : '关'} | 模型: ${prev.modelName || '未连接'}`,
+            statusText: '会话消息: ' + prev.messages.length + ' | 模式: ' + (prev.planMode ? '规划' : '执行') + ' | 自动: ' + (prev.autoMode ? '开' : '关') + ' | 模型: ' + (prev.modelName || '未连接'),
           }));
           return;
         case 'stop': client?.stop(); return;
@@ -93,7 +94,6 @@ export function useCommandHandler(opts: CommandHandlerOptions) {
         case 'config': if (cmdArg) client?.config(cmdArg); return;
         case 'plugin': if (cmdArg) client?.plugin(cmdArg); return;
         case 'tokens': client?.send('tokens'); return;
-        case 'memory': client?.send('memory'); return;
         case 'export': if (cmdArg) client?.send('export', undefined, { path: cmdArg }); return;
         case 'checkpoint': client?.send('checkpoint'); return;
         case 'test': client?.send('test'); return;
@@ -116,3 +116,4 @@ export function useCommandHandler(opts: CommandHandlerOptions) {
 
   return { executeCommand };
 }
+
