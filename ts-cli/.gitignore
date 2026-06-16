@@ -41,3 +41,5 @@ npm-debug.log*
 # === Session / Temp ===
 session_*/
 *.session/
+
+proguard.jar

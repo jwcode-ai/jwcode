@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Bundle script -- produces single dist/cli.js with esbuild.
  * Uses packages=external to avoid CJS/ESM interop issues.
  */
@@ -21,18 +21,14 @@ await esbuild.build({
 console.log('[build] Bundle: dist/cli.js');
 
 // Copy fat JAR from Maven build if it exists (dev convenience)
-import { existsSync, mkdirSync, copyFileSync, unlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, copyFileSync, unlinkSync, createWriteStream } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { get } from 'node:https';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-// Maven assembly plugin with `appendAssemblyId=false` writes the fat JAR as
-// `target/jwcode-web.jar`; with the default (appendAssemblyId=true) it
-// would be `target/jwcode-web-1.0.0-SNAPSHOT.jar`. We prefer the unversioned
-// name (matches the pom), but skip it if it looks like a broken ProGuard
-// output (has META-INF/proguard/ but no com/jwcode/ classes), falling back
-// to the SNAPSHOT name.
+
 function isProguardOutput(jarPath) {
   try {
     const out = execFileSync('unzip', ['-l', jarPath, 'META-INF/proguard/', 'com/jwcode/'], { stdio: ['ignore', 'pipe', 'ignore'] }).toString();
@@ -57,32 +53,63 @@ const obfJar = join(backendDir, 'jwcode-web-obf.jar');
 if (existsSync(fatJarSource)) {
   if (!existsSync(backendDir)) mkdirSync(backendDir, { recursive: true });
 
-  // Step 3: ProGuard 混淆 fat JAR
   if (existsSync(proguardJar)) {
-    console.log('[build] Running ProGuard obfuscation...');
-    try {
-      execFileSync('java', [
-        '-jar', proguardJar,
-        '-injars', fatJarSource,
-        '-outjars', obfJar,
-        '-libraryjars', `${process.env.JAVA_HOME || ''}/jre/lib/rt.jar`,
-        '@' + proguardConf,
-        '-printmapping', join(backendDir, 'proguard.map')
-      ], { stdio: 'inherit' });
-      console.log('[build] ProGuard obfuscation completed: backend/jwcode-web-obf.jar');
-      // Rename obfuscated JAR to final name
-      const finalJar = join(backendDir, 'jwcode-web.jar');
-      if (existsSync(finalJar)) unlinkSync(finalJar);
-      copyFileSync(obfJar, finalJar);
-      console.log('[build] Final JAR: backend/jwcode-web.jar');
-    } catch (err) {
-      console.error('[build] ProGuard failed, falling back to un-obfuscated JAR:', err.message);
+    await runProguard(fatJarSource, obfJar);
+  } else {
+    console.log('[build] ProGuard JAR not found, downloading...');
+    await downloadProguard(proguardJar);
+    if (existsSync(proguardJar)) {
+      await runProguard(fatJarSource, obfJar);
+    } else {
+      console.error('[build] Failed to download ProGuard, copying un-obfuscated JAR.');
       copyFileSync(fatJarSource, join(backendDir, 'jwcode-web.jar'));
     }
-  } else {
-    console.log('[build] ProGuard JAR not found, skipping obfuscation. Copying un-obfuscated JAR.');
-    copyFileSync(fatJarSource, join(backendDir, 'jwcode-web.jar'));
   }
 } else {
   console.log('[build] JAR not found (skip Maven build first, or use --build flag).');
+}
+
+function downloadProguard(dest) {
+  return new Promise((resolve, reject) => {
+    const url = 'https://repo1.maven.org/maven2/com/guardsquare/proguard/proguard-base/7.6.1/proguard-base-7.6.1.jar';
+    const file = createWriteStream(dest);
+    get(url, (res) => {
+      if (res.statusCode === 302 || res.statusCode === 301) {
+        file.close();
+        unlinkSync(dest);
+        return downloadProguard(res.headers.location).then(resolve, reject);
+      }
+      if (res.statusCode !== 200) {
+        file.close();
+        unlinkSync(dest);
+        reject(new Error('HTTP ' + res.statusCode + ' downloading ProGuard'));
+        return;
+      }
+      res.pipe(file);
+      file.on('finish', () => { file.close(); resolve(); });
+      file.on('error', (err) => { unlinkSync(dest); reject(err); });
+    }).on('error', (err) => { unlinkSync(dest); reject(err); });
+  });
+}
+
+async function runProguard(fatJarSource, obfJar) {
+  console.log('[build] Running ProGuard obfuscation...');
+  try {
+    execFileSync('java', [
+      '-jar', proguardJar,
+      '-injars', fatJarSource,
+      '-outjars', obfJar,
+      '-libraryjars', (process.env.JAVA_HOME || '') + '/jre/lib/rt.jar',
+      '@' + proguardConf,
+      '-printmapping', join(backendDir, 'proguard.map')
+    ], { stdio: 'inherit' });
+    console.log('[build] ProGuard obfuscation completed: backend/jwcode-web-obf.jar');
+    const finalJar = join(backendDir, 'jwcode-web.jar');
+    if (existsSync(finalJar)) unlinkSync(finalJar);
+    copyFileSync(obfJar, finalJar);
+    console.log('[build] Final JAR: backend/jwcode-web.jar');
+  } catch (err) {
+    console.error('[build] ProGuard failed, falling back to un-obfuscated JAR:', err.message);
+    copyFileSync(fatJarSource, join(backendDir, 'jwcode-web.jar'));
+  }
 }
