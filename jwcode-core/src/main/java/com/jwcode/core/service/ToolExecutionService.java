@@ -1,9 +1,6 @@
 package com.jwcode.core.service;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -29,7 +26,13 @@ public class ToolExecutionService {
     
     public ToolExecutionService() {
         this.registeredTools = new ConcurrentHashMap<>();
-        this.executionHistory = new ConcurrentHashMap<>();
+        this.executionHistory = Collections.synchronizedMap(
+            new LinkedHashMap<String, ToolExecutionRecord>(16, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, ToolExecutionRecord> eldest) {
+                    return size() > 1000;
+                }
+            });
         this.resultCache = new ConcurrentHashMap<>();
         this.toolPermissions = new ConcurrentHashMap<>();
         this.executionCounter = new AtomicInteger(0);
@@ -183,12 +186,6 @@ public class ToolExecutionService {
             id, toolName, args, result, duration, System.currentTimeMillis()
         );
         executionHistory.put(String.valueOf(id), record);
-        
-        // 限制历史记录数量
-        if (executionHistory.size() > 1000) {
-            String oldestKey = executionHistory.keySet().iterator().next();
-            executionHistory.remove(oldestKey);
-        }
     }
     
     /**

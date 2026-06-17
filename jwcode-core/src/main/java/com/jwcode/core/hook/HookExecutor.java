@@ -48,6 +48,17 @@ public interface HookExecutor {
     }
 
     /**
+     * æ¯å¦æ¯ææå®å·¥å·åç§°ã
+     * <p>é»è®¤è¿å {@code true}ï¼å­ç±»å¯è¦çä»¥å®ç°å·¥å·çº§å«çè¿æ»¤ã</p>
+     *
+     * @param toolName å·¥å·åç§°ï¼å¦ &quot;BashTool&quot;, &quot;FileWriteTool&quot;ï¼
+     * @return true å¦ææ­¤æ§è¡å¨æ¯ææå®å·¥å·
+     */
+    default boolean supportsTool(String toolName) {
+        return true;
+    }
+
+    /**
      * 获取此执行器的优先级。
      */
     default HookPriority getPriority() {

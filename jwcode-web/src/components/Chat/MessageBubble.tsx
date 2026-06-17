@@ -56,7 +56,7 @@ export const MessageBubble = memo(function MessageBubble({
         <div className="max-w-[92%] md:max-w-[80%]">
           <div className="text-xs text-dark-muted mb-0.5 text-right">You</div>
           <div className="text-dark-text whitespace-pre-wrap break-words leading-relaxed">
-            {message.content?.replace(/\n\s*\n+/g, '\n')}
+            {message.content?.replace(/\n{3,}/g, '\n\n')}
           </div>
         </div>
       </div>
@@ -110,7 +110,7 @@ export const MessageBubble = memo(function MessageBubble({
             </div>
             {!isThinkingCollapsed && (
               <div className="mt-1 text-xs text-dark-muted italic whitespace-pre-wrap break-words">
-                {message.thinking.replace(/\n\s*\n+/g, '\n')}
+                {message.thinking.replace(/\n{3,}/g, '\n\n')}
               </div>
             )}
           </div>
@@ -128,7 +128,7 @@ export const MessageBubble = memo(function MessageBubble({
         {/* Content with Markdown */}
         {message.content ? (
           <div className="leading-relaxed">
-            <MarkdownRenderer content={message.content.replace(/\n\s*\n+/g, '\n')} className="whitespace-pre-wrap" />
+            <MarkdownRenderer content={message.content.replace(/\n{3,}/g, '\n\n')} />
           </div>
         ) : !message.thinking && !message.hookApproval && message.steps?.length ? null : !message.thinking && !message.hookApproval && !message.steps?.length && isGenerating ? (
           <div className="flex items-center gap-3 py-1 text-xs text-dark-muted">

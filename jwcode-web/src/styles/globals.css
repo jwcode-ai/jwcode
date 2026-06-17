@@ -1,4 +1,4 @@
-@tailwind base;
+﻿@tailwind base;
 @tailwind components;
 @tailwind utilities;
 
@@ -209,7 +209,8 @@ body {
 
 /* Markdown styles - Base container styles for proper line breaks */
 .markdown-content {
-  white-space: pre-wrap;
+  /* ReactMarkdown handles structure naturally */
+  white-space: normal;
   word-break: break-word;
 }
 
@@ -330,3 +331,4 @@ pre[class*="language-"] {
 .token.variable {
   @apply text-accent-yellow;
 }
+

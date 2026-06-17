@@ -170,6 +170,7 @@ public class HookExecutorFactory {
             public boolean isFailOpen() { return config.isFailOpen(); }
             @Override
             public boolean supportsEvent(HookEventType eventType) { return config.supportsEvent(eventType); }
+            public boolean supportsTool(String toolName) { return config.matchesTool(toolName); }
         };
     }
 
@@ -195,6 +196,7 @@ public class HookExecutorFactory {
             public boolean isFailOpen() { return config.isFailOpen(); }
             @Override
             public boolean supportsEvent(HookEventType eventType) { return config.supportsEvent(eventType); }
+            public boolean supportsTool(String toolName) { return config.matchesTool(toolName); }
         };
     }
 
@@ -219,6 +221,7 @@ public class HookExecutorFactory {
             public boolean isFailOpen() { return true; }
             @Override
             public boolean supportsEvent(HookEventType eventType) { return config.supportsEvent(eventType); }
+            public boolean supportsTool(String toolName) { return config.matchesTool(toolName); }
         };
     }
 }

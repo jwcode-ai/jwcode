@@ -50,6 +50,10 @@ public class ModelInfoHandler implements HttpHandler {
                     handleAddModel(exchange);
                 } else if ("/api/models/toggle".equals(path)) {
                     handleToggleModel(exchange);
+                } else if ("/api/models/delete".equals(path)) {
+                    handleDeleteModel(exchange);
+                } else if ("/api/models/update".equals(path)) {
+                    handleUpdateModel(exchange);
                 } else {
                     sendError(exchange, 404, "Not found: " + path);
                 }
@@ -347,6 +351,212 @@ public class ModelInfoHandler implements HttpHandler {
         result.put("provider", providerName);
         result.put("modelId", modelId);
         result.put("enabled", newEnabled);
+        sendSuccess(exchange, 200, result);
+    }
+
+    /**
+     * 删除模型 POST /api/models/delete
+     * 请求体: { "provider": "openai", "modelId": "gpt-4o" }
+     */
+    @SuppressWarnings("unchecked")
+    private void handleDeleteModel(HttpExchange exchange) throws IOException {
+        InputStream is = exchange.getRequestBody();
+        String body = new String(is.readAllBytes(), StandardCharsets.UTF_8);
+
+        Map<String, Object> requestMap;
+        try {
+            requestMap = mapper.readValue(body, Map.class);
+        } catch (Exception e) {
+            sendError(exchange, 400, "Invalid JSON: " + e.getMessage());
+            return;
+        }
+
+        String providerName = (String) requestMap.get("provider");
+        String modelId = (String) requestMap.get("modelId");
+
+        if (providerName == null || providerName.isBlank()) {
+            sendError(exchange, 400, "provider is required");
+            return;
+        }
+        if (modelId == null || modelId.isBlank()) {
+            sendError(exchange, 400, "modelId is required");
+            return;
+        }
+
+        YamlConfigLoader loader = YamlConfigLoader.getInstance();
+        JwcodeConfig config = loader.getConfig();
+
+        JwcodeConfig.ProviderConfig provider = config.getProviders().get(providerName);
+        if (provider == null) {
+            sendError(exchange, 404, "Provider '" + providerName + "' not found");
+            return;
+        }
+
+        JwcodeConfig.ModelDefinition target = null;
+        for (JwcodeConfig.ModelDefinition m : provider.getModels()) {
+            if (m.getId().equals(modelId)) {
+                target = m;
+                break;
+            }
+        }
+        if (target == null) {
+            sendError(exchange, 404, "Model '" + modelId + "' not found in provider '" + providerName + "'");
+            return;
+        }
+
+        // 移除模型
+        provider.getModels().remove(target);
+
+        // 保存配置
+        try {
+            loader.saveConfig(config);
+            logger.info("Deleted model '" + modelId + "' from provider '" + providerName + "'");
+        } catch (Exception e) {
+            sendError(exchange, 500, "Failed to save config: " + e.getMessage());
+            return;
+        }
+
+        // Hot-reload LLMFactory
+        try {
+            LLMFactory factory = LLMFactory.getGlobalInstance();
+            if (factory != null) {
+                Path userPath = loader.getUserConfigPath();
+                if (userPath != null) {
+                    factory.reloadConfig(userPath.toString());
+                    logger.info("LLMFactory reloaded after model delete");
+                }
+            }
+        } catch (Exception e) {
+            logger.warning("Failed to reload LLMFactory after model delete: " + e.getMessage());
+        }
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("provider", providerName);
+        result.put("modelId", modelId);
+        result.put("removed", true);
+        sendSuccess(exchange, 200, result);
+    }
+
+    /**
+     * 更新模型 POST /api/models/update
+     * 请求体: { "provider": "openai", "modelId": "gpt-4o", "model": { "name": "...", "temperature": 1.0, ... } }
+     */
+    @SuppressWarnings("unchecked")
+    private void handleUpdateModel(HttpExchange exchange) throws IOException {
+        InputStream is = exchange.getRequestBody();
+        String body = new String(is.readAllBytes(), StandardCharsets.UTF_8);
+
+        Map<String, Object> requestMap;
+        try {
+            requestMap = mapper.readValue(body, Map.class);
+        } catch (Exception e) {
+            sendError(exchange, 400, "Invalid JSON: " + e.getMessage());
+            return;
+        }
+
+        String providerName = (String) requestMap.get("provider");
+        String modelId = (String) requestMap.get("modelId");
+        Map<String, Object> modelData = (Map<String, Object>) requestMap.get("model");
+
+        if (providerName == null || providerName.isBlank()) {
+            sendError(exchange, 400, "provider is required");
+            return;
+        }
+        if (modelId == null || modelId.isBlank()) {
+            sendError(exchange, 400, "modelId is required");
+            return;
+        }
+        if (modelData == null) {
+            sendError(exchange, 400, "model is required");
+            return;
+        }
+
+        YamlConfigLoader loader = YamlConfigLoader.getInstance();
+        JwcodeConfig config = loader.getConfig();
+
+        JwcodeConfig.ProviderConfig provider = config.getProviders().get(providerName);
+        if (provider == null) {
+            sendError(exchange, 404, "Provider '" + providerName + "' not found");
+            return;
+        }
+
+        JwcodeConfig.ModelDefinition target = null;
+        for (JwcodeConfig.ModelDefinition m : provider.getModels()) {
+            if (m.getId().equals(modelId)) {
+                target = m;
+                break;
+            }
+        }
+        if (target == null) {
+            sendError(exchange, 404, "Model '" + modelId + "' not found in provider '" + providerName + "'");
+            return;
+        }
+
+        // 更新字段
+        if (modelData.containsKey("name")) {
+            Object name = modelData.get("name");
+            if (name instanceof String) {
+                target.setName((String) name);
+            }
+        }
+        if (modelData.containsKey("enabled")) {
+            Object enabled = modelData.get("enabled");
+            if (enabled instanceof Boolean) {
+                target.setEnabled((Boolean) enabled);
+            }
+        }
+        if (modelData.containsKey("temperature")) {
+            Object temp = modelData.get("temperature");
+            if (temp instanceof Number) {
+                target.setTemperature(((Number) temp).doubleValue());
+            }
+        }
+        if (modelData.containsKey("maxTokens")) {
+            Object mt = modelData.get("maxTokens");
+            if (mt instanceof Number) {
+                target.setMaxTokens(((Number) mt).intValue());
+            }
+        }
+        if (modelData.containsKey("contextWindow")) {
+            Object cw = modelData.get("contextWindow");
+            if (cw instanceof Number) {
+                target.setContextWindow(((Number) cw).intValue());
+            }
+        }
+        if (modelData.containsKey("priority")) {
+            Object p = modelData.get("priority");
+            if (p instanceof Number) {
+                target.setPriority(((Number) p).intValue());
+            }
+        }
+
+        // 保存配置
+        try {
+            loader.saveConfig(config);
+            logger.info("Updated model '" + modelId + "' for provider '" + providerName + "'");
+        } catch (Exception e) {
+            sendError(exchange, 500, "Failed to save config: " + e.getMessage());
+            return;
+        }
+
+        // Hot-reload LLMFactory
+        try {
+            LLMFactory factory = LLMFactory.getGlobalInstance();
+            if (factory != null) {
+                Path userPath = loader.getUserConfigPath();
+                if (userPath != null) {
+                    factory.reloadConfig(userPath.toString());
+                    logger.info("LLMFactory reloaded after model update");
+                }
+            }
+        } catch (Exception e) {
+            logger.warning("Failed to reload LLMFactory after model update: " + e.getMessage());
+        }
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("provider", providerName);
+        result.put("modelId", modelId);
+        result.put("model", modelData);
         sendSuccess(exchange, 200, result);
     }
 

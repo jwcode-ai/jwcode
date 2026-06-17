@@ -222,7 +222,42 @@ public class OAuthFlow {
      *       the user authorizes the application and the code is exchanged</li>
      * </ol>
      */
+    /**
+     * High-level convenience flow:
+     * <ol>
+     *   <li>Generates PKCE verifier + challenge</li>
+     *   <li>Starts a local callback server (uses the port from {@code config.redirectUri},
+     *       or binds to a free ephemeral port if the configured port is {@code 0})</li>
+     *   <li>Builds the authorization URL and logs it</li>
+     *   <li>Returns a {@link CompletableFuture} that completes with the token once
+     *       the user authorizes the application and the code is exchanged</li>
+     * </ol>
+     *
+     * @deprecated Use {@link #startAuthFlow(OAuthConfig, java.util.function.Consumer)} instead.
+     *             This variant prints the authorization URL to {@code System.out}.
+     */
+    @Deprecated
     public static CompletableFuture<OAuthToken> startAuthFlow(OAuthConfig config) {
+        return startAuthFlow(config, url ->
+            System.out.println("Please open the following URL in your browser to authorize: " + url));
+    }
+
+    /**
+     * High-level convenience flow with an {@code onAuthUrl} callback.
+     *
+     * <p>Same as {@link #startAuthFlow(OAuthConfig)} but the authorization URL is
+     * delivered to the given callback instead of printed to {@code System.out}.
+     *
+     * <ol>
+     *   <li>Generates PKCE verifier + challenge</li>
+     *   <li>Starts a local callback server (uses the port from {@code config.redirectUri},
+     *       or binds to a free ephemeral port if the configured port is {@code 0})</li>
+     *   <li>Builds the authorization URL and calls {@code onAuthUrl}</li>
+     *   <li>Returns a {@link CompletableFuture} that completes with the token once
+     *       the user authorizes the application and the code is exchanged</li>
+     * </ol>
+     */
+    public static CompletableFuture<OAuthToken> startAuthFlow(OAuthConfig config, java.util.function.Consumer<String> onAuthUrl) {
         String codeVerifier = generateCodeVerifier();
         String codeChallenge = generateCodeChallenge(codeVerifier);
 
@@ -261,7 +296,9 @@ public class OAuthFlow {
             String authUrl = getAuthorizationUrl(config.getAuthorizationEndpoint(), config.getClientId(),
                     actualRedirectUri, config.getScope(), config.getState(), codeChallenge);
 
-            System.out.println("Please open the following URL in your browser to authorize: " + authUrl);
+            if (onAuthUrl != null) {
+                onAuthUrl.accept(authUrl);
+            }
 
         } catch (Exception e) {
             future.completeExceptionally(e);

@@ -516,6 +516,9 @@ public class HookRegistry {
         public boolean supportsEvent(HookEventType eventType) { return config.supportsEvent(eventType); }
 
         @Override
+        public boolean supportsTool(String toolName) { return config.matchesTool(toolName); }
+
+        @Override
         public HookPriority getPriority() { return config.getPriority(); }
 
         @Override

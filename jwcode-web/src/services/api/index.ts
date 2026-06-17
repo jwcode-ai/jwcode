@@ -34,7 +34,10 @@ export const api = {
     list: () => apiClient.get<{ models: Model[]; defaultProvider: unknown }>('/api/models'),
     get: (id: string) => apiClient.get<Model>(`/api/models/${id}`),
     create: (data: { provider: string; model: Record<string, unknown> }) => apiClient.post<{ model: Record<string, unknown>; provider: string; savedTo: string }>('/api/models', data),
-    update: (id: string, data: Partial<Model>) => apiClient.put<Model>(`/api/models/${id}`, data),
+    update: (provider: string, modelId: string, data: { model: Record<string, unknown> }) =>
+        apiClient.post<{ provider: string; modelId: string; model: Record<string, unknown> }>('/api/models/update', { provider, modelId, ...data }),
+    delete: (provider: string, modelId: string) =>
+        apiClient.post<{ provider: string; modelId: string; removed: boolean }>('/api/models/delete', { provider, modelId }),
     test: (id: string) => apiClient.post<{ success: boolean; message: string }>(`/api/models/${id}/test`),
     toggle: (provider: string, modelId: string) => apiClient.post<{ provider: string; modelId: string; enabled: boolean }>('/api/models/toggle', { provider, modelId }),
   },

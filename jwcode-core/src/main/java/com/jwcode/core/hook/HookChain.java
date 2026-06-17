@@ -82,9 +82,11 @@ public class HookChain {
         }
 
         // 2. 过滤并排序
+        String toolName = context.getToolName();
         List<HookExecutor> matched = executors.stream()
             .filter(HookExecutor::isEnabled)
             .filter(e -> e.supportsEvent(eventType))
+            .filter(e -> toolName == null || e.supportsTool(toolName))
             .sorted(Comparator.comparingInt(e -> -e.getPriority().getLevel())) // 降序
             .toList();
 

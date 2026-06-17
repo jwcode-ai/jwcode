@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Brain, RefreshCw, Wifi, WifiOff, AlertTriangle, Plus, X, Key, CheckCircle, EyeOff } from 'lucide-react';
+import { Brain, RefreshCw, Wifi, WifiOff, AlertTriangle, Plus, X, Key, CheckCircle, EyeOff, Trash2, Edit3 } from 'lucide-react';
 import { api, type Model } from '../../services/api';
 
 interface ProviderInfo {
@@ -64,6 +64,7 @@ export function ModelsView() {
   });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [editingModel, setEditingModel] = useState<{ provider: string; modelId: string } | null>(null);
 
   // Provider config state
   const [providerSummary, setProviderSummary] = useState<ProviderSummary | null>(null);
@@ -134,6 +135,33 @@ export function ModelsView() {
     await api.models.test(modelId);
     await loadData();
     setRefreshing(null);
+  };
+
+  const handleDelete = async (provider: string, modelId: string) => {
+    if (!confirm(`确定要删除模型 "${modelId}" 吗？此操作不可撤销。`)) return;
+    try {
+      const res = await api.models.delete(provider, modelId);
+      if (res.success) {
+        await loadData();
+      }
+    } catch { /* ignore */ }
+  };
+
+  const handleEdit = (model: Model) => {
+    setAddForm({
+      provider: model.provider,
+      modelId: model.id,
+      modelName: model.name,
+      baseUrl: '',
+      apiKeys: '',
+      apiType: model.apiType || 'openai-completions',
+      temperature: model.temperature ?? 1.0,
+      maxTokens: model.maxTokens ?? 32768,
+      contextWindow: model.contextWindow ?? 128000,
+    });
+    setEditingModel({ provider: model.provider, modelId: model.id });
+    setShowAddForm(true);
+    setSaveError(null);
   };
 
   const handlePresetClick = (preset: PresetProvider) => {
@@ -246,7 +274,7 @@ export function ModelsView() {
       {/* Provider Presets */}
       <div>
         <h2 className="text-base font-semibold mb-3">Provider 配置</h2>
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
           {PROVIDER_PRESETS.map(preset => {
             const configured = providerSummary?.providers?.[preset.key];
             const hasKey = configured?.hasApiKey;
@@ -524,6 +552,20 @@ export function ModelsView() {
 
                 <div className="flex items-center gap-2 ml-3">
                   <button
+                    onClick={() => handleEdit(model)}
+                    className="p-1.5 rounded hover:bg-accent-blue/10 text-dark-muted hover:text-accent-blue"
+                    title="编辑模型"
+                  >
+                    <Edit3 size={13} />
+                  </button>
+                  <button
+                    onClick={() => handleDelete(model.provider, model.id)}
+                    className="p-1.5 rounded hover:bg-accent-red/10 text-dark-muted hover:text-accent-red"
+                    title="删除模型"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                  <button
                     onClick={() => handleRefresh(model.id)}
                     disabled={refreshing === model.id}
                     className="p-1.5 rounded hover:bg-dark-hover disabled:opacity-50"
@@ -555,17 +597,17 @@ export function ModelsView() {
         </div>
       </div>
 
-      {/* Add Model Modal */}
+      {/* Add / Edit Model Modal */}
       {showAddForm && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-dark-surface border border-dark-border rounded-xl p-6 w-full max-w-lg mx-4">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold flex items-center gap-2">
-                <Plus size={18} />
-                添加模型
+                {editingModel ? <Edit3 size={18} /> : <Plus size={18} />}
+                {editingModel ? '编辑模型' : '添加模型'}
               </h3>
               <button
-                onClick={() => setShowAddForm(false)}
+                onClick={() => { setShowAddForm(false); setEditingModel(null); }}
                 className="p-1 rounded hover:bg-dark-hover"
               >
                 <X size={18} />
@@ -580,7 +622,8 @@ export function ModelsView() {
                   value={addForm.provider}
                   onChange={e => setAddForm(f => ({ ...f, provider: e.target.value }))}
                   placeholder="例如: openai, deepseek, moonshot"
-                  className="w-full px-3 py-2 bg-dark-bg border border-dark-border rounded text-sm focus:outline-none focus:border-accent-blue"
+                  disabled={!!editingModel}
+                  className="w-full px-3 py-2 bg-dark-bg border border-dark-border rounded text-sm focus:outline-none focus:border-accent-blue disabled:opacity-50 disabled:cursor-not-allowed"
                 />
               </div>
               <div>
@@ -590,7 +633,8 @@ export function ModelsView() {
                   value={addForm.modelId}
                   onChange={e => setAddForm(f => ({ ...f, modelId: e.target.value }))}
                   placeholder="例如: gpt-4, deepseek-chat"
-                  className="w-full px-3 py-2 bg-dark-bg border border-dark-border rounded text-sm focus:outline-none focus:border-accent-blue"
+                  disabled={!!editingModel}
+                  className="w-full px-3 py-2 bg-dark-bg border border-dark-border rounded text-sm focus:outline-none focus:border-accent-blue disabled:opacity-50 disabled:cursor-not-allowed"
                 />
               </div>
               <div>
@@ -704,7 +748,7 @@ export function ModelsView() {
 
             <div className="flex justify-end gap-2 mt-4">
               <button
-                onClick={() => setShowAddForm(false)}
+                onClick={() => { setShowAddForm(false); setEditingModel(null); }}
                 className="px-4 py-2 rounded border border-dark-border hover:bg-dark-hover transition-colors text-sm"
               >
                 取消
@@ -718,34 +762,57 @@ export function ModelsView() {
                   setSaving(true);
                   setSaveError(null);
                   try {
-                    const modelData: Record<string, unknown> = {
-                      id: addForm.modelId.trim(),
-                      name: addForm.modelName.trim() || addForm.modelId.trim(),
-                      temperature: addForm.temperature,
-                      maxTokens: addForm.maxTokens,
-                      contextWindow: addForm.contextWindow,
-                      enabled: true,
-                    };
-                    if (addForm.baseUrl.trim()) {
-                      modelData.baseUrl = addForm.baseUrl.trim();
-                    }
-                    if (addForm.apiKeys.trim()) {
-                      modelData.apiKeys = addForm.apiKeys.split(',').map(k => k.trim()).filter(Boolean);
-                    }
-                    modelData.apiType = addForm.apiType;
-                    const res = await api.models.create({
-                      provider: addForm.provider.trim(),
-                      model: modelData,
-                    });
-                    if (res.success) {
-                      setShowAddForm(false);
-                      setAddForm({
-                        provider: '', modelId: '', modelName: '', baseUrl: '', apiKeys: '', apiType: 'openai-completions',
-                        temperature: 1.0, maxTokens: 32768, contextWindow: 128000,
-                      });
-                      await loadData();
+                    if (editingModel) {
+                      // 编辑模式：只发送可修改的字段
+                      const modelData: Record<string, unknown> = {
+                        name: addForm.modelName.trim() || addForm.modelId.trim(),
+                        temperature: addForm.temperature,
+                        maxTokens: addForm.maxTokens,
+                        contextWindow: addForm.contextWindow,
+                      };
+                      const res = await api.models.update(editingModel.provider, editingModel.modelId, { model: modelData });
+                      if (res.success) {
+                        setShowAddForm(false);
+                        setEditingModel(null);
+                        setAddForm({
+                          provider: '', modelId: '', modelName: '', baseUrl: '', apiKeys: '', apiType: 'openai-completions',
+                          temperature: 1.0, maxTokens: 32768, contextWindow: 128000,
+                        });
+                        await loadData();
+                      } else {
+                        setSaveError((res as any).error || '保存失败');
+                      }
                     } else {
-                      setSaveError(res.error || '保存失败');
+                      // 添加模式
+                      const modelData: Record<string, unknown> = {
+                        id: addForm.modelId.trim(),
+                        name: addForm.modelName.trim() || addForm.modelId.trim(),
+                        temperature: addForm.temperature,
+                        maxTokens: addForm.maxTokens,
+                        contextWindow: addForm.contextWindow,
+                        enabled: true,
+                      };
+                      if (addForm.baseUrl.trim()) {
+                        modelData.baseUrl = addForm.baseUrl.trim();
+                      }
+                      if (addForm.apiKeys.trim()) {
+                        modelData.apiKeys = addForm.apiKeys.split(',').map(k => k.trim()).filter(Boolean);
+                      }
+                      modelData.apiType = addForm.apiType;
+                      const res = await api.models.create({
+                        provider: addForm.provider.trim(),
+                        model: modelData,
+                      });
+                      if (res.success) {
+                        setShowAddForm(false);
+                        setAddForm({
+                          provider: '', modelId: '', modelName: '', baseUrl: '', apiKeys: '', apiType: 'openai-completions',
+                          temperature: 1.0, maxTokens: 32768, contextWindow: 128000,
+                        });
+                        await loadData();
+                      } else {
+                        setSaveError(res.error || '保存失败');
+                      }
                     }
                   } catch (err) {
                     setSaveError(err instanceof Error ? err.message : '未知错误');

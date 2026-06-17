@@ -57,14 +57,14 @@ export function findJar(installDir: string): string | null {
   }
 
   // Development: Maven-built JAR in target/
-  // Prefer the versioned SNAPSHOT JAR (the proper Maven fat JAR), then
-  // fall back to the unversioned name (with appendAssemblyId=false in pom).
+  // Prefer the Spring Boot repackaged uber-JAR (jwcode-web.jar), then
+  // fall back to the plain SNAPSHOT jar.
   const targetDir = join(installDir, 'jwcode-web', 'target');
-  const devJarSnap = join(targetDir, 'jwcode-web-1.0.0-SNAPSHOT.jar');
   const devJarUnversioned = join(targetDir, 'jwcode-web.jar');
+  const devJarSnap = join(targetDir, 'jwcode-web-1.0.0-SNAPSHOT.jar');
 
-  if (existsSync(devJarSnap)) return devJarSnap;
   if (existsSync(devJarUnversioned) && !isProguardOutput(devJarUnversioned)) return devJarUnversioned;
+  if (existsSync(devJarSnap)) return devJarSnap;
 
   // Also check for any other matching JAR in target/
   if (existsSync(targetDir)) {

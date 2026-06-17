@@ -29,6 +29,7 @@ import java.nio.charset.CodingErrorAction;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.nio.file.Files;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
@@ -733,7 +734,15 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
         }
         // 2>&1 -> 2>&1 (Windows PowerShell 支持)
         // /dev/null 替换后继续处理
-        
+
+        // 【修复】检测并转换 Unix heredoc 语法（Windows cmd.exe 不支持 <<）
+        // 如: python - <<'PY'\nscript\nPY -> python tempfile.py
+        String heredocConverted = convertHeredocToWindows(command);
+        if (heredocConverted != null) {
+            logger.fine("Auto-converted heredoc to temp file for Windows: " + truncateForLog(heredocConverted));
+            return heredocConverted;
+        }
+
         // 转换为小写进行匹配
         String lower = command.toLowerCase();
         
@@ -864,7 +873,78 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
         
         return command;
     }
-    
+
+    /**
+     * 检测并转换 Unix heredoc 语法（Windows cmd.exe 不支持 <<）
+     * <p>
+     * 将形如 <code>python - <<'PY'\n...script\nPY</code> 的 heredoc 命令转换为写入临时文件后执行。
+     * 仅当命令包含 << 且以 python/python3 开头时尝试转换。
+     */
+    private String convertHeredocToWindows(String command) {
+        int heredocIdx = command.indexOf("<<");
+        if (heredocIdx < 0) return null;
+
+        // 只处理以 python/python3 开头的命令
+        String beforeHeredoc = command.substring(0, heredocIdx).trim().toLowerCase();
+        if (!beforeHeredoc.startsWith("python") && !beforeHeredoc.startsWith("python3")) {
+            return null;
+        }
+
+        // 提取 heredoc 标记名称（支持 'TOKEN'、"TOKEN"、无引号 TOKEN）
+        String afterHeredoc = command.substring(heredocIdx + 2).trim();
+        String token;
+        int contentStart;
+
+        if (afterHeredoc.startsWith("'")) {
+            int secondQuote = afterHeredoc.indexOf("'", 1);
+            if (secondQuote < 0) return null;
+            token = afterHeredoc.substring(1, secondQuote);
+            contentStart = afterHeredoc.indexOf('\n', secondQuote + 1);
+        } else if (afterHeredoc.startsWith("\"")) {
+            int secondQuote = afterHeredoc.indexOf("\"", 1);
+            if (secondQuote < 0) return null;
+            token = afterHeredoc.substring(1, secondQuote);
+            contentStart = afterHeredoc.indexOf('\n', secondQuote + 1);
+        } else {
+            int spaceIdx = afterHeredoc.indexOf(' ');
+            int nlIdx = afterHeredoc.indexOf('\n');
+            int endIdx = (spaceIdx >= 0 && nlIdx >= 0) ? Math.min(spaceIdx, nlIdx)
+                       : (spaceIdx >= 0 ? spaceIdx : nlIdx);
+            if (endIdx < 0) return null;
+            token = afterHeredoc.substring(0, endIdx);
+            contentStart = afterHeredoc.indexOf('\n', endIdx);
+        }
+
+        if (token == null || token.isEmpty() || contentStart < 0) return null;
+
+        // 提取脚本内容
+        String content = afterHeredoc.substring(contentStart + 1);
+        int closingIdx = content.lastIndexOf("\n" + token);
+        if (closingIdx < 0) {
+            String trimmed = content.trim();
+            if (trimmed.endsWith(token)) {
+                closingIdx = content.lastIndexOf(token);
+            } else {
+                return null;
+            }
+        }
+
+        String script = content.substring(0, closingIdx).trim();
+        if (script.isEmpty()) return null;
+
+        // 写入临时文件并返回 python <tempfile> 命令
+        try {
+            Path tempDir = Path.of(System.getProperty("java.io.tmpdir"));
+            Path scriptFile = Files.createTempFile(tempDir, "jwcode_", ".py");
+            Files.writeString(scriptFile, script, StandardCharsets.UTF_8);
+            scriptFile.toFile().deleteOnExit();
+            return "python \"" + scriptFile.toAbsolutePath() + "\"";
+        } catch (IOException e) {
+            logger.warning("Failed to create temp file for heredoc: " + e.getMessage());
+            return null;
+        }
+    }
+
     /**
      * 检测命令是否为 PowerShell 命令
      * 包含 PowerShell cmdlet 时自动使用 powershell.exe 执行

@@ -6,6 +6,8 @@ import com.jwcode.core.hook.*;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
@@ -48,24 +50,37 @@ public class ShellHookExecutor implements HookExecutor {
     private final long timeoutMs;
     private final boolean failOpen;
     private final boolean enabled;
+    private final List<HookEventType> events;
+    private final List<String> tools;
 
     /**
      * @param name    执行器名称
      * @param command Shell 命令（如 "python3 .jwcode/hooks/audit.py"）
      */
     public ShellHookExecutor(String name, String command) {
-        this(name, command, HookPriority.USER, 30_000, true, true);
+        this(name, command, HookPriority.USER, 30_000, true, true,
+             List.of(), List.of());
     }
 
     public ShellHookExecutor(String name, String command,
                               HookPriority priority, long timeoutMs,
                               boolean failOpen, boolean enabled) {
+        this(name, command, priority, timeoutMs, failOpen, enabled,
+             List.of(), List.of());
+    }
+
+    public ShellHookExecutor(String name, String command,
+                              HookPriority priority, long timeoutMs,
+                              boolean failOpen, boolean enabled,
+                              List<HookEventType> events, List<String> tools) {
         this.name = name;
         this.command = command;
         this.priority = priority;
         this.timeoutMs = timeoutMs;
         this.failOpen = failOpen;
         this.enabled = enabled;
+        this.events = events != null ? List.copyOf(events) : List.of();
+        this.tools = tools != null ? List.copyOf(tools) : List.of();
     }
 
     /**
@@ -78,7 +93,9 @@ public class ShellHookExecutor implements HookExecutor {
             config.getPriority(),
             config.getTimeoutMs(),
             config.isFailOpen(),
-            config.isEnabled()
+            config.isEnabled(),
+            config.getEvents(),
+            config.getTools()
         );
     }
 
@@ -91,13 +108,17 @@ public class ShellHookExecutor implements HookExecutor {
                 ProcessBuilder pb = buildProcess(command);
                 process = pb.start();
 
-                // 2. 写入 stdin
+                // 2. 写入 stdin (non-fatal: some scripts like 'echo hello' don't read stdin)
                 try (OutputStream stdin = process.getOutputStream();
                      BufferedWriter writer = new BufferedWriter(
                          new OutputStreamWriter(stdin, StandardCharsets.UTF_8))) {
                     String json = MAPPER.writeValueAsString(context.toJson());
                     writer.write(json);
                     writer.flush();
+                } catch (IOException e) {
+                    // Script may have exited without reading stdin (e.g. simple echo/help commands)
+                    logger.fine("[ShellHook] " + name + " stdin write failed (" + e.getMessage()
+                        + ") — continuing to read stdout");
                 }
 
                 // 3. 等待进程完成
@@ -150,10 +171,6 @@ public class ShellHookExecutor implements HookExecutor {
 
     /**
      * 解析 stdout JSON 为 HookResult。
-     *
-     * <p>脚本可在 JSON 响应中附带 {@code contextOutput} 字段，内容将作为
-     * XML 标签块注入到 Agent 上下文（如 lint 结果、测试输出、git status 等）。
-     * 仅 ALLOW 决策时注入；DENY 时的 contextOutput 被忽略。</p>
      */
     private HookResult parseResult(String stdout) {
         try {
@@ -184,7 +201,6 @@ public class ShellHookExecutor implements HookExecutor {
             if (decision == HookDecision.DEFER && root.has("deferToken")) {
                 builder.deferToken(root.get("deferToken").asText());
             }
-            // contextOutput: hook stdout text to inject into agent context
             if (root.has("contextOutput")) {
                 builder.contextOutput(root.get("contextOutput").asText());
             }
@@ -243,8 +259,24 @@ public class ShellHookExecutor implements HookExecutor {
     public boolean isEnabled() { return enabled; }
 
     @Override
+    public boolean supportsEvent(HookEventType eventType) {
+        if (events.isEmpty()) return true;
+        return events.contains(eventType);
+    }
+
+    @Override
+    public boolean supportsTool(String toolName) {
+        if (tools.isEmpty()) return true;
+        return tools.contains(toolName);
+    }
+
+    public List<HookEventType> getEvents() { return events; }
+
+    public List<String> getTools() { return tools; }
+
+    @Override
     public String toString() {
-        return String.format("ShellHookExecutor{name='%s', cmd='%s', priority=%s}",
-            name, command, priority);
+        return String.format("ShellHookExecutor{name='%s', cmd='%s', priority=%s, events=%s, tools=%s}",
+            name, command, priority, events, tools);
     }
 }
