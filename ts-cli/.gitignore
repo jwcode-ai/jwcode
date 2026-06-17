@@ -43,3 +43,6 @@ session_*/
 *.session/
 
 proguard.jar
+proguard-*.zip
+backend/proguard.map
+backend/.proguard_extract
