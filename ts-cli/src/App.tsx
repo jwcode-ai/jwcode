@@ -12,7 +12,7 @@ import { CommandPalette } from './components/CommandPalette.js';
 import { FilePalette } from './components/FilePalette.js';
 import { ApprovalModal } from './components/ApprovalModal.js';
 import { updateAppState, useAppSlice } from './hooks/useAppState.js';
-import { HELP_TEXT } from './commands/index.js';
+import { getCommandEntry, HELP_TEXT } from './commands/index.js';
 import { useStreamHandlers } from './hooks/useStreamHandlers.js';
 import { useKeyboardInput } from './hooks/useKeyboardInput.js';
 import { setClient } from './hooks/useWebSocket.js';
@@ -162,7 +162,11 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
   }, [input]);
 
   const handlePaletteSelect = useCallback((cmd: string | null) => {
-    if (cmd) { setInput(cmd); setShowPalette(false); }
+    if (cmd) {
+      const entry = getCommandEntry(cmd);
+      setInput(entry?.needsArg ? `${cmd} ` : cmd);
+      setShowPalette(false);
+    }
     else { setShowPalette(false); setInput(''); }
   }, []);
 

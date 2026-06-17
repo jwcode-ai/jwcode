@@ -1,138 +1,96 @@
-/**
- * Command definitions — Chinese descriptions.
- * Local commands handled by TUI; WS commands sent to backend.
- */
+export type CommandVia = 'local' | 'ws';
+export type CommandCategory = 'core' | 'session' | 'workspace' | 'tools' | 'config';
+
 export interface CmdEntry {
   cmd: string;
   desc: string;
-  via: 'local' | 'ws';
+  via: CommandVia;
   action: string | null;
+  category: CommandCategory;
+  usage?: string;
+  needsArg?: boolean;
 }
 
-// Local TUI commands
 export const LOCAL_COMMANDS: CmdEntry[] = [
-  { cmd: '/help', desc: '显示所有命令', via: 'local', action: null },
-  { cmd: '/plan', desc: '切换规划模式 (先规划再执行)', via: 'local', action: 'plan_mode' },
-  { cmd: '/auto', desc: '切换自动模式 (自动批准工具执行)', via: 'local', action: 'auto_mode' },
-  { cmd: '/context', desc: '显示当前会话状态', via: 'local', action: 'show_context' },
-  { cmd: '/exit', desc: '退出 JWCode', via: 'local', action: '__exit__' },
+  { cmd: '/help', desc: 'Show all commands', via: 'local', action: null, category: 'core' },
+  { cmd: '/plan', desc: 'Toggle plan mode before execution', via: 'local', action: 'plan_mode', category: 'core' },
+  { cmd: '/auto', desc: 'Toggle auto-approval mode', via: 'local', action: 'auto_mode', category: 'core' },
+  { cmd: '/context', desc: 'Show current conversation state', via: 'local', action: 'show_context', category: 'session' },
+  { cmd: '/clear', desc: 'Clear local conversation messages', via: 'local', action: 'clear', category: 'session' },
+  { cmd: '/tokens', desc: 'Show token usage details', via: 'local', action: 'tokens', category: 'session' },
+  { cmd: '/export', desc: 'Export conversation to a Markdown file', via: 'local', action: 'export', category: 'session', usage: '/export <path>', needsArg: true },
+  { cmd: '/checkpoint', desc: 'Create, list, or restore local checkpoints', via: 'local', action: 'checkpoint', category: 'session', usage: '/checkpoint [list|restore <file>|name]' },
+  { cmd: '/memory', desc: 'Browse project memory files', via: 'local', action: 'memory', category: 'workspace', usage: '/memory [file]' },
+  { cmd: '/project', desc: 'Show a compact project summary', via: 'local', action: 'project', category: 'workspace' },
+  { cmd: '/search', desc: 'Search text in the current workspace', via: 'local', action: 'search', category: 'workspace', usage: '/search <keyword>', needsArg: true },
+  { cmd: '/test', desc: 'Run the project test script', via: 'local', action: 'test', category: 'tools', usage: '/test [extra args]' },
+  { cmd: '/lint', desc: 'Run the project lint script', via: 'local', action: 'lint', category: 'tools', usage: '/lint [extra args]' },
+  { cmd: '/config', desc: 'Manage ~/.jwcode/config.yaml', via: 'local', action: 'config', category: 'config', usage: '/config list|get <key>|set <key> <value>' },
+  { cmd: '/skills', desc: 'List available local skills', via: 'local', action: 'skills', category: 'config' },
+  { cmd: '/agents', desc: 'List project agents', via: 'local', action: 'agents', category: 'config' },
+  { cmd: '/plugin', desc: 'List local plugins', via: 'local', action: 'plugin', category: 'config', usage: '/plugin list' },
+  { cmd: '/exit', desc: 'Exit JWCode', via: 'local', action: '__exit__', category: 'core' },
+  { cmd: '/quit', desc: 'Exit JWCode', via: 'local', action: '__exit__', category: 'core' },
 ];
 
-// WebSocket commands sent to backend
 export const WS_COMMANDS: CmdEntry[] = [
-  { cmd: '/confirm', desc: '确认当前规划并开始执行', via: 'ws', action: '__confirm_plan' },
-  { cmd: '/cancel', desc: '取消当前规划', via: 'ws', action: '__cancel_plan' },
-  { cmd: '/stop', desc: '停止当前 AI 生成', via: 'ws', action: 'stop' },
-  { cmd: '/pause', desc: '暂停当前 AI 生成', via: 'ws', action: 'pause' },
-  { cmd: '/resume', desc: '恢复暂停的 AI 生成', via: 'ws', action: 'resume' },
-  { cmd: '/clear', desc: '清除当前会话消息', via: 'ws', action: 'clear' },
-  { cmd: '/doctor', desc: '运行系统自诊断', via: 'ws', action: 'doctor' },
-  { cmd: '/rewind', desc: '回滚到最近的检查点', via: 'ws', action: 'rewind' },
-  { cmd: '/compact', desc: '压缩会话上下文 (释放 token)', via: 'ws', action: 'compact' },
-  { cmd: '/model', desc: '切换 AI 模型 (用法: /model <模型名>)', via: 'ws', action: 'model_change' },
-  { cmd: '/init', desc: '分析项目并生成 JWCODE.md 项目记忆文件', via: 'ws', action: 'init' },
-  { cmd: '/effort', desc: '设置任务努力级别 (low/medium/high)', via: 'ws', action: 'effort' },
-  { cmd: '/branch', desc: '创建分支会话 (用法: /branch <名称>)', via: 'ws', action: 'branch' },
-  { cmd: '/mcp', desc: 'MCP 服务器管理 (list/add/remove)', via: 'ws', action: 'mcp' },
-  { cmd: '/skills', desc: '查看可用 Skills 列表', via: 'ws', action: 'skills' },
-  { cmd: '/agents', desc: '列出配置的 Agent 代理', via: 'ws', action: 'agents' },
-  { cmd: '/config', desc: '管理配置 (get/set/list)', via: 'ws', action: 'config' },
-  { cmd: '/plugin', desc: '插件管理 (install/list/remove)', via: 'ws', action: 'plugin' },
-  { cmd: '/tokens', desc: '显示 Token 使用详情', via: 'ws', action: 'tokens' },
-  { cmd: '/memory', desc: '浏览项目记忆', via: 'ws', action: 'memory' },
-  { cmd: '/export', desc: '导出会话 (用法: /export <路径>)', via: 'ws', action: 'export' },
-  { cmd: '/checkpoint', desc: '设置或恢复检查点', via: 'ws', action: 'checkpoint' },
-  { cmd: '/test', desc: '运行当前项目测试', via: 'ws', action: 'test' },
-  { cmd: '/lint', desc: '对变更文件运行 Linter', via: 'ws', action: 'lint' },
-  { cmd: '/search', desc: '搜索代码库 (用法: /search <关键词>)', via: 'ws', action: 'search' },
-  { cmd: '/project', desc: '生成项目文档', via: 'ws', action: 'project' },
+  { cmd: '/confirm', desc: 'Confirm current plan and start execution', via: 'ws', action: '__confirm_plan', category: 'session' },
+  { cmd: '/cancel', desc: 'Cancel current plan', via: 'ws', action: '__cancel_plan', category: 'session' },
+  { cmd: '/stop', desc: 'Stop current AI generation', via: 'ws', action: 'stop', category: 'session' },
+  { cmd: '/pause', desc: 'Pause current AI generation', via: 'ws', action: 'pause', category: 'session' },
+  { cmd: '/resume', desc: 'Resume paused AI generation', via: 'ws', action: 'resume', category: 'session' },
+  { cmd: '/doctor', desc: 'Run backend diagnostics', via: 'ws', action: 'doctor', category: 'tools' },
+  { cmd: '/rewind', desc: 'Ask backend to rewind to its latest checkpoint', via: 'ws', action: 'rewind', category: 'session' },
+  { cmd: '/compact', desc: 'Compress backend conversation context', via: 'ws', action: 'compact', category: 'session' },
+  { cmd: '/model', desc: 'Switch AI model', via: 'ws', action: 'model_change', category: 'config', usage: '/model <model>', needsArg: true },
+  { cmd: '/init', desc: 'Analyze project and generate JWCODE.md', via: 'ws', action: 'init', category: 'workspace' },
+  { cmd: '/effort', desc: 'Set reasoning effort level', via: 'ws', action: 'effort', category: 'config', usage: '/effort low|medium|high', needsArg: true },
+  { cmd: '/branch', desc: 'Create a branch conversation', via: 'ws', action: 'branch', category: 'session', usage: '/branch <name>', needsArg: true },
+  { cmd: '/mcp', desc: 'Manage backend MCP servers', via: 'ws', action: 'mcp', category: 'config', usage: '/mcp list|add|remove', needsArg: true },
 ];
 
 export const ALL_COMMANDS: CmdEntry[] = [...LOCAL_COMMANDS, ...WS_COMMANDS];
 
-// Action map: slash command -> { action, needsArg? }
-export const SLASH_COMMANDS: Record<string, { action: string; needsArg?: boolean } | null> = {
-  '/help': null,
-  '/plan': { action: 'plan_mode' },
-  '/auto': { action: 'auto_mode' },
-  '/context': { action: 'show_context' },
-  '/exit': { action: '__exit__' },
-  '/quit': { action: '__exit__' },
-  '/confirm': { action: '__confirm_plan' },
-  '/cancel': { action: '__cancel_plan' },
-  '/stop': { action: 'stop' },
-  '/pause': { action: 'pause' },
-  '/resume': { action: 'resume' },
-  '/clear': { action: 'clear' },
-  '/doctor': { action: 'doctor' },
-  '/rewind': { action: 'rewind' },
-  '/compact': { action: 'compact' },
-  '/model': { action: 'model_change', needsArg: true },
-  '/init': { action: 'init' },
-  '/effort': { action: 'effort', needsArg: true },
-  '/branch': { action: 'branch', needsArg: true },
-  '/mcp': { action: 'mcp', needsArg: true },
-  '/skills': { action: 'skills' },
-  '/agents': { action: 'agents' },
-  '/config': { action: 'config', needsArg: true },
-  '/plugin': { action: 'plugin', needsArg: true },
-  '/tokens': { action: 'tokens' },
-  '/memory': { action: 'memory' },
-  '/export': { action: 'export', needsArg: true },
-  '/checkpoint': { action: 'checkpoint' },
-  '/test': { action: 'test' },
-  '/lint': { action: 'lint' },
-  '/search': { action: 'search', needsArg: true },
-  '/project': { action: 'project' },
+export const SLASH_COMMANDS: Record<string, { action: string; needsArg?: boolean } | null> =
+  Object.fromEntries(
+    ALL_COMMANDS.map(c => [c.cmd, c.action === null ? null : { action: c.action, needsArg: c.needsArg }]),
+  );
+
+export function getCommandEntry(cmd: string): CmdEntry | undefined {
+  return ALL_COMMANDS.find(c => c.cmd === cmd);
+}
+
+export function getUsage(cmd: string): string {
+  const entry = getCommandEntry(cmd);
+  return entry?.usage || cmd;
+}
+
+const CATEGORY_LABELS: Record<CommandCategory, string> = {
+  core: 'Core',
+  session: 'Session',
+  workspace: 'Workspace',
+  tools: 'Tools',
+  config: 'Config',
 };
 
-export const HELP_TEXT = `
-╔══════════════════════════════════════════╗
-║        JWCode 命令帮助                    ║
-╠══════════════════════════════════════════╣
-║  本地命令:                                ║
-║  /help        显示此帮助信息              ║
-║  /plan        切换规划模式                ║
-║  /auto        切换自动模式                ║
-║  /context     显示当前会话状态            ║
-║  /exit        退出 JWCode                ║
-╠══════════════════════════════════════════╣
-║  后端命令:                                ║
-║  /confirm     确认执行当前规划            ║
-║  /cancel      取消当前规划                ║
-║  /stop        停止当前 AI 生成            ║
-║  /pause       暂停当前 AI 生成            ║
-║  /resume      恢复暂停的生成              ║
-║  /clear       清除当前会话消息            ║
-║  /model <名>  切换 AI 模型                ║
-║  /compact     压缩会话上下文              ║
-║  /doctor      系统自诊断                  ║
-║  /rewind      回滚到最近检查点            ║
-║  /init        生成项目 JWCODE.md           ║
-║  /effort <级> 设置努力级别 low/med/high   ║
-║  /branch <名> 创建分支会话                ║
-║  /mcp <操作>  MCP 服务器管理              ║
-║  /skills      查看 Skills 列表            ║
-║  /agents      列出 Agent 代理             ║
-║  /config <操> 管理配置 (get/set/list)     ║
-║  /plugin <操> 插件管理                    ║
-║  /tokens      显示 Token 使用详情         ║
-║  /memory      浏览项目记忆                ║
-║  /export <路> 导出会话到文件              ║
-║  /checkpoint  设置或恢复检查点            ║
-║  /test        运行当前项目测试            ║
-║  /lint        对变更文件运行 Linter       ║
-║  /search <词> 搜索代码库                  ║
-║  /project     生成项目文档                ║
-╠══════════════════════════════════════════╣
-║  快捷键:                                  ║
-║  ↑↓           浏览输入历史 (最近30条)     ║
-║  PgUp/PgDn    翻页浏览消息                ║
-║  Home/End     跳到最早/最新消息           ║
-║  Tab          切换 Plan/Act 模式          ║
-║  /            打开命令面板 (可翻页)        ║
-║  Esc          关闭面板/取消审批            ║
-╠══════════════════════════════════════════╣
-║  普通输入即发送聊天消息                   ║
-║  输入框显示字符数+token估算               ║
-╚══════════════════════════════════════════╝`;
+export const HELP_TEXT = [
+  'JWCode commands',
+  '',
+  ...(['core', 'session', 'workspace', 'tools', 'config'] as CommandCategory[]).flatMap(category => {
+    const commands = ALL_COMMANDS.filter(c => c.category === category);
+    return [
+      CATEGORY_LABELS[category],
+      ...commands.map(c => {
+        const lhs = (c.usage || c.cmd).padEnd(28, ' ');
+        const scope = c.via === 'local' ? 'local' : 'backend';
+        return `  ${lhs} ${c.desc} (${scope})`;
+      }),
+      '',
+    ];
+  }),
+  'Shortcuts',
+  '  / opens this command palette',
+  '  @ references project files',
+  '  PgUp/PgDn scrolls help and messages',
+  '  Esc closes panels or cancels approval prompts',
+].join('\n');

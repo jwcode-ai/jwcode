@@ -1,25 +1,26 @@
-/**
- * Command execution hook — handles /commands, normal chat dispatch,
- * @ file references, and paste expansion. Single entry point for all
- * input submitted from the prompt.
- */
-import { useCallback } from 'react';
+import { useCallback, type MutableRefObject } from 'react';
 import type { JwCodeClient } from '../client.js';
 import { updateAppState } from './useAppState.js';
 import { saveToHistory } from '../components/TextInput.js';
 import { createMessage } from '../protocol.js';
-import { SLASH_COMMANDS } from '../commands/index.js';
+import { SLASH_COMMANDS, getUsage } from '../commands/index.js';
+import { runLocalCommand } from '../commands/localActions.js';
 import { expandPastes, clearAllPastes } from '../pasteBuffer.js';
 import { queryGuard } from './useQueryGuard.js';
 
 interface CommandHandlerOptions {
-  clientRef: React.MutableRefObject<JwCodeClient | null>;
-  planModeRef: React.MutableRefObject<boolean>;
-  referencedFilesRef: React.MutableRefObject<string[]>;
+  clientRef: MutableRefObject<JwCodeClient | null>;
+  planModeRef: MutableRefObject<boolean>;
+  referencedFilesRef: MutableRefObject<string[]>;
   onExit: () => void;
   setInput: (v: string) => void;
   setShowHelp: (v: boolean, scroll?: number) => void;
   setShowPalette: (v: boolean) => void;
+}
+
+function pushAssistant(content: string): void {
+  const msg = createMessage('assistant', content);
+  updateAppState(prev => ({ ...prev, messages: [...prev.messages, msg] }));
 }
 
 export function useCommandHandler(opts: CommandHandlerOptions) {
@@ -27,7 +28,7 @@ export function useCommandHandler(opts: CommandHandlerOptions) {
 
   const executeCommand = useCallback(async (value: string) => {
     const text = value.trim();
-    if (!text || !clientRef.current) return;
+    if (!text) return;
     setInput('');
     setShowHelp(false);
     setShowPalette(false);
@@ -42,9 +43,14 @@ export function useCommandHandler(opts: CommandHandlerOptions) {
         setShowHelp(true, 0);
         return;
       }
-      const { action, needsArg } = def;
-      const client = clientRef.current;
 
+      const { action, needsArg } = def;
+      if (needsArg && !cmdArg) {
+        pushAssistant(`Usage: ${getUsage(cmd)}`);
+        return;
+      }
+
+      const client = clientRef.current;
       switch (action) {
         case '__exit__':
           onExit();
@@ -67,61 +73,86 @@ export function useCommandHandler(opts: CommandHandlerOptions) {
           return;
         case 'clear':
           clearAllPastes();
-          updateAppState(prev => ({
-            ...prev,
-            messages: [], currentMessage: null,
-          }));
-          return;
-        case 'model_change':
-          if (needsArg && cmdArg) client?.switchModel(cmdArg);
+          updateAppState(prev => ({ ...prev, messages: [], currentMessage: null, statusText: '' }));
           return;
         case 'show_context':
           updateAppState(prev => ({
             ...prev,
-            statusText: `会话消息: ${prev.messages.length} | 模式: ${prev.planMode ? '规划' : '执行'} | 自动: ${prev.autoMode ? '开' : '关'} | 模型: ${prev.modelName || '未连接'}`,
+            statusText: `Messages: ${prev.messages.length} | Mode: ${prev.planMode ? 'Plan' : 'Act'} | Auto: ${prev.autoMode ? 'on' : 'off'} | Model: ${prev.modelName || 'not connected'}`,
           }));
           return;
-        case 'stop': client?.stop(); return;
-        case 'pause': client?.pause(); return;
-        case 'resume': client?.resume(); return;
-        case 'doctor': client?.doctor(); return;
-        case 'rewind': client?.rewind(); return;
-        case 'compact': client?.compact(); return;
-        case 'init': client?.init(); return;
-        case 'effort': if (cmdArg) client?.effort(cmdArg); return;
-        case 'branch': if (cmdArg) client?.branch(cmdArg); return;
-        case 'mcp': if (cmdArg) client?.mcp(cmdArg); return;
-        case 'skills': client?.skills(); return;
-        case 'agents': client?.agents(); return;
-        case 'config': if (cmdArg) client?.config(cmdArg); return;
-        case 'plugin': if (cmdArg) client?.plugin(cmdArg); return;
-        case 'tokens': client?.send('tokens'); return;
-        case 'memory': client?.send('memory'); return;
-        case 'export': if (cmdArg) client?.send('export', undefined, { path: cmdArg }); return;
-        case 'checkpoint': client?.send('checkpoint'); return;
-        case 'test': client?.send('test'); return;
-        case 'lint': client?.send('lint'); return;
-        case 'search': if (cmdArg) client?.send('search', undefined, { query: cmdArg }); return;
-        case 'project': client?.send('project'); return;
+        case 'model_change':
+          client?.switchModel(cmdArg);
+          return;
+        case 'stop':
+          client?.stop();
+          return;
+        case 'pause':
+          client?.pause();
+          return;
+        case 'resume':
+          client?.resume();
+          return;
+        case 'doctor':
+          client?.doctor();
+          return;
+        case 'rewind':
+          client?.rewind();
+          return;
+        case 'compact':
+          client?.compact();
+          return;
+        case 'init':
+          client?.init();
+          return;
+        case 'effort':
+          client?.effort(cmdArg);
+          return;
+        case 'branch':
+          client?.branch(cmdArg);
+          return;
+        case 'mcp':
+          client?.mcp(cmdArg);
+          return;
+        case 'tokens':
+        case 'memory':
+        case 'export':
+        case 'checkpoint':
+        case 'test':
+        case 'lint':
+        case 'search':
+        case 'project':
+        case 'config':
+        case 'skills':
+        case 'agents':
+        case 'plugin':
+          try {
+            await runLocalCommand(action, cmdArg);
+          } catch (err) {
+            pushAssistant(`Command failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+          return;
       }
       return;
     }
 
-    // Normal chat — ignore unmatched / prefixes
-    if (text.startsWith('/') && !(cmd && cmd in SLASH_COMMANDS)) return;
+    if (text.startsWith('/') && !(cmd && cmd in SLASH_COMMANDS)) {
+      pushAssistant(`Unknown command: ${cmd}. Type /help to see available commands.`);
+      return;
+    }
 
     const client = clientRef.current;
-    if (!client) return;
+    if (!client) {
+      pushAssistant('Backend is not connected yet.');
+      return;
+    }
 
-    // QueryGuard: reserve before any prep work. If already dispatching/running,
-    // enqueue the input for auto-submit once the current query completes.
     const guardGen = queryGuard.reserve();
     if (guardGen === null) {
       queryGuard.enqueue(text);
       return;
     }
 
-    // Resolve @ file references → attach as <context> blocks
     const files = referencedFilesRef.current;
     referencedFilesRef.current = [];
     let finalText = text;
@@ -133,19 +164,19 @@ export function useCommandHandler(opts: CommandHandlerOptions) {
           finalText = finalText.replace(filePath, '').trim();
           const ext = filePath.split('.').pop() || '';
           fileCtxs.push(
-            `<context ref="${filePath}">\n\`\`\`${ext}\n${content}\n\`\`\`\n</context>`
+            `<context ref="${filePath}">\n\`\`\`${ext}\n${content}\n\`\`\`\n</context>`,
           );
         }
-      } catch { /* file not readable, leave path in text */ }
+      } catch {
+        // Leave the path in the prompt when the backend cannot read it.
+      }
     }
     if (fileCtxs.length > 0) {
-      finalText = fileCtxs.join('\n\n') + '\n\n' + finalText.trim();
-      finalText = finalText.trim();
+      finalText = `${fileCtxs.join('\n\n')}\n\n${finalText.trim()}`.trim();
     }
 
-    // Expand "[Pasted text #N ...]" tokens to the real clipboard content
     const expanded = expandPastes(finalText);
-    saveToHistory(finalText); // save the compact view, not the expanded text
+    saveToHistory(finalText);
     const msg = createMessage('user', expanded);
     updateAppState(prev => ({ ...prev, messages: [...prev.messages, msg] }));
     client.chat(expanded, planModeRef.current);
