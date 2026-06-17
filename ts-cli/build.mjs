@@ -21,11 +21,10 @@ await esbuild.build({
 console.log('[build] Bundle: dist/cli.js');
 
 // Copy fat JAR from Maven build if it exists (dev convenience)
-import { existsSync, mkdirSync, copyFileSync, unlinkSync, createWriteStream } from 'node:fs';
+import { existsSync, mkdirSync, copyFileSync, unlinkSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { get } from 'node:https';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -57,7 +56,11 @@ if (existsSync(fatJarSource)) {
     await runProguard(fatJarSource, obfJar);
   } else {
     console.log('[build] ProGuard JAR not found, downloading...');
-    await downloadProguard(proguardJar);
+    try {
+      await downloadProguard(proguardJar);
+    } catch (err) {
+      console.error('[build] Download failed:', err.message);
+    }
     if (existsSync(proguardJar)) {
       await runProguard(fatJarSource, obfJar);
     } else {
@@ -70,43 +73,84 @@ if (existsSync(fatJarSource)) {
 }
 
 function downloadProguard(dest) {
-  return new Promise((resolve, reject) => {
-    const url = 'https://repo1.maven.org/maven2/com/guardsquare/proguard/proguard-base/7.4.2/proguard-base-7.4.2.jar';
-    const file = createWriteStream(dest);
-    get(url, (res) => {
-      if (res.statusCode === 302 || res.statusCode === 301) {
-        file.close();
-        unlinkSync(dest);
-        return downloadProguard(res.headers.location).then(resolve, reject);
-      }
-      if (res.statusCode !== 200) {
-        file.close();
-        unlinkSync(dest);
-        reject(new Error('HTTP ' + res.statusCode + ' downloading ProGuard'));
-        return;
-      }
-      res.pipe(file);
-      file.on('finish', () => { file.close(); resolve(); });
-      file.on('error', (err) => { unlinkSync(dest); reject(err); });
-    }).on('error', (err) => { unlinkSync(dest); reject(err); });
-  });
+  const version = '7.9.1';
+  const url = `https://github.com/Guardsquare/proguard/releases/download/v${version}/proguard-${version}.zip`;
+  const zipDest = dest + '.zip';
+
+  console.log('[build] Downloading ProGuard ZIP from:', url);
+  try {
+    execFileSync('curl', ['-skL', '--connect-timeout', '30', '--retry', '3', '--retry-delay', '10', '-o', zipDest, url], { stdio: 'inherit' });
+  } catch {
+    if (existsSync(zipDest)) unlinkSync(zipDest);
+    throw new Error('curl download failed — check network connectivity to GitHub');
+  }
+
+  console.log('[build] Extracting proguard.jar...');
+  const extractDir = join(dirname(dest), '.proguard_extract');
+  try {
+    if (process.platform === 'win32') {
+      execFileSync('powershell', [
+        '-Command',
+        `Expand-Archive -Path '${zipDest.replace(/'/g, "''")}' -DestinationPath '${extractDir.replace(/'/g, "''")}' -Force`
+      ], { stdio: 'inherit' });
+      const result = execFileSync('powershell', [
+        '-Command',
+        `Get-ChildItem -Recurse -Filter 'proguard.jar' '${extractDir.replace(/'/g, "''")}' | Select-Object -First 1 -ExpandProperty FullName`
+      ], { stdio: ['ignore', 'pipe', 'pipe'] });
+      const jarPath = result.toString().trim();
+      if (!jarPath) throw new Error('proguard.jar not found in extracted ZIP');
+      copyFileSync(jarPath, dest);
+    } else {
+      execFileSync('unzip', ['-o', '-j', zipDest, 'lib/proguard.jar', '-d', dirname(dest)], { stdio: 'inherit' });
+    }
+    console.log('[build] ProGuard JAR ready:', dest);
+  } finally {
+    if (existsSync(zipDest)) unlinkSync(zipDest);
+    if (existsSync(extractDir)) rmRecursive(extractDir);
+  }
+}
+
+function rmRecursive(dir) {
+  try {
+    if (process.platform === 'win32') {
+      execFileSync('powershell', ['-Command', `Remove-Item -Recurse -Force '${dir.replace(/'/g, "''")}'`], { stdio: 'ignore' });
+    } else {
+      execFileSync('rm', ['-rf', dir], { stdio: 'ignore' });
+    }
+  } catch { /* best effort */ }
 }
 
 async function runProguard(fatJarSource, obfJar) {
   console.log('[build] Running ProGuard obfuscation...');
   try {
+    const javaHome = process.env.JAVA_HOME || '';
+    // JDK 9+ uses .jmod files instead of rt.jar; list all available jmods for ProGuard
+    const jmodDir = join(javaHome, 'jmods');
+    const libArgs = [];
+    if (existsSync(jmodDir)) {
+      for (const f of readdirSync(jmodDir)) {
+        libArgs.push('-libraryjars', join(jmodDir, f) + '(!**.jar;!module-info.class)');
+      }
+    } else {
+      libArgs.push('-libraryjars', join(javaHome, 'jre', 'lib', 'rt.jar'));
+    }
     execFileSync('java', [
       '-jar', proguardJar,
       '-injars', fatJarSource,
       '-outjars', obfJar,
-      '-libraryjars', (process.env.JAVA_HOME || '') + '/jre/lib/rt.jar',
+      ...libArgs,
       '@' + proguardConf,
       '-printmapping', join(backendDir, 'proguard.map')
     ], { stdio: 'inherit' });
     console.log('[build] ProGuard obfuscation completed: backend/jwcode-web-obf.jar');
     const finalJar = join(backendDir, 'jwcode-web.jar');
-    if (existsSync(finalJar)) unlinkSync(finalJar);
-    copyFileSync(obfJar, finalJar);
+    try {
+      if (existsSync(finalJar)) unlinkSync(finalJar);
+      copyFileSync(obfJar, finalJar);
+    } catch (err) {
+      console.warn('[build] Could not replace jwcode-web.jar (file may be locked):', err.message);
+      console.warn('[build] Obfuscated JAR available at:', obfJar);
+    }
     console.log('[build] Final JAR: backend/jwcode-web.jar');
   } catch (err) {
     console.error('[build] ProGuard failed, falling back to un-obfuscated JAR:', err.message);
