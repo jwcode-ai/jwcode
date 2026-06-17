@@ -13,7 +13,9 @@
     "build": "node build.mjs",
     "go": "node build.mjs && node dist/cli.js run",
     "start": "node build.mjs && node dist/cli.js start",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "version": "node -e \"const f=require('fs');const v=require('./package.json').version;let l=f.readFileSync('./package-lock.json','utf8');l=l.replace(/\\\"version\\\":\\s*\\\"[^\\\"]+\\\"/g,(m)=>m.replace(/\\\"[^\\\"]+\\\"$/,`\\\"${v}\\\"`));f.writeFileSync('./package-lock.json',l)\" && git add package-lock.json",
+    "postversion": "git push origin main --follow-tags && git push origin v$(node -p \"require('./package.json').version\")"
   },
   "dependencies": {
     "ink": "^5.0.0",
