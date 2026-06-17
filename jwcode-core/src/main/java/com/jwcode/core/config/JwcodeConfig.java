@@ -310,6 +310,7 @@ public class JwcodeConfig {
     @Data
     @NoArgsConstructor
     @JsonInclude(JsonInclude.Include.NON_NULL)
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public static class ModelDefinition {
         
         @JsonProperty("id")
@@ -362,6 +363,7 @@ public class JwcodeConfig {
         /**
          * 获取有效的温度值
          */
+        @com.fasterxml.jackson.annotation.JsonIgnore
         public Double getEffectiveTemperature() {
             return temperature;
         }
