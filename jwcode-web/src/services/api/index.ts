@@ -36,6 +36,7 @@ export const api = {
     create: (data: { provider: string; model: Record<string, unknown> }) => apiClient.post<{ model: Record<string, unknown>; provider: string; savedTo: string }>('/api/models', data),
     update: (id: string, data: Partial<Model>) => apiClient.put<Model>(`/api/models/${id}`, data),
     test: (id: string) => apiClient.post<{ success: boolean; message: string }>(`/api/models/${id}/test`),
+    toggle: (provider: string, modelId: string) => apiClient.post<{ provider: string; modelId: string; enabled: boolean }>('/api/models/toggle', { provider, modelId }),
   },
 
   // Tool related
@@ -102,6 +103,7 @@ export const api = {
       }>('/api/config/provider'),
       save: (data: Record<string, unknown>) => apiClient.post<{ message: string }>('/api/config/provider', data),
       delete: (providerName: string) => apiClient.post<{ message: string }>('/api/config/provider', { provider: providerName, apiKeys: [], models: [] }),
+      setDefault: (providerName: string) => apiClient.post<{ message: string }>('/api/config/provider', { provider: providerName, setDefault: true }),
     },
     files: {
       list: () => apiClient.get<Array<{ name: string; size: number; modified: number; editable: boolean }>>('/api/config/files'),

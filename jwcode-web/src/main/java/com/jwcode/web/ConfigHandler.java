@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jwcode.core.config.ConfigManager;
 import com.jwcode.core.config.ConfigScope;
+import com.jwcode.core.llm.LLMFactory;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 
@@ -489,6 +490,20 @@ public class ConfigHandler implements HttpHandler {
 
             // Save to user config
             loader.saveConfig(config);
+
+            // Hot-reload LLMFactory so the new provider takes effect without restart
+            try {
+                LLMFactory factory = LLMFactory.getGlobalInstance();
+                if (factory != null) {
+                    java.nio.file.Path configPath = loader.getUserConfigPath();
+                    if (configPath != null) {
+                        factory.reloadConfig(configPath.toString());
+                        logger.info("LLMFactory reloaded after provider config save");
+                    }
+                }
+            } catch (Exception e) {
+                logger.warning("Failed to reload LLMFactory: " + e.getMessage());
+            }
 
             ObjectNode response = objectMapper.createObjectNode();
             response.put("success", true);

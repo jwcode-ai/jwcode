@@ -3,6 +3,7 @@ package com.jwcode.web;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jwcode.core.config.JwcodeConfig;
 import com.jwcode.core.config.YamlConfigLoader;
+import com.jwcode.core.llm.LLMFactory;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 
@@ -10,6 +11,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -46,6 +48,8 @@ public class ModelInfoHandler implements HttpHandler {
             } else if ("POST".equals(method)) {
                 if ("/api/models".equals(path)) {
                     handleAddModel(exchange);
+                } else if ("/api/models/toggle".equals(path)) {
+                    handleToggleModel(exchange);
                 } else {
                     sendError(exchange, 404, "Not found: " + path);
                 }
@@ -261,7 +265,91 @@ public class ModelInfoHandler implements HttpHandler {
         
         sendSuccess(exchange, 201, result);
     }
-    
+
+    /**
+     * 切换模型的启用/禁用状态 POST /api/models/toggle
+     * 请求体: { "provider": "openai", "modelId": "gpt-4o" }
+     */
+    @SuppressWarnings("unchecked")
+    private void handleToggleModel(HttpExchange exchange) throws IOException {
+        InputStream is = exchange.getRequestBody();
+        String body = new String(is.readAllBytes(), StandardCharsets.UTF_8);
+
+        Map<String, Object> requestMap;
+        try {
+            requestMap = mapper.readValue(body, Map.class);
+        } catch (Exception e) {
+            sendError(exchange, 400, "Invalid JSON: " + e.getMessage());
+            return;
+        }
+
+        String providerName = (String) requestMap.get("provider");
+        String modelId = (String) requestMap.get("modelId");
+
+        if (providerName == null || providerName.isBlank()) {
+            sendError(exchange, 400, "provider is required");
+            return;
+        }
+        if (modelId == null || modelId.isBlank()) {
+            sendError(exchange, 400, "modelId is required");
+            return;
+        }
+
+        YamlConfigLoader loader = YamlConfigLoader.getInstance();
+        JwcodeConfig config = loader.getConfig();
+
+        JwcodeConfig.ProviderConfig provider = config.getProviders().get(providerName);
+        if (provider == null) {
+            sendError(exchange, 404, "Provider '" + providerName + "' not found");
+            return;
+        }
+
+        JwcodeConfig.ModelDefinition target = null;
+        for (JwcodeConfig.ModelDefinition m : provider.getModels()) {
+            if (m.getId().equals(modelId)) {
+                target = m;
+                break;
+            }
+        }
+        if (target == null) {
+            sendError(exchange, 404, "Model '" + modelId + "' not found in provider '" + providerName + "'");
+            return;
+        }
+
+        // Toggle enabled state
+        boolean newEnabled = !target.isEnabled();
+        target.setEnabled(newEnabled);
+
+        // Save config
+        try {
+            loader.saveConfig(config);
+            logger.info("Toggled model '" + modelId + "' for provider '" + providerName + "' to enabled=" + newEnabled);
+        } catch (Exception e) {
+            sendError(exchange, 500, "Failed to save config: " + e.getMessage());
+            return;
+        }
+
+        // Hot-reload LLMFactory
+        try {
+            LLMFactory factory = LLMFactory.getGlobalInstance();
+            if (factory != null) {
+                Path userPath = loader.getUserConfigPath();
+                if (userPath != null) {
+                    factory.reloadConfig(userPath.toString());
+                    logger.info("LLMFactory reloaded after model toggle");
+                }
+            }
+        } catch (Exception e) {
+            logger.warning("Failed to reload LLMFactory after model toggle: " + e.getMessage());
+        }
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("provider", providerName);
+        result.put("modelId", modelId);
+        result.put("enabled", newEnabled);
+        sendSuccess(exchange, 200, result);
+    }
+
     private void sendSuccess(HttpExchange exchange, int statusCode, Object data) throws IOException {
         Map<String, Object> response = new HashMap<>();
         response.put("success", true);

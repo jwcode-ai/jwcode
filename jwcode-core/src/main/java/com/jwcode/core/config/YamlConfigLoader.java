@@ -579,6 +579,7 @@ public class YamlConfigLoader {
      * 保存配置到用户目录
      */
     public synchronized void saveConfig(JwcodeConfig config) {
+        ensureDefaultProvider(config);
         saveConfig(config, userConfigPath);
     }
     
@@ -587,6 +588,7 @@ public class YamlConfigLoader {
      */
     public synchronized void saveConfig(JwcodeConfig config, Path path) {
         try {
+            ensureDefaultProvider(config);
             Files.createDirectories(path.getParent());
             String yaml = yamlMapper.writeValueAsString(config);
             String header = "# JWCode Configuration\n"
@@ -686,6 +688,17 @@ public class YamlConfigLoader {
         // 返回空配置，所有值由配置文件决定
         return new JwcodeConfig();
     }
+
+    /**
+     * Ensure default provider is set: auto-pick first provider if none specified.
+     */
+    private void ensureDefaultProvider(JwcodeConfig config) {
+        if (config.getDefaultProviderName() == null && !config.getProviders().isEmpty()) {
+            String first = config.getProviders().entrySet().iterator().next().getKey();
+            config.setDefaultProvider(first);
+        }
+    }
+
     
     // ==================== 路径获取 ====================
     

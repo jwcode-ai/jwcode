@@ -94,7 +94,13 @@ public class JwcodeConfig {
      */
     @JsonIgnore
     public String getDefaultProviderName() {
-        return defaultProvider;
+        if (defaultProvider != null && providers.containsKey(defaultProvider)) {
+            return defaultProvider;
+        }
+        if (!providers.isEmpty()) {
+            return providers.entrySet().iterator().next().getKey();
+        }
+        return null;
     }
 
     /**

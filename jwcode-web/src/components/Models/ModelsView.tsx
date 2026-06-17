@@ -31,11 +31,8 @@ const PROVIDER_PRESETS: PresetProvider[] = [
   { key: 'moonshot', name: 'Moonshot / Kimi', baseUrl: 'https://api.moonshot.cn/v1', apiType: 'openai-completions', defaultModel: 'moonshot-v1-8k' },
   { key: 'qwen', name: '通义千问 (Qwen)', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', apiType: 'openai-completions', defaultModel: 'qwen-plus' },
   { key: 'zhipu', name: '智谱 (GLM)', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', apiType: 'openai-completions', defaultModel: 'glm-4-plus' },
-  { key: 'baichuan', name: '百川 (Baichuan)', baseUrl: 'https://api.baichuan-ai.com/v1', apiType: 'openai-completions', defaultModel: 'Baichuan4' },
   { key: 'minimax', name: 'MiniMax / 海螺', baseUrl: 'https://api.minimax.chat/v1', apiType: 'openai-completions', defaultModel: 'abab6.5s-chat' },
   { key: 'doubao', name: '豆包 (Doubao)', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', apiType: 'openai-completions', defaultModel: 'doubao-pro-32k' },
-  { key: 'hunyuan', name: '腾讯混元 (Hunyuan)', baseUrl: 'https://api.hunyuan.cloud.tencent.com/v1', apiType: 'openai-completions', defaultModel: 'hunyuan-pro' },
-  { key: 'spark', name: '讯飞星火 (Spark)', baseUrl: 'https://spark-api-open.xf-yun.com/v1', apiType: 'openai-completions', defaultModel: 'generalv3.5' },
   { key: 'custom', name: 'Custom (自定义)', baseUrl: '', apiType: 'openai-completions', defaultModel: '' },
 ];
 
@@ -60,6 +57,7 @@ export function ModelsView() {
     modelName: '',
     baseUrl: '',
     apiKeys: '',
+    apiType: 'openai-completions',
     temperature: 1.0,
     maxTokens: 32768,
     contextWindow: 128000,
@@ -70,7 +68,7 @@ export function ModelsView() {
   // Provider config state
   const [providerSummary, setProviderSummary] = useState<ProviderSummary | null>(null);
   const [activePreset, setActivePreset] = useState<string | null>(null);
-  const [presetForm, setPresetForm] = useState({ apiKey: '', modelId: '', baseUrl: '', apiType: 'openai-completions' });
+  const [presetForm, setPresetForm] = useState({ apiKey: '', modelIds: '', baseUrl: '', apiType: 'openai-completions', setDefault: false });
   const [presetSaving, setPresetSaving] = useState(false);
   const [presetError, setPresetError] = useState<string | null>(null);
   const [showKey, setShowKey] = useState(false);
@@ -120,8 +118,15 @@ export function ModelsView() {
     loadData();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleToggle = async (_modelId: string, _currentStatus: string) => {
-    await loadData();
+  const handleToggle = async (modelId: string, _currentStatus: string) => {
+    const model = models.find(m => m.id === modelId);
+    if (!model) return;
+    try {
+      const res = await api.models.toggle(model.provider, modelId);
+      if (res.success) {
+        await loadData();
+      }
+    } catch { /* ignore */ }
   };
 
   const handleRefresh = async (modelId: string) => {
@@ -133,12 +138,17 @@ export function ModelsView() {
 
   const handlePresetClick = (preset: PresetProvider) => {
     const existing = providerSummary?.providers?.[preset.key];
+    const isDefault = providerSummary?.defaultProvider === preset.key;
+    // Load existing model IDs for this provider
+    const existingModels = models.filter(m => m.provider === preset.key).map(m => m.id);
+    const initialModelIds = existingModels.length > 0 ? existingModels.join(', ') : preset.defaultModel;
     setActivePreset(preset.key);
     setPresetForm({
       apiKey: '',
-      modelId: preset.defaultModel,
+      modelIds: initialModelIds,
       baseUrl: existing?.baseUrl || preset.baseUrl,
       apiType: existing?.apiType || preset.apiType,
+      setDefault: !isDefault && !existing?.hasApiKey,
     });
     if (existing?.hasApiKey) {
       // Already configured, form is toggled with existing values
@@ -162,15 +172,15 @@ export function ModelsView() {
         baseUrl: presetForm.baseUrl || preset.baseUrl,
         apiType: presetForm.apiType || preset.apiType,
         apiKey: presetForm.apiKey.trim() || (existing?.hasApiKey ? undefined : ''),
-        models: [{
-          id: presetForm.modelId || preset.defaultModel,
-          name: presetForm.modelId || preset.defaultModel,
+        models: (presetForm.modelIds || preset.defaultModel).split(',').map((id, i) => ({
+          id: id.trim(),
+          name: id.trim(),
           enabled: true,
-          priority: 10,
-        }],
+          priority: 10 + i,
+        })).filter(m => m.id.length > 0),
       };
-      // Set as default if this is the first provider
-      if (!providerSummary?.configured) {
+      // Set as default: first provider, or explicitly checked
+      if (!providerSummary?.configured || presetForm.setDefault) {
         body.setDefault = true;
       }
       const res = await api.config.provider.save(body);
@@ -298,12 +308,12 @@ export function ModelsView() {
                         </button>
                       </div>
                       <div>
-                        <label className="block text-[11px] text-dark-muted mb-0.5">模型 ID</label>
+                        <label className="block text-[11px] text-dark-muted mb-0.5">模型 ID（多个用逗号分隔）</label>
                         <input
                           type="text"
-                          value={presetForm.modelId}
-                          onChange={e => setPresetForm(f => ({ ...f, modelId: e.target.value }))}
-                          placeholder={preset.defaultModel || '输入模型 ID'}
+                          value={presetForm.modelIds}
+                          onChange={e => setPresetForm(f => ({ ...f, modelIds: e.target.value }))}
+                          placeholder={preset.defaultModel || '多个模型 ID 用逗号分隔'}
                           className="w-full bg-dark-bg border border-dark-border rounded px-2 py-1.5 text-sm focus:border-accent-blue outline-none"
                           onClick={e => e.stopPropagation()}
                         />
@@ -365,6 +375,15 @@ export function ModelsView() {
                           </label>
                         </div>
                       </div>
+                      <label className="flex items-center gap-1.5 cursor-pointer" onClick={e => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={presetForm.setDefault}
+                          onChange={e => setPresetForm(f => ({ ...f, setDefault: e.target.checked }))}
+                          className="accent-accent-blue"
+                        />
+                        <span className="text-[11px] text-dark-muted">设为默认 Provider</span>
+                      </label>
                       {presetError && (
                         <div className="text-xs text-accent-red">{presetError}</div>
                       )}
@@ -382,6 +401,21 @@ export function ModelsView() {
                             className="px-3 py-1.5 border border-accent-red/30 text-accent-red rounded text-sm hover:bg-accent-red/10"
                           >
                             删除
+                          </button>
+                        )}
+                        {hasKey && !isDefault && (
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              try {
+                                await api.config.provider.setDefault(preset.key);
+                                await loadProviderSummary();
+                                await loadData();
+                              } catch { /* ignore */ }
+                            }}
+                            className="px-3 py-1.5 border border-accent-blue/30 text-accent-blue rounded text-sm hover:bg-accent-blue/10"
+                          >
+                            设为默认
                           </button>
                         )}
                         <button
@@ -580,6 +614,45 @@ export function ModelsView() {
                 />
               </div>
               <div>
+                <label className="block text-sm text-dark-muted mb-1">API 类型</label>
+                <div className="flex gap-1">
+                  <label
+                    className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded text-sm cursor-pointer border transition-colors ${
+                      addForm.apiType === 'openai-completions'
+                        ? 'bg-accent-blue/20 border-accent-blue text-accent-blue'
+                        : 'bg-dark-bg border-dark-border text-dark-muted hover:border-dark-hover'}
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="addFormApiType"
+                      value="openai-completions"
+                      checked={addForm.apiType === 'openai-completions'}
+                      onChange={e => setAddForm(f => ({ ...f, apiType: e.target.value }))}
+                      className="sr-only"
+                    />
+                    OpenAI Compatible
+                  </label>
+                  <label
+                    className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded text-sm cursor-pointer border transition-colors ${
+                      addForm.apiType === 'anthropic-messages'
+                        ? 'bg-accent-blue/20 border-accent-blue text-accent-blue'
+                        : 'bg-dark-bg border-dark-border text-dark-muted hover:border-dark-hover'}
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="addFormApiType"
+                      value="anthropic-messages"
+                      checked={addForm.apiType === 'anthropic-messages'}
+                      onChange={e => setAddForm(f => ({ ...f, apiType: e.target.value }))}
+                      className="sr-only"
+                    />
+                    Anthropic Messages
+                  </label>
+                </div>
+              </div>
+              <div>
                 <label className="block text-sm text-dark-muted mb-1">API Key（多个用逗号分隔）</label>
                 <input
                   type="text"
@@ -659,6 +732,7 @@ export function ModelsView() {
                     if (addForm.apiKeys.trim()) {
                       modelData.apiKeys = addForm.apiKeys.split(',').map(k => k.trim()).filter(Boolean);
                     }
+                    modelData.apiType = addForm.apiType;
                     const res = await api.models.create({
                       provider: addForm.provider.trim(),
                       model: modelData,
@@ -666,7 +740,7 @@ export function ModelsView() {
                     if (res.success) {
                       setShowAddForm(false);
                       setAddForm({
-                        provider: '', modelId: '', modelName: '', baseUrl: '', apiKeys: '',
+                        provider: '', modelId: '', modelName: '', baseUrl: '', apiKeys: '', apiType: 'openai-completions',
                         temperature: 1.0, maxTokens: 32768, contextWindow: 128000,
                       });
                       await loadData();
