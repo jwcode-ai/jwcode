@@ -10,8 +10,9 @@
  *   launches via `java -jar` from target/.
  */
 import { spawn, spawnSync, execSync, execFileSync, type ChildProcess } from 'node:child_process';
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname, delimiter } from 'node:path';
+import { createRequire } from 'node:module';
 import { homedir, platform } from 'node:os';
 import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
@@ -20,23 +21,22 @@ const __dirname = dirname(__filename);
 /**
  * Find the installation directory where jwcode's backend JAR lives.
  *
- * Looks for backend/jwcode-web.jar relative to the script (npm global install).
- * Falls back to the dev repo root (contains pom.xml).
+ * Dev repo clone: walk up looking for pom.xml (monorepo root).
+ * npm global install: dist/cli.js → ../package.json (install root).
  * Final fallback is process.cwd().
  */
 export function findInstallDir(): string {
-  // Production: look for bundled JAR relative to dist/cli.js
-  // dist/cli.js → ../backend/jwcode-web.jar
-  const bundledJar = join(__dirname, '..', 'backend', 'jwcode-web.jar');
-  if (existsSync(bundledJar)) {
-    return join(__dirname, '..');
-  }
-
   // Development: walk up from script looking for pom.xml (monorepo root)
   let dir = join(__dirname, '..', '..');
   while (dir !== dirname(dir)) {
     if (existsSync(join(dir, 'pom.xml'))) return dir;
     dir = dirname(dir);
+  }
+
+  // npm global install: package.json in parent dir
+  const parentDir = join(__dirname, '..');
+  if (existsSync(join(parentDir, 'package.json'))) {
+    return parentDir;
   }
 
   return process.cwd();
@@ -147,6 +147,74 @@ export function findJava(): string {
     } catch {}
   }
   return 'java';
+}
+
+/**
+ * Ensure the backend JAR exists by downloading from GitHub Releases if needed.
+ * Returns the JAR path, or null if download fails.
+ */
+export async function ensureBackendJar(installDir: string): Promise<string | null> {
+  const existing = findJar(installDir);
+  if (existing) return existing;
+
+  const backendDir = join(installDir, 'backend');
+  const jarPath = join(backendDir, 'jwcode-web.jar');
+
+  // Read package version for the release tag
+  let version: string;
+  try {
+    const req = createRequire(import.meta.url);
+    const pkg = req('../package.json');
+    version = pkg.version;
+  } catch {
+    console.error('[launcher] Could not read package.json to determine version.');
+    return null;
+  }
+
+  const url = `https://github.com/ngwlh/jwcode/releases/download/v${version}/jwcode-web.jar`;
+  console.log(`[launcher] Backend JAR not found. Downloading from GitHub Releases...`);
+  console.log(`[launcher] ${url}`);
+
+  try {
+    mkdirSync(backendDir, { recursive: true });
+    const response = await fetch(url);
+    if (!response.ok) {
+      console.error(`[launcher] Download failed: HTTP ${response.status}`);
+      return null;
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      console.error('[launcher] Download failed: no response body');
+      return null;
+    }
+
+    const chunks: Uint8Array[] = [];
+    let downloaded = 0;
+    const total = Number(response.headers.get('content-length') || 0);
+
+    // Read in chunks for progress reporting
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      downloaded += value.length;
+      if (total > 0) {
+        const pct = Math.round((downloaded / total) * 100);
+        process.stdout.write(`\r[launcher] Downloading... ${pct}% (${(downloaded / 1024 / 1024).toFixed(1)} MB)`);
+      }
+    }
+
+    // Write concatenated chunks
+    const buf = Buffer.concat(chunks);
+    writeFileSync(jarPath, buf);
+    console.log(`\n[launcher] Download complete: ${jarPath} (${(buf.length / 1024 / 1024).toFixed(1)} MB)`);
+
+    return jarPath;
+  } catch (err) {
+    console.error(`[launcher] Download failed: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
 }
 
 export function buildBackend(projectRoot: string): void {

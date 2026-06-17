@@ -22,8 +22,7 @@
     "ws": "^8.18.0"
   },
   "files": [
-    "dist/",
-    "backend/"
+    "dist/"
   ],
   "engines": {
     "node": ">=18"

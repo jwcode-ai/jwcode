@@ -39,7 +39,7 @@ process.on('uncaughtException', (err: NodeJS.ErrnoException) => {
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  findInstallDir, findJar, findMvn, buildBackend,
+  findInstallDir, findJar, findMvn, ensureBackendJar, buildBackend,
   startBackend, waitForBackend, cleanupBackend,
   findAvailablePorts, portInUse, killPort,
 } from './launcher.js';
@@ -123,14 +123,19 @@ async function cmdStart(args: Record<string, string | boolean>): Promise<void> {
   console.log(`  HTTP API:  http://localhost:${httpPort}`);
   console.log(`  WebSocket: ws://localhost:${wsPort}/ws`);
 
-  // Build if requested or if jar doesn't exist (dev mode)
-  if (build || !findJar(installDir)) {
+  // Ensure JAR exists: build from source (dev) or download from GitHub Releases
+  if (!findJar(installDir) || build) {
     if (existsSync(join(installDir, 'pom.xml'))) {
+      // Dev mode — build from source
       buildBackend(installDir);
     } else if (!findJar(installDir)) {
-      console.error('[launcher] Backend JAR not found and no pom.xml for build.');
-      console.error('[launcher] Install via: npm install -g @jwcode/cli');
-      process.exit(1);
+      // Production mode — download from GitHub Releases
+      const jar = await ensureBackendJar(installDir);
+      if (!jar) {
+        console.error('[launcher] Backend JAR not found and download failed.');
+        console.error('[launcher] Install via: npm install -g @jwcode/cli');
+        process.exit(1);
+      }
     }
   }
 
