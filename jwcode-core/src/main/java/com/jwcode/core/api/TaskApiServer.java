@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.jwcode.core.agent.EnhancedOrchestratorAgent;
+import com.jwcode.core.config.JwcodeConfig;
 import com.jwcode.core.llm.LLMService;
 import com.jwcode.core.session.SessionManager;
 import com.jwcode.core.task.Task;
@@ -51,6 +52,7 @@ public class TaskApiServer {
     private ToolExecutor toolExecutor;
     private ToolRegistry toolRegistry;
     private SessionManager sessionManager;
+    private JwcodeConfig jwcodeConfig;
     
     public TaskApiServer(TaskStore taskStore) {
         this.taskStore = taskStore;
@@ -77,6 +79,10 @@ public class TaskApiServer {
     
     public void setSessionManager(SessionManager sessionManager) {
         this.sessionManager = sessionManager;
+    }
+
+    public void setJwcodeConfig(JwcodeConfig jwcodeConfig) {
+        this.jwcodeConfig = jwcodeConfig;
     }
     
     /**
@@ -120,7 +126,7 @@ public class TaskApiServer {
         if (orchestrator != null && llmService != null) {
             SessionManager sm = sessionManager != null ? sessionManager : new SessionManager();
             WebSocketMessageHandler handler = new WebSocketMessageHandler(
-                sm, orchestrator, llmService, toolExecutor, toolRegistry, wsServer
+                sm, orchestrator, llmService, toolExecutor, toolRegistry, wsServer, jwcodeConfig
             );
             wsServer.setMessageHandler(handler);
             logger.info("WebSocketMessageHandler configured and injected");

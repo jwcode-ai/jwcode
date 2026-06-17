@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import Prism from 'prismjs';
 import 'prismjs/components/prism-javascript';
@@ -14,7 +14,6 @@ import 'prismjs/components/prism-markdown';
 import 'prismjs/components/prism-yaml';
 import 'prismjs/components/prism-sql';
 import { CheckCircle, Copy } from 'lucide-react';
-import { useState } from 'react';
 
 interface MarkdownRendererProps {
   content: string;
@@ -100,11 +99,40 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
 }
 
 export function MarkdownRenderer({ content, className = '' }: MarkdownRendererProps) {
+  // Streaming throttle: during rapid content updates (streaming), re-render
+  // markdown at most every 200ms.  The ref-based timer ensures any intermediate
+  // changes between renders are picked up when the timer fires.
+  const [displayedContent, setDisplayedContent] = useState(content);
+  const lastCommitRef = useRef(0);
+  const nextTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latestRef = useRef(content);
+  latestRef.current = content;
+
+  useEffect(() => {
+    if (content === displayedContent) return;
+    const now = Date.now();
+    const elapsed = now - lastCommitRef.current;
+    if (elapsed >= 200) {
+      setDisplayedContent(content);
+      lastCommitRef.current = now;
+    } else if (!nextTimerRef.current) {
+      nextTimerRef.current = setTimeout(() => {
+        nextTimerRef.current = null;
+        setDisplayedContent(latestRef.current);
+        lastCommitRef.current = Date.now();
+      }, 200 - elapsed);
+    }
+  }, [content]);
+
+  useEffect(() => {
+    return () => { if (nextTimerRef.current) { clearTimeout(nextTimerRef.current); } };
+  }, []);
+
   // Ensure line breaks are preserved - process escaped newlines first
-  const processedContent = (content || '')
+  const processedContent = (displayedContent || '')
     .replace(/\\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n');
-  
+
   return (
     <div className={`markdown-content ${className}`} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
       <ReactMarkdown

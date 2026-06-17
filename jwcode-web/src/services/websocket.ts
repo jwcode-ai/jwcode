@@ -1,4 +1,5 @@
 ﻿import { WSMessage } from '../types';
+import { errLog } from '../stores/errorStore';
 
 type MessageHandler = (message: WSMessage) => void;
 type ConnectionHandler = () => void;
@@ -71,7 +72,7 @@ class WebSocketService {
     };
 
     this.ws.onerror = (error) => {
-      console.error('[WS] WebSocket error:', error);
+      errLog.error('WebSocket connection error', (error as ErrorEvent).message || 'Connection failed');
       this.errorHandlers.forEach((handler) => handler());
     };
 
@@ -94,7 +95,7 @@ class WebSocketService {
 
         this.messageHandlers.forEach((handler) => handler(message));
       } catch (error) {
-        console.error('Failed to parse WebSocket message:', error);
+        errLog.error('Failed to parse WebSocket message', String(error));
       }
     };
   }

@@ -658,6 +658,9 @@ public class JwcodeConfig {
         
         @JsonProperty("ai-mode")
         private boolean aiMode = true;  // 默认使用 AI 模式
+
+        @JsonProperty("max-plan-rounds")
+        private int maxPlanRounds = 8;  // Plan 模式最大分析轮次，0 表示无限制
     }
     
     /**

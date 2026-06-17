@@ -5,7 +5,7 @@ import { useSessionStore } from '../../stores/sessionStore';
 import { Trash2, ChevronDown, ChevronUp, Gauge, Scissors, MessageSquare } from 'lucide-react';
 
 export function ContextManager() {
-  const { currentUsage, maxContextTokens, showTokenInfo, setShowTokenInfo, pruneContext, estimateTokens } = useTokenStore();
+  const { currentUsage, maxContextTokens, showTokenInfo, setShowTokenInfo, estimateTokens } = useTokenStore();
   const messagesBySession = useChatStore((s) => s.messagesBySession);
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   // 只使用当前激活会话的消息
@@ -36,7 +36,7 @@ export function ContextManager() {
     };
   }, [messages, estimateTokens]);
 
-  const usagePercent = maxContextTokens > 0 
+  const usagePercent = maxContextTokens > 0
     ? Math.min(100, Math.round((currentUsage.totalTokens / maxContextTokens) * 100))
     : 0;
 
@@ -52,12 +52,24 @@ export function ContextManager() {
     return 'bg-red-500';
   };
 
+  // 客户端裁剪 — 直接截断当前会话消息，保留 pruneRatio 比例
   const handlePrune = useCallback(() => {
-    const result = pruneContext(pruneRatio);
-    // ContextManager 不再直接操作 chatStore 的消息
-    // 裁剪由 tokenStore 的 pruneContext 处理
-    console.log(`[ContextManager] Pruned ${result.cutMessages} messages, recovered ${result.recoveredTokens} tokens`);
-  }, [pruneRatio, pruneContext]);
+    if (messages.length === 0) return;
+    const keepCount = Math.max(1, Math.floor(messages.length * pruneRatio));
+    const keepSet = new Set(messages.slice(-keepCount).map((m) => m.id));
+    const cutMessages = messages.length - keepCount;
+    // 通过 chatStore action 实际裁剪消息
+    useChatStore.setState((state) => {
+      if (!activeSessionId) return state;
+      const current = state.messagesBySession[activeSessionId] || [];
+      const filtered = current.filter((m) => keepSet.has(m.id));
+      return {
+        ...state,
+        messagesBySession: { ...state.messagesBySession, [activeSessionId]: filtered },
+      };
+    });
+    console.log(`[ContextManager] Pruned ${cutMessages} messages, kept last ${keepCount}`);
+  }, [messages, pruneRatio, activeSessionId]);
 
   if (!showTokenInfo) {
     // Mini indicator bar

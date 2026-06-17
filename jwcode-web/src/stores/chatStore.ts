@@ -57,6 +57,8 @@ interface ChatState {
   setSessionInput: (sessionId: string, input: string) => void;
   getSessionInput: (sessionId: string) => string;
   attachHookApproval: (sessionId: string, approval: HookApprovalInfo) => void;
+  /** Tombstone: 标记指定消息为已删除（模型切换/上下文压缩导致） */
+  applyTombstone: (sessionId: string, messageIds: string[]) => void;
   isGenerating: (sessionId: string) => boolean;
   isPaused: (sessionId: string) => boolean;
 }
@@ -541,6 +543,22 @@ export const useChatStore = create<ChatState>()(
             messagesBySession: {
               ...state.messagesBySession,
               [sessionId]: [...messages, newMsg].slice(-MAX_MESSAGES_PER_SESSION),
+            },
+          };
+        }),
+
+      applyTombstone: (sessionId, messageIds) =>
+        set((state) => {
+          const messages = state.messagesBySession[sessionId];
+          if (!messages || messages.length === 0) return state;
+          const idSet = new Set(messageIds);
+          const updated = messages.map(msg =>
+            idSet.has(msg.id) ? { ...msg, deleted: true } as Message : msg
+          );
+          return {
+            messagesBySession: {
+              ...state.messagesBySession,
+              [sessionId]: updated,
             },
           };
         }),

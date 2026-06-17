@@ -11,6 +11,8 @@ export interface Message {
   toolCalls?: ToolCall[];
   /** Hook 审批信息 �?当此消息为权限申请时存在 */
   hookApproval?: HookApprovalInfo;
+  /** Tombstone: 标记此消息已被后端的模型切换或上下文压缩清理 */
+  deleted?: boolean;
 }
 
 /**
@@ -290,7 +292,8 @@ export type WSMessageType =
   | 'compaction_progress'
   | 'agent_flow_event'
   | 'message_ack'
-  | 'exit';
+  | 'exit'
+  | 'tombstone';
 
 
 export interface WSMessage {

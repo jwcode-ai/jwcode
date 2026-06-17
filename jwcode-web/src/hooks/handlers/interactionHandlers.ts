@@ -4,6 +4,7 @@ import { useSwarmStore, SwarmTask } from "../../stores/swarmStore";
 import { useHookApprovalStore } from "../../stores/useHookApprovalStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import wsService from "../../services/websocket";
+import { errLog } from "../../stores/errorStore";
 import type { SessionTask } from "../../types";
 
 const DEBUG = false;
@@ -101,7 +102,7 @@ export function handleStepMessage(rawType: string, rawData: any, sessionId: stri
       }
     }
   } catch (e) {
-    console.error("Failed to parse ${rawType}:", e);
+    errLog.warn('Failed to parse ' + rawType, String(e));
   }
 }
 

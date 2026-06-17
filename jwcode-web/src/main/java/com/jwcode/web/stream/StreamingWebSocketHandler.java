@@ -1393,22 +1393,24 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                 StringBuilder fullContentBuilder = new StringBuilder();
                 
                 // 最大工具调用轮次（对齐 claude-code maxTurns=200，Plan 模式给 100 足够）
-                int maxToolIterations = 100;
+                int maxToolIterations = (config != null && config.getSettings() != null && config.getSettings().getEngine() != null)
+                    ? config.getSettings().getEngine().getMaxIterations()
+                    : 50;
                 int toolIteration = 0;
                 boolean finished = false;
                 // 连续失败计数器 — 防止 LLM 幻觉出不存在的工具导致死循环
                 int consecutiveUnknownTools = 0;
                 int consecutiveToolErrors = 0;
 
-                while (!finished && toolIteration < maxToolIterations) {
+                while (!finished && (maxToolIterations <= 0 || toolIteration < maxToolIterations)) {
                     toolIteration++;
 
                     // Plan 轮次限制：超过最大轮次强制总结
                     if (PlanModeManager.getInstance().isPlanRoundsExceeded()) {
-                        logger.warning("Plan 查询: 已达最大分析轮次(" + PlanModeManager.MAX_PLAN_ROUNDS
+                        logger.warning("Plan 查询: 已达最大分析轮次(" + PlanModeManager.getInstance().getMaxPlanRounds()
                             + ")，强制总结。当前轮次=" + PlanModeManager.getInstance().getPlanRounds());
                         session.addMessage(com.jwcode.core.model.Message.createSystemMessage(
-                            "你已达到最大分析轮次限制（" + PlanModeManager.MAX_PLAN_ROUNDS
+                            "你已达到最大分析轮次限制（" + PlanModeManager.getInstance().getMaxPlanRounds()
                             + "轮）。请基于已有信息直接给出分析总结和计划，不要继续使用工具探索。"));
                         java.util.List<LLMMessage> finalMessages = buildLLMMessagesFromSession(session);
                         CompletableFuture<LLMResponse> finalFuture = llmService.chatStreamWithTools(
@@ -1569,7 +1571,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
 
                         // 继续循环，让 AI 基于工具结果继续分析
                         WebSocketLogBroadcaster.getInstance().broadcast(
-                            LogEntry.info("Plan", "继续分析中...（第 " + toolIteration + " 轮 / 上限 " + PlanModeManager.MAX_PLAN_ROUNDS + " 轮）")
+                            LogEntry.info("Plan", "继续分析中...（第 " + toolIteration + " 轮 / 上限 " + PlanModeManager.getInstance().getMaxPlanRounds() + " 轮）")
                         );
                     } else {
                         // 没有工具调用，分析完成
@@ -2065,6 +2067,16 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             Session session = sessions.get(sessionId);
             if (session != null) {
                 session.setMetadata("modelId", modelId);
+
+                // Emit tombstone for current assistant messages — model switch means context may differ
+                java.util.List<String> orphanedIds = session.getMessages().stream()
+                    .filter(m -> m.getRole() == com.jwcode.core.model.Message.Role.ASSISTANT)
+                    .map(com.jwcode.core.model.Message::getId)
+                    .collect(java.util.stream.Collectors.toList());
+                if (!orphanedIds.isEmpty()) {
+                    emitTombstone(sessionId, orphanedIds, "model_switch");
+                    logger.info("Tombstone emitted for " + orphanedIds.size() + " messages (model switch)");
+                }
             }
 
             sendMessage(conn, MessageType.NOTIFICATION, "Model switched to: " + modelId);
@@ -2169,26 +2181,62 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             // Stage 2: compacting
             sendCompactionProgress(conn, "compact", 50, "压缩中... (策略: " + strategy + ")");
 
-            // Perform compaction using ContextWindowManager
-            ContextWindowManager windowManager;
-            switch (strategy) {
-                case "aggressive" -> windowManager = new ContextWindowManager(
-                    ContextWindowManager.DEFAULT_CONTEXT_LIMIT, 10, 2);
-                case "summary" -> windowManager = new ContextWindowManager(
-                    ContextWindowManager.DEFAULT_CONTEXT_LIMIT, 20, 4);
-                default -> windowManager = new ContextWindowManager(
-                    ContextWindowManager.DEFAULT_CONTEXT_LIMIT, 30, 4);
-            }
+            // Collect original message IDs before compaction (for tombstone detection)
+            java.util.List<com.jwcode.core.model.Message> originalMessages = new java.util.ArrayList<>(session.getMessages());
+            java.util.Set<String> beforeIds = originalMessages.stream()
+                .map(com.jwcode.core.model.Message::getId)
+                .collect(java.util.stream.Collectors.toSet());
 
-            List<com.jwcode.core.model.Message> compacted = windowManager.prepareMessages(
-                session.getMessages(), strategy.equals("aggressive"));
+            List<com.jwcode.core.model.Message> compacted;
+
+            // "pipeline" strategy uses the 5-stage CompactionPipeline
+            if ("pipeline".equals(strategy)) {
+                com.jwcode.core.context.CompactionPipeline pipeline = new com.jwcode.core.context.CompactionPipeline(
+                    null, // no LLM strategy for manual compact
+                    (stage, percent, progressMsg) -> sendCompactionProgress(conn, stage.getId(), percent, progressMsg)
+                );
+                var result = pipeline.execute(session, true);
+                compacted = session.getMessages();
+                sendCompactionProgress(conn, "pipeline", 100,
+                    "管线压缩完成: " + result.getBeforeCount() + " → " + result.getAfterCount() + " 条");
+            } else {
+                // Traditional strategy using ContextWindowManager
+                ContextWindowManager windowManager;
+                switch (strategy) {
+                    case "aggressive" -> windowManager = new ContextWindowManager(
+                        ContextWindowManager.DEFAULT_CONTEXT_LIMIT, 10, 2);
+                    case "summary" -> windowManager = new ContextWindowManager(
+                        ContextWindowManager.DEFAULT_CONTEXT_LIMIT, 20, 4);
+                    default -> windowManager = new ContextWindowManager(
+                        ContextWindowManager.DEFAULT_CONTEXT_LIMIT, 30, 4);
+                }
+
+                compacted = windowManager.prepareMessages(
+                    session.getMessages(), "aggressive".equals(strategy));
+                session.setMessages(compacted);
+            }
             int afterCount = compacted != null ? compacted.size() : beforeCount;
 
             if (compacted != null && afterCount < beforeCount) {
-                session.setMessages(compacted);
+                // Compute removed assistant messages for tombstone (using pre-compaction snapshot)
+                java.util.Set<String> afterIds = compacted.stream()
+                    .map(com.jwcode.core.model.Message::getId)
+                    .collect(java.util.stream.Collectors.toSet());
+                java.util.List<String> removedAssistantIds = originalMessages.stream()
+                    .filter(m -> m.getRole() == com.jwcode.core.model.Message.Role.ASSISTANT)
+                    .map(com.jwcode.core.model.Message::getId)
+                    .filter(id -> !afterIds.contains(id))
+                    .collect(java.util.stream.Collectors.toList());
+
                 session.markCompacted();
                 int removed = beforeCount - afterCount;
                 long tokensSaved = removed * 120L; // rough estimate
+
+                // Emit tombstone for removed assistant messages
+                if (!removedAssistantIds.isEmpty()) {
+                    emitTombstone(sessionId, removedAssistantIds, "compaction");
+                    logger.info("Tombstone emitted for " + removedAssistantIds.size() + " assistant messages (compaction)");
+                }
 
                 // Stage 3: finalizing
                 sendCompactionProgress(conn, "finalize", 90, "完成中...");
@@ -2223,6 +2271,25 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             "{\"stage\":\"%s\",\"percent\":%d,\"message\":\"%s\"}",
             escapeJson(stage), percent, escapeJson(message));
         sendMessage(conn, MessageType.COMPACTION_PROGRESS, json);
+    }
+
+    /**
+     * Emit a tombstone message to the frontend, instructing it to mark specific messages as deleted.
+     * Used when model switches or context compaction creates orphaned assistant messages.
+     */
+    private void emitTombstone(String sessionId, java.util.List<String> messageIds, String reason) {
+        if (messageIds == null || messageIds.isEmpty()) return;
+        StringBuilder sb = new StringBuilder();
+        sb.append("{\"messageIds\":[");
+        for (int i = 0; i < messageIds.size(); i++) {
+            if (i > 0) sb.append(",");
+            sb.append("\"").append(escapeJson(messageIds.get(i))).append("\"");
+        }
+        sb.append("],");
+        sb.append("\"reason\":\"").append(escapeJson(reason)).append("\"");
+        sb.append(",\"ts\":").append(System.currentTimeMillis());
+        sb.append("}");
+        sendMessage(sessionId, MessageType.TOMBSTONE, sb.toString());
     }
 
     /**
@@ -3495,6 +3562,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         DOCTOR_RESULT,      // 诊断结果
         REWIND_RESULT,      // 回退结果
         DOCS_UPDATED,       // 文档更新完成
+        TOMBSTONE,          // Tombstone 消息：通知前端清理孤立 assistant 消息
         EXIT                // 退出后端服务
     }
     

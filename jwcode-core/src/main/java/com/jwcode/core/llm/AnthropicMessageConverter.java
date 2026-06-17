@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.util.ArrayList;
+import java.util.Set;
 import java.util.List;
 import java.util.Map;
 import java.util.logging.Logger;
@@ -102,8 +103,60 @@ public class AnthropicMessageConverter {
                 assistantMsg.put("role", "assistant");
                 assistantMsg.set("content", contentArray);
                 result.add(assistantMsg);
+           }
+       }
+
+        // Anthropic API要求：tool_use后必须紧邻tool_result，中间不能有其他消息
+        // 后置验证：反复扫描直到没有需要处理的孤立块
+        boolean changed;
+        do {
+            changed = false;
+            for (int i = 0; i < result.size(); i++) {
+                JsonNode msg = result.get(i);
+                if (!"assistant".equals(msg.get("role").asText())) continue;
+                JsonNode content = msg.get("content");
+                if (content == null || !content.isArray()) continue;
+
+                // 收集这条assistant消息中的所有tool_use ID
+                List<String> toolUseIds = new ArrayList<>();
+                for (JsonNode block : content) {
+                    if ("tool_use".equals(block.get("type").asText(""))) {
+                        toolUseIds.add(block.get("id").asText(""));
+                    }
+                }
+                if (toolUseIds.isEmpty()) continue;
+
+                // 检查下一条消息是否是user且包含对应的tool_result
+                if (i + 1 >= result.size()) {
+                    log.warning("[AnthropicConverter] Removing tool_use from last assistant msg: " + toolUseIds);
+                    removeToolUseBlocks((ObjectNode) msg);
+                    changed = true;
+                } else {
+                    JsonNode nextMsg = result.get(i + 1);
+                    if (!"user".equals(nextMsg.get("role").asText())) {
+                        log.warning("[AnthropicConverter] Removing tool_use from msg " + i + ": next role=" + nextMsg.get("role").asText());
+                        removeToolUseBlocks((ObjectNode) msg);
+                        changed = true;
+                    } else {
+                        Set<String> nextResultIds = collectToolResultIds(nextMsg);
+                        List<String> orphaned = new ArrayList<>();
+                        for (String tid : toolUseIds) {
+                            if (!nextResultIds.contains(tid)) {
+                                orphaned.add(tid);
+                            }
+                        }
+                        if (!orphaned.isEmpty()) {
+                            log.warning("[AnthropicConverter] Removing orphaned tool_use from msg " + i + ": " + orphaned);
+                            removeSpecificToolUseBlocks((ObjectNode) msg, orphaned);
+                            changed = true;
+                        }
+                    }
+                }
             }
-        }
+        } while (changed);
+
+        // 清理剩余的孤立tool_result
+        cleanupOrphanedToolResults(result);
         return result;
     }
 
@@ -305,5 +358,108 @@ public class AnthropicMessageConverter {
             block.set("input", mapper.createObjectNode());
         }
         return block;
+    }
+
+    /**
+     * 从assistant消息中移除所有tool_use blocks
+     */
+    private void removeToolUseBlocks(ObjectNode assistantMsg) {
+        ArrayNode content = (ArrayNode) assistantMsg.get("content");
+        if (content == null) return;
+        ArrayNode cleaned = mapper.createArrayNode();
+        for (JsonNode block : content) {
+            if (!"tool_use".equals(block.get("type").asText(""))) {
+                cleaned.add(block);
+            }
+        }
+        assistantMsg.set("content", cleaned);
+    }
+
+    /**
+     * 从assistant消息中移除指定的tool_use blocks
+     */
+    private void removeSpecificToolUseBlocks(ObjectNode assistantMsg, List<String> idsToRemove) {
+        Set<String> removeSet = new java.util.HashSet<>(idsToRemove);
+        ArrayNode content = (ArrayNode) assistantMsg.get("content");
+        if (content == null) return;
+        ArrayNode cleaned = mapper.createArrayNode();
+        for (JsonNode block : content) {
+            if ("tool_use".equals(block.get("type").asText(""))
+                    && removeSet.contains(block.get("id").asText(""))) {
+                continue;
+            }
+            cleaned.add(block);
+        }
+        assistantMsg.set("content", cleaned);
+    }
+
+    /**
+     * 收集user消息中的所有tool_result ID
+     */
+    private Set<String> collectToolResultIds(JsonNode userMsg) {
+        Set<String> ids = new java.util.HashSet<>();
+        JsonNode content = userMsg.get("content");
+        if (content == null || !content.isArray()) return ids;
+        for (JsonNode block : content) {
+            if ("tool_result".equals(block.get("type").asText(""))) {
+                String id = block.get("tool_use_id").asText("");
+                if (!id.isEmpty()) ids.add(id);
+            }
+        }
+        return ids;
+    }
+
+    /**
+     * 清理没有前导tool_use的孤立tool_result
+     */
+    private void cleanupOrphanedToolResults(List<JsonNode> messages) {
+        // 收集所有有效的tool_use ID
+        Set<String> validToolUseIds = new java.util.HashSet<>();
+        for (JsonNode msg : messages) {
+            if (!"assistant".equals(msg.get("role").asText())) continue;
+            JsonNode content = msg.get("content");
+            if (content == null || !content.isArray()) continue;
+            for (JsonNode block : content) {
+                if ("tool_use".equals(block.get("type").asText(""))) {
+                    String id = block.get("id").asText("");
+                    if (!id.isEmpty()) validToolUseIds.add(id);
+                }
+            }
+        }
+
+        // 移除没有对应tool_use的tool_result
+        for (JsonNode msg : messages) {
+            if (!"user".equals(msg.get("role").asText())) continue;
+            ArrayNode content = (ArrayNode) msg.get("content");
+            if (content == null || content.size() == 0) continue;
+
+            // 检查是否有tool_result没有被前导tool_use引用
+            boolean hasOrphanedResult = false;
+            for (JsonNode block : content) {
+                if ("tool_result".equals(block.get("type").asText(""))) {
+                    String id = block.get("tool_use_id").asText("");
+                    if (!validToolUseIds.contains(id)) {
+                        hasOrphanedResult = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!hasOrphanedResult) continue;
+
+            // 移除孤立的tool_result，保留其他内容
+            ArrayNode cleaned = mapper.createArrayNode();
+            for (JsonNode block : content) {
+                if ("tool_result".equals(block.get("type").asText(""))) {
+                    String id = block.get("tool_use_id").asText("");
+                    if (!validToolUseIds.contains(id)) {
+                        log.warning("[AnthropicConverter] Removing orphaned tool_result: " + id);
+                        continue;
+                    }
+                }
+                cleaned.add(block);
+            }
+            ((ObjectNode) msg).set("content", cleaned);
+        }
     }
 }

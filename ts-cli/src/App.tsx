@@ -68,12 +68,15 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
   const planModeRef = useRef(planMode);
   planModeRef.current = planMode;
   const connected = useAppSlice(s => s.connected);
+
+  // Ref holding the latest executeCommand for QueryGuard dequeue to call
+  const dequeueRef = useRef<((input: string) => void) | null>(null);
   const planWaiting = useAppSlice(s => s.planWaiting);
   const isGenerating = useAppSlice(s => s.currentMessage !== null);
   const messagesLen = useAppSlice(s => s.messages.length);
   const modelName = useAppSlice(s => s.modelName);
 
-  const wireHandlers = useStreamHandlers(setShowApproval, sessionAllowRef);
+  const wireHandlers = useStreamHandlers(setShowApproval, sessionAllowRef, dequeueRef);
 
   useEffect(() => {
     const client = new JwCodeClient(backendUrl, wsUrl);
@@ -107,6 +110,7 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
     setShowHelp,
     setShowPalette,
   });
+  dequeueRef.current = executeCommand;
 
   const handleSubmit = useCallback((value: string) => {
     if (showPalette || showFilePalette) return;

@@ -3,6 +3,7 @@
  */
 import WebSocket from 'ws';
 import type { WSMessage } from './protocol.js';
+import { queryGuard } from './hooks/useQueryGuard.js';
 
 type Handler = (msg: WSMessage) => void;
 
@@ -106,6 +107,7 @@ export class JwCodeClient {
       });
 
       this.ws.on('close', () => {
+        queryGuard.reset();
         this._stopHeartbeat();
         // If connect() hasn't settled yet (close before auth), reject so promise doesn't hang
         if (!this.sessionId && !this._reconnecting) {

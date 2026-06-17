@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.jwcode.core.agent.EnhancedOrchestratorAgent;
 import com.jwcode.core.config.SystemPromptLoader;
+import com.jwcode.core.config.JwcodeConfig;
 import com.jwcode.core.hook.HookApprovalManager;
 import com.jwcode.core.llm.LLMService;
 import com.jwcode.core.plan.PlanModeManager;
@@ -54,6 +55,8 @@ public class WebSocketMessageHandler {
     private final ToolRegistry toolRegistry;
     private final TaskWebSocketServer wsServer;
 
+    private final JwcodeConfig jwcodeConfig;
+
     // 缓存每个 session 的 LLMQueryEngine（按 sessionId）
     private final ConcurrentHashMap<String, LLMQueryEngine> queryEngines;
 
@@ -62,13 +65,15 @@ public class WebSocketMessageHandler {
                                    LLMService llmService,
                                    ToolExecutor toolExecutor,
                                    ToolRegistry toolRegistry,
-                                   TaskWebSocketServer wsServer) {
+                                   TaskWebSocketServer wsServer,
+                                   JwcodeConfig jwcodeConfig) {
         this.sessionManager = sessionManager;
         this.orchestrator = orchestrator;
         this.llmService = llmService;
         this.toolExecutor = toolExecutor;
         this.toolRegistry = toolRegistry;
         this.wsServer = wsServer;
+        this.jwcodeConfig = jwcodeConfig;
         this.queryEngines = new ConcurrentHashMap<>();
 
         // 设置 Hook 审批 WebSocket 广播
@@ -599,7 +604,9 @@ public class WebSocketMessageHandler {
      */
     private LLMQueryEngine getOrCreateQueryEngine(Session session) {
         return queryEngines.computeIfAbsent(session.getId(), k -> {
-            EngineConfig config = EngineConfig.defaultConfig();
+            EngineConfig config = jwcodeConfig != null
+                ? EngineConfig.fromJwcodeConfig(jwcodeConfig)
+                : EngineConfig.defaultConfig();
             LLMQueryEngine engine = new LLMQueryEngine(session, llmService, toolExecutor, config, null);
 
             // 设置步骤回调，通过 WebSocket 推送进度

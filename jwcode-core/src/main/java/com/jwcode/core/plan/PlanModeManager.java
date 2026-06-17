@@ -125,10 +125,11 @@ public class PlanModeManager {
     private static volatile PlanModeManager instance;
 
     /** Plan 模式最大分析轮次，超过后强制总结 */
-    public static final int MAX_PLAN_ROUNDS = 8;
+    public static final int DEFAULT_MAX_PLAN_ROUNDS = 8;
 
     // 当前模式
     private volatile Mode currentMode = Mode.NORMAL;
+    private volatile int maxPlanRounds = DEFAULT_MAX_PLAN_ROUNDS;
 
     /** Hard lock: prevents direct API calls from bypassing Plan mode isolation. */
     private volatile boolean planModeLocked = false;
@@ -199,9 +200,17 @@ public class PlanModeManager {
         return planRounds;
     }
 
+    public void setMaxPlanRounds(int rounds) {
+        this.maxPlanRounds = rounds;
+    }
+
+    public int getMaxPlanRounds() {
+        return maxPlanRounds;
+    }
+
     /** Plan 轮次是否已超过限制 */
     public boolean isPlanRoundsExceeded() {
-        return planRounds >= MAX_PLAN_ROUNDS;
+        return maxPlanRounds > 0 && planRounds >= maxPlanRounds;
     }
 
     /**

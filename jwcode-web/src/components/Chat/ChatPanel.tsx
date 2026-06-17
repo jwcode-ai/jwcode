@@ -65,6 +65,12 @@ export const ChatPanel = memo(function ChatPanel({
   const toggleMode = usePlanStore((s) => s.toggleMode);
   const hasPendingApproval = useHookApprovalStore((s) => s.pendingApprovals.length > 0);
 
+  // Filter out tombstoned (deleted) messages so Virtuoso doesn't allocate space for them
+  const visibleMessages = useMemo(() =>
+    messages.filter(m => !m.deleted),
+    [messages]
+  );
+
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const isComposingRef = useRef(false);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
@@ -339,7 +345,7 @@ export const ChatPanel = memo(function ChatPanel({
     <div className="flex-1 flex flex-col min-h-0">
       {/* Messages */}
       <div className="flex-1 min-h-0 overflow-hidden">
-        <Virtuoso ref={virtuosoRef} data={messages} itemContent={renderMessage} followOutput="smooth"
+        <Virtuoso ref={virtuosoRef} data={visibleMessages} itemContent={renderMessage} followOutput="smooth"
           components={{ Footer: GeneratingFooter, EmptyPlaceholder }} style={{ height: '100%' }} />
       </div>
 

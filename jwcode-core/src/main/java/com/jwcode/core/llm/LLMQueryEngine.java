@@ -85,6 +85,19 @@ public class LLMQueryEngine {
     private final FragmentRegistry fragmentRegistry;
     private boolean fragmentsInitialized = false;
 
+    // 【R1/R2】恢复转换状态：跟踪上次迭代使用的恢复策略（collapse_drain_retry 单次触发保护）
+    private volatile String lastTransitionReason = null;
+    // 【R2】错误扣留：可恢复的 API 错误码（不立即 fail，等恢复检查决定）
+    private static final java.util.Set<String> WITHHELD_ERROR_CODES = java.util.Set.of(
+        "prompt_too_long", "context_length_exceeded", "max_tokens", "max_output_tokens", "string_too_long", "media_too_large"
+    );
+
+    /** 【R2】检查错误码是否可扣留（可恢复错误） */
+    private static boolean isWithheldError(String errorCode) {
+        if (errorCode == null) return false;
+        return WITHHELD_ERROR_CODES.contains(errorCode.toLowerCase());
+    }
+
     // ContextReconcilerBridge — 上下文增量更新集成
     private ContextReconcilerBridge contextReconcilerBridge;
 
@@ -103,6 +116,9 @@ public class LLMQueryEngine {
     private int consecutiveThinkingOnlyRounds = 0;
     // 【修复】连续失败工具轮数检测：连续 N 轮工具调用全部失败则强制终止
     private int consecutiveFailedToolRounds = 0;
+    // 【R6】max_output_tokens 恢复计数：finish_reason=length 时的续写恢复次数上限
+    private int maxOutputTokensRecoveryCount = 0;
+    private static final int MAX_OUTPUT_TOKENS_RECOVERY_LIMIT = 3;
     private static final ObjectMapper MAPPER = new ObjectMapper()
             .registerModule(new JavaTimeModule());
     
@@ -736,6 +752,13 @@ public class LLMQueryEngine {
      */
     private CompletableFuture<QueryResult> handleResponse(LLMResponse response, int iteration, int emptyResponseCount) {
         if (response.hasError()) {
+            // 【R2】错误扣留：可恢复错误不立即失败，尝试 collapse_drain_retry
+            if (isWithheldError(response.getErrorCode())) {
+                if (tryCollapseDrainRetry(iteration)) {
+                    logger.info("[LLMQueryEngine] Withheld error [" + response.getErrorCode() + "], collapse_drain_retry triggered");
+                    return runConversationLoop(iteration, emptyResponseCount);
+                }
+            }
             logger.severe("[LLMQueryEngine] API error [" + response.getErrorCode() + "]: " + response.getErrorMessage());
             triggerStepComplete("LLM查询", "API错误: " + response.getErrorMessage());
             return CompletableFuture.completedFuture(
@@ -831,9 +854,16 @@ public class LLMQueryEngine {
             if ("stop".equals(response.getFinishReason()) && !response.hasToolCalls()) {
                 return CompletableFuture.completedFuture(QueryResult.success(assistantMessage));
             }
-            // API finish_reason="length" + 无工具调用 → 上下文窗口耗尽，强制要求 [FINISH] 后给最后一轮机会
+            // API finish_reason="length" + 无工具调用 → 输出触顶，尝试续写再强制结束
             if ("length".equals(response.getFinishReason()) && !response.hasToolCalls()) {
-                logger.warning("[LLMQueryEngine] finish_reason=length (context exhausted), forcing finish");
+                if (maxOutputTokensRecoveryCount < MAX_OUTPUT_TOKENS_RECOVERY_LIMIT) {
+                    maxOutputTokensRecoveryCount++;
+                    logger.warning("[LLMQueryEngine] finish_reason=length, recovery attempt #" + maxOutputTokensRecoveryCount);
+                    session.addMessage(Message.createUserMessage(
+                        "Output token limit hit. Resume directly — no recap. Pick up mid-thought, break remaining work into smaller pieces."));
+                    return runConversationLoop(iteration + 1, 0);
+                }
+                logger.warning("[LLMQueryEngine] finish_reason=length, recovery exhausted, forcing finish");
                 session.addMessage(Message.createSystemMessage(
                     "⛔ 【紧急】你的上下文窗口已完全耗尽！必须立即在最后一行输出 [FINISH] 结束对话。禁止发起任何新的工具调用，你没有足够的 token 来完成更多操作。"));
                 return runConversationLoop(iteration + 1, 0);
@@ -929,6 +959,7 @@ public class LLMQueryEngine {
             }
 
             // 没有 finishReason，继续对话循环
+            resetTransitionReason();
             return runConversationLoop(iteration + 1, emptyResponseCount);
         }
     }
@@ -1021,6 +1052,13 @@ public class LLMQueryEngine {
             Consumer<String> thinkingConsumer,
             Consumer<LLMService.StreamToolCallEvent> toolCallConsumer) {
         if (response.hasError()) {
+            // 【R2】错误扣留：可恢复错误不立即失败，尝试 collapse_drain_retry
+            if (isWithheldError(response.getErrorCode())) {
+                if (tryCollapseDrainRetry(iteration)) {
+                    logger.info("[LLMQueryEngine] Withheld error [" + response.getErrorCode() + "], collapse_drain_retry triggered");
+                    return runStreamConversationLoop(iteration, emptyResponseCount, contentConsumer, thinkingConsumer, toolCallConsumer);
+                }
+            }
             logger.severe("[LLMQueryEngine] API error [" + response.getErrorCode() + "]: " + response.getErrorMessage());
             triggerStepComplete("LLM查询", "API错误: " + response.getErrorMessage());
             return CompletableFuture.completedFuture(
@@ -1113,9 +1151,17 @@ public class LLMQueryEngine {
             if ("stop".equals(response.getFinishReason()) && !response.hasToolCalls()) {
                 return CompletableFuture.completedFuture(QueryResult.success(assistantMessage));
             }
-            // API finish_reason="length" + 无工具调用 → 上下文窗口耗尽，强制要求 [FINISH] 后给最后一轮机会
+            // API finish_reason="length" + 无工具调用 → 输出触顶，尝试续写再强制结束
             if ("length".equals(response.getFinishReason()) && !response.hasToolCalls()) {
-                logger.warning("[LLMQueryEngine] finish_reason=length (context exhausted), forcing finish");
+                if (maxOutputTokensRecoveryCount < MAX_OUTPUT_TOKENS_RECOVERY_LIMIT) {
+                    maxOutputTokensRecoveryCount++;
+                    logger.warning("[LLMQueryEngine] finish_reason=length, recovery attempt #" + maxOutputTokensRecoveryCount);
+                    session.addMessage(Message.createUserMessage(
+                        "Output token limit hit. Resume directly — no recap. Pick up mid-thought, break remaining work into smaller pieces."));
+                    return runStreamConversationLoop(iteration + 1, 0,
+                        contentConsumer, thinkingConsumer, toolCallConsumer);
+                }
+                logger.warning("[LLMQueryEngine] finish_reason=length, recovery exhausted, forcing finish");
                 session.addMessage(Message.createSystemMessage(
                     "⛔ 【紧急】你的上下文窗口已完全耗尽！必须立即在最后一行输出 [FINISH] 结束对话。禁止发起任何新的工具调用，你没有足够的 token 来完成更多操作。"));
                 return runStreamConversationLoop(iteration + 1, 0,
@@ -1210,6 +1256,7 @@ public class LLMQueryEngine {
             }
 
             // 没有 finishReason，继续流式对话循环
+            resetTransitionReason();
             return runStreamConversationLoop(iteration + 1, emptyResponseCount, contentConsumer, thinkingConsumer, toolCallConsumer);
         }
     }
@@ -1223,151 +1270,122 @@ public class LLMQueryEngine {
      */
     private CompletableFuture<QueryResult> executeToolCalls(List<LLMMessage.ToolCall> toolCalls, int nextIteration, int emptyResponseCount,
             java.util.function.BiFunction<Integer, Integer, CompletableFuture<QueryResult>> loopContinuation) {
-        logger.info("[LLMQueryEngine] Executing " + toolCalls.size() + " tool calls");
-        
-        List<CompletableFuture<ToolExecutionResult>> futures = new ArrayList<>();
+        logger.info("[LLMQueryEngine] Executing " + toolCalls.size() + " tool calls (streaming)");
+
+        StreamingToolExecutor<ToolExecutionResult> streamingExec = new DefaultStreamingToolExecutor<>();
+
+        // 注册完成回调：每完成一个工具立即 yield 给前端（pipeline 事件）
+        streamingExec.onToolComplete(result -> {
+            boolean success = result.getResult() != null && !result.getResult().startsWith("Error:");
+            pipeline.publish(new ObservationEvent.ToolResult(
+                result.getToolName(), result.getResult(), success, null, result.getToolCallId()));
+            String resultPreview = truncate(result.getResult(), 100);
+            pipeline.publish(new ObservationEvent.StepComplete("工具执行",
+                result.getToolName() + " → " + resultPreview));
+        });
+
         int toolIndex = 1;
-        
         for (LLMMessage.ToolCall tc : toolCalls) {
             String toolName = tc.getFunction().getName();
-            
+
             // 触发事件：开始执行工具
-            pipeline.publish(new ObservationEvent.StepStart("工具调用", "执行 " + toolName + " (第 " + toolIndex + "/" + toolCalls.size() + " 个)"));
-            
+            pipeline.publish(new ObservationEvent.StepStart("工具调用",
+                "执行 " + toolName + " (第 " + toolIndex + "/" + toolCalls.size() + " 个)"));
+
             // 记录工具调用历史
             toolCallHistory.add(toolName + ":" + tc.getFunction().getArguments());
-            
+
             // 查找并执行工具
             Tool<?, ?, ?> tool = findTool(toolName);
             if (tool == null) {
                 logger.warning("[LLMQueryEngine] Tool not found: " + toolName + " [toolCallId=" + tc.getId() + "]");
-                // 触发事件：工具未找到
                 pipeline.publish(new ObservationEvent.StepComplete("工具执行", "未找到工具: " + toolName));
-                // 必须添加错误结果，否则 assistant 的 tool_calls 会缺少对应的 tool 消息
-                futures.add(CompletableFuture.completedFuture(
+                streamingExec.submit(CompletableFuture.completedFuture(
                     new ToolExecutionResult(tc.getId(), toolName,
-                        tc.getFunction().getArguments(), "Error: Tool not found: " + toolName)
-                ));
+                        tc.getFunction().getArguments(), "Error: Tool not found: " + toolName)));
                 toolIndex++;
                 continue;
             }
-            
-            // 异步执行工具（传入输入参数）
-            CompletableFuture<ToolExecutionResult> future = executeToolAsync(tool, tc);
-            futures.add(future);
+
+            // 异步执行工具并提交给 StreamingToolExecutor
+            streamingExec.submit(executeToolAsync(tool, tc));
             toolIndex++;
         }
-        
-        // 等待所有工具执行完成
-        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
-            .thenCompose(v -> {
-                // 添加工具结果到会话
-                int resultIndex = 1;
-                boolean hasAskUserQuestion = false;
-                boolean hasError = false;
-                boolean allFailed = true; // 【修复】追踪是否所有工具都失败
-                for (CompletableFuture<ToolExecutionResult> future : futures) {
-                    try {
-                        ToolExecutionResult result = future.get();
-                        
-                        // 触发事件：工具执行完成
-                        boolean success = result.getResult() != null && !result.getResult().startsWith("Error:");
-                        pipeline.publish(new ObservationEvent.ToolResult(
-                            result.getToolName(), result.getResult(), success, null, result.getToolCallId()));
-                        String resultPreview = truncate(result.getResult(), 100);
-                        pipeline.publish(new ObservationEvent.StepComplete("工具执行", result.getToolName() + " → " + resultPreview));
-                        
-                        // 添加工具结果消息（包含输入参数）
-                        Message toolResultMsg = Message.createToolResultMessage(
-                            result.getToolCallId(),
-                            result.getToolName(),
-                            result.getInputArguments(),  // 新增：传递输入参数
-                            result.getResult()
-                        );
-                        logger.info("[LLMQueryEngine] Created tool result message: toolCallId=" + 
-                            result.getToolCallId() + ", toolName=" + result.getToolName());
-                        session.addMessage(toolResultMsg);
-                        
-                        // 【任务生命周期】检测关键工具
-                        if ("AskUserQuestion".equals(result.getToolName())) {
-                            hasAskUserQuestion = true;
-                        }
-                        if (!success) {
-                            hasError = true;
-                        } else {
-                            allFailed = false; // 至少有一个工具成功
-                        }
-                        
-                    } catch (Exception e) {
-                        logger.severe("[LLMQueryEngine] Failed to get tool result: " + e.getMessage());
-                        pipeline.publish(new ObservationEvent.StepComplete("工具执行", "执行失败: " + e.getMessage()));
-                        // 即使获取结果失败，也必须添加工具结果消息以保持 tool_calls 与 results 数量一致
-                        // 使用第一个工具调用的 ID 作为回退
-                        String fallbackToolCallId = "unknown";
-                        if (resultIndex <= futures.size() && toolCalls != null && resultIndex <= toolCalls.size()) {
-                            fallbackToolCallId = toolCalls.get(resultIndex - 1).getId();
-                        }
-                        Message errorMsg = Message.createToolResultMessage(
-                            fallbackToolCallId,
-                            "system",
-                            "Error: Failed to get tool result - " + e.getMessage()
-                        );
-                        session.addMessage(errorMsg);
-                        hasError = true;
-                    }
-                    resultIndex++;
-                }
-                
-                // 【修复】更新连续失败工具轮数计数器
-                if (allFailed && !futures.isEmpty()) {
-                    consecutiveFailedToolRounds++;
-                    logger.warning("[LLMQueryEngine] All tools failed in this round (consecutiveFailedToolRounds="
-                        + consecutiveFailedToolRounds + "/" + MAX_CONSECUTIVE_FAILED_TOOL_ROUNDS + ")");
-                } else if (!allFailed) {
-                    consecutiveFailedToolRounds = 0; // 有工具成功，重置计数器
-                }
 
-                // 【任务生命周期】根据工具结果更新任务状态
-                if (hasAskUserQuestion) {
-                    // AskUserQuestion 的结果作为等待的问题描述
-                    String question = futures.stream()
-                        .map(f -> {
-                            try { return f.get(); } catch (Exception e) { return null; }
-                        })
-                        .filter(r -> r != null && "AskUserQuestion".equals(r.getToolName()))
-                        .findFirst()
-                        .map(ToolExecutionResult::getResult)
-                        .orElse(null);
+        // 等待所有工具完成，聚合处理
+        return streamingExec.whenAllComplete().thenCompose(v -> {
+            List<ToolExecutionResult> results = streamingExec.getCompletedResults();
+            boolean hasAskUserQuestion = false;
+            boolean hasError = false;
+            boolean allFailed = true;
 
-                    if (question == null || question.isEmpty()) {
-                        // 工具执行失败或返回 null，注入系统消息让 LLM 继续
-                        session.addMessage(Message.createSystemMessage(
-                            "AskUserQuestion 未能获取用户补充信息。请基于已有信息继续执行，或尝试用更简单的方式向用户提问。"));
-                        logger.warning("[LLMQueryEngine] AskUserQuestion result is null/empty, skipping waitForUserInput");
-                    } else {
-                        try {
-                            taskLifecycleManager.waitForUserInput(session, question);
-                        } catch (Exception e) {
-                            logger.warning("[LLMQueryEngine] waitForUserInput failed: " + e.getMessage());
-                            session.addMessage(Message.createSystemMessage(
-                                "向用户提问失败。请基于已有信息继续执行。"));
-                        }
-                    }
-                } else if (hasError) {
-                    taskLifecycleManager.failStep(session, "工具执行失败");
+            for (ToolExecutionResult result : results) {
+                boolean success = result.getResult() != null && !result.getResult().startsWith("Error:");
+
+                // 添加工具结果消息到会话（用于下一轮 LLM 请求）
+                Message toolResultMsg = Message.createToolResultMessage(
+                    result.getToolCallId(), result.getToolName(),
+                    result.getInputArguments(), result.getResult());
+                logger.info("[LLMQueryEngine] Created tool result message: toolCallId="
+                    + result.getToolCallId() + ", toolName=" + result.getToolName());
+                session.addMessage(toolResultMsg);
+
+                // 【任务生命周期】检测关键工具
+                if ("AskUserQuestion".equals(result.getToolName())) {
+                    hasAskUserQuestion = true;
+                }
+                if (!success) {
+                    hasError = true;
                 } else {
-                    taskLifecycleManager.advanceStep(session, "工具执行成功");
+                    allFailed = false;
                 }
-                
-                // 触发事件：继续分析
-                pipeline.publish(new ObservationEvent.Thinking("分析", "工具执行完成，继续分析结果..."));
+            }
 
-                // 【修复】工具执行 = 真实进展，重置纯思考计数器
-                consecutiveThinkingOnlyRounds = 0;
+            // 【修复】更新连续失败工具轮数计数器
+            if (allFailed && !results.isEmpty()) {
+                consecutiveFailedToolRounds++;
+                logger.warning("[LLMQueryEngine] All tools failed in this round (consecutiveFailedToolRounds="
+                    + consecutiveFailedToolRounds + "/" + MAX_CONSECUTIVE_FAILED_TOOL_ROUNDS + ")");
+            } else if (!allFailed) {
+                consecutiveFailedToolRounds = 0;
+            }
 
-                // 继续对话循环（重置空回复计数，因为工具执行可能有有效输出）
-                return loopContinuation.apply(nextIteration, 0);
-            });
+            // 【任务生命周期】根据工具结果更新任务状态
+            if (hasAskUserQuestion) {
+                String question = results.stream()
+                    .filter(r -> "AskUserQuestion".equals(r.getToolName()))
+                    .findFirst()
+                    .map(ToolExecutionResult::getResult)
+                    .orElse(null);
+
+                if (question == null || question.isEmpty()) {
+                    session.addMessage(Message.createSystemMessage(
+                        "AskUserQuestion 未能获取用户补充信息。请基于已有信息继续执行，或尝试用更简单的方式向用户提问。"));
+                    logger.warning("[LLMQueryEngine] AskUserQuestion result is null/empty, skipping waitForUserInput");
+                } else {
+                    try {
+                        taskLifecycleManager.waitForUserInput(session, question);
+                    } catch (Exception e) {
+                        logger.warning("[LLMQueryEngine] waitForUserInput failed: " + e.getMessage());
+                        session.addMessage(Message.createSystemMessage(
+                            "向用户提问失败。请基于已有信息继续执行。"));
+                    }
+                }
+            } else if (hasError) {
+                taskLifecycleManager.failStep(session, "工具执行失败");
+            } else {
+                taskLifecycleManager.advanceStep(session, "工具执行成功");
+            }
+
+            // 触发事件：继续分析
+            pipeline.publish(new ObservationEvent.Thinking("分析", "工具执行完成，继续分析结果..."));
+
+            // 【修复】工具执行 = 真实进展，重置纯思考计数器
+            consecutiveThinkingOnlyRounds = 0;
+
+            // 继续对话循环（重置空回复计数）
+            return loopContinuation.apply(nextIteration, 0);
+        });
     }
     
     /**
@@ -1403,6 +1421,72 @@ public class LLMQueryEngine {
         if (str == null) return "";
         if (str.length() <= maxLength) return str;
         return str.substring(0, maxLength - 3) + "...";
+    }
+
+    /**
+     * 【R1】尝试 collapse_drain_retry 恢复转换
+     *
+     * 触发条件：
+     * - 单次触发保护：上次 transition 已经是 collapse_drain_retry，避免无限循环
+     * - 冷却保护：复用 COMPACT_COOLDOWN_MS，避免短时间内连续折叠
+     *
+     * 折叠策略（成本最低，保留细粒度上下文）：
+     * 1. 移除最早的 user/tool 消息对（直到消息数 ≤ 原始的 60%）
+     * 2. 注入系统提示，告知 LLM 上下文已被截断
+     * 3. 标记 transition = "collapse_drain_retry" 让循环重试
+     *
+     * @return true 表示成功折叠，调用方应 continue 重试；false 表示不应触发，恢复原始失败路径
+     */
+    private boolean tryCollapseDrainRetry(int iteration) {
+        // 单次触发保护
+        if ("collapse_drain_retry".equals(lastTransitionReason)) {
+            logger.warning("[LLMQueryEngine] collapse_drain_retry already triggered, falling through");
+            return false;
+        }
+        // 冷却保护
+        long now = System.currentTimeMillis();
+        if (now - lastCompactTime < COMPACT_COOLDOWN_MS) {
+            logger.info("[LLMQueryEngine] collapse_drain_retry skipped: in compact cooldown");
+            return false;
+        }
+        // 尝试用 ContextWindowManager 折叠
+        try {
+            List<Message> current = session.getMessages();
+            if (current == null || current.size() < 4) {
+                logger.info("[LLMQueryEngine] collapse_drain_retry skipped: too few messages");
+                return false;
+            }
+            // 移除最早 1/3 的非系统消息（保留最近的上下文）
+            int toCollapse = Math.max(1, current.size() / 3);
+            int collapsed = 0;
+            java.util.Iterator<Message> it = current.iterator();
+            while (it.hasNext() && collapsed < toCollapse) {
+                Message m = it.next();
+                if (m.getRole() != Message.Role.SYSTEM) {
+                    it.remove();
+                    collapsed++;
+                }
+            }
+            // 注入系统提示告知上下文已被截断
+            session.addMessage(Message.createSystemMessage(
+                "⚠️ [collapse_drain_retry] 上下文已折叠 " + collapsed +
+                " 条早期消息以适配上下文窗口。请基于剩余上下文继续执行。"));
+            lastTransitionReason = "collapse_drain_retry";
+            lastCompactTime = now;
+            logger.info("[LLMQueryEngine] collapse_drain_retry: collapsed " + collapsed + " messages at iteration " + iteration);
+            return true;
+        } catch (Exception e) {
+            logger.warning("[LLMQueryEngine] collapse_drain_retry failed: " + e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * 【辅助】在正常循环续接时重置恢复状态
+     */
+    private void resetTransitionReason() {
+        this.lastTransitionReason = null;
+        this.maxOutputTokensRecoveryCount = 0;
     }
     
     /**

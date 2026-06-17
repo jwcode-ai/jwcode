@@ -1,6 +1,7 @@
 package com.jwcode.core.llm;
 
 import com.jwcode.core.agent.AgentRegistry;
+import com.jwcode.core.config.JwcodeConfig;
 import com.jwcode.core.session.Session;
 import com.jwcode.core.tool.ToolExecutor;
 import com.jwcode.core.tool.ToolRegistry;
@@ -40,6 +41,9 @@ public class LLMQueryEnginePool {
 
     /** 最大池容量 */
     private static final int MAX_POOL_SIZE = 16;
+
+    /** JwcodeConfig for EngineConfig creation */
+    private JwcodeConfig jwcodeConfig;
 
     /** 池存储：sessionId → PoolEntry */
     private final ConcurrentHashMap<String, PoolEntry> pool = new ConcurrentHashMap<>();
@@ -89,7 +93,7 @@ public class LLMQueryEnginePool {
             .toolExecutor(toolExecutor)
             .toolRegistry(toolRegistry)
             .agentRegistry(agentRegistry)
-            .config(LLMQueryEngine.EngineConfig.defaultConfig())
+            .config(jwcodeConfig != null ? LLMQueryEngine.EngineConfig.fromJwcodeConfig(jwcodeConfig) : LLMQueryEngine.EngineConfig.defaultConfig())
             .build();
 
         pool.put(sessionId, new PoolEntry(engine));
@@ -130,6 +134,10 @@ public class LLMQueryEnginePool {
     /**
      * 获取当前池大小（用于监控）。
      */
+    public void setJwcodeConfig(JwcodeConfig config) {
+        this.jwcodeConfig = config;
+    }
+
     public int size() {
         return pool.size();
     }

@@ -17,6 +17,11 @@ export const MessageBubble = memo(function MessageBubble({
   message,
   sessionId,
 }: MessageBubbleProps) {
+  // Tombstone: 被后端标记为已删除的消息不渲染
+  if (message.deleted) {
+    return null;
+  }
+
   const isUser = message.type === 'user';
   const isSystem = message.type === 'system';
   const isGenerating = sessionId ? useChatStore(s => s.generatingSessions.includes(sessionId)) : false;

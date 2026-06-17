@@ -3,6 +3,7 @@ import { useCommandStore } from '../../stores/commandStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import wsService from '../../services/websocket';
 import { toast } from '../../stores/toastStore';
+import { errLog } from '../../stores/errorStore';
 import type { LogEntry } from '../../types';
 
 interface SystemCtx {
@@ -44,7 +45,7 @@ export function handleSystemMessage(rawType: string, rawData: any, _sessionId: s
       break;
 
     case 'auth_failed':
-      console.error('[WS] Auth failed:', rawData);
+      errLog.error('Auth failed', String(rawData));
       break;
 
     case 'log':
@@ -57,14 +58,14 @@ export function handleSystemMessage(rawType: string, rawData: any, _sessionId: s
         };
         ctx.setLogs(prev => [...prev, newLog].slice(-500));
         if (ctx.activeTab !== 'logs') ctx.setUnreadLogs(prev => prev + 1);
-      } catch (e) { console.error('Failed to parse log:', e); }
+      } catch (e) { errLog.warn('Failed to parse log entry', String(e)); }
       break;
 
     case 'commands_list':
       try {
         const commands = JSON.parse(rawData || '[]');
         useCommandStore.getState().setBackendCommands(commands);
-      } catch (e) { console.error('Failed to parse commands list:', e); }
+      } catch (e) { errLog.warn('Failed to parse commands list', String(e)); }
       break;
 
     case 'ping':
@@ -121,7 +122,7 @@ export function handleSystemMessage(rawType: string, rawData: any, _sessionId: s
         } else {
           toast.success("API Normal");
         }
-      } catch (e) { console.error("[WS] degradation_update parse error:", e); }
+      } catch (e) { errLog.warn('Degradation update parse error', String(e)); }
       break;
 
     case "doctor_result":
@@ -158,7 +159,7 @@ export function handleSystemMessage(rawType: string, rawData: any, _sessionId: s
             }
           }
         }
-      } catch (e) { console.error("[WS] doctor_result parse error:", e); }
+      } catch (e) { errLog.warn('Doctor result parse error', String(e)); }
       break;
   }
 }

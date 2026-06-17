@@ -1,8 +1,9 @@
-import { memo, useState, useEffect, useRef } from 'react';
+import { memo, useState, useRef } from 'react';
 import { Plus, Minus, Clock } from 'lucide-react';
 import { Step } from '../../types';
 import { ExpandableResult } from './ExpandableResult';
 import { ToolCallItem } from './ToolCallItem';
+import { useGlobalTick } from '../../hooks/useGlobalTick';
 
 interface StepItemProps {
   step: Step;
@@ -12,22 +13,18 @@ interface StepItemProps {
 export const StepItem = memo(function StepItem({ step, defaultCollapsed = false }: StepItemProps) {
   const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
   const [isThoughtCollapsed, setIsThoughtCollapsed] = useState(true);
-  const [elapsed, setElapsed] = useState(0);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const tick = useGlobalTick(); // 1s global tick — replaces per-component setInterval
+  const startTickRef = useRef(0);
 
-  // Live elapsed timer for running steps
-  useEffect(() => {
-    if (step.status === 'running') {
-      const startTime = step.timestamp || Date.now();
-      setElapsed(0);
-      timerRef.current = setInterval(() => {
-        setElapsed(Math.floor((Date.now() - startTime) / 1000));
-      }, 1000);
-    } else {
-      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
-    }
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [step.status, step.timestamp]);
+  // Capture starting tick when the step begins running
+  if (step.status === 'running' && startTickRef.current === 0) {
+    startTickRef.current = tick;
+  }
+  if (step.status !== 'running') {
+    startTickRef.current = 0;
+  }
+
+  const elapsed = step.status === 'running' ? tick - startTickRef.current : 0;
 
   const statusConfig = {
     pending:  { bg: 'bg-dark-hover', text: 'text-dark-muted', border: 'border-dark-border', icon: '○', label: '等待' },

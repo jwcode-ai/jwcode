@@ -32,6 +32,7 @@ const ObservabilityView = lazy(() => import('./components/Observability/Observab
 const HookApprovalModal = lazy(() => import('./components/Hook/HookApprovalModal').then(m => ({ default: m.HookApprovalModal })));
 const HookConfigView = lazy(() => import('./components/Hook/HookConfigView').then(m => ({ default: m.HookConfigView })));
 import { ToastContainer } from './components/Toast/ToastContainer';
+import { ErrorToast } from './components/Toast/ErrorToast';
 import { toast } from './stores/toastStore';
 
 const PanelFallback = () => (
@@ -1006,6 +1007,7 @@ function App() {
       </Suspense>
 
       <ToastContainer />
+      <ErrorToast />
     </ErrorBoundary>
   );
 }

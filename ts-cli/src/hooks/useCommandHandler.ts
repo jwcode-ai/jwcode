@@ -10,6 +10,7 @@ import { saveToHistory } from '../components/TextInput.js';
 import { createMessage } from '../protocol.js';
 import { SLASH_COMMANDS } from '../commands/index.js';
 import { expandPastes, clearAllPastes } from '../pasteBuffer.js';
+import { queryGuard } from './useQueryGuard.js';
 
 interface CommandHandlerOptions {
   clientRef: React.MutableRefObject<JwCodeClient | null>;
@@ -111,6 +112,14 @@ export function useCommandHandler(opts: CommandHandlerOptions) {
 
     const client = clientRef.current;
     if (!client) return;
+
+    // QueryGuard: reserve before any prep work. If already dispatching/running,
+    // enqueue the input for auto-submit once the current query completes.
+    const guardGen = queryGuard.reserve();
+    if (guardGen === null) {
+      queryGuard.enqueue(text);
+      return;
+    }
 
     // Resolve @ file references → attach as <context> blocks
     const files = referencedFilesRef.current;

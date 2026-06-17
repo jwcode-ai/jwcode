@@ -3,6 +3,7 @@ import wsService from "../services/websocket";
 import { useChatStore } from "../stores/chatStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { LogEntry } from "../types";
+import { errLog } from "../stores/errorStore";
 import { handlePlanMessage } from "./handlers/planHandlers";
 import { handleStreamMessage } from "./handlers/streamHandlers";
 import { handleSystemMessage } from "./handlers/systemHandlers";
@@ -72,12 +73,12 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
 
     // Plan messages
     if (rawType.startsWith("plan_")) {
-      try { handlePlanMessage(rawType, rawData, sessionId); } catch (e) { console.error(`Failed to handle ${rawType}:`, e); }
+      try { handlePlanMessage(rawType, rawData, sessionId); } catch (e) { errLog.error(`Failed to handle ${rawType}`, String(e)); }
       return;
     }
 
     if (rawType === "step_prompt") {
-      try { handlePlanMessage(rawType, rawData, sessionId); } catch (e) { console.error(`Failed to handle ${rawType}:`, e); }
+      try { handlePlanMessage(rawType, rawData, sessionId); } catch (e) { errLog.error(`Failed to handle ${rawType}`, String(e)); }
       return;
     }
 
@@ -86,7 +87,7 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
     if (rawType === "todo_progress") return;
 
     // Stream messages
-    if (["start", "content", "thinking", "tool_call", "tool_result", "complete", "generation_paused", "generation_resumed", "error", "context_compressed", "compaction_progress"].includes(rawType)) {
+    if (["start", "content", "thinking", "tool_call", "tool_result", "complete", "generation_paused", "generation_resumed", "error", "context_compressed", "compaction_progress", "tombstone"].includes(rawType)) {
       handleStreamMessage(rawType, rawData, sessionId);
       return;
     }
@@ -103,6 +104,13 @@ export function useWebSocket({ activeTab, setLogs, setUnreadLogs }: UseWebSocket
   useEffect(() => {
     wsService.connect();
     const unsub = wsService.onMessage(handleWSMessage);
-    return () => unsub();
+    // 断连时清理所有正在生成的会话状态 — 避免 UI 永远卡在 "生成中"
+    const unsubClose = wsService.onClose(() => {
+      const state = useChatStore.getState();
+      for (const sessionId of state.generatingSessions) {
+        state.endGeneration(sessionId, 'WebSocket disconnected');
+      }
+    });
+    return () => { unsub(); unsubClose(); };
   }, [handleWSMessage]);
 }

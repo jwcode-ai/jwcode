@@ -1,6 +1,7 @@
 ﻿import { useChatStore } from '../../stores/chatStore';
 import { useTokenStore } from '../../stores/tokenStore';
 import { toast } from '../../stores/toastStore';
+import { errLog } from '../../stores/errorStore';
 
 export function handleStreamMessage(rawType: string, rawData: any, sessionId: string) {
   const chatStore = useChatStore.getState();
@@ -46,7 +47,7 @@ export function handleStreamMessage(rawType: string, rawData: any, sessionId: st
             args: toolArgs, status: 'running', timestamp: Date.now(),
           });
         }
-      } catch (e) { console.error('Failed to parse tool call:', e); }
+      } catch (e) { errLog.warn('Failed to parse tool call', String(e)); }
       break;
 
     case 'tool_result':
@@ -96,7 +97,7 @@ export function handleStreamMessage(rawType: string, rawData: any, sessionId: st
             duration,
           });
         }
-      } catch (e) { console.error('Failed to parse tool result:', e); }
+      } catch (e) { errLog.warn('Failed to parse tool result', String(e)); }
       break;
 
     case 'complete':
@@ -143,6 +144,16 @@ export function handleStreamMessage(rawType: string, rawData: any, sessionId: st
         id: crypto.randomUUID(), type: 'assistant',
         content: 'Error occurred', timestamp: Date.now(),
       });
+      break;
+
+    case 'tombstone':
+      try {
+        const td = JSON.parse(rawData || '{}');
+        const messageIds: string[] = td.messageIds || [];
+        if (messageIds.length > 0) {
+          chatStore.applyTombstone(sessionId, messageIds);
+        }
+      } catch (e) { errLog.warn('Failed to parse tombstone', String(e)); }
       break;
   }
 }

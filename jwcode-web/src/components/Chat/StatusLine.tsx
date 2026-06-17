@@ -12,7 +12,15 @@ interface StatusLineProps {
 }
 
 export const StatusLine = memo(function StatusLine(_props: StatusLineProps) {
-  const { currentUsage, maxContextTokens, model, tokenRate, compactingUntil, lastCompactInfo, degradation, compactionProgress } = useTokenStore();
+  // 细粒度 selector 订阅 — 避免 tokenRate/compactionProgress 等高频变化触发整体重渲染
+  const currentUsage = useTokenStore((s) => s.currentUsage);
+  const maxContextTokens = useTokenStore((s) => s.maxContextTokens);
+  const model = useTokenStore((s) => s.model);
+  const tokenRate = useTokenStore((s) => s.tokenRate);
+  const compactingUntil = useTokenStore((s) => s.compactingUntil);
+  const lastCompactInfo = useTokenStore((s) => s.lastCompactInfo);
+  const degradation = useTokenStore((s) => s.degradation);
+  const compactionProgress = useTokenStore((s) => s.compactionProgress);
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const isGenerating = useChatStore((s) => activeSessionId ? s.isGenerating(activeSessionId) : false);
   const [elapsed, setElapsed] = useState(0);

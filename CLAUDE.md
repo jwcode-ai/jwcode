@@ -223,16 +223,24 @@ Built with Ink 5 (React for terminal), `ws`, esbuild. Source in `src/`, output i
 **Key components:**
 | File | Purpose |
 |------|---------|
-| `src/App.tsx` | Root component: WS event wiring, generation elapsed timer, token rate computation, keyboard, command execution |
+| `src/App.tsx` | Root component: WS event wiring, generation elapsed timer, token rate computation, keyboard, command execution. `useEffect` installs BSU/ESU wrapper from `terminalSync.ts` |
 | `src/components/TextInput.tsx` | Text input with paste support (CJK-safe), ↑↓ input history (30 entries), token/char counter |
-| `src/components/ChatArea.tsx` | Virtual message window with scrollOffset, `[X/Y]` indicator; live elapsed timers for running tool calls, duration for completed |
+| `src/components/ChatArea.tsx` | Virtual message window with scrollOffset, `[X/Y]` indicator; live elapsed timers for running tool calls, duration for completed. `StreamingMessage` has custom `memo` comparator + `useCallback` toggle functions to avoid wasted re-renders during step/tool_call events |
 | `src/components/StatusLine.tsx` | Model, prompt+completion token breakdown, token rate (t/s), generation elapsed, Plan/Act/Auto tags, █░ bar |
 | `src/components/ApprovalModal.tsx` | CRITICAL/HIGH/MEDIUM/LOW risk classification, 15s countdown auto-approval, tool preview panel, y/n/1/2 shortcuts |
 | `src/components/CommandPalette.tsx` | `/` filterable popup with PgUp/PgDn page navigation |
 | `src/components/FilePalette.tsx` | `@` file reference popup: fuzzy search, ↑↓/PgUp/PgDn nav, Enter to insert path, Esc close |
+| `src/store.ts` | `createStore` defers listener notification via `queueMicrotask`; multiple setState calls in the same task coalesce into one notification (handles the 4 boundary events that previously caused double-renders) |
+| `src/terminalSync.ts` | DEC 2026 BSU/ESU atomic output wrapper. Wraps `process.stdout.write` so each Ink 5 frame is committed atomically — eliminates intra-frame tearing / flicker on Windows Terminal, iTerm2, WezTerm, ghostty, VS Code, kitty, alacritty, foot. Bypassed on tmux and unsupported terminals |
 | `src/theme.ts` | Color constants, `JWCODE_THEME=dark\|light` env var support |
 
 **Text input features:** ↑↓ browses last 30 inputs (sessionStorage). CJK ≈ 1.5 chars/token, English ≈ 4 chars/token. Warning at >100K tokens.
+
+**Streaming flicker mitigation (Ink 5 has no cell diff / damage tracking / BSU/ESU):**
+- `src/terminalSync.ts` wraps `process.stdout.write` with BSU/ESU (`\x1b[?2026h` ... `\x1b[?2026l`) so the terminal commits each frame atomically. Detected via `WT_SESSION` / `TERM_PROGRAM` / kitty / foot; bypassed on tmux.
+- `src/store.ts` batches listener notifications on `queueMicrotask` so the 4 double-`updateAppState` boundary events (`start` / `complete` / `plan_start` / `plan_complete`) collapse to one render.
+- `useStreamHandlers.ts` `scheduleStreamFlush` is adaptive: first flush immediate, content > 100 chars immediate, else 200ms.
+- `ChatArea.tsx` `StreamingMessage` has explicit `memo` comparator + `useCallback` toggles.
 
 **@ file reference (TS CLI):** Type `@` in the input → `findAtTrigger()` detects the last `@` not preceded by a word char → debounced file list via `GET /api/files` → `FilePalette` renders matching files (files only, not directories) → select inserts path → on send, `resolveAndSend()` reads each file via `GET /api/files/read`, wraps content in `<context ref="path">\n```ext\n...\n```\n</context>` blocks, removes raw paths from message text, and prepends contexts before the user prompt.
 

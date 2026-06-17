@@ -49,7 +49,6 @@ interface TokenState {
   addToHistory: (usage: TokenUsage) => void;
   estimateTokens: (text: string) => number;
   recalculateFromMessages: (messages: Message[]) => void;
-  pruneContext: (targetRatio: number) => { cutMessages: number; recoveredTokens: number };
   resetUsage: () => void;
   setCompacting: (info: { originalCount: number; compressedCount: number; tokensSaved: number }) => void;
   setCompactionProgress: (progress: { stage: string; percent: number; message: string } | null) => void;
@@ -183,33 +182,6 @@ export const useTokenStore = create<TokenState>((set, get) => ({
     set({
       currentUsage: { promptTokens, completionTokens, totalTokens, estimatedCost },
     });
-  },
-
-  pruneContext: (targetRatio) => {
-    const state = get();
-    const targetTokens = Math.floor(state.currentUsage.totalTokens * targetRatio);
-    if (targetTokens >= state.currentUsage.totalTokens) {
-      return { cutMessages: 0, recoveredTokens: 0 };
-    }
-    
-    // The actual pruning logic will be handled externally
-    // This just reports what could be saved
-    const tokensToRecover = state.currentUsage.totalTokens - targetTokens;
-    const estimatedMessagesToCut = Math.ceil(tokensToRecover / 200); // ~200 tokens per message avg
-    
-    // Update the usage after pruning
-    set({
-      currentUsage: {
-        ...state.currentUsage,
-        promptTokens: Math.max(0, state.currentUsage.promptTokens - tokensToRecover),
-        totalTokens: targetTokens,
-      }
-    });
-
-    return {
-      cutMessages: estimatedMessagesToCut,
-      recoveredTokens: tokensToRecover,
-    };
   },
 
   resetUsage: () => set((state) => ({

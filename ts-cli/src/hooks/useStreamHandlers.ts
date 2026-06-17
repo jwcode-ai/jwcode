@@ -5,6 +5,7 @@ import { useCallback } from 'react';
 import type { JwCodeClient } from '../client.js';
 import { updateAppState, getStore } from './useAppState.js';
 import { createMessage, parseData, type WSMessage, type ToolCall, type Message, type PlanTask, type Step } from '../protocol.js';
+import { queryGuard } from './useQueryGuard.js';
 
 function cleanArgs(raw: unknown): string {
   let s: string = typeof raw === 'string' ? raw : JSON.stringify(raw);
@@ -31,6 +32,7 @@ interface ApprovalState {
 export function useStreamHandlers(
   setShowApproval: (v: ApprovalState | null) => void,
   sessionAllowRef: { current: Set<string> },
+  dequeueRef?: React.MutableRefObject<((input: string) => void) | null>,
 ) {
   return useCallback((client: JwCodeClient) => {
     let _pendingContent = '';
@@ -115,6 +117,7 @@ export function useStreamHandlers(
     // ---- core event wiring ----
 
     client.on('start', () => {
+      queryGuard.markRunning();
       flushNow();
       const msg = createMessage('assistant');
       updateAppState(prev => ({
@@ -188,6 +191,10 @@ export function useStreamHandlers(
 
     client.on('complete', () => {
       flushNow();
+      const next = queryGuard.markComplete();
+      if (next && dequeueRef?.current) {
+        dequeueRef.current(next);
+      }
       updateAppState(prev => {
         if (!prev.currentMessage) return prev;
         const msgs = [...prev.messages];
@@ -203,6 +210,10 @@ export function useStreamHandlers(
     });
 
     client.on('error', (_m: WSMessage) => {
+      const next = queryGuard.markComplete();
+      if (next && dequeueRef?.current) {
+        dequeueRef.current(next);
+      }
       const text = String(_m.data || 'Error');
       updateAppState(prev => ({
         ...prev,
@@ -417,12 +428,23 @@ export function useStreamHandlers(
       const comp = Number(d.compressedCount) || 0;
       const saved = Number(d.tokensSaved) || 0;
       const tokensStr = saved >= 1000 ? (saved / 1000).toFixed(1) + 'K' : String(saved);
-      updateAppState(prev => ({
-        ...prev,
-        statusText: 'Context compressed ' + orig + ' to ' + comp + ' messages, freed ' + tokensStr + ' tokens',
-        usage: { ...prev.usage, usageRatio: Math.max(0, prev.usage.usageRatio - 0.15) },
-        compactionProgress: null,
-      }));
+      updateAppState(prev => {
+        // Use proportional reduction instead of hardcoded 0.15:
+        // newRatio = oldRatio × (total - saved) / total
+        const total = prev.usage.totalTokens;
+        let newRatio: number;
+        if (total > 0 && saved > 0) {
+          newRatio = Math.max(0, prev.usage.usageRatio * (total - saved) / total);
+        } else {
+          newRatio = Math.max(0, prev.usage.usageRatio - 0.1);
+        }
+        return {
+          ...prev,
+          statusText: 'Context compressed ' + orig + ' to ' + comp + ' messages, freed ' + tokensStr + ' tokens',
+          usage: { ...prev.usage, usageRatio: newRatio },
+          compactionProgress: null,
+        };
+      });
     });
 
     // ---- hook & approval ----

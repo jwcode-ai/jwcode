@@ -1,7 +1,8 @@
-import { memo, useState, useEffect, useRef } from 'react';
+import { memo, useState, useRef } from 'react';
 import { Plus, Minus, Clock } from 'lucide-react';
 import { ToolCall } from '../../types';
 import { DiffPreview } from './DiffPreview';
+import { useGlobalTick } from '../../hooks/useGlobalTick';
 
 interface ToolCallItemProps {
   toolCall: ToolCall;
@@ -36,8 +37,8 @@ function extractFilePath(args: Record<string, unknown> | string): string | undef
 
 export const ToolCallItem = memo(function ToolCallItem({ toolCall, defaultCollapsed = false }: ToolCallItemProps) {
   const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
-  const [elapsed, setElapsed] = useState(0);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const tick = useGlobalTick(); // single 1s global tick
+  const startTickRef = useRef(0);
 
   const isRunning = toolCall.status === 'running';
   const hasResult = toolCall.result !== undefined && toolCall.result !== null;
@@ -47,24 +48,20 @@ export const ToolCallItem = memo(function ToolCallItem({ toolCall, defaultCollap
   const filePath = typeof toolCall.args === 'object' && toolCall.args
     ? extractFilePath(toolCall.args as Record<string, unknown>)
     : undefined;
+
+  // Capture starting tick when this tool call begins running
+  if (isRunning && startTickRef.current === 0) {
+    startTickRef.current = tick;
+  }
+  if (!isRunning) {
+    startTickRef.current = 0;
+  }
+
+  const elapsed = isRunning ? tick - startTickRef.current : 0;
   const duration = toolCall.duration ?? (isRunning ? elapsed : 0);
   const durationStr = duration > 0
     ? duration >= 60 ? `${Math.floor(duration / 60)}m ${duration % 60}s` : `${duration}s`
     : '';
-
-  // Live elapsed timer for running tool calls
-  useEffect(() => {
-    if (isRunning) {
-      setElapsed(0);
-      const startTime = toolCall.timestamp || Date.now();
-      timerRef.current = setInterval(() => {
-        setElapsed(Math.floor((Date.now() - startTime) / 1000));
-      }, 1000);
-    } else {
-      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
-    }
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [isRunning, toolCall.timestamp]);
 
   const statusConfig = isRunning
     ? { dot: 'bg-accent-blue', border: 'border-accent-blue/40', text: 'text-accent-blue', label: '运行中' }

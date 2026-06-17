@@ -190,11 +190,13 @@ public class LLMFactory {
             com.jwcode.core.session.Session session,
             com.jwcode.core.tool.ToolRegistry toolRegistry,
             com.jwcode.core.tool.ToolExecutor toolExecutor) {
+        LLMQueryEngine.EngineConfig engineConfig = LLMQueryEngine.EngineConfig.fromJwcodeConfig(config);
         return LLMQueryEngine.builder()
             .session(session)
             .llmService(getLLMService())
             .toolRegistry(toolRegistry)
             .toolExecutor(toolExecutor)
+            .config(engineConfig)
             .build();
     }
     
