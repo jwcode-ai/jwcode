@@ -171,50 +171,57 @@ export async function ensureBackendJar(installDir: string): Promise<string | nul
     return null;
   }
 
-  const url = `https://github.com/ngwlh/jwcode/releases/download/v${version}/jwcode-web.jar`;
+  const urls = [
+    `https://ghproxy.com/https://github.com/ngwlh/jwcode/releases/download/v${version}/jwcode-web.jar`,
+    `https://github.com/ngwlh/jwcode/releases/download/v${version}/jwcode-web.jar`,
+  ];
+
   console.log(`[launcher] Backend JAR not found. Downloading from GitHub Releases...`);
-  console.log(`[launcher] ${url}`);
 
-  try {
-    mkdirSync(backendDir, { recursive: true });
-    const response = await fetch(url);
-    if (!response.ok) {
-      console.error(`[launcher] Download failed: HTTP ${response.status}`);
-      return null;
-    }
+  mkdirSync(backendDir, { recursive: true });
 
-    const reader = response.body?.getReader();
-    if (!reader) {
-      console.error('[launcher] Download failed: no response body');
-      return null;
-    }
-
-    const chunks: Uint8Array[] = [];
-    let downloaded = 0;
-    const total = Number(response.headers.get('content-length') || 0);
-
-    // Read in chunks for progress reporting
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-      downloaded += value.length;
-      if (total > 0) {
-        const pct = Math.round((downloaded / total) * 100);
-        process.stdout.write(`\r[launcher] Downloading... ${pct}% (${(downloaded / 1024 / 1024).toFixed(1)} MB)`);
+  for (const url of urls) {
+    console.log(`[launcher] Trying: ${url}`);
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        console.log(`[launcher] HTTP ${response.status}, trying next source...`);
+        continue;
       }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        console.log('[launcher] No response body, trying next source...');
+        continue;
+      }
+
+      const chunks: Uint8Array[] = [];
+      let downloaded = 0;
+      const total = Number(response.headers.get('content-length') || 0);
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        downloaded += value.length;
+        if (total > 0) {
+          const pct = Math.round((downloaded / total) * 100);
+          process.stdout.write(`\r[launcher] Downloading... ${pct}% (${(downloaded / 1024 / 1024).toFixed(1)} MB)`);
+        }
+      }
+
+      const buf = Buffer.concat(chunks);
+      writeFileSync(jarPath, buf);
+      console.log(`\n[launcher] Download complete: ${jarPath} (${(buf.length / 1024 / 1024).toFixed(1)} MB)`);
+      return jarPath;
+    } catch (err) {
+      console.log(`[launcher] Download failed: ${err instanceof Error ? err.message : String(err)}`);
+      console.log('[launcher] Trying next source...');
     }
-
-    // Write concatenated chunks
-    const buf = Buffer.concat(chunks);
-    writeFileSync(jarPath, buf);
-    console.log(`\n[launcher] Download complete: ${jarPath} (${(buf.length / 1024 / 1024).toFixed(1)} MB)`);
-
-    return jarPath;
-  } catch (err) {
-    console.error(`[launcher] Download failed: ${err instanceof Error ? err.message : String(err)}`);
-    return null;
   }
+
+  console.error('[launcher] All download sources failed.');
+  return null;
 }
 
 export function buildBackend(projectRoot: string): void {
