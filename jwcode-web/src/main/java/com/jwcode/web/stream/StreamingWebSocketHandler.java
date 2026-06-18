@@ -149,6 +149,12 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         this.hookChain = hookChain;
     }
 
+    private com.jwcode.core.command.CommandRegistry commandRegistry;
+
+    public void setCommandRegistry(com.jwcode.core.command.CommandRegistry commandRegistry) {
+        this.commandRegistry = commandRegistry;
+    }
+
     /** Inject session manager for message persistence. */
     public void setSessionManager(WebSessionManager mgr) {
         this.sessionStore = mgr;
@@ -816,6 +822,9 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                     logger.info("收到未实现命令: " + clientMsg.type);
                     sendMessage(conn, MessageType.NOTIFICATION,
                         escapeJson("Command '" + clientMsg.type + "' is not yet implemented via WebSocket."));
+                    break;
+                case "command_execute":
+                    handleCommandExecute(conn, clientMsg);
                     break;
                 case "exit":
                     logger.info("收到 exit 消息，正在关闭后端服务...");
@@ -2712,6 +2721,194 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     /**
      * Get or generate a session ID for the connection.
      */
+    /**
+     * Handle the unified command_execute WebSocket protocol.
+     *
+     * <p>Parses {command, args} from msg.data, emits COMMAND_START, then runs the
+     * command on the query executor (without blocking the WS IO thread).
+     * Orchestrated commands (init/branch/compact/doctor/rewind/...) delegate to
+     * the existing per-command handlers to preserve full behavior; pure commands
+     * (export/search/test/lint/...) run via Command.execute. Results are sent as
+     * a NOTIFICATION (so existing clients render them) plus a COMMAND_COMPLETE
+     * event. AI-prompt commands (init/project) forward to executeQuery.
+     */
+    private void handleCommandExecute(WebSocket conn, ClientMessage msg) {
+        String command = null;
+        String args = "";
+        try {
+            String dataStr = msg.data;
+            if (dataStr != null && !dataStr.isEmpty()) {
+                String trimmed = dataStr.trim();
+                if (trimmed.startsWith("{")) {
+                    JsonNode node = new com.fasterxml.jackson.databind.ObjectMapper().readTree(trimmed);
+                    if (node.has("command")) command = node.get("command").asText();
+                    if (node.has("args")) args = node.get("args").asText();
+                } else {
+                    int sp = trimmed.indexOf(' ');
+                    if (sp > 0) {
+                        command = trimmed.substring(0, sp);
+                        args = trimmed.substring(sp + 1).trim();
+                    } else {
+                        command = trimmed;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            logger.warning("command_execute parse error: " + e.getMessage());
+        }
+        if (command == null || command.isEmpty()) {
+            sendMessage(conn, MessageType.COMMAND_ERROR, escapeJson("{\"error\":\"missing command\"}"), msg.sessionId);
+            return;
+        }
+        String name = command;
+        if (name.startsWith("/")) name = name.substring(1);
+        name = name.trim();
+        final String cmdName = name;
+        final String cmdArgs = args;
+        String startJson = String.format("{\"command\":\"/%s\",\"args\":\"%s\"}",
+            escapeJson(cmdName), escapeJson(cmdArgs));
+        sendMessage(conn, MessageType.COMMAND_START, startJson, msg.sessionId);
+
+        queryExecutor.submit(() -> {
+            try {
+                runCommandExecute(conn, msg, cmdName, cmdArgs);
+            } catch (Exception e) {
+                logger.warning("command_execute error: " + e.getMessage());
+                String errJson = String.format("{\"command\":\"/%s\",\"error\":\"%s\"}",
+                    escapeJson(cmdName), escapeJson(e.getMessage() == null ? "error" : e.getMessage()));
+                sendMessage(conn, MessageType.COMMAND_ERROR, errJson, msg.sessionId);
+            }
+        });
+    }
+
+    private void runCommandExecute(WebSocket conn, ClientMessage msg, String name, String args) {
+        String sessionId = getOrGenerateSessionId(conn, msg);
+        Session session = sessions.get(sessionId);
+
+        // Orchestrated commands delegate to existing handlers (preserve behavior).
+        switch (name) {
+            case "init":
+                handleInit(conn, msg);
+                sendCommandComplete(conn, msg, name, "init started");
+                return;
+            case "effort":
+                msg.data = args;
+                handleEffort(conn, msg);
+                sendCommandComplete(conn, msg, name, "effort applied");
+                return;
+            case "branch":
+                msg.data = args;
+                handleBranch(conn, msg);
+                sendCommandComplete(conn, msg, name, "branch created");
+                return;
+            case "mcp":
+                handleMcpCommand(conn, msg);
+                sendCommandComplete(conn, msg, name, "mcp done");
+                return;
+            case "agents":
+                handleAgentsCommand(conn, msg);
+                sendCommandComplete(conn, msg, name, "agents listed");
+                return;
+            case "model":
+                msg.data = args;
+                handleModelChange(conn, msg);
+                sendCommandComplete(conn, msg, name, "model set");
+                return;
+            case "config":
+                msg.data = args;
+                handleConfigCommand(conn, msg);
+                sendCommandComplete(conn, msg, name, "config done");
+                return;
+            case "plugin":
+                handlePluginCommand(conn, msg);
+                sendCommandComplete(conn, msg, name, "plugin done");
+                return;
+            case "compact":
+                msg.data = args;
+                handleCompact(conn, msg);
+                sendCommandComplete(conn, msg, name, "compact done");
+                return;
+            case "doctor":
+                handleDoctorCommand(conn, msg);
+                sendCommandComplete(conn, msg, name, "doctor done");
+                return;
+            case "rewind":
+                msg.data = args;
+                handleRewindCommand(conn, msg);
+                sendCommandComplete(conn, msg, name, "rewind done");
+                return;
+            case "project":
+            case "update_docs":
+                handleUpdateDocsCommand(conn, msg);
+                sendCommandComplete(conn, msg, name, "project started");
+                return;
+            case "tokens":
+                handleTokensCommand(conn, msg);
+                sendCommandComplete(conn, msg, name, "tokens reported");
+                return;
+            case "skills":
+                handleSkillsCommand(conn, msg);
+                sendCommandComplete(conn, msg, name, "skills listed");
+                return;
+            default:
+                break;
+        }
+
+        // Pure commands: run via Command.execute().
+        com.jwcode.core.command.CommandRegistry registry = commandRegistry != null
+            ? commandRegistry : com.jwcode.core.command.CommandRegistry.getInstance();
+        if (registry == null) {
+            sendMessage(conn, MessageType.COMMAND_ERROR,
+                escapeJson("{\"command\":\"/" + name + "\",\"error\":\"command registry unavailable\"}"), msg.sessionId);
+            return;
+        }
+        com.jwcode.core.command.Command cmd = registry.getCommand(name);
+        if (cmd == null) {
+            sendMessage(conn, MessageType.COMMAND_ERROR,
+                escapeJson("{\"command\":\"/" + name + "\",\"error\":\"unknown command: " + name + "\"}"), msg.sessionId);
+            return;
+        }
+        String[] argArr = (args == null || args.trim().isEmpty())
+            ? new String[0] : args.trim().split("\\s+");
+        com.jwcode.core.command.CommandResult result = cmd.execute(argArr, session);
+
+        if (result.isExit()) {
+            sendCommandComplete(conn, msg, name, result.getMessage());
+            sendMessage(conn, MessageType.EXIT, "Server shutting down...");
+            new Thread(() -> {
+                try { Thread.sleep(500); } catch (InterruptedException ignored) {}
+                System.exit(0);
+            }).start();
+            return;
+        }
+        if ("AI_PROMPT".equals(result.getData())) {
+            if (session == null) {
+                session = createNewSession(sessionId, msg.model);
+            }
+            final Session sess = session;
+            final String prompt = result.getMessage();
+            cancelRunningQuery(sessionId);
+            java.util.concurrent.Future<?> future = queryExecutor.submit(() -> executeQuery(conn, sess, prompt));
+            runningQueryFutures.put(sessionId, future);
+            sendCommandComplete(conn, msg, name, "started");
+            return;
+        }
+        if (result.isSuccess()) {
+            sendMessage(conn, MessageType.NOTIFICATION, escapeJson(result.getMessage()), msg.sessionId);
+            sendCommandComplete(conn, msg, name, result.getMessage());
+        } else {
+            String errJson = String.format("{\"command\":\"/%s\",\"error\":\"%s\"}",
+                escapeJson(name), escapeJson(result.getMessage()));
+            sendMessage(conn, MessageType.COMMAND_ERROR, errJson, msg.sessionId);
+        }
+    }
+
+    private void sendCommandComplete(WebSocket conn, ClientMessage msg, String name, String result) {
+        String json = String.format("{\"command\":\"/%s\",\"exitCode\":0,\"result\":\"%s\"}",
+            escapeJson(name), escapeJson(result == null ? "" : result));
+        sendMessage(conn, MessageType.COMMAND_COMPLETE, json, msg.sessionId);
+    }
+
     private String getOrGenerateSessionId(WebSocket conn, ClientMessage msg) {
         String sessionId = msg.sessionId;
         if (sessionId == null || sessionId.isEmpty()) {
@@ -3563,7 +3760,11 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         REWIND_RESULT,      // 回退结果
         DOCS_UPDATED,       // 文档更新完成
         TOMBSTONE,          // Tombstone 消息：通知前端清理孤立 assistant 消息
-        EXIT                // 退出后端服务
+        EXIT,                // 退出后端服务
+        COMMAND_START,      // command_start event
+        COMMAND_OUTPUT,     // command_output event (v2 streaming, unused in v1)
+        COMMAND_COMPLETE,   // command_complete event
+        COMMAND_ERROR       // command_error event
     }
     
     /**

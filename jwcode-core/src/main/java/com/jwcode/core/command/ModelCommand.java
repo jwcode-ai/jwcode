@@ -37,6 +37,11 @@ public class ModelCommand implements Command {
     public String getUsage() {
         return "model [model-name]";
     }
+
+    @Override
+    public String getCategory() {
+        return "config";
+    }
     
     @Override
     public CommandResult execute(String[] args, Session session) {

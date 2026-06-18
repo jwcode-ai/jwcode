@@ -13,6 +13,7 @@ interface SettingsState extends Settings, AdvancedSettings {
 
   // Actions
   setTheme: (theme: 'dark' | 'light' | 'auto') => void;
+  setThemePreset: (presetId: string) => void;
   setLanguage: (language: string) => void;
   setFontSize: (fontSize: number) => void;
   setStreamingEnabled: (enabled: boolean) => void;
@@ -29,6 +30,7 @@ export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
       theme: 'dark',
+      themePresetId: 'github',
       language: 'zh-CN',
       fontSize: 14,
       streamingEnabled: true,
@@ -40,6 +42,7 @@ export const useSettingsStore = create<SettingsState>()(
       customThemeEnabled: false,
 
       setTheme: (theme) => set({ theme }),
+      setThemePreset: (themePresetId) => set({ themePresetId, customThemeEnabled: false }),
       setLanguage: (language) => set({ language }),
       setFontSize: (fontSize) => set({ fontSize }),
       setStreamingEnabled: (streamingEnabled) => set({ streamingEnabled }),

@@ -172,6 +172,17 @@ export interface Settings {
   language: string;
   fontSize: number;
   streamingEnabled: boolean;
+  /** Theme preset ID — selects a named color palette. Defaults to 'github'. */
+  themePresetId?: string;
+}
+
+/** A named color palette with dark and light variants */
+export interface ThemePreset {
+  id: string;
+  nameKey: string;
+  descriptionKey: string;
+  dark: CustomThemeColors;
+  light: CustomThemeColors;
 }
 
 export interface AdvancedSettings {
@@ -293,6 +304,12 @@ export type WSMessageType =
   | 'agent_flow_event'
   | 'message_ack'
   | 'exit'
+  // Unified command_execute protocol
+  | 'command_execute'
+  | 'command_start'
+  | 'command_output'
+  | 'command_complete'
+  | 'command_error'
   | 'tombstone';
 
 
@@ -385,7 +402,19 @@ export interface SessionTask {
 }
 
 // Tab types
-export type TabId = 'chat' | 'plan' | 'terminal' | 'files' | 'models' | 'tools' | 'skills' | 'agents' | 'hooks' | 'settings' | 'logs' | 'agentflow' | 'observability';
+export type TabId = 'chat' | 'plan' | 'terminal' | 'files' | 'models' | 'tools' | 'skills' | 'agents' | 'hooks' | 'channels' | 'settings' | 'logs' | 'agentflow' | 'observability';
+
+export type ChannelType = 'wechat' | 'feishu' | 'dingtalk';
+export interface Channel {
+  id: string; name: string; type: ChannelType;
+  appId: string; appSecret: string; token: string; encodingAESKey: string;
+  enabled: boolean; extra: Record<string, string>;
+  connected?: boolean;
+}
+export interface ChannelFormData {
+  id?: string; name: string; type: ChannelType;
+  appId: string; appSecret: string; token: string; encodingAESKey: string; enabled: boolean;
+}
 
 export interface Tab {
   id: TabId;

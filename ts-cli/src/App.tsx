@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Root Ink component -- layout, WS connection, and event dispatch.
  */
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -12,9 +12,11 @@ import { CommandPalette } from './components/CommandPalette.js';
 import { FilePalette } from './components/FilePalette.js';
 import { ApprovalModal } from './components/ApprovalModal.js';
 import { updateAppState, useAppSlice } from './hooks/useAppState.js';
-import { getCommandEntry, HELP_TEXT } from './commands/index.js';
+import { getCommandEntry, HELP_TEXT, setDynamicCommands, type CommandCategory } from './commands/index.js';
 import { useStreamHandlers } from './hooks/useStreamHandlers.js';
 import { useKeyboardInput } from './hooks/useKeyboardInput.js';
+import { useAsciiAnimation, MIN_ANIMATION_WIDTH, MIN_ANIMATION_HEIGHT } from './hooks/useAsciiAnimation.js';
+import { PIXEL_ANIMALS } from './components/PixelArt.js';
 import { setClient } from './hooks/useWebSocket.js';
 import { installSyncOutput } from './terminalSync.js';
 import { useCommandHandler } from './hooks/useCommandHandler.js';
@@ -63,6 +65,7 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
   const clientRef = useRef<JwCodeClient | null>(null);
   const { stdout } = useStdout();
   const terminalRows = (stdout as any)?.rows || 24;
+  const terminalCols = (stdout as any)?.columns || 80;
 
   const planMode = useAppSlice(s => s.planMode);
   const planModeRef = useRef(planMode);
@@ -75,6 +78,17 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
   const isGenerating = useAppSlice(s => s.currentMessage !== null);
   const messagesLen = useAppSlice(s => s.messages.length);
   const modelName = useAppSlice(s => s.modelName);
+
+  // Welcome mascot animation. Hook is called unconditionally (rules of hooks);
+  // it is cheap and only ticks while there is more than one frame.
+  // Stop animation when user starts typing — prevents Ink re-render race
+  // on Windows terminals where the clear+redraw cycle can swallow keystrokes.
+  const welcomeActive = messagesLen === 0 && !isGenerating && !!modelName && input === '';
+  const showBanner = !!modelName && connected;
+  const anim = useAsciiAnimation(PIXEL_ANIMALS, 8, welcomeActive);
+  const showAnimal = showBanner
+    && terminalCols >= MIN_ANIMATION_WIDTH
+    && terminalRows >= MIN_ANIMATION_HEIGHT;
 
   const wireHandlers = useStreamHandlers(setShowApproval, sessionAllowRef, dequeueRef);
 
@@ -94,6 +108,21 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
       } catch {
         updateAppState(s => ({ ...s, connected: true }));
       }
+      fetch(backendUrl + '/api/commands')
+        .then(r => r.json())
+        .then(body => {
+          const cmds = ((body && body.data) || []).map((c: any) => ({
+            cmd: '/' + c.name,
+            desc: c.description || '',
+            via: 'ws' as const,
+            action: 'command_execute',
+            category: (c.category || 'core') as CommandCategory,
+            usage: c.usage,
+            needsArg: !!c.requiresArgs,
+          }));
+          setDynamicCommands(cmds);
+        })
+        .catch(() => { /* fall back to local commands only */ });
     }).catch((err: Error) => {
       updateAppState(s => ({ ...s, statusText: 'Connection failed: ' + err.message }));
     });
@@ -191,6 +220,7 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
     onDenyApproval: () => { if (showApproval) handleApprovalDeny(showApproval.approvalId); },
     onCloseHelp: () => setShowHelp(false),
     setHelpScroll,
+    onSwitchAnimal: anim.switchVariant,
   });
 
   const handleApprovalAllowForModal = useCallback(() => {
@@ -219,34 +249,49 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
     <Box flexDirection="column" width="100%">
       {connected ? (
         <Box flexDirection="column">
-          {messagesLen === 0 && !isGenerating && !!modelName && (
-            <Box key="welcome-banner" flexDirection="column" borderStyle="round" borderColor={t.primary} paddingX={1} marginBottom={1}>
-              <Box>
-                <Text color={t.primary} bold>&gt;_ JWCode v3.0.0</Text>
-              </Box>
-              <Box>
-                <Text dimColor>model:     </Text>
-                <Text color={t.success}>{modelName || 'connecting...'}</Text>
-                <Text dimColor>   /model to change</Text>
-              </Box>
-              <Box>
-                <Text dimColor>directory: </Text>
-                <Text color={t.warning}>{process.cwd()}</Text>
+          {showBanner && (
+            <Box key="welcome-banner" flexDirection="row" borderStyle="round" borderColor={t.primary} paddingX={1} marginBottom={1}>
+              {showAnimal && (
+                <Box flexDirection="column" marginRight={2}>
+                  {anim.currentFrame.split('\n').map((line, i) => (
+                    <Text key={i} color={t.primary}>{line}</Text>
+                  ))}
+                </Box>
+              )}
+              <Box flexDirection="column">
+                <Box>
+                  <Text color={t.primary} bold>&gt;_ JWCode v3.0.0</Text>
+                </Box>
+                <Box>
+                  <Text dimColor>model:     </Text>
+                  <Text color={t.success}>{modelName || 'connecting...'}</Text>
+                  <Text dimColor>   /model to change</Text>
+                </Box>
+                <Box>
+                  <Text dimColor>directory: </Text>
+                  <Text color={t.warning}>{process.cwd()}</Text>
+                </Box>
+                {showAnimal && welcomeActive && (
+                  <Box>
+                    <Text dimColor>{anim.variant.tip}</Text>
+                  </Box>
+                )}
               </Box>
             </Box>
           )}
-          {messagesLen === 0 && !isGenerating && !!modelName && (
-            <Box key="tip-line" paddingLeft={3} marginBottom={1}>
-              <Text dimColor>Tip: Type / for commands, @ to reference files, ↑↓ for history</Text>
+          {showBanner && welcomeActive && (
+            <Box key="tip-line" paddingLeft={3} marginBottom={1} flexDirection="column">
+              <Text dimColor>/ commands   @ files   ?? history   Ctrl+E expand   Ctrl+. swap mascot</Text>
+              <Text dimColor>Tab plan mode   Esc pause/stop   /help for everything</Text>
             </Box>
           )}
           {/* flexGrow=0 when palette open: prevents Yoga layout overflow + Ink ghost content duplication */}
           <Box flexGrow={paletteActive ? 0 : 1} flexDirection="column">
             <ChatAreaContainer />
           </Box>
-          {/* Help box — rendered above input so text appears between messages and input */}
+          {/* Help box -- rendered above input so text appears between messages and input */}
           {showHelp && (() => {
-            const helpLines = HELP_TEXT.split('\\n');
+            const helpLines = HELP_TEXT.split('\n');
             const helpMax = Math.max(5, Math.min(terminalRows - 12, 10));
             const helpEnd = Math.max(0, helpLines.length - helpScroll);
             const helpStart = Math.max(0, helpEnd - helpMax);

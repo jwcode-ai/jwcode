@@ -1,4 +1,4 @@
-import { memo, useState, useEffect, useCallback } from 'react';
+import { memo, useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Settings, Palette, RefreshCw, Globe, Search,
@@ -10,6 +10,8 @@ import wsService from '../../services/websocket';
 import { FeatureToggle } from './FeatureToggle';
 import { ConfigFileEditor } from './ConfigFileEditor';
 import { CustomThemeColors, TabId } from '../../types';
+import { ThemePresetCard } from './ThemePresetCard';
+import { THEME_PRESETS, DEFAULT_PRESET_ID } from '../../themes/presets';
 import api from '../../services/api';
 import { toast } from '../../stores/toastStore';
 
@@ -45,6 +47,7 @@ export const SettingsPanel = memo(function SettingsPanel({ onNavigate }: Setting
   const { t } = useTranslation();
   const {
     theme, setTheme,
+    themePresetId, setThemePreset,
     language, setLanguage,
     yolo, setYoloEnabled,
     autoSwarm, setAutoSwarmEnabled,
@@ -54,6 +57,18 @@ export const SettingsPanel = memo(function SettingsPanel({ onNavigate }: Setting
   } = useSettingsStore();
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const [showCustomTheme, setShowCustomTheme] = useState(customThemeEnabled);
+
+  // Resolve effective dark/light mode (respecting auto)
+  const effectiveMode = useMemo<'dark' | 'light'>(() => {
+    if (theme === 'dark') return 'dark';
+    if (theme === 'light') return 'light';
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }, [theme]);
+
+  // Get all preset entries as an array for rendering
+  const presetEntries = useMemo(() =>
+    Object.values(THEME_PRESETS),
+  []);
   const [uptime, setUptime] = useState(0);
   const [restarting, setRestarting] = useState(false);
   const [shuttingDown, setShuttingDown] = useState(false);
@@ -202,7 +217,30 @@ export const SettingsPanel = memo(function SettingsPanel({ onNavigate }: Setting
               ))}
             </div>
 
-            {/* Custom Theme Toggle */}
+            {/* Theme Presets Grid */}
+            <div className="mb-4">
+              <h4 className="text-xs font-semibold text-dark-text mb-2">{t('settings.themePresets')}</h4>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                {presetEntries.map((preset) => {
+                  if (!preset) return null;
+                  const isSelected = (themePresetId || DEFAULT_PRESET_ID) === preset.id;
+                  const previewColors = effectiveMode === 'dark' ? preset.dark : preset.light;
+                  return (
+                    <ThemePresetCard
+                      key={preset.id}
+                      id={preset.id}
+                      nameKey={preset.nameKey}
+                      descriptionKey={preset.descriptionKey}
+                      colors={previewColors}
+                      isSelected={isSelected}
+                      onClick={() => setThemePreset(preset.id)}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Custom Overrides Toggle */}
             <div className="pt-4 border-t border-dark-border">
               <button
                 onClick={() => {
@@ -213,11 +251,14 @@ export const SettingsPanel = memo(function SettingsPanel({ onNavigate }: Setting
                 className="flex items-center gap-2 text-sm text-dark-muted hover:text-dark-text transition-colors"
               >
                 <Palette size={14} />
-                <span>{t('settings.customColors')}</span>
+                <span>{t('settings.customOverrides')}</span>
                 <span className={`w-8 h-4 rounded-full transition-colors ${showCustomTheme ? 'bg-accent-blue' : 'bg-dark-border'}`}>
                   <span className={`block w-3 h-3 rounded-full bg-white transition-transform mt-0.5 ${showCustomTheme ? 'ml-4' : 'ml-0.5'}`} />
                 </span>
               </button>
+              {showCustomTheme && (
+                <p className="text-[10px] text-dark-muted mt-1 mb-2">{t('settings.customOverridesHint')}</p>
+              )}
 
               {showCustomTheme && (
                 <div className="mt-3">

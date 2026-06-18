@@ -4,7 +4,6 @@ import { updateAppState } from './useAppState.js';
 import { saveToHistory } from '../components/TextInput.js';
 import { createMessage } from '../protocol.js';
 import { SLASH_COMMANDS, getUsage } from '../commands/index.js';
-import { runLocalCommand } from '../commands/localActions.js';
 import { expandPastes, clearAllPastes } from '../pasteBuffer.js';
 import { queryGuard } from './useQueryGuard.js';
 
@@ -81,9 +80,6 @@ export function useCommandHandler(opts: CommandHandlerOptions) {
             statusText: `Messages: ${prev.messages.length} | Mode: ${prev.planMode ? 'Plan' : 'Act'} | Auto: ${prev.autoMode ? 'on' : 'off'} | Model: ${prev.modelName || 'not connected'}`,
           }));
           return;
-        case 'model_change':
-          client?.switchModel(cmdArg);
-          return;
         case 'stop':
           client?.stop();
           return;
@@ -93,44 +89,8 @@ export function useCommandHandler(opts: CommandHandlerOptions) {
         case 'resume':
           client?.resume();
           return;
-        case 'doctor':
-          client?.doctor();
-          return;
-        case 'rewind':
-          client?.rewind();
-          return;
-        case 'compact':
-          client?.compact();
-          return;
-        case 'init':
-          client?.init();
-          return;
-        case 'effort':
-          client?.effort(cmdArg);
-          return;
-        case 'branch':
-          client?.branch(cmdArg);
-          return;
-        case 'mcp':
-          client?.mcp(cmdArg);
-          return;
-        case 'tokens':
-        case 'memory':
-        case 'export':
-        case 'checkpoint':
-        case 'test':
-        case 'lint':
-        case 'search':
-        case 'project':
-        case 'config':
-        case 'skills':
-        case 'agents':
-        case 'plugin':
-          try {
-            await runLocalCommand(action, cmdArg);
-          } catch (err) {
-            pushAssistant(`Command failed: ${err instanceof Error ? err.message : String(err)}`);
-          }
+        default:
+          client?.executeCommand(cmd, cmdArg);
           return;
       }
       return;

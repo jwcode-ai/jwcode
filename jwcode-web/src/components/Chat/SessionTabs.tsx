@@ -1,4 +1,5 @@
 import { memo, useState, useRef, useCallback, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { SessionTab } from '../../types';
 import { X, Clock, MessageSquare } from 'lucide-react';
 import { useSessionStore } from '../../stores/sessionStore';
@@ -22,6 +23,7 @@ export const SessionTabs = memo(function SessionTabs({
   onRename,
 }: SessionTabsProps) {
 
+  const { t } = useTranslation();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
   const editInputRef = useRef<HTMLInputElement>(null);
@@ -120,8 +122,9 @@ export const SessionTabs = memo(function SessionTabs({
                         onClose(tab.id);
                       }}
                       className="opacity-0 group-hover:opacity-100 hover:bg-dark-hover rounded p-0.5 transition-all"
+                      aria-label={t('a11y.close')}
                     >
-                      <X size={12} />
+                      <X size={12} aria-hidden="true" />
                     </button>
                   )}
                 </>
@@ -142,8 +145,10 @@ export const SessionTabs = memo(function SessionTabs({
                 : 'text-dark-muted hover:text-dark-text hover:bg-dark-hover border border-transparent'
               }`}
             title="历史会话"
+            aria-label={t('chat.sessionHistory')}
+            aria-expanded={historyOpen}
           >
-            <Clock size={14} />
+            <Clock size={14} aria-hidden="true" />
             <span className="text-[10px]">{historySessions.length}</span>
           </button>
 
@@ -174,8 +179,9 @@ export const SessionTabs = memo(function SessionTabs({
                     }}
                     className="opacity-0 group-hover:opacity-100 hover:bg-dark-hover rounded p-0.5 transition-all shrink-0"
                     title="从历史移除"
+                    aria-label={t('chat.removeFromHistory')}
                   >
-                    <X size={10} />
+                    <X size={10} aria-hidden="true" />
                   </button>
                 </div>
               ))}

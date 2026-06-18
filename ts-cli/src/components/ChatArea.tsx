@@ -1,8 +1,12 @@
-﻿import { Box, Text, Static } from "ink";
+import { Box, Text } from "ink";
 import { useState, useMemo, useCallback, memo } from "react";
 import { useStdout } from "ink";
 import { type Message, type ToolCall, type Step } from "../protocol.js";
 import { useAppChatArea, useAppToolCallsExpanded } from "../hooks/useAppState.js";
+import { t } from "../theme.js";
+import { useSpinner } from "../hooks/useSpinner.js";
+import { useShimmerSpans, intensityWeight } from "../hooks/useShimmer.js";
+import { highlightPaths } from "./highlightPaths.js";
 
 const SEP = "-".repeat(60);
 const MAX_THINKING = 200;
@@ -38,28 +42,64 @@ function shouldStartCollapsed(toolCalls: ToolCall[], index: number): boolean {
   return index !== lastFinishedIdx;
 }
 
+/** Renders text with path-like tokens colored via t.filePath. */
+function PathText({ text, color, dimColor }: { text: string; color?: string; dimColor?: boolean }) {
+  const segs = useMemo(() => highlightPaths(text), [text]);
+  return (
+    <Text color={color} dimColor={dimColor}>
+      {segs.map((s, i) =>
+        s.isPath
+          ? <Text key={i} color={t.filePath} dimColor={dimColor}>{s.text}</Text>
+          : <Text key={i}>{s.text}</Text>,
+      )}
+    </Text>
+  );
+}
+
+/** Shimmering text: a cosine intensity band sweeps across while active. */
+function ShimmerText({ text, color, active }: { text: string; color: string; active: boolean }) {
+  const spans = useShimmerSpans(text, active);
+  if (!active) {
+    return <Text bold color={color}>{text}</Text>;
+  }
+  return (
+    <Text>
+      {spans.map((s, i) => {
+        const w = intensityWeight(s.intensity);
+        return (
+          <Text key={i} color={color} bold={w === "bold"} dimColor={w === "dim"}>
+            {s.char}
+          </Text>
+        );
+      })}
+    </Text>
+  );
+}
+
 const StepDisplay = memo(function StepDisplay({ step }: { step: Step }) {
+  const running = step.status === "running";
+  const spinner = useSpinner(running);
   const icon = step.status === "success" ? "[ok]" : step.status === "error" ? "[!!]"
-    : step.status === "running" ? "[..]" : "[--]";
-  const color = step.status === "success" ? "green" : step.status === "error" ? "red"
-    : step.status === "running" ? "cyan" : "cyan";
+    : running ? "[" + spinner + "]" : "[--]";
+  const color = step.status === "success" ? t.success : step.status === "error" ? t.error
+    : running ? t.info : t.info;
   const durStr = step.duration
     ? formatDuration(step.duration)
-    : step.status === "running" && step.timestamp
+    : running && step.timestamp
       ? formatDuration(Math.floor((Date.now() - step.timestamp) / 1000))
       : "";
   return (
     <Box flexDirection="column">
       <Box>
         <Text color={color}>  {icon} </Text>
-        <Text bold color={color}>{step.title}</Text>
+        <ShimmerText text={step.title} color={t.stepTitle} active={running} />
         {durStr && (
-          <><Text dimColor>  </Text><Text color="grey" dimColor>{durStr}</Text></>
+          <><Text dimColor>  </Text><Text color={t.muted} dimColor>{durStr}</Text></>
         )}
       </Box>
-      {step.thought && <Text color="blue" dimColor>    {truncate(step.thought, 200)}</Text>}
-      {step.action && <Text color="yellow">    {truncate(step.action, 200)}</Text>}
-      {step.result && <Text color="green">    {truncate(step.result, 300)}</Text>}
+      {step.thought && <Box paddingLeft={4}><Text color={t.stepThought} dimColor>{truncate(step.thought, 200)}</Text></Box>}
+      {step.action && <Box paddingLeft={4}><Text color={t.stepAction}>{truncate(step.action, 200)}</Text></Box>}
+      {step.result && <Box paddingLeft={4}><PathText text={truncate(step.result, 300)} color={t.toolResult} dimColor /></Box>}
     </Box>
   );
 });
@@ -71,28 +111,34 @@ const ToolCallDisplay = memo(function ToolCallDisplay({
   collapsed: boolean;
   onToggle: () => void;
 }) {
-  const statusIcon = tc.status === "complete" ? "[ok]" : tc.status === "running" ? "[..]" : "[!!]";
-  const statusColor = tc.status === "complete" ? "green" : tc.status === "running" ? "yellow" : "red";
+  const running = tc.status === "running";
+  const spinner = useSpinner(running);
+  const statusIcon = tc.status === "complete" ? "[ok]" : running ? "[" + spinner + "]" : "[!!]";
+  const statusColor = tc.status === "complete" ? t.success : running ? t.warning : t.error;
   const durStr = tc.duration
     ? formatDuration(tc.duration)
-    : tc.status === "running" && tc.timestamp
+    : running && tc.timestamp
       ? formatDuration(Math.floor((Date.now() - tc.timestamp) / 1000))
       : "";
   return (
     <Box flexDirection="column" paddingLeft={1}>
       <Box>
         <Text color={statusColor}>  {statusIcon} </Text>
-        <Text bold color="magenta">{tc.name}</Text>
-        {durStr && (<><Text dimColor>  </Text><Text color="grey" dimColor>{durStr}</Text></>)}
+        <ShimmerText text={tc.name} color={t.toolName} active={running} />
+        {durStr && (<><Text dimColor>  </Text><Text color={t.muted} dimColor>{durStr}</Text></>)}
         <Text dimColor>  </Text>
-        <Text color="blue" dimColor>[{collapsed ? "+" : "-"}]</Text>
+        <Text color={t.filePath} dimColor>[{collapsed ? "+" : "-"}]</Text>
       </Box>
       {!collapsed && tc.args && (
-        <Box paddingLeft={4}><Text dimColor>{truncate(formatJson(tc.args), 200)}</Text></Box>
+        <Box paddingLeft={4}><PathText text={truncate(formatJson(tc.args), 200)} color={t.toolArgs} dimColor /></Box>
       )}
       {tc.result && (
         <Box paddingLeft={4} flexDirection="column">
-          <Text color={tc.status === "error" ? "red" : "green"} dimColor>{truncate(tc.result, 500)}</Text>
+          <PathText
+            text={truncate(tc.result, 500)}
+            color={tc.status === "error" ? t.error : t.toolResult}
+            dimColor
+          />
         </Box>
       )}
     </Box>
@@ -115,7 +161,7 @@ const MessageItem = memo(function MessageItem({
       {msg.type === "user" && (
         <Box flexDirection="column">
           <Text dimColor>{SEP}</Text>
-          <Text color="green" bold>{">"} {msg.content}</Text>
+          <Text color={t.user} bold>{">"} {msg.content}</Text>
         </Box>
       )}
       {msg.type === "assistant" && (
@@ -132,9 +178,9 @@ const MessageItem = memo(function MessageItem({
                   : truncate(msg.thinking, MAX_THINKING)}
               </Text>
               {msg.thinking.length > MAX_THINKING && (
-                <Text color="blue" dimColor>
+                <Text color={t.info} dimColor>
                   [{msg.thinking.length - MAX_THINKING} more chars]
-                  <Text color="cyan" dimColor> {"-> to expand"}</Text>
+                  <Text color={t.brand} dimColor> {"-> to expand"}</Text>
                 </Text>
               )}
             </Box>
@@ -157,7 +203,7 @@ const MessageItem = memo(function MessageItem({
         </Box>
       )}
       {msg.type === "system" && (
-        <Box><Text color="red">Error: {msg.content}</Text></Box>
+        <Box><Text color={t.system}>Error: {msg.content}</Text></Box>
       )}
     </Box>
   );
@@ -200,11 +246,12 @@ const StreamingMessage = memo(function StreamingMessage({
     </Box>
   );
 }, (prev, next) => {
-  // Custom comparator: skip re-render when streaming content/toolCalls haven't
-  // actually changed. Without this, the default shallow check fails on every
-  // parent render (onToggleTool reference changes when toggle functions aren't
-  // stable), causing unnecessary re-renders during step/tool_call events that
-  // don't modify the streaming content.
+  // Force re-render while any tool is running so spinner/shimmer animate and
+  // running -> complete/error transitions are reflected. Otherwise fall back
+  // to a shallow check that skips re-renders for unchanged streaming content.
+  const prevRunning = prev.msg.toolCalls.some(tc => tc.status === "running");
+  const nextRunning = next.msg.toolCalls.some(tc => tc.status === "running");
+  if (prevRunning || nextRunning) return false;
   return prev.msg.id === next.msg.id
     && prev.msg.content === next.msg.content
     && prev.msg.thinking === next.msg.thinking
@@ -234,21 +281,17 @@ export const ChatArea = memo(function ChatArea({
 
   return (
     <Box flexDirection="column" width="100%">
-      {/* Static renders each finalized message once — no per-frame Ink diffing.
-          Only the streaming message (below) updates during generation. */}
-      <Static items={allMessages}>
-        {msg => (
-          <MessageItem
-            key={msg.id}
-            msg={msg}
-            expandedMessages={expandedMessages}
-            expandedTools={expandedTools}
-            toolCallsExpanded={toolCallsExpanded}
-            onToggleTool={toggleExpandTool}
-            onToggleMessage={toggleExpandMessage}
-          />
-        )}
-      </Static>
+      {allMessages.map(msg => (
+        <MessageItem
+          key={msg.id}
+          msg={msg}
+          expandedMessages={expandedMessages}
+          expandedTools={expandedTools}
+          toolCallsExpanded={toolCallsExpanded}
+          onToggleTool={toggleExpandTool}
+          onToggleMessage={toggleExpandMessage}
+        />
+      ))}
       {currentMessage && (
         <StreamingMessage
           key={currentMessage.id}

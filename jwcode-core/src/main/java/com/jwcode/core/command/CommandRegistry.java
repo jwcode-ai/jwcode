@@ -6,8 +6,56 @@ import java.util.*;
  * 命令注册表 - 管理所有可用命令
  */
 public class CommandRegistry {
-    
+
+    private static volatile CommandRegistry instance;
+
     private final Map<String, Command> commands = new HashMap<>();
+
+    /** Global singleton set during WebServer assembly. */
+    public static CommandRegistry getInstance() {
+        return instance;
+    }
+
+    public static void setInstance(CommandRegistry registry) {
+        instance = registry;
+    }
+
+    /**
+     * Build the full unified command registry (single source of truth).
+     * Used by WebServer assembly and contract tests.
+     */
+    public static CommandRegistry createFull(com.jwcode.core.tool.ToolRegistry toolRegistry) {
+        CommandRegistry registry = new CommandRegistry();
+        registry.registerAll(java.util.Arrays.asList(
+            new HelpCommand(registry),
+            new ExitCommand(),
+            new ClearCommand(),
+            new ConfigCommand(),
+            new StatusCommand(),
+            new ModelCommand(),
+            new EvalCommand(),
+            new DoctorCommand(),
+            new CostCommand(),
+            new SkillsCommand(new com.jwcode.core.skill.SkillRegistry()),
+            new RewindCommand(),
+            new CompactCommand(),
+            new InitCommand(),
+            new EffortCommand(),
+            new BranchCommand(),
+            new McpCommand(),
+            new AgentsCommand(toolRegistry),
+            new PluginCommand(),
+            new TokensCommand(),
+            new ProjectCommand(),
+            new ExportCommand(),
+            new CheckpointCommand(),
+            new MemoryCommand(),
+            new SearchCommand(),
+            new TestCommand(),
+            new LintCommand()
+        ));
+        return registry;
+    }
     private final Map<String, String> aliasToCommand = new HashMap<>();
     
     /**
@@ -90,6 +138,7 @@ public class CommandRegistry {
     /**
      * 创建默认注册表
      */
+    @Deprecated
     public static CommandRegistry createDefault() {
         CommandRegistry registry = new CommandRegistry();
         registry.register(new HelpCommand(registry));

@@ -1,5 +1,5 @@
 import { useTokenStore } from '../../stores/tokenStore';
-import { useCommandStore } from '../../stores/commandStore';
+import { useCommandStore, fetchCommands } from '../../stores/commandStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import wsService from '../../services/websocket';
 import { toast } from '../../stores/toastStore';
@@ -39,7 +39,7 @@ export function handleSystemMessage(rawType: string, rawData: any, _sessionId: s
     case 'auth_success':
       wsService.setAuthenticated(true);
       wsService.send({ type: 'subscribe_logs' });
-      wsService.send({ type: 'get_commands' });
+      fetchCommands();
       const currentDir = useSettingsStore.getState().workspaceDir;
       if (currentDir) wsService.send({ type: 'workspace', message: currentDir });
       break;
@@ -66,6 +66,25 @@ export function handleSystemMessage(rawType: string, rawData: any, _sessionId: s
         const commands = JSON.parse(rawData || '[]');
         useCommandStore.getState().setBackendCommands(commands);
       } catch (e) { errLog.warn('Failed to parse commands list', String(e)); }
+      break;
+
+    case 'command_start':
+      // Lightweight ack; full results arrive via command_complete / notifications.
+      break;
+
+    case 'command_complete':
+      try {
+        const d = typeof rawData === 'string' ? JSON.parse(rawData) : (rawData || {});
+        const text = (d.result || '').toString();
+        toast.success(text.length > 120 ? text.slice(0, 120) + '...' : (text || 'Command completed'), 4000);
+      } catch { /* ignore */ }
+      break;
+
+    case 'command_error':
+      try {
+        const d = typeof rawData === 'string' ? JSON.parse(rawData) : (rawData || {});
+        toast.error((d.error || 'Command failed').toString(), 6000);
+      } catch { /* ignore */ }
       break;
 
     case 'ping':

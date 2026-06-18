@@ -215,6 +215,8 @@ export class JwCodeClient {
   skills(): void { this.send('skills'); }
   agents(): void { this.send('agents'); }
   config(action: string): void { this.send('config', undefined, { action }); }
+  /** Unified command execution path (Java backend is the single source). */
+  executeCommand(command: string, args: string): void { this.send('command_execute', undefined, { command, args }); }
   plugin(action: string): void { this.send('plugin', undefined, { action }); }
 
   // File API for @ file references

@@ -26,6 +26,7 @@ public class SharedContextBus {
     private final Map<String, CompletableFuture<SubAgentResult>> resultFutures = new ConcurrentHashMap<>();
     private final Map<String, String> intermediateArtifacts = new ConcurrentHashMap<>();
     private final Map<String, Consumer<String>> subscribers = new ConcurrentHashMap<>();
+    private final Map<String, Object> blackboard = new ConcurrentHashMap<>();
 
     /**
      * 注册一个子 Agent 任务的结果 Future。
@@ -84,5 +85,36 @@ public class SharedContextBus {
         resultFutures.remove(taskId);
         subscribers.remove(taskId);
         intermediateArtifacts.keySet().removeIf(k -> k.startsWith(taskId + ":"));
+    }
+
+    public void put(String key, Object value) {
+        if (key == null || key.isBlank()) {
+            throw new IllegalArgumentException("Blackboard key must not be blank");
+        }
+        if (value == null) {
+            blackboard.remove(key);
+        } else {
+            blackboard.put(key, value);
+        }
+    }
+
+    public Object get(String key) {
+        return blackboard.get(key);
+    }
+
+    public Map<String, Object> snapshot() {
+        return new ConcurrentHashMap<>(blackboard);
+    }
+
+    public void clearBlackboard() {
+        blackboard.clear();
+    }
+
+    public Object remove(String key) {
+        return blackboard.remove(key);
+    }
+
+    public Map<String, String> intermediateSnapshot() {
+        return new ConcurrentHashMap<>(intermediateArtifacts);
     }
 }

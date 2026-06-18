@@ -162,14 +162,15 @@ SQLite schema: `checkpoints` (id, session, step, ts, source, channel_values) + `
 - **Entry point:** `jwcode-web/.../WebLauncher.java` (starts `WebServer` with `com.sun.net.httpserver`)
 - **Agent system:** `jwcode-core/.../agent/` — 17 types: Orchestrator, Coder, Debugger, Architect, Reviewer, Explorer, etc.
 - **Agent graph:** `jwcode-core/.../graph/` — AgentGraph builder, CompiledAgentGraph (PregelLoop), OrchestratorGraphFactory
-- **Channels:** `jwcode-core/.../graph/channel/` — LastValueChannel, BinaryOpChannel, TopicChannel, EphemeralChannel
+- **Graph channels:** `jwcode-core/.../graph/channel/` — LastValueChannel, BinaryOpChannel, TopicChannel, EphemeralChannel (typed state slots for the agent graph)
+- **Messaging channels:** `jwcode-core/.../channel/` — ChannelAdapter, ChannelRegistry, ChannelMessageDispatcher, `wechat/` (external messaging integrations: WeChat now, Feishu/DingTalk pluggable)
 - **Checkpoint storage:** `jwcode-core/.../checkpoint/` — CheckpointStorage, InMemoryCheckpointStorage, SqliteCheckpointStorage
 - **Tools:** `jwcode-core/.../tool/` — 47 tools: `execution/`, `shell/`, `analysis/`, `permission/`, `io/`
 - **WebSocket handler:** `jwcode-web/.../stream/StreamingWebSocketHandler.java` (3062 lines)
 - **React frontend:** `jwcode-web/src/` — Vite+React SPA, zustand stores, Tailwind CSS
 - **TS CLI:** `ts-cli/src/` — esbuild-bundled Ink/React TUI, `ws` for WebSocket
 - **REST API:** `FilesHandler.java` — `GET /api/files?path=` for directory listing (returns `FileNode[]` tree), `GET /api/files/read?path=` for file content (returns plain text), `POST/PUT/DELETE /api/files` for CRUD
-- **Config:** `~/.jwcode/config.yaml` (backend_url, ws_url, ws_auth_token)
+- **Config:** `~/.jwcode/config.yaml` (backend_url, ws_url, ws_auth_token); `~/.jwcode/channels.json` (messaging channel configs)
 - **Hooks:** `~/.jwcode/hooks/` — user-defined lifecycle hook scripts
 - **Memory:** `~/.claude/projects/.../memory/` — persistent Claude Code memory
 
@@ -199,6 +200,8 @@ Registered via `CommandRegistry.createDefault()` — user-facing commands:
 |---------|---------|
 | `/doctor` | System diagnostic: Java env, OS, session, Docker check |
 | `/cost` | Token usage + estimated cost by model (prompt/completion/total) |
+
+In the web frontend these are surfaced both inline (type `/` in chat → `SlashCommandMenu`) and app-wide via the `Ctrl/Cmd+K` CommandPalette (`jwcode-web/src/components/CommandPalette.tsx`), which reuses the same `useSlashCommands` command set (navigation + local + backend commands).
 
 ## Team Collaboration & Config
 
@@ -266,6 +269,58 @@ The web terminal tab uses [ttyd](https://github.com/tsl0922/ttyd) as a PTY sidec
 
 **Requirements:** ttyd must be installed on PATH. Terminal tab is hidden when ttyd is not detected (checked via `GET /api/terminal/status` on startup).
 
+## Messaging Channels (jwcode-core/.../channel/)
+
+External messaging channels (WeChat now; Feishu/DingTalk pluggable) let users submit task commands and receive status, progress, and final reports back. Channels are configured/managed from the web "渠道" tab.
+
+**Design principle:** reuses `LLMQueryEngine.StepCallback` — a transport-agnostic interface. `StreamingWebSocketHandler` uses it to push events to the WebSocket; the channel subsystem implements the same interface to push events to WeChat/Feishu. Core agent execution is untouched.
+
+**Flow:**
+```
+External channel (WeChat iLink long-poll / Feishu WS / DingTalk webhook)
+  → ChannelAdapter (unified interface) → ChannelRegistry
+  → ChannelMessageDispatcher (polls adapters every 100ms)
+      → per (channelId:senderId) Session → LLMQueryEngine.queryStream(...)
+      → StepCallback: onStepStart→"📍", onContentChunk→buffer, complete→final report
+      → ChannelRegistry.send() → adapter.send() (auto-segments >2000 chars)
+```
+
+**Core files (`jwcode-core/.../channel/`):**
+| File | Purpose |
+|------|---------|
+| `ChannelAdapter` | Interface: `getChannelType` / `initialize` / `shutdown` / `isConnected` / `send` / `poll` / `getConfig` |
+| `ChannelConfig` | POJO: id, name, type, appId, appSecret, token, encodingAESKey, enabled, extra map |
+| `InboundChannelMessage` | Inbound model: channelId, channelType, senderId, text, receivedAt |
+| `ChannelRegistry` | Runtime registry + adapter lifecycle; persists configs to `~/.jwcode/channels.json`; type→factory map |
+| `ChannelMessageDispatcher` | Poll loop + per-user Session map + task thread pool (4-16); bridges inbound → `LLMQueryEngine` + `StepCallback` |
+| `wechat/WechatApiClient` | iLink Bot API: `getUpdates` (35s long-poll), `sendText`, `getQrCode`, `getQrCodeStatus`; Bearer token + random `X-WECHAT-UIN` |
+| `wechat/WechatChannelAdapter` | WeChat adapter: polling thread → `BlockingQueue`, syncBuf persisted for reconnect, per-user context_token cache |
+
+**REST API (`ChannelsHandler.java`, registered at `/api/channels` in `WebServer.java`):**
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /api/channels` | List all (appSecret/token/encodingAESKey masked as `***`) |
+| `POST /api/channels` | Create channel (starts adapter if enabled) |
+| `PUT /api/channels/{id}` | Update (restarts adapter) |
+| `DELETE /api/channels/{id}` | Delete (shuts down adapter) |
+| `PATCH /api/channels/{id}/toggle` | Enable/disable |
+| `POST /api/channels/{id}/test` | Connectivity check |
+| `GET /api/channels/{id}/wechat/qrcode` | Get iLink login QR code |
+| `GET /api/channels/{id}/wechat/qrcode/status` | Poll QR scan status (confirmed → saves bot_token, starts polling) |
+
+**Frontend files (`jwcode-web/src/`):**
+| File | Purpose |
+|------|---------|
+| `stores/channelsStore.ts` | zustand: load/create/update/remove/toggle + form state |
+| `components/Channels/ChannelConfigView.tsx` | Container: toolbar (新建渠道), error banner, table + drawer |
+| `components/Channels/ChannelTable.tsx` | List with type badge, enable toggle, edit/delete actions |
+| `components/Channels/ChannelDrawer.tsx` | Right-side edit drawer; dynamic fields per type; WeChat QR scan panel with 2s status polling |
+| `services/api/index.ts` | `api.channels.*` methods incl. `wechat.qrcode` / `wechat.qrcodeStatus` |
+
+**Config storage:** `~/.jwcode/channels.json` — array of `ChannelConfig`. WeChat runtime state (bot_token, sync_buf, per-user context tokens) stored in `config.extra` map.
+
+**Adding a new channel (Feishu/DingTalk):** (1) implement `ChannelAdapter`; (2) register factory in `WebServer.java`: `channelRegistry.registerFactory("feishu", cfg -> new FeishuChannelAdapter())`. `ChannelMessageDispatcher` and the frontend need no changes — the drawer's field set is driven by the channel-type enum.
+
 ## Web Frontend (jwcode-web/src/)
 
 **Architecture:** Vite+React 18 SPA, Tailwind CSS, zustand stores, tab-based navigation (no React Router).
@@ -292,6 +347,9 @@ The web terminal tab uses [ttyd](https://github.com/tsl0922/ttyd) as a PTY sidec
 | `Chat/DiffPreview.tsx` | Unified + side-by-side diff views, stats footer (+N/-M/hunks), language detection for 20+ languages |
 | `Chat/ExpandableResult.tsx` | Expand/collapse long result text with truncation |
 | `Chat/FileMentionMenu.tsx` | `@` file mention popup: filtered file list, ↑↓ select, Enter/Hover, yellow folder/file icons, path display |
+| `CommandPalette.tsx` | App-level `Ctrl/Cmd+K` palette: reuses `useSlashCommands` (navigation + local/backend commands), centered modal, ↑↓ nav, Enter run, Esc close, toast feedback for backend commands |
+| `ShortcutsHelp.tsx` | `Ctrl/Cmd+/` keyboard-shortcuts reference modal (built on `common/Modal`); ⌘ vs Ctrl label per platform |
+| `common/Skeleton.tsx` | Skeleton/SkeletonCard/SkeletonList + LoadingSpinner/PageLoading; `shimmer` prop (sweeping highlight) and `role="status"` on spinners |
 
 **WebSocket handlers** (`src/hooks/handlers/`): 775-line `useWebSocket.ts` split into category modules:
 | Module | Message types handled |
@@ -319,3 +377,17 @@ The web terminal tab uses [ttyd](https://github.com/tsl0922/ttyd) as a PTY sidec
 - CLI StatusLine with token breakdown, rate display, generation elapsed counter
 - CLI ApprovalModal with risk levels, countdown auto-approval, y/n/1/2 shortcuts
 - @ file reference in both web and TS CLI: type `@` to search/filter files, select to insert path, on send file content is read via REST API and attached as `<context>` blocks
+
+**Branding, shortcuts & accessibility (UI polish):**
+- **Brand assets:** `jwcode-web/public/favicon.svg` + `public/logo.svg` (blue→purple gradient `</>` mark). Vite serves `public/` at root, so `index.html` references `/favicon.svg`; the header (`App.tsx`) and chat welcome empty-state (`ChatPanel.tsx`) render `/logo.svg`. App/brand name is **JWCode** (title, header, i18n `chat.welcome`).
+- **Global keyboard shortcuts** (wired in `App.tsx` global `keydown` effect; text-edit-safe):
+  | Shortcut | Action |
+  |----------|--------|
+  | `Ctrl/Cmd + K` | Toggle CommandPalette |
+  | `Ctrl/Cmd + L` | Clear logs (toast feedback); skipped while editing text |
+  | `Ctrl/Cmd + /` | Toggle ShortcutsHelp |
+  | `Ctrl/Cmd + Enter` | Submit chat input (explicit, IME-safe; handled in `ChatPanel` textarea) |
+  | `Esc` | Closes palette → help → mobile menu, else falls through to existing pause/stop (double-Esc terminates) |
+- **Interaction states** (`styles/globals.css`): `.btn` unified `disabled:` state; chat textarea `focus:ring`; `shimmer` keyframe + `.skeleton-shimmer` utility (opt-in via Skeleton `shimmer` prop).
+- **Accessibility:** icon-only buttons get `aria-label` (i18n `a11y.*`) with decorative icons `aria-hidden`; spinners use `role="status"`; connection indicator is a labeled `role="status"`. Existing dark/light palette already meets WCAG AA contrast (body ≈12:1, muted ≈5.8:1) — no color changes needed.
+- **i18n keys:** `shortcuts.*`, `palette.*`, `a11y.*`, `chat.kbdHint` added to both `zh-CN.json` and `en.json`.

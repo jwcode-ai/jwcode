@@ -1,22 +1,24 @@
 import { create } from 'zustand';
 
 /**
- * 后端命令描述
+ * Backend command descriptor (served by GET /api/commands).
  */
 export interface BackendCommand {
   name: string;
   description: string;
   usage: string;
+  category?: string;
+  source?: string;
+  requiresArgs?: boolean;
+  aliases?: string[];
 }
 
 interface CommandState {
-  /** 从后端获取的命令列表 */
+  /** Commands fetched from the backend manifest. */
   backendCommands: BackendCommand[];
-  /** 是否已从后端获取 */
+  /** Whether the manifest has been fetched. */
   loaded: boolean;
-  /** 设置后端命令列表 */
   setBackendCommands: (commands: BackendCommand[]) => void;
-  /** 获取所有命令（合并别名） */
   getAllCommands: () => BackendCommand[];
 }
 
@@ -32,3 +34,23 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
     return get().backendCommands;
   },
 }));
+
+/**
+ * Fetch the unified command manifest from the backend.
+ *
+ * <p>The Java backend is the single source of truth for slash commands; the web
+ * frontend pulls the full list here and merges it with its local UI commands.
+ * Uses a relative URL so it resolves against the same origin that served the UI.
+ */
+export async function fetchCommands(baseUrl = ''): Promise<BackendCommand[]> {
+  try {
+    const resp = await fetch(`${baseUrl}/api/commands`);
+    if (!resp.ok) return [];
+    const body = await resp.json();
+    const cmds: BackendCommand[] = (body && body.data) || [];
+    useCommandStore.getState().setBackendCommands(cmds);
+    return cmds;
+  } catch {
+    return [];
+  }
+}

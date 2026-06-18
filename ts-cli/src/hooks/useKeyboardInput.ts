@@ -14,17 +14,27 @@ interface KeyboardOptions {
   onDenyApproval: () => void;
   onCloseHelp: () => void;
   setHelpScroll: (updater: (prev: number) => number) => void;
+  onSwitchAnimal?: () => void;
 }
 
 export function useKeyboardInput(opts: KeyboardOptions) {
   const {
     showApproval, showHelp, isGenerating, terminalRows, paletteOpen,
-    clientRef, onCloseHelp, setHelpScroll,
+    clientRef, onCloseHelp, setHelpScroll, onSwitchAnimal,
   } = opts;
 
   const lastEscRef = useRef(0);
 
   useInput((input, key) => {
+    // Ctrl+. swaps the welcome mascot. Only responds in the welcome idle
+    // state (no generation, no overlay, no palette) to avoid conflicts.
+    if (key.ctrl && input === '.') {
+      if (onSwitchAnimal && !showApproval && !showHelp && !paletteOpen && !isGenerating) {
+        onSwitchAnimal();
+      }
+      return;
+    }
+
     if (key.escape) {
       if (showApproval) return;
       if (showHelp) {
@@ -79,7 +89,7 @@ export function useKeyboardInput(opts: KeyboardOptions) {
       return;
     }
     if (key.downArrow && !showApproval && !paletteOpen) {
-      updateAppState(prev => ({ ...prev, scrollOffset: prev.scrollOffset + 1 }));
+      updateAppState(prev => ({ ...prev, scrollOffset: prev.scrollOffset + 1 })); 
       return;
     }
     if ((key as any).home) {

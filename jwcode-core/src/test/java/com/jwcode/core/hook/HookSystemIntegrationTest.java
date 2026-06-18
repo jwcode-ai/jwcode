@@ -101,7 +101,9 @@ public class HookSystemIntegrationTest {
         Mockito.when(allowHook.getName()).thenReturn("allow-hook");
         Mockito.when(allowHook.isEnabled()).thenReturn(true);
         Mockito.when(allowHook.supportsEvent(Mockito.any())).thenReturn(true);
+        Mockito.when(allowHook.supportsTool(Mockito.any())).thenReturn(true);
         Mockito.when(allowHook.getPriority()).thenReturn(HookPriority.USER);
+        Mockito.when(allowHook.getType()).thenReturn(HookImplementationType.PROMPT);
         Mockito.when(allowHook.execute(Mockito.any()))
             .thenReturn(CompletableFuture.completedFuture(
                 HookResult.allow("allow-hook", "允许")));
@@ -120,7 +122,9 @@ public class HookSystemIntegrationTest {
         Mockito.when(denyHook.getName()).thenReturn("deny-hook");
         Mockito.when(denyHook.isEnabled()).thenReturn(true);
         Mockito.when(denyHook.supportsEvent(Mockito.any())).thenReturn(true);
+        Mockito.when(denyHook.supportsTool(Mockito.any())).thenReturn(true);
         Mockito.when(denyHook.getPriority()).thenReturn(HookPriority.USER);
+        Mockito.when(denyHook.getType()).thenReturn(HookImplementationType.PROMPT);
         Mockito.when(denyHook.execute(Mockito.any()))
             .thenReturn(CompletableFuture.completedFuture(
                 HookResult.deny("deny-hook", "拒绝执行")));

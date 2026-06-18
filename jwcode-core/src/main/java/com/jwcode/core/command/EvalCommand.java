@@ -37,12 +37,12 @@ public class EvalCommand implements Command {
 
     @Override
     public String getName() {
-        return "test";
+        return "eval";
     }
 
     @Override
     public List<String> getAliases() {
-        return List.of("eval", "t");
+        return List.of("t");
     }
 
     @Override

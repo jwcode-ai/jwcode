@@ -85,9 +85,10 @@ public class OpenAILLMService implements LLMService {
                     String requestJson = mapper.writeValueAsString(requestBody);
                     
                     // 鎵撳嵃璇锋眰鍙傛暟锛圛NFO 绾у埆锛屽紑鍚?debug 妯″紡锛?
-                    log.info("[OpenAI] ---------- Request Body ----------");
-                    log.info("[OpenAI] " + requestJson);
-                    log.info("[OpenAI] ---------- End Request Body ----------");
+                    log.fine("[OpenAI] ---------- Request Body ----------");
+                    log.fine("[OpenAI] " + requestJson);
+                    log.fine("[OpenAI] ---------- End Request Body ----------");
+                    log.info("[OpenAI] Request body length: " + requestJson.length() + " bytes");
                     
                     // 鍙戦€佽姹?
                     HttpRequest request = HttpRequest.newBuilder()
@@ -103,11 +104,11 @@ public class OpenAILLMService implements LLMService {
                     log.info("[OpenAI] Response status: " + response.statusCode());
                     
                     if (response.statusCode() == 200) {
-                        // 鎵撳嵃鍝嶅簲鍐呭
                         String responseBody = response.body();
-                        log.info("[OpenAI] ---------- Response Body ----------");
-                        log.info("[OpenAI] " + responseBody);
-                        log.info("[OpenAI] ---------- End Response Body ----------");
+                        log.info("[OpenAI] Response body length: " + responseBody.length() + " bytes");
+                        log.fine("[OpenAI] ---------- Response Body ----------");
+                        log.fine("[OpenAI] " + responseBody);
+                        log.fine("[OpenAI] ---------- End Response Body ----------");
                         return parseResponse(responseBody);
                     } else if (response.statusCode() == 429) {
                         String errorBody = response.body();
@@ -140,7 +141,7 @@ public class OpenAILLMService implements LLMService {
                         if (attempt <= maxRetries) {
                             log.warning("[OpenAI] Server error " + response.statusCode() + ", retrying (" + attempt + "/" + maxRetries + ") after " + retryDelay + "ms...");
                             String errorBody = response.body();
-                            log.info("[OpenAI] Server error body: " + errorBody);
+                            log.fine("[OpenAI] Server error body: " + errorBody);
                             Thread.sleep(retryDelay);
                             retryDelay *= 2; // 鎸囨暟閫€閬?
                             // 鍒囨崲 API key
@@ -148,19 +149,17 @@ public class OpenAILLMService implements LLMService {
                             continue;
                         }
                         String errorBody = response.body();
-                        log.severe("[OpenAI] ---------- Server Error Response ----------");
-                        log.severe("[OpenAI] Status: " + response.statusCode());
-                        log.severe("[OpenAI] Body: " + errorBody);
-                        log.severe("[OpenAI] ---------- End Server Error Response ----------");
+                        String truncatedError = errorBody.length() > 500 ? errorBody.substring(0, 500) + "..." : errorBody;
+                        log.severe("[OpenAI] Server error (HTTP " + response.statusCode() + "): " + truncatedError);
+                        log.fine("[OpenAI] Full server error body: " + errorBody);
                         return LLMResponse.error("SERVER_ERROR", "Server error (HTTP " + response.statusCode() + "). The API server encountered an internal error. " +
                             "This is usually temporary. Please try again in a few moments. " +
                             "Error: " + errorBody);
                     } else {
                         String errorBody = response.body();
-                        log.severe("[OpenAI] ---------- Error Response ----------");
-                        log.severe("[OpenAI] Status: " + response.statusCode());
-                        log.severe("[OpenAI] Body: " + errorBody);
-                        log.severe("[OpenAI] ---------- End Error Response ----------");
+                        String truncatedError = errorBody.length() > 500 ? errorBody.substring(0, 500) + "..." : errorBody;
+                        log.severe("[OpenAI] Client error (HTTP " + response.statusCode() + "): " + truncatedError);
+                        log.fine("[OpenAI] Full client error body: " + errorBody);
                         return LLMResponse.error("CLIENT_ERROR", "HTTP " + response.statusCode() + ": " + errorBody);
                     }
                     
@@ -261,10 +260,11 @@ public class OpenAILLMService implements LLMService {
                     requestBody.put("stream", true);
                     String requestJson = mapper.writeValueAsString(requestBody);
                     
-                    // 鎵撳嵃璇锋眰鍙傛暟锛圛NFO 绾у埆锛屽紑鍚?debug 妯″紡锛?
-                    log.info("[OpenAI Stream] ---------- Request Body ----------");
-                    log.info("[OpenAI Stream] " + requestJson);
-                    log.info("[OpenAI Stream] ---------- End Request Body ----------");
+                    // 完整请求体改为 fine 级别；INFO 只打印长度摘要
+                    log.fine("[OpenAI Stream] ---------- Request Body ----------");
+                    log.fine("[OpenAI Stream] " + requestJson);
+                    log.fine("[OpenAI Stream] ---------- End Request Body ----------");
+                    log.info("[OpenAI Stream] Request body length: " + requestJson.length() + " bytes");
                     
                     // 鍙戦€佽姹?
                     HttpRequest request = HttpRequest.newBuilder()

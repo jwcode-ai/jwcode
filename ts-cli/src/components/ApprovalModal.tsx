@@ -1,11 +1,13 @@
 /**
- * ApprovalModal — numbered option list style, i18n support.
- * Language auto-detected from LANG/LC_ALL env var.
+ * ApprovalModal -- codex-style: title question + risk band + bordered preview
+ * (with path/keyword highlighting) + numbered options + countdown progress
+ * bar + footer hint. Keeps risk classification and auto-allow countdown.
  */
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { Box, Text, useInput } from "ink";
 import { t as th } from "../theme.js";
 import { t as tr } from "../locale.js";
+import { highlightPaths } from "./highlightPaths.js";
 
 type RiskLevel = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
 
@@ -19,6 +21,10 @@ interface Props {
 }
 
 const COUNTDOWN_S = 15;
+const ARROW = "\u25B6"; // ?
+const BLOCK_FULL = "\u2588";
+const BLOCK_EMPTY = "\u2591";
+const BAR_LEN = 10;
 
 function classifyRisk(toolName: string, payload: string): { level: RiskLevel; reason: string } {
   const name = toolName.toLowerCase();
@@ -52,16 +58,37 @@ function classifyRisk(toolName: string, payload: string): { level: RiskLevel; re
 const RISK_COLOR: Record<RiskLevel, string> = {
   CRITICAL: th.error,
   HIGH: th.warning,
-  MEDIUM: th.warning,
-  LOW: th.info,
+  MEDIUM: th.info,
+  LOW: th.muted,
 };
 
-const RISK_ICON: Record<RiskLevel, string> = {
-  CRITICAL: "!",
-  HIGH: "!",
-  MEDIUM: "*",
-  LOW: "~",
+const RISK_BG: Record<RiskLevel, string> = {
+  CRITICAL: "red",
+  HIGH: "yellow",
+  MEDIUM: "cyan",
+  LOW: "grey",
 };
+
+const RISK_LABEL: Record<RiskLevel, string> = {
+  CRITICAL: tr("critical"),
+  HIGH: tr("high"),
+  MEDIUM: tr("medium"),
+  LOW: tr("low"),
+};
+
+function questionFor(toolName: string): string {
+  const n = toolName.toLowerCase();
+  if (/\b(bash|shell|exec|cmd|powershell|terminal)\b/.test(n)) {
+    return "Would you like to run the following command?";
+  }
+  if (/\b(write|edit|save|create|upload|deploy|publish)\b/.test(n)) {
+    return "Would you like to apply the following file change?";
+  }
+  if (/\b(http|fetch|curl|wget|api|request|download)\b/.test(n)) {
+    return "Would you like to allow the following network request?";
+  }
+  return "Would you like to allow the following tool?";
+}
 
 function extractPreview(toolName: string, payload: string): string {
   if (/\b(bash|shell|exec|cmd|powershell|terminal)\b/i.test(toolName)) {
@@ -72,6 +99,57 @@ function extractPreview(toolName: string, payload: string): string {
     if (match) return tr("previewFile") + match[1] + "\n" + payload.slice(0, 160);
   }
   return payload.length > 200 ? payload.slice(0, 200) + "..." : payload;
+}
+
+const KEYWORDS_RE = /\b(rm\s+-rf|sudo|chmod\s+777|mkfs|push|force|reset\s+--hard|rebase|del|delete|drop|truncate|format|>\s*\/dev\/sd|curl.*\|\s*(ba)?sh)\b/gi;
+
+/** Renders preview text with paths (t.filePath) and dangerous keywords (t.error). */
+function PreviewText({ text, highlightKeywords }: { text: string; highlightKeywords: boolean }) {
+  const lines = useMemo(() => text.split("\n"), [text]);
+  return (
+    <Box flexDirection="column">
+      {lines.map((line, li) => {
+        // First split by keywords, then by paths within each piece.
+        const pieces: { text: string; kw: boolean }[] = [];
+        if (highlightKeywords) {
+          KEYWORDS_RE.lastIndex = 0;
+          let last = 0;
+          let m: RegExpExecArray | null;
+          while ((m = KEYWORDS_RE.exec(line)) !== null) {
+            if (m.index > last) pieces.push({ text: line.slice(last, m.index), kw: false });
+            pieces.push({ text: m[0], kw: true });
+            last = m.index + m[0].length;
+          }
+          if (last < line.length) pieces.push({ text: line.slice(last), kw: false });
+        } else {
+          pieces.push({ text: line, kw: false });
+        }
+        return (
+          <Text key={li}>
+            {pieces.map((p, pi) =>
+              p.kw
+                ? <Text key={pi} color={th.error} bold>{p.text}</Text>
+                : <PathSpan key={pi} text={p.text} />,
+            )}
+          </Text>
+        );
+      })}
+    </Box>
+  );
+}
+
+function PathSpan({ text }: { text: string }) {
+  const segs = useMemo(() => highlightPaths(text), [text]);
+  if (segs.length === 1 && !segs[0]!.isPath) return <>{text}</>;
+  return (
+    <>
+      {segs.map((s, i) =>
+        s.isPath
+          ? <Text key={i} color={th.filePath}>{s.text}</Text>
+          : <Text key={i}>{s.text}</Text>,
+      )}
+    </>
+  );
 }
 
 export function ApprovalModal({ toolName, payload, onAllow, onDeny, onAllowSession, onAutoMode }: Props) {
@@ -102,15 +180,14 @@ export function ApprovalModal({ toolName, payload, onAllow, onDeny, onAllowSessi
   }, [countdown, onAllow]);
 
   const countdownUrgent = countdown <= 5;
-
-  const levelLabelKey = `risk${level.charAt(0) + level.slice(1).toLowerCase()}` as const;
-  const levelKey = level.toLowerCase() as "critical" | "high" | "medium" | "low";
+  const filled = Math.max(0, Math.min(BAR_LEN, Math.round((countdown / COUNTDOWN_S) * BAR_LEN)));
+  const bar = BLOCK_FULL.repeat(filled) + BLOCK_EMPTY.repeat(BAR_LEN - filled);
 
   const options = [
-    { label: tr("allowExec"), hint: tr("confirmHint"), action: onAllow },
-    { label: tr("denyCancel"), hint: tr("denyHint"), action: onDeny },
-    { label: tr("allowSession"), hint: tr("sessionHint", { tool: toolName }), action: onAllowSession },
-    { label: tr("autoMode"), hint: tr("autoHint"), action: onAutoMode },
+    { label: tr("allowExec"), hint: tr("confirmHint"), action: onAllow, key: "y" },
+    { label: tr("denyCancel"), hint: tr("denyHint"), action: onDeny, key: "n" },
+    { label: tr("allowSession"), hint: tr("sessionHint", { tool: toolName }), action: onAllowSession, key: "s" },
+    { label: tr("autoMode"), hint: tr("autoHint"), action: onAutoMode, key: "r" },
   ];
 
   const execSelected = () => options[selected]!.action();
@@ -131,36 +208,25 @@ export function ApprovalModal({ toolName, payload, onAllow, onDeny, onAllowSessi
   const borderColor = level === "CRITICAL" ? th.error : th.warning;
 
   return (
-    <Box
-      flexDirection="column"
-      borderStyle="round"
-      borderColor={borderColor}
-      marginTop={1}
-    >
-      {/* Title row */}
-      <Box paddingLeft={1} paddingRight={1} justifyContent="space-between">
-        <Box gap={1}>
-          <Text bold>{tr("permissionRequired")}</Text>
-          <Text dimColor>{"· "}{toolName}</Text>
-        </Box>
-        <Text color={countdownUrgent ? th.error : th.muted}>
-          {tr("auto")} {countdown}{tr("s")}
-        </Text>
+    <Box flexDirection="column" borderStyle="round" borderColor={borderColor} marginTop={1}>
+      {/* Title question */}
+      <Box paddingLeft={1} paddingRight={1}>
+        <Text bold color={th.warning}>{questionFor(toolName)}</Text>
       </Box>
 
-      {/* Risk description */}
+      {/* Risk band */}
       <Box paddingLeft={1} paddingRight={1}>
-        <Text color={riskColor} bold={level === "CRITICAL"}>
-          {RISK_ICON[level]} {level === "CRITICAL" ? tr("critical") : level === "HIGH" ? tr("high") : level === "MEDIUM" ? tr("medium") : tr("low")}
+        <Text backgroundColor={RISK_BG[level]} color="black" bold>
+          {" RISK: " + RISK_LABEL[level] + " "}
         </Text>
-        <Text dimColor> — {reason}</Text>
+        <Text dimColor>  {"-- " + reason}</Text>
       </Box>
 
       {/* Preview */}
       {preview ? (
         <Box flexDirection="column" paddingLeft={1} paddingRight={1} marginTop={1}>
-          <Box marginLeft={2}>
-            <Text color={th.tool}>{preview}</Text>
+          <Box borderStyle="single" borderColor={riskColor} paddingX={1}>
+            <PreviewText text={preview} highlightKeywords={level === "CRITICAL" || level === "HIGH"} />
           </Box>
         </Box>
       ) : null}
@@ -172,27 +238,41 @@ export function ApprovalModal({ toolName, payload, onAllow, onDeny, onAllowSessi
         </Box>
       )}
 
-      {/* Options */}
+      {/* Numbered options */}
       <Box flexDirection="column" marginTop={1}>
-        {options.map((opt, i) => (
-          <Box key={i} flexDirection="column" paddingLeft={1} paddingRight={1}>
-            <Box>
-              <Text color={selected === i ? th.brand : th.muted}>
-                {selected === i ? "❯" : " "} {i + 1}. {opt.label}
-              </Text>
+        {options.map((opt, i) => {
+          const isSel = selected === i;
+          return (
+            <Box key={i} flexDirection="column" paddingLeft={1} paddingRight={1}>
+              <Box>
+                <Text color={isSel ? th.brand : th.muted}>
+                  {isSel ? ARROW + " " : "   "}
+                </Text>
+                <Text bold color={isSel ? th.brand : undefined}>
+                  {i + 1}. {opt.label}
+                </Text>
+                <Text dimColor>  [{" + opt.key + "}]</Text>
+              </Box>
+              <Box marginLeft={5}>
+                <Text dimColor>{opt.hint}</Text>
+              </Box>
             </Box>
-            <Box marginLeft={4}>
-              <Text dimColor>{opt.hint}</Text>
-            </Box>
-          </Box>
-        ))}
+          );
+        })}
       </Box>
 
-      {/* Footer */}
+      {/* Countdown + progress bar */}
       <Box paddingLeft={1} paddingRight={1} marginTop={1}>
-        <Text dimColor>
-          {tr("selectHint")}
+        <Text color={countdownUrgent ? th.error : th.muted}>
+          {tr("auto")} {countdown}{tr("s")}
         </Text>
+        <Text dimColor>  </Text>
+        <Text color={countdownUrgent ? th.error : th.muted}>{bar}</Text>
+      </Box>
+
+      {/* Footer hint */}
+      <Box paddingLeft={1} paddingRight={1} marginTop={1}>
+        <Text dimColor>{tr("selectHint")}</Text>
       </Box>
     </Box>
   );

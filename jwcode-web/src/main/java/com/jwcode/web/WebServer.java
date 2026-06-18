@@ -124,6 +124,11 @@ public class WebServer {
         server.createContext("/api/models", new ModelInfoHandler());
         // 任务管理 API
         server.createContext("/api/tasks", new TaskHandler(TaskStore.getInstance()));
+        // Unified command registry - single source of truth for slash commands
+        com.jwcode.core.command.CommandRegistry commandRegistry =
+            com.jwcode.core.command.CommandRegistry.createFull(toolRegistry);
+        com.jwcode.core.command.CommandRegistry.setInstance(commandRegistry);
+        server.createContext("/api/commands", new CommandsHandler(commandRegistry));
         server.createContext("/api/files", new FilesHandler());
         server.createContext("/api/system/status", new SystemStatusHandler());
         server.createContext("/api/checkpoints", new CheckpointsHandler());
@@ -171,6 +176,20 @@ public class WebServer {
                 java.nio.file.Path.of(this.workspaceDir, ".jwcode", "hooks.json")));
             System.out.println("  ✓ Hook config API: /api/hooks");
         }
+
+        // 渠道管理 — 微信/飞书/钉钉等外部消息渠道
+        {
+            com.jwcode.core.channel.ChannelRegistry channelRegistry =
+                new com.jwcode.core.channel.ChannelRegistry();
+            channelRegistry.registerFactory("wechat",
+                cfg -> new com.jwcode.core.channel.wechat.WechatChannelAdapter());
+            channelRegistry.load();
+            com.jwcode.core.channel.ChannelMessageDispatcher dispatcher =
+                new com.jwcode.core.channel.ChannelMessageDispatcher(toolRegistry, channelRegistry);
+            dispatcher.start();
+            server.createContext("/api/channels", new ChannelsHandler(channelRegistry));
+            System.out.println("  ✓ Channel API: /api/channels");
+        }
         
         // 使用 ThreadPoolExecutor 替代 newFixedThreadPool，支持有界队列和拒绝策略
         server.setExecutor(new ThreadPoolExecutor(
@@ -196,6 +215,7 @@ public class WebServer {
         webSocketHandler = new StreamingWebSocketHandler(wsPort, toolRegistry);
         webSocketHandler.setCodebaseIndexer(codebaseIndexer);
         webSocketHandler.setSessionManager(sessionManager);
+        webSocketHandler.setCommandRegistry(commandRegistry);
         webSocketHandler.start();
 
         // 将 PlanTaskBroadcaster 接入主 WebSocket，使 plan_* 消息通过当前连接发送

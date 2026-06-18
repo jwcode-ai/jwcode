@@ -120,8 +120,8 @@ jwcode/
 
 | 方向 | 消息类型 |
 |------|---------|
-| 客户端 → 服务端 | `chat`, `plan`, `plan_confirm`, `stop`, `pause`, `resume`, `hook_allow`, `hook_deny`, `model_change`, `workspace` |
-| 服务端 → 客户端 | `start`, `content`, `thinking`, `tool_call`, `tool_result`, `step_start/thinking/action/complete`, `complete`, `hook_ask`, `token_update`, `error` |
+| 客户端 → 服务端 | `chat`, `plan`, `plan_confirm`, `stop`, `pause`, `resume`, `hook_allow`, `hook_deny`, `model_change`, `workspace`, `command_execute` |
+| 服务端 → 客户端 | `start`, `content`, `thinking`, `tool_call`, `tool_result`, `step_start/thinking/action/complete`, `complete`, `hook_ask`, `token_update`, `error`, `command_start`, `command_complete`, `command_error` |
 
 ---
 
@@ -140,6 +140,7 @@ jwcode/
 | 库 | 版本 | 用途 |
 |----|------|------|
 | Java | 17 | 运行环境 |
+| command_execute | — | 统一 slash command 执行协议（详见 COMMAND_SYSTEM.md） |
 | Maven | 3.8+ | 构建 |
 | Jackson | 2.17.0 | JSON 序列化 |
 | SLF4J + Logback | 2.0.13 / 1.5.6 | 日志 |

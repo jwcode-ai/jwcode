@@ -83,7 +83,7 @@ body {
 
 /* Enhanced Button styles */
 .btn {
-  @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium transition-all duration-200;
+  @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100 disabled:hover:opacity-40;
 }
 
 .btn-primary {
@@ -183,6 +183,15 @@ body {
   }
 }
 
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
 .animate-fade-in {
   animation: fadeIn 0.3s ease-out;
 }
@@ -205,6 +214,18 @@ body {
 
 .animate-spin {
   animation: spin 1s linear infinite;
+}
+
+/* Skeleton shimmer (sweeping highlight) */
+.skeleton-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    rgb(var(--color-border) / 0.35) 25%,
+    rgb(var(--color-muted) / 0.25) 37%,
+    rgb(var(--color-border) / 0.35) 63%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
 }
 
 /* Markdown styles - Base container styles for proper line breaks */

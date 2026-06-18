@@ -5,7 +5,8 @@ import type {
   Task, CreateTaskInput, UpdateTaskInput,
   ObservabilitySummary, CostData, TraceRunSummary, TraceRunDetail, PaginatedEvents,
   HookRule, HookRuleFormData, HookDryRunRequest, HookDryRunResult,
-  HookExecutionLog, HookStats, HookEventCategory, HookAgentInfo
+  HookExecutionLog, HookStats, HookEventCategory, HookAgentInfo,
+  Channel, ChannelFormData
 } from '../../types';
 
 export { apiClient, type ApiResponse };
@@ -167,6 +168,21 @@ export const api = {
     lifecycleMappings: {
       get: () => apiClient.get<Record<string, string>>('/api/hooks/lifecycle-mappings'),
       save: (mappings: Record<string, string>) => apiClient.put<void>('/api/hooks/lifecycle-mappings', mappings),
+    },
+  },
+
+  // Channel management (WeChat / Feishu / DingTalk ...)
+  channels: {
+    list: () => apiClient.get<Channel[]>('/api/channels'),
+    create: (data: ChannelFormData) => apiClient.post<Channel>('/api/channels', data),
+    update: (id: string, data: ChannelFormData) => apiClient.put<Channel>(`/api/channels/${encodeURIComponent(id)}`, data),
+    delete: (id: string) => apiClient.delete<void>(`/api/channels/${encodeURIComponent(id)}`),
+    toggle: (id: string, enabled: boolean) => apiClient.patch<void>(`/api/channels/${encodeURIComponent(id)}/toggle`, { enabled }),
+    test: (id: string) => apiClient.post<{ connected: boolean }>(`/api/channels/${encodeURIComponent(id)}/test`),
+    wechat: {
+      qrcode: (id: string, token: string) => apiClient.get<unknown>(`/api/channels/${encodeURIComponent(id)}/wechat/qrcode?token=${encodeURIComponent(token)}`),
+      qrcodeStatus: (id: string, token: string, qrcode: string) =>
+        apiClient.get<unknown>(`/api/channels/${encodeURIComponent(id)}/wechat/qrcode/status?token=${encodeURIComponent(token)}&qrcode=${encodeURIComponent(qrcode)}`),
     },
   },
 };

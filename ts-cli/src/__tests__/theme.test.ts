@@ -1,10 +1,11 @@
-import { describe, it, expect, afterEach } from 'vitest';
-import { getTheme, setTheme, t } from '../theme.js';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { getTheme, setTheme, t, detectTerminalBg, reapplyTheme } from '../theme.js';
 import type { ThemeName } from '../theme.js';
 
 describe('theme', () => {
   afterEach(() => {
     setTheme('dark');
+    vi.unstubAllEnvs();
   });
 
   it('default theme is dark', () => {
@@ -20,17 +21,27 @@ describe('theme', () => {
     expect(theme.muted).toBe('blackBright');
   });
 
-  it('all required color keys exist', () => {
+  it('all required color keys exist (incl. semantic keys)', () => {
     const required = [
       'bg', 'text', 'muted', 'border',
       'primary', 'success', 'warning', 'error', 'info',
       'user', 'assistant', 'system', 'tool', 'thinking',
       'plan', 'auto', 'connected', 'disconnected',
+      // semantic
+      'toolName', 'toolArgs', 'toolResult', 'filePath',
+      'stepTitle', 'stepAction', 'stepThought',
     ];
     const theme = getTheme();
     for (const key of required) {
       expect(theme).toHaveProperty(key);
     }
+  });
+
+  it('semantic keys have distinct values', () => {
+    const theme = getTheme();
+    expect(theme.toolName).toBeTruthy();
+    expect(theme.filePath).toBeTruthy();
+    expect(theme.toolResult).toBe('green');
   });
 
   it('module-level t exports dark theme initially', () => {
@@ -43,5 +54,27 @@ describe('theme', () => {
     setTheme('dark');
     const dark = getTheme();
     expect(Object.keys(light)).toEqual(Object.keys(dark));
+  });
+
+  it('detectTerminalBg returns dark on non-TTY', () => {
+    // vitest runs without a TTY on stdout.
+    expect(detectTerminalBg()).toBe('dark');
+  });
+
+  it('adaptive priority: JWCODE_THEME env overrides detection', () => {
+    // Non-TTY detection would return dark; env must win.
+    vi.stubEnv('JWCODE_THEME', 'light');
+    reapplyTheme();
+    expect(getTheme().muted).toBe('blackBright');
+
+    vi.stubEnv('JWCODE_THEME', 'dark');
+    reapplyTheme();
+    expect(getTheme().muted).toBe('grey');
+  });
+
+  it('default falls back to dark when no env and non-TTY', () => {
+    vi.stubEnv('JWCODE_THEME', '');
+    reapplyTheme();
+    expect(getTheme().primary).toBe('cyan');
   });
 });

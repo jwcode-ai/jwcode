@@ -166,15 +166,20 @@ com.jwcode.core
 | HookResult | Hook 决策结果（decision/reason/modifiedInput/rollbackAction）← v2.1 | HookDecision, RollbackAction |
 | TransitionGuard | 状态转换前置审批（STATE_TRANSITION Hook）← v2.1 | MainAgentStateMachine, HookChain |
 
-### jwcode-cli 模块
+### jwcode-core 命令系统
+
+统一 slash command 系统以 Java 为单一源头，详见 [COMMAND_SYSTEM.md](COMMAND_SYSTEM.md)。
 
 #### 包结构
 
 ```
-com.jwcode.cli
-├── command/         # 命令实现
-├── options/         # 选项解析
-└── handler/         # 命令处理器
+com.jwcode.core.command
+├── Command.java           # 命令契约（含 category/source/requiresArgs 默认方法）
+├── CommandSource.java     # CORE/SESSION/WORKSPACE/TOOLS/CONFIG 枚举
+├── CommandResult.java     # SUCCESS/ERROR/EXIT 结果
+├── CommandRegistry.java   # 单例注册表 + createFull 工厂
+├── CommandExecutor.java   # 解析与执行
+└── *Command.java          # 26 个命令实现
 ```
 
 ### jwcode-mcp 模块

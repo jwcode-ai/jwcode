@@ -5,17 +5,19 @@ interface SkeletonProps {
   variant?: 'text' | 'circular' | 'rectangular';
   width?: string | number;
   height?: string | number;
+  shimmer?: boolean;
 }
 
 /**
  * Skeleton - 加载占位动画组件
  * 用于数据加载时显示的占位符
  */
-export function Skeleton({ 
-  className, 
+export function Skeleton({
+  className,
   variant = 'rectangular',
   width,
-  height 
+  height,
+  shimmer = false,
 }: SkeletonProps) {
   const variantStyles = {
     text: 'rounded h-4',
@@ -25,8 +27,9 @@ export function Skeleton({
 
   return (
     <div
+      aria-hidden="true"
       className={cn(
-        'animate-pulse bg-dark-border/50',
+        shimmer ? 'skeleton-shimmer' : 'animate-pulse bg-dark-border/50',
         variantStyles[variant],
         className
       )}
@@ -90,8 +93,8 @@ export function LoadingSpinner({ size = 'md', className }: LoadingSpinnerProps) 
   };
 
   return (
-    <div className={cn('flex items-center justify-center', className)}>
-      <div 
+    <div role="status" aria-label="Loading" className={cn('flex items-center justify-center', className)}>
+      <div
         className={cn(
           'border-2 border-dark-border border-t-accent-blue rounded-full animate-spin',
           sizeClasses[size]
@@ -106,7 +109,7 @@ export function LoadingSpinner({ size = 'md', className }: LoadingSpinnerProps) 
  */
 export function PageLoading({ message = '加载中...' }: { message?: string }) {
   return (
-    <div className="flex flex-col items-center justify-center h-full gap-4 p-8">
+    <div role="status" className="flex flex-col items-center justify-center h-full gap-4 p-8">
       <LoadingSpinner size="lg" />
       <p className="text-dark-muted text-sm">{message}</p>
     </div>

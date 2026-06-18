@@ -20,7 +20,7 @@ public class ServiceConfig {
     private List<String> apiKeys;
     private Double temperature;
     private Integer maxTokens;
-    @Builder.Default private int timeoutSeconds = 300;
+    @Builder.Default private int timeoutSeconds = 60;
     @Builder.Default private int contextWindow = 1000000;
     @Builder.Default private String apiType = "openai-completions";
     @Builder.Default private String anthropicVersion = "2023-06-01";
@@ -36,7 +36,8 @@ public class ServiceConfig {
         this.apiKeys = apiKeys;
         this.temperature = temperature;
         this.maxTokens = maxTokens;
-        this.timeoutSeconds = timeoutSeconds;
+        // 用户显式配置的优先级最高；默认值由 @Builder.Default 控制（当前为 60s）
+        this.timeoutSeconds = timeoutSeconds > 0 ? timeoutSeconds : 60;
         this.contextWindow = contextWindow;
         this.apiType = apiType != null ? apiType : "openai-completions";
         this.anthropicVersion = anthropicVersion != null ? anthropicVersion : "2023-06-01";

@@ -56,4 +56,19 @@ public interface Command {
     default boolean requiresConfirmation() {
         return false;
     }
+
+    /** Logical category, used for grouping in command manifests. */
+    default String getCategory() {
+        return "core";
+    }
+
+    /** Whether the command requires an argument to run. */
+    default boolean requiresArgs() {
+        return false;
+    }
+
+    /** Origin source of the command implementation. */
+    default CommandSource getSource() {
+        return CommandSource.CORE;
+    }
 }

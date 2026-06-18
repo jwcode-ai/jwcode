@@ -1,6 +1,6 @@
 ﻿import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense, startTransition } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Activity, MessageSquare, Terminal, FolderTree, Settings, Brain, Wrench, Target, Users, FileText, ScrollText, LucideIcon, Menu, X, ChevronDown, ChevronUp, ListChecks, Shield } from 'lucide-react';
+import { Activity, MessageSquare, MessageCircle, Terminal, FolderTree, Settings, Brain, Wrench, Target, Users, FileText, ScrollText, LucideIcon, Menu, X, ChevronDown, ChevronUp, ListChecks, Shield } from 'lucide-react';
 import { useChatStore } from './stores/chatStore';
 import { useSessionStore } from './stores/sessionStore';
 import { useTerminalStore } from './stores/terminalStore';
@@ -11,6 +11,7 @@ import wsService from './services/websocket';
 import { useWebSocket } from './hooks/useWebSocket';
 import { apiClient } from './services/api/client';
 import { Tab, TabId, LogEntry, SessionTask } from './types';
+import { getThemeColors, DEFAULT_PRESET_ID } from './themes/presets';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { api } from './services/api';
 
@@ -31,9 +32,13 @@ const ObservabilityView = lazy(() => import('./components/Observability/Observab
 
 const HookApprovalModal = lazy(() => import('./components/Hook/HookApprovalModal').then(m => ({ default: m.HookApprovalModal })));
 const HookConfigView = lazy(() => import('./components/Hook/HookConfigView').then(m => ({ default: m.HookConfigView })));
+const ChannelConfigView = lazy(() => import('./components/Channels/ChannelConfigView').then(m => ({ default: m.ChannelConfigView })));
 import { ToastContainer } from './components/Toast/ToastContainer';
 import { ErrorToast } from './components/Toast/ErrorToast';
 import { toast } from './stores/toastStore';
+import { CommandPalette } from './components/CommandPalette';
+import { ShortcutsHelp } from './components/ShortcutsHelp';
+import type { UseSlashCommandsOptions } from './hooks/useSlashCommands';
 
 const PanelFallback = () => (
   <div className="flex-1 flex items-center justify-center bg-dark-bg">
@@ -65,13 +70,14 @@ const TABS: Tab[] = [
   { id: 'skills', title: '技能', icon: 'Target' },
   { id: 'agents', title: 'Agents', icon: 'Users' },
   { id: 'hooks', title: 'Hooks', icon: 'Shield' },
+  { id: 'channels', title: '渠道', icon: 'MessageCircle' },
   { id: 'settings', title: '设置', icon: 'Settings' },
   { id: 'logs', title: '日志', icon: 'ScrollText' },
   { id: 'observability', title: '监控', icon: 'Activity' },
 ];
 
 const ICON_MAP: Record<string, LucideIcon> = {
-  MessageSquare, Terminal, FolderTree, Settings, Brain,
+  MessageSquare, MessageCircle, Terminal, FolderTree, Settings, Brain,
   Wrench, Target, Users, FileText, ScrollText, ListChecks, Activity, Shield,
 };
 
@@ -87,10 +93,12 @@ function App() {
   const [isHistoryOpen, setIsHistoryOpen] = useState(true);
   const [isAgentFlowOpen, setIsAgentFlowOpen] = useState(false);
   const [ttydAvailable, setTtydAvailable] = useState<boolean | null>(null);
+  const [isPaletteOpen, setIsPaletteOpen] = useState(false);
+  const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
 
   const { t, i18n } = useTranslation();
   const { toggleTerminal } = useTerminalStore();
-  const { theme, setTheme, language, workspaceDir, setWorkspaceDir } = useSettingsStore();
+  const { theme, setTheme, setThemePreset, language, workspaceDir, setWorkspaceDir } = useSettingsStore();
   const approvalStore = useHookApprovalStore();
 
   // Sync language from store to i18n
@@ -172,62 +180,83 @@ function App() {
 
   const { clearMessages } = useChatStore();
 
-  // Theme switching: sync to DOM + meta tags
+  // Theme + preset colors: sync to DOM + inject CSS variables
+  const { customTheme, customThemeEnabled, themePresetId } = useSettingsStore();
   useEffect(() => {
     const root = document.documentElement;
     const metaThemeColor = document.querySelector('meta[name="theme-color"]');
     const metaColorScheme = document.querySelector('meta[name="color-scheme"]');
 
-    const applyTheme = (mode: 'dark' | 'light') => {
-      root.classList.toggle('dark', mode === 'dark');
-      root.classList.toggle('light', mode === 'light');
-      if (metaThemeColor) metaThemeColor.setAttribute('content', mode === 'dark' ? '#0d1117' : '#ffffff');
-      if (metaColorScheme) metaColorScheme.setAttribute('content', mode);
-    };
-
-    if (theme === 'dark') {
-      applyTheme('dark');
-    } else if (theme === 'light') {
-      applyTheme('light');
-    } else {
-      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      applyTheme(prefersDark ? 'dark' : 'light');
-
-      const mqListener = (e: MediaQueryListEvent) => applyTheme(e.matches ? 'dark' : 'light');
-      const mq = window.matchMedia('(prefers-color-scheme: dark)');
-      mq.addEventListener('change', mqListener);
-      return () => mq.removeEventListener('change', mqListener);
-    }
-  }, [theme]);
-
-  // Custom theme colors: inject CSS variables (hex → RGB)
-  const { customTheme, customThemeEnabled } = useSettingsStore();
-  useEffect(() => {
-    const root = document.documentElement;
     const hexToRgb = (hex: string) => {
       const r = parseInt(hex.slice(1, 3), 16);
       const g = parseInt(hex.slice(3, 5), 16);
       const b = parseInt(hex.slice(5, 7), 16);
       return `${r} ${g} ${b}`;
     };
-    if (customThemeEnabled) {
-      root.style.setProperty('--color-bg', hexToRgb(customTheme.bg));
-      root.style.setProperty('--color-surface', hexToRgb(customTheme.surface));
-      root.style.setProperty('--color-border', hexToRgb(customTheme.border));
-      root.style.setProperty('--color-text', hexToRgb(customTheme.text));
-      root.style.setProperty('--color-muted', hexToRgb(customTheme.muted));
-      root.style.setProperty('--color-accent-blue', hexToRgb(customTheme.accentBlue));
-      root.style.setProperty('--color-accent-green', hexToRgb(customTheme.accentGreen));
-      root.style.setProperty('--color-accent-red', hexToRgb(customTheme.accentRed));
-      root.style.setProperty('--color-accent-yellow', hexToRgb(customTheme.accentYellow));
-      root.style.setProperty('--color-accent-purple', hexToRgb(customTheme.accentPurple));
+
+    // Compute effective mode (respecting auto → media query)
+    let effectiveMode: 'dark' | 'light';
+    if (theme === 'dark') {
+      effectiveMode = 'dark';
+    } else if (theme === 'light') {
+      effectiveMode = 'light';
     } else {
-      const vars = ['--color-bg', '--color-surface', '--color-border', '--color-text',
-        '--color-muted', '--color-accent-blue', '--color-accent-green', '--color-accent-red',
-        '--color-accent-yellow', '--color-accent-purple'];
-      vars.forEach(v => root.style.removeProperty(v));
+      effectiveMode = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
     }
-  }, [customTheme, customThemeEnabled]);
+
+    // Apply dark/light class
+    root.classList.toggle('dark', effectiveMode === 'dark');
+    root.classList.toggle('light', effectiveMode === 'light');
+
+    // Get preset colors, merge custom overrides if enabled
+    const overrides = customThemeEnabled ? customTheme : undefined;
+    const colors = getThemeColors(themePresetId || DEFAULT_PRESET_ID, effectiveMode, overrides);
+
+    // Inject all CSS vars as RGB triplets
+    root.style.setProperty('--color-bg', hexToRgb(colors.bg));
+    root.style.setProperty('--color-surface', hexToRgb(colors.surface));
+    root.style.setProperty('--color-border', hexToRgb(colors.border));
+    root.style.setProperty('--color-text', hexToRgb(colors.text));
+    root.style.setProperty('--color-muted', hexToRgb(colors.muted));
+    root.style.setProperty('--color-accent-blue', hexToRgb(colors.accentBlue));
+    root.style.setProperty('--color-accent-green', hexToRgb(colors.accentGreen));
+    root.style.setProperty('--color-accent-red', hexToRgb(colors.accentRed));
+    root.style.setProperty('--color-accent-yellow', hexToRgb(colors.accentYellow));
+    root.style.setProperty('--color-accent-purple', hexToRgb(colors.accentPurple));
+    // Compute --color-hover from surface (slightly lighter/darker)
+    const hoverRgb = hexToRgb(colors.surface);
+    root.style.setProperty('--color-hover', hoverRgb);
+
+    // Update meta tags
+    if (metaThemeColor) metaThemeColor.setAttribute('content', effectiveMode === 'dark' ? colors.bg : colors.bg);
+    if (metaColorScheme) metaColorScheme.setAttribute('content', effectiveMode);
+
+    // Listen for auto mode media query changes
+    if (theme === 'auto') {
+      const mq = window.matchMedia('(prefers-color-scheme: dark)');
+      const mqListener = () => {
+        const mode = mq.matches ? 'dark' : 'light';
+        const c = getThemeColors(themePresetId || DEFAULT_PRESET_ID, mode, overrides);
+        root.classList.toggle('dark', mode === 'dark');
+        root.classList.toggle('light', mode === 'light');
+        root.style.setProperty('--color-bg', hexToRgb(c.bg));
+        root.style.setProperty('--color-surface', hexToRgb(c.surface));
+        root.style.setProperty('--color-border', hexToRgb(c.border));
+        root.style.setProperty('--color-text', hexToRgb(c.text));
+        root.style.setProperty('--color-muted', hexToRgb(c.muted));
+        root.style.setProperty('--color-accent-blue', hexToRgb(c.accentBlue));
+        root.style.setProperty('--color-accent-green', hexToRgb(c.accentGreen));
+        root.style.setProperty('--color-accent-red', hexToRgb(c.accentRed));
+        root.style.setProperty('--color-accent-yellow', hexToRgb(c.accentYellow));
+        root.style.setProperty('--color-accent-purple', hexToRgb(c.accentPurple));
+        root.style.setProperty('--color-hover', hexToRgb(c.surface));
+        if (metaThemeColor) metaThemeColor.setAttribute('content', c.bg);
+        if (metaColorScheme) metaColorScheme.setAttribute('content', mode);
+      };
+      mq.addEventListener('change', mqListener);
+      return () => mq.removeEventListener('change', mqListener);
+    }
+  }, [theme, customTheme, customThemeEnabled, themePresetId]);
 
   // WebSocket connection
   useWebSocket({ activeTab, setLogs, setUnreadLogs });
@@ -446,6 +475,55 @@ function App() {
     setUnreadLogs(0);
   };
 
+  // Command palette options (reuses slash-command set at app level)
+  const paletteOptions = useMemo<UseSlashCommandsOptions>(() => ({
+    setActiveTab: handleTabChange,
+    createNewSession: handleNewSession,
+    clearMessages: handleClearMessages,
+    setTheme,
+    setThemePreset,
+    toggleTerminal,
+    setLogs,
+    setUnreadLogs,
+  }), [handleTabChange, handleNewSession, handleClearMessages, setTheme, setThemePreset, toggleTerminal]);
+
+  // Global keyboard shortcuts: Ctrl/Cmd + K / L / / ; Esc closes overlays
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const mod = e.ctrlKey || e.metaKey;
+      const tag = (e.target as HTMLElement)?.tagName;
+      const inEditable = tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable;
+
+      // Esc closes app-level overlays first (palette/help/mobile menu)
+      if (e.key === 'Escape') {
+        if (isPaletteOpen) { e.preventDefault(); setIsPaletteOpen(false); return; }
+        if (isShortcutsOpen) { e.preventDefault(); setIsShortcutsOpen(false); return; }
+        if (isMobileMenuOpen) { e.preventDefault(); setIsMobileMenuOpen(false); return; }
+        return; // fall through to ChatPanel/ESC pause handler
+      }
+
+      if (!mod) return;
+
+      if (e.key === 'k' || e.key === 'K') {
+        e.preventDefault();
+        setIsShortcutsOpen(false);
+        setIsPaletteOpen((v) => !v);
+      } else if (e.key === 'l' || e.key === 'L') {
+        // Don't hijack terminal/input clear when editing text
+        if (inEditable) return;
+        e.preventDefault();
+        handleClearLogs();
+        toast.success(t('slashCommands.logs_clear_result'));
+      } else if (e.key === '/') {
+        e.preventDefault();
+        setIsPaletteOpen(false);
+        setIsShortcutsOpen((v) => !v);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [isPaletteOpen, isShortcutsOpen, isMobileMenuOpen, t]);
+
   // TaskListPanel - per-session task list with backend sync
   function TaskListPanel() {
     const sid = useSessionStore((s) => s.activeSessionId);
@@ -637,8 +715,9 @@ function App() {
                     }}
                     className="opacity-0 group-hover:opacity-100 hover:bg-dark-hover rounded p-0.5 transition-all shrink-0"
                     title={t('chat.deleteTask')}
+                    aria-label={t('chat.deleteTask')}
                   >
-                    <X size={10} />
+                    <X size={10} aria-hidden="true" />
                   </button>
                 </div>
               );
@@ -708,6 +787,8 @@ function App() {
         return <AgentsView />;
       case 'hooks':
         return <HookConfigView />;
+      case 'channels':
+        return <ChannelConfigView />;
       case 'settings':
         return <SettingsPanel onNavigate={handleTabChange} />;
       case 'logs':
@@ -727,15 +808,15 @@ function App() {
           <button
             className="md:hidden p-2 mr-2 rounded-lg hover:bg-dark-hover transition-colors"
             onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+            aria-label={isMobileMenuOpen ? t('a11y.closeMenu') : t('a11y.openMenu')}
+            aria-expanded={isMobileMenuOpen}
           >
-            {isMobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
+            {isMobileMenuOpen ? <X size={20} aria-hidden="true" /> : <Menu size={20} aria-hidden="true" />}
           </button>
 
           <div className="flex items-center gap-2 mr-6">
-            <div className="w-7 h-7 rounded-lg bg-accent-blue flex items-center justify-center">
-              <span className="text-white font-bold text-sm">JW</span>
-            </div>
-            <span className="font-semibold hidden sm:inline">JwCode</span>
+            <img src="/logo.svg" alt="JWCode" className="w-7 h-7 rounded-lg" />
+            <span className="font-semibold hidden sm:inline">JWCode</span>
           </div>
 
           <nav className="flex-1 flex items-center gap-1 overflow-x-auto">
@@ -770,8 +851,8 @@ function App() {
           </nav>
 
           <div className="flex items-center gap-3">
-            <div className="flex items-center gap-1.5 text-xs text-dark-muted">
-              <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-accent-green' : 'bg-accent-red'}`} />
+            <div className="flex items-center gap-1.5 text-xs text-dark-muted" role="status" aria-label={t('a11y.connectionStatus')}>
+              <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-accent-green' : 'bg-accent-red'}`} aria-hidden="true" />
               <span className="hidden sm:inline">{isConnected ? t('chat.connected') : t('chat.disconnected')}</span>
             </div>
             {activeTab === 'chat' && (
@@ -839,8 +920,10 @@ function App() {
                 isAgentFlowOpen ? 'w-5' : 'w-7'
               }`}
               title={isAgentFlowOpen ? '折叠 Agent 信息流' : '展开 Agent 信息流'}
+              aria-label={t('a11y.toggleAgentFlow')}
+              aria-expanded={isAgentFlowOpen}
             >
-              <Activity size={14} className={`text-accent-purple transition-transform duration-300 ${isAgentFlowOpen ? 'rotate-180' : ''}`} />
+              <Activity size={14} aria-hidden="true" className={`text-accent-purple transition-transform duration-300 ${isAgentFlowOpen ? 'rotate-180' : ''}`} />
               {!isAgentFlowOpen && (
                 <span className="text-[9px] text-dark-muted ml-1 hidden xl:inline">Agent 信息流</span>
               )}
@@ -926,8 +1009,9 @@ function App() {
                           }}
                           className="opacity-0 group-hover:opacity-100 hover:bg-dark-hover rounded p-0.5 transition-all shrink-0"
                           title={t('chat.removeFromHistory')}
+                          aria-label={t('chat.removeFromHistory')}
                         >
-                          <X size={10} />
+                          <X size={10} aria-hidden="true" />
                         </button>
                       </div>
                     ))}
@@ -1005,6 +1089,13 @@ function App() {
           onCloseModal={() => setHookModalOpen(false)}
         />
       </Suspense>
+
+      <CommandPalette
+        open={isPaletteOpen}
+        onClose={() => setIsPaletteOpen(false)}
+        options={paletteOptions}
+      />
+      <ShortcutsHelp open={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />
 
       <ToastContainer />
       <ErrorToast />

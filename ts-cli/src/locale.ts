@@ -9,8 +9,11 @@ let _locale: Locale | null = null;
 
 function detectLocale(): Locale {
   const lang = process.env.LANG || process.env.LC_ALL || '';
-  if (/^zh/i.test(lang)) return 'zh';
-  // Windows: check system locale (LANG is often unset)
+  if (lang) {
+    // Explicit env var wins: a non-Chinese LANG means English, a Chinese one means zh.
+    return /^zh/i.test(lang) ? 'zh' : 'en';
+  }
+  // Windows: check system locale only when LANG/LC_ALL are unset.
   try {
     const locale = Intl.DateTimeFormat().resolvedOptions().locale;
     if (/^zh/i.test(locale)) return 'zh';

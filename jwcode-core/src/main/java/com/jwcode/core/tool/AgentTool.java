@@ -5,8 +5,11 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jwcode.core.agent.Agent;
 import com.jwcode.core.agent.AgentRegistry;
+import com.jwcode.core.agent.SharedContextBus;
 import com.jwcode.core.agent.parallel.*;
 import com.jwcode.core.api.StepMessageBroadcaster;
+import com.jwcode.core.llm.LLMMessage;
+import com.jwcode.core.llm.LLMResponse;
 import com.jwcode.core.llm.LLMService;
 import com.jwcode.core.session.Session;
 import com.jwcode.core.tool.context.ToolExecutionContext;
@@ -34,6 +37,18 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
     
     private static final Logger logger = Logger.getLogger(AgentTool.class.getName());
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    // 默认超时: 全局 5min，单子任务 2min
+    private static final long DEFAULT_GLOBAL_TIMEOUT_MS = 300_000L;
+    private static final long DEFAULT_TASK_TIMEOUT_MS = 120_000L;
+    // 单子任务硬上限 10min
+    private static final long HARD_TASK_TIMEOUT_MS = 600_000L;
+    private static final int MAX_AUTO_AGENTS = 3;
+    private static final int LONG_TASK_THRESHOLD = 120;
+
+    // 重试/熔断/降级配置
+    private static final int MAX_RETRIES_PER_TASK = 1;
+    private static final int CIRCUIT_BREAKER_THRESHOLD = 5;
+    private static final int STRATEGY_SWITCH_HINT_THRESHOLD = 3;
     
     // Agent 管理器单例
     private static final AgentManager agentManager = new AgentManager();
@@ -47,6 +62,7 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
     
     // 【修复】用于同步注册到全局 AgentRegistry
     private static volatile AgentRegistry sharedAgentRegistry;
+    private final SharedContextBus sharedBus = new SharedContextBus();
     
     // 执行统计
     private final AtomicInteger executionCounter = new AtomicInteger(0);
@@ -102,12 +118,25 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
                 - agent_id: Agent ID（必需）
                 - task: 任务描述（单数，用于单个任务）
                 - context: 上下文信息（可选）
-                - timeout: 超时时间毫秒（可选，默认60000）
+                - timeout: 超时时间毫秒（可选，默认600000）
                 
                 execute 参数:
                 - tasks: 任务列表（复数，用于多个任务）[{name, role, task, depends_on}, ...]
                 - parallel: 是否并行执行（可选，默认true）
-                - timeout: 全局超时时间（可选，默认300000）
+                - timeout: 全局超时时间（可选，默认1800000）
+
+                auto_execute 参数:
+                - task: 长任务描述
+                - context: 上下文信息（可选）
+                - timeout: 全局超时时间（可选，默认1800000）
+                - task_timeout: 单个子任务超时时间（可选，默认600000）
+                - max_agents: 最大子 Agent 数（可选，默认5）
+
+                blackboard 参数:
+                - blackboard_put: key, value
+                - blackboard_get: key
+                - blackboard_list: 无
+                - blackboard_clear: key（可选，不传则清空全部）
                 
                 merge 参数:
                 - agent_ids: Agent ID 列表（必需）
@@ -132,14 +161,18 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
                 {
                     "type": "object",
                     "properties": {
-                        "action": {"type": "string", "enum": ["create", "create_parallel", "assign", "execute", "status", "list", "stop", "merge", "cancel", "query"]},
+                        "action": {"type": "string", "enum": ["create", "create_parallel", "assign", "execute", "auto_execute", "status", "list", "stop", "merge", "cancel", "query", "blackboard_put", "blackboard_get", "blackboard_list", "blackboard_clear"]},
                         "agent_id": {"type": "string"},
                         "name": {"type": "string"},
                         "role": {"type": "string"},
                         "color": {"type": "string"},
                         "task": {"type": "string"},
                         "context": {"type": "string"},
-                        "timeout": {"type": "integer", "default": 60000},
+                        "timeout": {"type": "integer", "default": 300000},
+                        "task_timeout": {"type": "integer", "default": 120000},
+                        "max_agents": {"type": "integer", "default": 3},
+                        "key": {"type": "string"},
+                        "value": {},
                         "agents": {"type": "array"},
                         "tasks": {"type": "array"},
                         "parallel": {"type": "boolean", "default": true}
@@ -191,6 +224,8 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
                         return assignTask(normalizedInput, context.getSession());
                     case "execute":
                         return executeTasks(normalizedInput, context.getSession());
+                    case "auto_execute":
+                        return autoExecuteTasks(normalizedInput, context.getSession());
                     case "status":
                         return getAgentStatus(normalizedInput, context.getSession());
                     case "list":
@@ -203,6 +238,14 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
                         return cancelTask(normalizedInput, context.getSession());
                     case "query":
                         return queryTask(normalizedInput, context.getSession());
+                    case "blackboard_put":
+                        return blackboardPut(normalizedInput);
+                    case "blackboard_get":
+                        return blackboardGet(normalizedInput);
+                    case "blackboard_list":
+                        return blackboardList();
+                    case "blackboard_clear":
+                        return blackboardClear(normalizedInput);
                     default:
                         return ToolResult.error("未知的操作类型：" + action);
                 }
@@ -257,6 +300,11 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
             // 如果 tasks 为空但 task 不为空，将 task 包装为 tasks 数组
             if ((tasks == null) && task != null) {
                 if (task instanceof String) {
+                    String taskText = (String) task;
+                    if (shouldAutoDecompose(taskText)) {
+                        normalized.put("action", "auto_execute");
+                        return normalized;
+                    }
                     // 单个字符串任务 → 包装为数组
                     List<Map<String, Object>> taskList = new ArrayList<>();
                     Map<String, Object> singleTask = new HashMap<>();
@@ -332,6 +380,21 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
             }
         }
         
+        if (normalized.containsKey("task_timeout") && normalized.get("task_timeout") instanceof String) {
+            try {
+                normalized.put("task_timeout", Long.parseLong((String) normalized.get("task_timeout")));
+            } catch (NumberFormatException e) {
+                // Keep original value for validation.
+            }
+        }
+        if (normalized.containsKey("max_agents") && normalized.get("max_agents") instanceof String) {
+            try {
+                normalized.put("max_agents", Integer.parseInt((String) normalized.get("max_agents")));
+            } catch (NumberFormatException e) {
+                // Keep original value for validation.
+            }
+        }
+
         return normalized;
     }
     
@@ -343,7 +406,7 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
                 if (parallelExecutor == null) {
                     agentRegistry = context.getAgentRegistry();
                     llmService = context.getLLMService();
-                    parallelExecutor = new ParallelAgentExecutor(agentRegistry, llmService);
+                    parallelExecutor = new ParallelAgentExecutor(agentRegistry, llmService, sharedBus);
                     logger.info("ParallelAgentExecutor initialized");
                 }
             }
@@ -468,7 +531,7 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
         String task = (String) args.get("task");
         String context = (String) args.get("context");
         Long timeout = args.get("timeout") instanceof Number ? 
-            ((Number) args.get("timeout")).longValue() : 60000L;
+            ((Number) args.get("timeout")).longValue() : DEFAULT_TASK_TIMEOUT_MS;
         
         if (agentId == null || agentId.isEmpty()) {
             return ToolResult.error("agent_id 参数是必需的");
@@ -572,50 +635,375 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
     @SuppressWarnings("unchecked")
     private ToolResult<Map<String, Object>> executeTasks(Map<String, Object> args, Session session) {
         List<Map<String, Object>> taskConfigs = (List<Map<String, Object>>) args.get("tasks");
-        Boolean parallel = args.get("parallel") instanceof Boolean ? 
+        Boolean parallel = args.get("parallel") instanceof Boolean ?
             (Boolean) args.get("parallel") : true;
-        Long globalTimeout = args.get("timeout") instanceof Number ? 
-            ((Number) args.get("timeout")).longValue() : 300000L;
-        
+        Long globalTimeout = args.get("timeout") instanceof Number ?
+            ((Number) args.get("timeout")).longValue() : DEFAULT_GLOBAL_TIMEOUT_MS;
+
         if (taskConfigs == null || taskConfigs.isEmpty()) {
             return ToolResult.error("tasks 参数是必需的");
         }
-        
+
         session.getLogger().info("AgentTool: 执行 " + taskConfigs.size() + " 个任务, parallel=" + parallel);
-        
+        StepMessageBroadcaster broadcaster = StepMessageBroadcaster.getInstance();
+
         // 构建 SubAgentTask 列表
         List<SubAgentTask> tasks = new ArrayList<>();
         for (Map<String, Object> config : taskConfigs) {
             SubAgentTask task = buildTaskFromConfig(config);
             tasks.add(task);
-            // 广播 step_start 消息到前端
-            StepMessageBroadcaster.getInstance().broadcastStepStart(
-                task.getTaskId(),
-                task.getName(),
-                task.getTaskDescription()
-            );
+            broadcaster.broadcastStepStart(task.getTaskId(), task.getName(), task.getTaskDescription());
         }
-        
+
+        // 重试/熔断/降级状态
+        String executionMode = "parallel";
+        String circuitState = "closed";
+        int totalRetries = 0;
+        int consecutiveFailures = 0;
+        int totalFailedCount = 0;
+        boolean degradedToHeuristic = false;
+        List<String> strategyHints = new ArrayList<>();
+
         try {
             ParallelExecutionResult executionResult;
-            
+
             if (parallel) {
-                // 异步执行
-                CompletableFuture<ParallelExecutionResult> future = 
+                CompletableFuture<ParallelExecutionResult> future =
                     parallelExecutor.executeAsync(tasks, session, globalTimeout);
                 executionResult = future.get();
             } else {
-                // 同步执行
                 executionResult = parallelExecutor.execute(tasks, session, globalTimeout);
             }
-            
+
+            // --- 重试阶段：对可恢复错误的任务进行有限重试 ---
+            List<SubAgentResult> retriedResults = new ArrayList<>();
+            for (SubAgentResult r : executionResult.getFailedResults()) {
+                if (isRetryableResult(r) && MAX_RETRIES_PER_TASK > 0) {
+                    SubAgentTask failedTask = findTaskInList(tasks, r.getTaskId());
+                    if (failedTask != null) {
+                        totalRetries++;
+                        consecutiveFailures++;
+                        logger.info("[AgentTool] Retrying task " + r.getTaskId() + " (retry #" + totalRetries + ")");
+                        broadcaster.broadcastStepAction(r.getTaskId(), "Retrying (attempt #" + (1 + totalRetries) + ")...");
+                        try {
+                            CompletableFuture<ParallelExecutionResult> retryFuture =
+                                parallelExecutor.executeAsync(List.of(failedTask), session,
+                                    Math.min(failedTask.getTimeoutMs(), DEFAULT_TASK_TIMEOUT_MS));
+                            ParallelExecutionResult retryResult = retryFuture.get(
+                                    Math.min(failedTask.getTimeoutMs(), DEFAULT_TASK_TIMEOUT_MS),
+                                    TimeUnit.MILLISECONDS);
+                            List<SubAgentResult> retryResults = retryResult.getResults();
+                            if (!retryResults.isEmpty() && retryResults.get(0).isSuccess()) {
+                                consecutiveFailures = 0;
+                                retriedResults.add(retryResults.get(0));
+                                continue;
+                            }
+                        } catch (Exception e) {
+                            logger.warning("[AgentTool] Retry failed for " + r.getTaskId() + ": " + e.getMessage());
+                        }
+                    }
+                } else {
+                    consecutiveFailures++;
+                }
+                totalFailedCount++;
+                retriedResults.add(r);
+            }
+
+            // 替换重试成功的结果
+            if (!retriedResults.isEmpty()) {
+                List<SubAgentResult> merged = new ArrayList<>(executionResult.getSuccessfulResults());
+                merged.addAll(retriedResults);
+                executionResult = new ParallelExecutionResult(merged, executionResult.getTotalExecutionTimeMs());
+            }
+
+            // --- 熔断/降级检查 ---
+            if (totalFailedCount >= CIRCUIT_BREAKER_THRESHOLD) {
+                circuitState = "open";
+                executionMode = "degraded_partial";
+                strategyHints.add("⚠️ " + totalFailedCount + " 个子任务连续失败，触发熔断保护。本轮自动并行已被降级。");
+                logger.warning("[AgentTool] Circuit breaker opened: " + totalFailedCount + " consecutive failures");
+            } else if (consecutiveFailures >= STRATEGY_SWITCH_HINT_THRESHOLD) {
+                circuitState = "half-open";
+                executionMode = "degraded_hint";
+                strategyHints.add("ⓘ " + consecutiveFailures + " 个子任务连续失败，建议切换策略：减少并行度、简化任务描述，或改用 heuristic 计划。");
+                logger.warning("[AgentTool] Strategy switch hint: " + consecutiveFailures + " consecutive failures");
+            }
+
+            // 广播失败/完成事件
+            for (SubAgentResult r : executionResult.getFailedResults()) {
+                broadcaster.broadcastStepComplete(r.getTaskId(), r.getError() != null ? r.getError() : "Unknown error", false);
+            }
+            for (SubAgentResult r : executionResult.getSuccessfulResults()) {
+                broadcaster.broadcastStepComplete(r.getTaskId(), r.getOutput(), true);
+            }
+
             // 构建结果
-            return buildExecutionResult(executionResult);
-            
+            ToolResult<Map<String, Object>> result = buildExecutionResult(executionResult);
+
+            // --- 注入降级元数据 ---
+            Map<String, Object> meta = result.getMetadata();
+            if (meta == null) meta = new HashMap<>();
+            meta.put("execution_mode", executionMode);
+            meta.put("retry_count", totalRetries);
+            meta.put("circuit_state", circuitState);
+            meta.put("partial_results", totalFailedCount > 0 && totalFailedCount < tasks.size());
+            meta.put("timeout_ms", globalTimeout);
+            if (!strategyHints.isEmpty()) {
+                meta.put("strategy_hints", strategyHints);
+                String hintText = String.join("\n", strategyHints);
+                result.setContent(result.getContent() + "\n\n" + hintText);
+            }
+            result.setMetadata(meta);
+            return result;
+
         } catch (Exception e) {
             logger.severe("Task execution failed: " + e.getMessage());
             return ToolResult.error("任务执行失败: " + e.getMessage());
         }
+    }
+
+    private ToolResult<Map<String, Object>> autoExecuteTasks(Map<String, Object> args, Session session) {
+        String task = stringValue(args.get("task"));
+        if (task == null || task.isBlank()) {
+            return ToolResult.error("task parameter is required for auto_execute");
+        }
+
+        int maxAgents = clampMaxAgents(args.get("max_agents"));
+        long taskTimeout = longValue(args.get("task_timeout"), DEFAULT_TASK_TIMEOUT_MS);
+        long globalTimeout = longValue(args.get("timeout"), DEFAULT_GLOBAL_TIMEOUT_MS);
+
+        List<Map<String, Object>> plannedTasks = decomposeTaskWithFallback(task, args.get("context"), maxAgents, taskTimeout);
+        String executionId = "auto-" + executionCounter.incrementAndGet();
+        sharedBus.put(executionId + ":plan", plannedTasks);
+        sharedBus.put(executionId + ":task", task);
+
+        Map<String, Object> executeArgs = new HashMap<>(args);
+        executeArgs.put("action", "execute");
+        executeArgs.put("tasks", plannedTasks);
+        executeArgs.put("parallel", true);
+        executeArgs.put("timeout", globalTimeout);
+
+        ToolResult<Map<String, Object>> result = executeTasks(executeArgs, session);
+        Map<String, Object> metadata = new HashMap<>();
+        if (result.getMetadata() != null) {
+            metadata.putAll(result.getMetadata());
+        }
+        metadata.put("execution_id", executionId);
+        metadata.put("auto_decomposed", true);
+        metadata.put("planned_count", plannedTasks.size());
+        metadata.put("planned_tasks", plannedTasks);
+        result.setMetadata(metadata);
+        return result;
+    }
+
+    private List<Map<String, Object>> decomposeTaskWithFallback(
+            String task, Object context, int maxAgents, long taskTimeout) {
+        List<Map<String, Object>> llmPlan = tryLlmDecompose(task, context, maxAgents, taskTimeout);
+        if (!llmPlan.isEmpty()) {
+            return llmPlan;
+        }
+        logger.info("[AgentTool] LLM decomposition timed out or empty, falling back to heuristic plan");
+        StepMessageBroadcaster.getInstance().broadcastStepAction("decompose",
+            "LLM decomposition fallback to heuristic plan (timeout=15s)");
+        return heuristicDecompose(task, context, maxAgents, taskTimeout);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> tryLlmDecompose(String task, Object context, int maxAgents, long taskTimeout) {
+        if (llmService == null) {
+            return List.of();
+        }
+
+        String prompt = """
+            Split the user task into 1 to %d independent sub-agent tasks.
+            Return only a JSON array. Each item must contain:
+            name, role, task, agent_type, priority, depends_on.
+            Use concise English identifiers for name and agent_type.
+            Do not include markdown fences or commentary.
+
+            Task:
+            %s
+
+            Context:
+            %s
+            """.formatted(maxAgents, task, context != null ? context : "");
+
+        try {
+            LLMResponse response = llmService.chat(List.of(
+                LLMMessage.system("You are a task decomposition planner. Return strict JSON only."),
+                LLMMessage.user(prompt)
+            )).get(Math.min(DEFAULT_TASK_TIMEOUT_MS, 15_000L), TimeUnit.MILLISECONDS);
+
+            if (response == null || response.hasError() || response.getContent() == null) {
+                return List.of();
+            }
+
+            JsonNode root = MAPPER.readTree(extractJsonArray(response.getContent()));
+            if (!root.isArray()) {
+                return List.of();
+            }
+
+            List<Map<String, Object>> tasks = new ArrayList<>();
+            for (JsonNode node : root) {
+                if (tasks.size() >= maxAgents) break;
+                Map<String, Object> map = MAPPER.convertValue(node, new TypeReference<Map<String, Object>>() {});
+                normalizeAutoTask(map, tasks.size() + 1, task, context, taskTimeout);
+                tasks.add(map);
+            }
+            return tasks.isEmpty() ? List.of() : tasks;
+        } catch (Exception e) {
+            logger.warning("[AgentTool] LLM task decomposition failed, using heuristic fallback: " + e.getMessage());
+            return List.of();
+        }
+    }
+
+    private List<Map<String, Object>> heuristicDecompose(String task, Object context, int maxAgents, long taskTimeout) {
+        int count = estimateAgentCount(task, maxAgents);
+        List<Map<String, Object>> tasks = new ArrayList<>();
+        String[][] templates = {
+            {"structure-explorer", "Repository structure explorer", "explore", "Map the relevant files, modules, entrypoints, and current implementation shape for this task."},
+            {"implementation-analyst", "Implementation analyst", "coder", "Identify the concrete code changes needed, affected interfaces, and likely integration points."},
+            {"risk-reviewer", "Risk and regression reviewer", "review", "Find behavioral risks, compatibility issues, edge cases, and missing safeguards."},
+            {"test-planner", "Test planner", "test", "Define focused validation steps, tests, and acceptance scenarios for this task."},
+            {"documentation-summarizer", "Documentation and handoff specialist", "doc", "Summarize findings and produce a concise handoff-ready result."}
+        };
+
+        for (int i = 0; i < count; i++) {
+            Map<String, Object> map = new HashMap<>();
+            map.put("name", templates[i][0]);
+            map.put("role", templates[i][1]);
+            map.put("agent_type", templates[i][2]);
+            map.put("priority", 5);
+            map.put("timeout", taskTimeout);
+            map.put("depends_on", List.of());
+            map.put("task", templates[i][3] + "\n\nOriginal task:\n" + task);
+            Map<String, Object> taskContext = new HashMap<>();
+            taskContext.put("blackboard", sharedBus.snapshot());
+            if (context != null) {
+                taskContext.put("user_context", context);
+            }
+            map.put("context", taskContext);
+            tasks.add(map);
+        }
+        return tasks;
+    }
+
+    private void normalizeAutoTask(Map<String, Object> map, int index, String originalTask, Object context, long taskTimeout) {
+        map.putIfAbsent("name", "auto-task-" + index);
+        map.putIfAbsent("role", "Sub-agent " + index);
+        map.putIfAbsent("agent_type", inferAgentType(stringValue(map.get("role"))));
+        map.putIfAbsent("priority", 5);
+        map.put("timeout", map.get("timeout") instanceof Number ? map.get("timeout") : taskTimeout);
+        map.putIfAbsent("depends_on", List.of());
+        if (!map.containsKey("task") || map.get("task") == null || stringValue(map.get("task")).isBlank()) {
+            map.put("task", originalTask);
+        }
+        Map<String, Object> taskContext = new HashMap<>();
+        Object existingContext = map.get("context");
+        if (existingContext instanceof Map<?, ?> existingMap) {
+            for (Map.Entry<?, ?> entry : existingMap.entrySet()) {
+                taskContext.put(String.valueOf(entry.getKey()), entry.getValue());
+            }
+        }
+        taskContext.put("blackboard", sharedBus.snapshot());
+        if (context != null) {
+            taskContext.put("user_context", context);
+        }
+        map.put("context", taskContext);
+    }
+
+    private boolean shouldAutoDecompose(String task) {
+        if (task == null) return false;
+        String trimmed = task.trim();
+        return trimmed.length() >= LONG_TASK_THRESHOLD || trimmed.contains("\n");
+    }
+
+    private int clampMaxAgents(Object value) {
+        int requested = intValue(value, MAX_AUTO_AGENTS);
+        return Math.max(1, Math.min(MAX_AUTO_AGENTS, requested));
+    }
+
+    private long longValue(Object value, long defaultValue) {
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value instanceof String text) {
+            try {
+                return Long.parseLong(text);
+            } catch (NumberFormatException ignored) {
+                return defaultValue;
+            }
+        }
+        return defaultValue;
+    }
+
+    private int intValue(Object value, int defaultValue) {
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        if (value instanceof String text) {
+            try {
+                return Integer.parseInt(text);
+            } catch (NumberFormatException ignored) {
+                return defaultValue;
+            }
+        }
+        return defaultValue;
+    }
+
+    private int estimateAgentCount(String task, int maxAgents) {
+        String lower = task != null ? task.toLowerCase(Locale.ROOT) : "";
+        boolean complex = lower.contains("refactor") || lower.contains("architecture")
+            || lower.contains("multi") || lower.contains("module") || lower.contains("debug")
+            || lower.contains("全仓") || lower.contains("多模块") || lower.contains("重构") || lower.contains("排查");
+        boolean simple = lower.length() < 80
+            && !(lower.contains("analyze") || lower.contains("分析") || lower.contains("探索"));
+        // 启发式: 简单=1, 中等=2, 复杂=max 3（只有用户显式传 max_agents 才允许到 5）
+        int count = simple ? 1 : (complex ? 3 : 2);
+        return Math.max(1, Math.min(maxAgents, count));
+    }
+
+    private String extractJsonArray(String text) {
+        int start = text.indexOf('[');
+        int end = text.lastIndexOf(']');
+        if (start >= 0 && end > start) {
+            return text.substring(start, end + 1);
+        }
+        return text;
+    }
+
+    private String stringValue(Object value) {
+        return value != null ? String.valueOf(value) : null;
+    }
+
+    /**
+     * 在任务列表中根据 taskId 查找 SubAgentTask
+     */
+    private SubAgentTask findTaskInList(List<SubAgentTask> tasks, String taskId) {
+        for (SubAgentTask t : tasks) {
+            if (t.getTaskId() != null && t.getTaskId().equals(taskId)) {
+                return t;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 判断子任务结果是否可重试（timeout、网络错误、可恢复 LLM 错误）
+     */
+    private boolean isRetryableResult(SubAgentResult r) {
+        if (r == null || r.isSuccess()) return false;
+        String error = r.getError() != null ? r.getError().toLowerCase(Locale.ROOT) : "";
+        return error.contains("timeout")
+            || error.contains("timed out")
+            || error.contains("connection")
+            || error.contains("reset")
+            || error.contains("unavailable")
+            || error.contains("rate_limit")
+            || error.contains("429")
+            || error.contains("503")
+            || error.contains("500")
+            || error.contains("interrupted");
     }
     
     /**
@@ -630,21 +1018,27 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
         Integer priority = config.get("priority") instanceof Number ? 
             ((Number) config.get("priority")).intValue() : 5;
         Long timeout = config.get("timeout") instanceof Number ? 
-            ((Number) config.get("timeout")).longValue() : 60000L;
+            ((Number) config.get("timeout")).longValue() : DEFAULT_TASK_TIMEOUT_MS;
         List<String> dependsOn = (List<String>) config.get("depends_on");
         Map<String, Object> context = (Map<String, Object>) config.get("context");
         
+        // 单子任务硬上限 10min
+        long clampedTimeout = Math.min(timeout, HARD_TASK_TIMEOUT_MS);
+        if (clampedTimeout < timeout) {
+            logger.warning("[AgentTool] Task timeout clamped: " + timeout + "ms -> " + clampedTimeout + "ms for task " + name);
+        }
+
         SubAgentTask task = SubAgentTask.builder()
             .name(name)
             .role(role)
             .taskDescription(taskDesc)
             .agentType(agentType)
             .priority(priority)
-            .timeout(timeout)
+            .timeout(clampedTimeout)
             .dependencies(dependsOn)
             .context(context)
             .build();
-        
+
         return task;
     }
     
@@ -667,6 +1061,7 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
                 content.append("\n【").append(r.getTaskId()).append("】\n");
                 if (r.getOutput() != null) {
                     content.append(r.getOutput()).append("\n");
+                    sharedBus.put("task:" + r.getTaskId() + ":result", r.getOutput());
                 }
             }
         }
@@ -706,6 +1101,78 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
      * 取消任务（支持 task_id 和 agent_id 两种取消方式）
      * 修复：同时支持 task_id 和 agent_id 参数
      */
+    private ToolResult<Map<String, Object>> blackboardPut(Map<String, Object> args) {
+        String key = stringValue(args.get("key"));
+        if (key == null || key.isBlank()) {
+            return ToolResult.error("key parameter is required");
+        }
+        Object value = args.get("value");
+        sharedBus.put(key, value);
+
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("key", key);
+        metadata.put("value", value);
+
+        ToolResult<Map<String, Object>> result = new ToolResult<>(metadata);
+        result.setSuccess(true);
+        result.setContent("blackboard updated: " + key);
+        result.setMetadata(metadata);
+        return result;
+    }
+
+    private ToolResult<Map<String, Object>> blackboardGet(Map<String, Object> args) {
+        String key = stringValue(args.get("key"));
+        if (key == null || key.isBlank()) {
+            return ToolResult.error("key parameter is required");
+        }
+        Object value = sharedBus.get(key);
+
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("key", key);
+        metadata.put("value", value);
+
+        ToolResult<Map<String, Object>> result = new ToolResult<>(metadata);
+        result.setSuccess(true);
+        result.setContent(String.valueOf(value));
+        result.setMetadata(metadata);
+        return result;
+    }
+
+    private ToolResult<Map<String, Object>> blackboardList() {
+        Map<String, Object> snapshot = sharedBus.snapshot();
+        Map<String, String> intermediate = sharedBus.intermediateSnapshot();
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("items", snapshot);
+        metadata.put("intermediate", intermediate);
+        metadata.put("count", snapshot.size());
+        metadata.put("intermediate_count", intermediate.size());
+
+        ToolResult<Map<String, Object>> result = new ToolResult<>(metadata);
+        result.setSuccess(true);
+        result.setContent("blackboard=" + snapshot + "\nintermediate=" + intermediate);
+        result.setMetadata(metadata);
+        return result;
+    }
+
+    private ToolResult<Map<String, Object>> blackboardClear(Map<String, Object> args) {
+        String key = stringValue(args.get("key"));
+        Map<String, Object> metadata = new HashMap<>();
+        if (key == null || key.isBlank()) {
+            sharedBus.clearBlackboard();
+            metadata.put("scope", "all");
+        } else {
+            sharedBus.remove(key);
+            metadata.put("scope", "key");
+            metadata.put("key", key);
+        }
+
+        ToolResult<Map<String, Object>> result = new ToolResult<>(metadata);
+        result.setSuccess(true);
+        result.setContent("blackboard cleared");
+        result.setMetadata(metadata);
+        return result;
+    }
+
     private ToolResult<Map<String, Object>> cancelTask(Map<String, Object> args, Session session) {
         String taskId = (String) args.get("task_id");
         String agentId = (String) args.get("agent_id");
@@ -1107,8 +1574,9 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
         }
         
         String action = (String) normalized.get("action");
-        Set<String> validActions = Set.of("create", "create_parallel", "assign", "execute", 
-                                          "status", "list", "stop", "merge", "cancel", "query");
+        Set<String> validActions = Set.of("create", "create_parallel", "assign", "execute", "auto_execute",
+                                          "status", "list", "stop", "merge", "cancel", "query",
+                                          "blackboard_put", "blackboard_get", "blackboard_list", "blackboard_clear");
         
         if (!validActions.contains(action)) {
             builder.addError("无效的 action: " + action);
@@ -1174,6 +1642,25 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
                 builder.addError("query action 必须提供 agent_id 参数");
             }
         }
+
+        if ("auto_execute".equals(action)) {
+            if (!input.containsKey("task") || input.get("task") == null) {
+                builder.addError("auto_execute action 必须提供 task 参数");
+            }
+        }
+
+        if ("blackboard_put".equals(action) || "blackboard_get".equals(action)) {
+            if (!input.containsKey("key") || input.get("key") == null) {
+                builder.addError(action + " action 必须提供 key 参数");
+            }
+        }
+
+        if ("blackboard_clear".equals(action) && input.containsKey("key") && input.get("key") != null) {
+            Object key = input.get("key");
+            if (!(key instanceof String) || ((String) key).isBlank()) {
+                builder.addError("blackboard_clear 的 key 参数必须是非空字符串，或不传以清空全部");
+            }
+        }
         
         return builder.build();
     }
@@ -1181,7 +1668,8 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
     @Override
     public boolean isReadOnly(Map<String, Object> input) {
         String action = (String) input.get("action");
-        return "status".equals(action) || "list".equals(action) || "query".equals(action);
+        return "status".equals(action) || "list".equals(action) || "query".equals(action)
+            || "blackboard_get".equals(action) || "blackboard_list".equals(action);
     }
     
     // ==================== 内部类 ====================

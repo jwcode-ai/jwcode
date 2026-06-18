@@ -3,6 +3,7 @@ import { TabId } from '../types';
 import { useCommandStore, BackendCommand } from '../stores/commandStore';
 import wsService from '../services/websocket';
 import { useSessionStore } from '../stores/sessionStore';
+import { THEME_PRESETS } from '../themes/presets';
 
 export interface SlashCommand {
   id: string;
@@ -20,6 +21,7 @@ export interface UseSlashCommandsOptions {
   createNewSession: () => void;
   clearMessages: () => void;
   setTheme: (theme: 'dark' | 'light' | 'auto') => void;
+  setThemePreset?: (presetId: string) => void;
   toggleTerminal: () => void;
   setLogs: React.Dispatch<React.SetStateAction<import('../types').LogEntry[]>>;
   setUnreadLogs: React.Dispatch<React.SetStateAction<number>>;
@@ -31,6 +33,7 @@ export function useSlashCommands(options: UseSlashCommandsOptions) {
     createNewSession,
     clearMessages,
     setTheme,
+    setThemePreset,
     toggleTerminal,
     setLogs,
     setUnreadLogs,
@@ -50,9 +53,9 @@ export function useSlashCommands(options: UseSlashCommandsOptions) {
     if (sessionId) {
       wsService.setSessionId(sessionId);
       wsService.send({
-        type: 'chat',
+        type: 'command_execute',
         sessionId,
-        message: args ? `/${cmd} ${args}` : `/${cmd}`,
+        data: JSON.stringify({ command: `/${cmd}`, args: args || '' }),
       });
       return { success: true, message: `已发送命令 /${cmd}` };
     }
@@ -187,17 +190,26 @@ export function useSlashCommands(options: UseSlashCommandsOptions) {
     {
       id: 'theme',
       name: 'theme',
-      description: '切换主题 (dark/light/auto)',
-      args: '<dark|light|auto>',
+      description: '切换主题 (dark/light/auto) 或预设 (cherry/ocean/nord/...)',
+      args: '<dark|light|auto|preset-name>',
       icon: '🎨',
       local: true,
       action: (args) => {
-        const theme = args.trim().toLowerCase() as 'dark' | 'light' | 'auto';
-        if (!theme || !['dark', 'light', 'auto'].includes(theme)) {
-          return { success: false, message: '用法: /theme <dark|light|auto>' };
+        const val = args.trim().toLowerCase();
+        if (['dark', 'light', 'auto'].includes(val)) {
+          setTheme(val as 'dark' | 'light' | 'auto');
+          return { success: true, message: `主题模式已切换为 ${val}` };
         }
-        setTheme(theme);
-        return { success: true, message: `主题已切换为 ${theme}` };
+        // Check if it's a valid preset ID
+        if (THEME_PRESETS[val]) {
+          if (setThemePreset) {
+            setThemePreset(val);
+            return { success: true, message: `主题预设已切换为 ${THEME_PRESETS[val].nameKey}` };
+          }
+          return { success: false, message: '主题预设切换不可用' };
+        }
+        const validPresets = Object.keys(THEME_PRESETS).join('|');
+        return { success: false, message: `用法: /theme <dark|light|auto|${validPresets}>` };
       },
     },
     {
@@ -308,7 +320,7 @@ export function useSlashCommands(options: UseSlashCommandsOptions) {
       local: false,
       action: (args) => sendToBackend('test', args),
     },
-  ], [setActiveTab, createNewSession, clearMessages, setTheme, toggleTerminal, setLogs, setUnreadLogs, sendToBackend]);
+  ], [setActiveTab, createNewSession, clearMessages, setTheme, setThemePreset, toggleTerminal, setLogs, setUnreadLogs, sendToBackend]);
 
   // 将后端命令转换为 SlashCommand 格式
   const backendSlashCommands: SlashCommand[] = useMemo(() => {
@@ -324,9 +336,9 @@ export function useSlashCommands(options: UseSlashCommandsOptions) {
         if (sessionId) {
           wsService.setSessionId(sessionId);
           wsService.send({
-            type: 'chat',
+            type: 'command_execute',
             sessionId,
-            message: `/${bc.name}${args ? ' ' + args : ''}`,
+            data: JSON.stringify({ command: `/${bc.name}`, args: args || '' }),
           });
           return { success: true, message: `已发送命令 /${bc.name}` };
         }

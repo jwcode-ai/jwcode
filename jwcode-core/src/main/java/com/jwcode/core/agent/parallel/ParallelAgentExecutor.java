@@ -4,6 +4,7 @@ import com.jwcode.core.agent.Agent;
 import com.jwcode.core.agent.AgentRegistry;
 import com.jwcode.core.agent.SharedContextBus;
 import com.jwcode.core.agent.SubAgentContextStore;
+import com.jwcode.core.api.StepMessageBroadcaster;
 import com.jwcode.core.llm.LLMQueryEngine;
 import com.jwcode.core.llm.LLMService;
 import com.jwcode.core.session.Session;
@@ -161,6 +162,11 @@ public class ParallelAgentExecutor {
     public ParallelAgentExecutor(AgentRegistry agentRegistry, LLMService llmService, int poolSize) {
         this(agentRegistry, llmService, poolSize, new SubAgentContextStore(), new SharedContextBus());
     }
+
+    public ParallelAgentExecutor(AgentRegistry agentRegistry, LLMService llmService, SharedContextBus sharedBus) {
+        this(agentRegistry, llmService, DEFAULT_POOL_SIZE, new SubAgentContextStore(),
+            sharedBus != null ? sharedBus : new SharedContextBus());
+    }
     
     public ParallelAgentExecutor(AgentRegistry agentRegistry, LLMService llmService,
                                   int poolSize, SubAgentContextStore contextStore, SharedContextBus sharedBus) {
@@ -219,33 +225,101 @@ public class ParallelAgentExecutor {
      */
     public ParallelExecutionResult execute(List<SubAgentTask> tasks, Session session, long timeoutMs) {
         checkShutdown();
-        
+
         if (tasks == null || tasks.isEmpty()) {
             return ParallelExecutionResult.empty();
         }
-        
+
         logger.info("[ParallelAgent] Starting synchronous execution of " + tasks.size() + " tasks");
         long startTime = System.currentTimeMillis();
-        
+
+        // 统一使用 executorService 提交每个任务，避免 ForkJoinPool + parallelStream 嵌套
+        List<CompletableFuture<SubAgentResult>> futures = new ArrayList<>();
+        List<CancellationToken> tokens = new ArrayList<>();
+        for (SubAgentTask task : tasks) {
+            CancellationToken token = new CancellationToken("Timeout or cancellation");
+            cancellationTokens.put(task.getTaskId(), token);
+            tokens.add(token);
+
+            CompletableFuture<SubAgentResult> future = CompletableFuture.supplyAsync(() -> {
+                Thread currentThread = Thread.currentThread();
+                TaskExecution execution = new TaskExecution(task.getTaskId(), null, token);
+                execution.executingThread = currentThread;
+                activeExecutions.put(task.getTaskId(), execution);
+                try {
+                    return doExecute(task, session, token);
+                } finally {
+                    activeExecutions.remove(task.getTaskId());
+                }
+            }, executorService);
+
+            futures.add(future);
+            resultFutures.put(task.getTaskId(), future);
+        }
+
         try {
-            // 使用 ForkJoinPool 进行并行执行
-            List<SubAgentResult> results = forkJoinPool.submit(() ->
-                tasks.parallelStream()
-                    .map(task -> executeSingle(task, session, timeoutMs))
-                    .collect(Collectors.toList())
-            ).get(timeoutMs, TimeUnit.MILLISECONDS);
-            
+            // 等待所有任务完成或超时
+            CompletableFuture<Void> allOf = CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
+            allOf.get(timeoutMs, TimeUnit.MILLISECONDS);
+
             long executionTime = System.currentTimeMillis() - startTime;
+            List<SubAgentResult> results = new ArrayList<>();
+            for (CompletableFuture<SubAgentResult> f : futures) {
+                try {
+                    SubAgentResult r = f.getNow(null);
+                    if (r != null) results.add(r);
+                } catch (Exception e) {
+                    logger.fine("[ParallelAgent] Error collecting result: " + e.getMessage());
+                }
+            }
             logger.info("[ParallelAgent] Execution completed in " + executionTime + "ms");
-            
             return new ParallelExecutionResult(results, executionTime);
-            
+
         } catch (TimeoutException e) {
+            long executionTime = System.currentTimeMillis() - startTime;
             logger.warning("[ParallelAgent] Execution timeout after " + timeoutMs + "ms");
+
+            // 超时时取消未完成的任务和对应的 cancellation tokens
+            int cancelledCount = 0;
+            for (int i = 0; i < tasks.size(); i++) {
+                SubAgentTask task = tasks.get(i);
+                CompletableFuture<SubAgentResult> f = futures.get(i);
+                if (f != null && !f.isDone()) {
+                    f.cancel(true);
+                    CancellationToken token = tokens.get(i);
+                    if (token != null) token.cancel();
+                    cancelledCount++;
+                }
+            }
+            logger.info("[ParallelAgent] Cancelled " + cancelledCount + " incomplete tasks after timeout");
+
+            // 收集中间已完成的结果
+            List<SubAgentResult> partialResults = new ArrayList<>();
+            for (int i = 0; i < tasks.size(); i++) {
+                CompletableFuture<SubAgentResult> f = futures.get(i);
+                if (f != null && f.isDone()) {
+                    try {
+                        SubAgentResult r = f.getNow(null);
+                        if (r != null) partialResults.add(r);
+                    } catch (Exception ex) {
+                        // skip
+                    }
+                }
+            }
+
+            if (!partialResults.isEmpty()) {
+                return createMixedResult(partialResults, tasks, timeoutMs, executionTime);
+            }
             return createTimeoutResult(tasks, timeoutMs);
         } catch (Exception e) {
             logger.log(Level.SEVERE, "[ParallelAgent] Execution failed", e);
             return createErrorResult(tasks, e);
+        } finally {
+            // 清理
+            for (SubAgentTask task : tasks) {
+                cancellationTokens.remove(task.getTaskId());
+                resultFutures.remove(task.getTaskId());
+            }
         }
     }
     
@@ -798,10 +872,10 @@ public class ParallelAgentExecutor {
         }
         ToolExecutor toolExecutor = new ToolExecutor(registry);
 
-        // 3. 子 Agent 配置：不限制迭代次数，独立 Token 预算
+        // 3. 子 Agent 配置：有限迭代次数 + Token 预算，超限返回部分结果和明确错误
         LLMQueryEngine.EngineConfig subConfig = LLMQueryEngine.EngineConfig.defaultConfig();
-        subConfig.setMaxIterations(0);
-        subConfig.setTokenBudget(500_000);
+        subConfig.setMaxIterations(8);
+        subConfig.setTokenBudget(120_000);
 
         // 4. 创建 LLMQueryEngine
         LLMQueryEngine engine = LLMQueryEngine.builder()
@@ -810,6 +884,34 @@ public class ParallelAgentExecutor {
             .toolExecutor(toolExecutor)
             .config(subConfig)
             .build();
+
+        // 4b. 注册 StepCallback 用于进度广播（子 Agent 的思考、工具调用等通过 broadcaster 推送到前端）
+        engine.setStepCallback(new LLMQueryEngine.StepCallback() {
+            @Override
+            public void onStepStart(String stepName, String description) {
+                StepMessageBroadcaster.getInstance().broadcastStepStart(task.getTaskId(), stepName, description);
+            }
+            @Override
+            public void onStepThinking(String stepName, String thought) {
+                StepMessageBroadcaster.getInstance().broadcastStepThinking(task.getTaskId(), thought);
+            }
+            @Override
+            public void onStepAction(String stepName, String action) {
+                StepMessageBroadcaster.getInstance().broadcastStepAction(task.getTaskId(), action);
+            }
+            @Override
+            public void onStepComplete(String stepName, String result) {
+                StepMessageBroadcaster.getInstance().broadcastStepComplete(task.getTaskId(), result, true);
+            }
+            @Override
+            public void onToolResult(String toolName, String result, String toolCallId) {
+                // Pass through as step action for visibility
+                if (result != null && (result.startsWith("Error:") || result.startsWith("error:"))) {
+                    StepMessageBroadcaster.getInstance().broadcastStepAction(task.getTaskId(),
+                        "Tool " + toolName + " failed: " + (result.length() > 200 ? result.substring(0, 200) : result));
+                }
+            }
+        });
 
         // 5. 构建完整 prompt
         String fullPrompt = (agent.getSystemPrompt() != null && !agent.getSystemPrompt().isEmpty())

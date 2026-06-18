@@ -1,7 +1,7 @@
 import { memo, useRef, useCallback, useState, useMemo, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
-import { MessageSquare, Zap, Square, Pause, Play } from 'lucide-react';
+import { Zap, Square, Pause, Play } from 'lucide-react';
 import { Message, TabId, LogEntry, FileNode } from '../../types';
 import { MessageBubble } from './MessageBubble';
 import { SlashCommandMenu } from '../SlashCommandMenu';
@@ -271,6 +271,13 @@ export const ChatPanel = memo(function ChatPanel({
       }
     }
 
+    // Ctrl/Cmd + Enter always submits (IME-safe explicit shortcut)
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      handleSend();
+      return;
+    }
+
     if (e.key === 'Enter' && !e.shiftKey && !isComposingRef.current) {
       e.preventDefault();
       handleSend();
@@ -320,9 +327,7 @@ export const ChatPanel = memo(function ChatPanel({
   const EmptyPlaceholder = useCallback(() => (
     <div className="flex-1 flex items-center justify-center p-4">
       <div className="text-center max-w-md px-4">
-        <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-accent-blue/10 flex items-center justify-center">
-          <MessageSquare size={32} className="text-accent-blue" />
-        </div>
+        <img src="/logo.svg" alt="JWCode" className="w-16 h-16 mx-auto mb-4 rounded-2xl shadow-lg shadow-accent-blue/20" />
         <h2 className="text-xl font-semibold mb-2">{t('chat.welcome')}</h2>
         <p className="text-dark-muted text-sm">{t('chat.welcomeDesc')}</p>
         <div className="mt-6 flex flex-wrap justify-center gap-2">
@@ -333,10 +338,11 @@ export const ChatPanel = memo(function ChatPanel({
         <div className="mt-4 text-xs text-dark-muted space-y-1">
           <div>{t('chat.quickCommands')} <kbd className="px-1 py-0.5 bg-dark-bg rounded border border-dark-border">/</kbd></div>
           <div>{t('chat.refFiles')} <kbd className="px-1 py-0.5 bg-dark-bg rounded border border-dark-border">@</kbd></div>
+          <div>{t('chat.kbdHint')} <kbd className="px-1 py-0.5 bg-dark-bg rounded border border-dark-border">Ctrl</kbd> <kbd className="px-1 py-0.5 bg-dark-bg rounded border border-dark-border">K</kbd></div>
         </div>
       </div>
     </div>
-  ), []);
+  ), [t]);
 
   const tokenWarn = tokenEstimate > 8000;
   const charCount = input.length;
@@ -384,7 +390,7 @@ export const ChatPanel = memo(function ChatPanel({
                 planMode === "act" ? t('plan.actTitle') :
                 t('chat.inputPlaceholder')
               }
-              rows={1} disabled={isGenerating || hasPendingApproval} className={`flex-1 bg-dark-bg border rounded-lg px-3 sm:px-4 py-2.5 sm:py-3 text-dark-text placeholder-dark-muted resize-none focus:outline-none focus:border-accent-green text-sm min-h-[40px] max-h-[40vh] transition-colors ${
+              rows={1} disabled={isGenerating || hasPendingApproval} aria-label={t('a11y.messageInput')} className={`flex-1 bg-dark-bg border rounded-lg px-3 sm:px-4 py-2.5 sm:py-3 text-dark-text placeholder-dark-muted resize-none focus:outline-none focus:border-accent-green focus:ring-2 focus:ring-accent-green/20 text-sm min-h-[40px] max-h-[40vh] transition-all ${
                 hasPendingApproval ? "border-accent-yellow/50 opacity-60" :
                 planMode === "plan" ? "border-accent-purple/50" :
                 planMode === "act" ? "border-accent-green/50" :
@@ -430,9 +436,9 @@ export const ChatPanel = memo(function ChatPanel({
               )}
             </div>
           ) : (
-            <button onClick={handleSend} disabled={!input.trim()}
+            <button onClick={handleSend} disabled={!input.trim()} aria-label={t('a11y.send')}
               className="px-4 py-3 text-white rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2 bg-accent-green">
-              <Zap size={16} />
+              <Zap size={16} aria-hidden="true" />
               <span className="hidden sm:inline">{t('chat.sendBtn')}</span>
             </button>
           )}
