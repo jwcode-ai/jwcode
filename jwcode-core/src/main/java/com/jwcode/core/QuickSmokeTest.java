@@ -47,7 +47,7 @@ public class QuickSmokeTest {
                 pipeline.publish(new ObservationEvent.ToolResult(name, result.isSuccess() ? "OK" : result.getErrorMessage(), result.isSuccess(), Duration.ofMillis(dt), "tc_" + name));
                 if (result.isSuccess()) { System.out.println("PASS (" + dt + "ms)"); passed++; }
                 else { System.out.println("FAIL: " + result.getErrorMessage()); failed++; }
-                pipeline.publish(new ObservationEvent.StepComplete(name, result.isSuccess() ? "passed" : "failed"));
+                pipeline.publish(new ObservationEvent.StepComplete(name, result.isSuccess() ? "passed" : "failed", result.isSuccess()));
             } catch (TimeoutException e) {
                 System.out.println("TIMEOUT (>10s)"); failed++;
                 pipeline.publish(new ObservationEvent.Error(name, "Timeout", "Increase timeout or check tool"));

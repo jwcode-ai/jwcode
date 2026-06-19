@@ -35,6 +35,13 @@
             <artifactId>Java-WebSocket</artifactId>
         </dependency>
 
+        <!-- PTY: real pseudo-terminal so the web terminal behaves correctly
+             (cursor/prompt redraw, resize, interactive programs) -->
+        <dependency>
+            <groupId>org.jetbrains.pty4j</groupId>
+            <artifactId>pty4j</artifactId>
+        </dependency>
+
         <!-- Test -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>

@@ -56,6 +56,7 @@
         <reactor.version>3.6.6</reactor.version>
         <jsonschema.version>4.35.0</jsonschema.version>
         <java.websocket.version>1.5.6</java.websocket.version>
+        <pty4j.version>0.13.12</pty4j.version>
         <snakeyaml.version>2.2</snakeyaml.version>
         <pdfbox.version>3.0.2</pdfbox.version>
         <jakarta.validation.version>3.0.2</jakarta.validation.version>
@@ -227,6 +228,13 @@
                 <groupId>org.java-websocket</groupId>
                 <artifactId>Java-WebSocket</artifactId>
                 <version>${java.websocket.version}</version>
+            </dependency>
+
+            <!-- PTY (real pseudo-terminal for web terminal) -->
+            <dependency>
+                <groupId>org.jetbrains.pty4j</groupId>
+                <artifactId>pty4j</artifactId>
+                <version>${pty4j.version}</version>
             </dependency>
 
             <!-- JLine Terminal (managed separately from jline) -->

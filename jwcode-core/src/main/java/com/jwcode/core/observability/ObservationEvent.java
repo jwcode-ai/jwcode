@@ -119,9 +119,9 @@ public sealed interface ObservationEvent {
     /**
      * 步骤完成 — 某阶段任务结束
      */
-    record StepComplete(String stepName, String result, Instant timestamp) implements ObservationEvent {
-        public StepComplete(String stepName, String result) {
-            this(stepName, result, Instant.now());
+    record StepComplete(String stepName, String result, boolean success, Instant timestamp) implements ObservationEvent {
+        public StepComplete(String stepName, String result, boolean success) {
+            this(stepName, result, success, Instant.now());
         }
     }
 

@@ -2,17 +2,15 @@ import { create } from 'zustand';
 import { api } from '../services/api';
 import type {
   HookRule, HookRuleFormData, HookDryRunRequest, HookDryRunResult,
-  HookExecutionLog, HookStats, HookEventCategory, HookAgentInfo
+  HookStats, HookEventCategory, HookAgentInfo
 } from '../types';
 
 interface HooksState {
   // Data
   rules: HookRule[];
-  logs: HookExecutionLog[];
   stats: HookStats | null;
   events: HookEventCategory[];
   agents: HookAgentInfo[];
-  lifecycleMappings: Record<string, string>;
   loading: boolean;
   error: string | null;
   fieldErrors: Record<string, string> | null;
@@ -21,15 +19,12 @@ interface HooksState {
   formOpen: boolean;
   editingRule: HookRule | null;
   dryRunResult: HookDryRunResult | null;
-  logsExpanded: boolean;
 
   // Actions
   loadRules: () => Promise<void>;
-  loadLogs: () => Promise<void>;
   loadStats: () => Promise<void>;
   loadEvents: () => Promise<void>;
   loadAgents: () => Promise<void>;
-  loadLifecycleMappings: () => Promise<void>;
   loadAll: () => Promise<void>;
 
   createRule: (data: HookRuleFormData) => Promise<boolean>;
@@ -41,23 +36,18 @@ interface HooksState {
 
   dryRun: (request: HookDryRunRequest) => Promise<HookDryRunResult | null>;
 
-  saveLifecycleMappings: (mappings: Record<string, string>) => Promise<boolean>;
-
   openForm: (rule?: HookRule) => void;
   closeForm: () => void;
   setDryRunResult: (result: HookDryRunResult | null) => void;
-  setLogsExpanded: (expanded: boolean) => void;
   clearError: () => void;
   clearFieldErrors: () => void;
 }
 
 export const useHooksStore = create<HooksState>((set, get) => ({
   rules: [],
-  logs: [],
   stats: null,
   events: [],
   agents: [],
-  lifecycleMappings: {},
   loading: false,
   error: null,
   fieldErrors: null,
@@ -65,17 +55,11 @@ export const useHooksStore = create<HooksState>((set, get) => ({
   formOpen: false,
   editingRule: null,
   dryRunResult: null,
-  logsExpanded: false,
 
   loadRules: async () => {
     const res = await api.hooks.list();
     if (res.success && res.data) set({ rules: res.data });
     else set({ error: res.error || 'Failed to load rules' });
-  },
-
-  loadLogs: async () => {
-    const res = await api.hooks.logs();
-    if (res.success && res.data) set({ logs: res.data });
   },
 
   loadStats: async () => {
@@ -93,11 +77,6 @@ export const useHooksStore = create<HooksState>((set, get) => ({
     if (res.success && res.data) set({ agents: res.data });
   },
 
-  loadLifecycleMappings: async () => {
-    const res = await api.hooks.lifecycleMappings.get();
-    if (res.success && res.data) set({ lifecycleMappings: res.data });
-  },
-
   loadAll: async () => {
     set({ loading: true, error: null });
     try {
@@ -106,7 +85,6 @@ export const useHooksStore = create<HooksState>((set, get) => ({
         get().loadStats(),
         get().loadEvents(),
         get().loadAgents(),
-        get().loadLifecycleMappings(),
       ]);
     } catch (e) {
       set({ error: String(e) });
@@ -209,20 +187,9 @@ export const useHooksStore = create<HooksState>((set, get) => ({
     return null;
   },
 
-  saveLifecycleMappings: async (mappings) => {
-    const res = await api.hooks.lifecycleMappings.save(mappings);
-    if (res.success) {
-      set({ lifecycleMappings: mappings });
-      return true;
-    }
-    set({ error: res.error || 'Save mappings failed' });
-    return false;
-  },
-
   openForm: (rule) => set({ formOpen: true, editingRule: rule || null, dryRunResult: null, fieldErrors: null }),
   closeForm: () => set({ formOpen: false, editingRule: null, dryRunResult: null, fieldErrors: null }),
   setDryRunResult: (result) => set({ dryRunResult: result }),
-  setLogsExpanded: (expanded) => set({ logsExpanded: expanded }),
   clearError: () => set({ error: null }),
   clearFieldErrors: () => set({ fieldErrors: null }),
 }));

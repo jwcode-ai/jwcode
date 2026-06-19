@@ -97,6 +97,12 @@ export interface Model {
   temperature?: number;
   contextWindow?: number;
   isDefault?: boolean;
+  /** 是否为全局默认模型 */
+  isGlobalDefault?: boolean;
+  /** 是否为 Plan 模式默认模型 */
+  isPlanDefault?: boolean;
+  /** 是否为 Act 模式默认模型 */
+  isActDefault?: boolean;
   apiType?: string;
 }
 
@@ -135,6 +141,15 @@ export interface Skill {
   category: string;
   icon?: string;
   tags?: string[];
+  trigger?: string;
+  injection?: string;
+  systemPrompt?: string;
+  requiredTools?: string[];
+  source?: string;
+  editable?: boolean;
+  version?: string;
+  author?: string;
+  provenance?: string;
 }
 
 // Agent types
@@ -144,7 +159,29 @@ export interface Agent {
   description: string;
   color: string;
   active: boolean;
+  enabled: boolean;
+  instanceCount: number;
   state: 'idle' | 'busy' | 'error';
+  /** Agent 模型绑定配置 */
+  modelBinding?: {
+    mode: 'mode-default' | 'specified';
+    modelRef?: string;
+  };
+  /** Plan 模式生效模型 */
+  effectivePlanModel?: EffectiveModel;
+  /** Act 模式生效模型 */
+  effectiveActModel?: EffectiveModel;
+}
+
+/** 生效模型信息 */
+export interface EffectiveModel {
+  modelRef: string | null;
+  provider: string | null;
+  modelId: string | null;
+  usable: boolean;
+  fallback: boolean;
+  fallbackReason?: string;
+  error?: string;
 }
 
 // Template types
@@ -402,7 +439,7 @@ export interface SessionTask {
 }
 
 // Tab types
-export type TabId = 'chat' | 'plan' | 'terminal' | 'files' | 'models' | 'tools' | 'skills' | 'agents' | 'hooks' | 'channels' | 'settings' | 'logs' | 'agentflow' | 'observability';
+export type TabId = 'chat' | 'plan' | 'terminal' | 'files' | 'models' | 'tools' | 'skills' | 'agents' | 'hooks' | 'channels' | 'settings' | 'logs' | 'agentflow';
 
 export type ChannelType = 'wechat' | 'feishu' | 'dingtalk';
 export interface Channel {
@@ -435,16 +472,22 @@ export interface FileNode {
 
 // Terminal types
 export interface TerminalStartResponse {
+  port?: number;
   ttydPort: number;
   wsUrl: string;
+  workspaceDir?: string;
+  shell?: string;
 }
 
 export interface TerminalStatusResponse {
   running: boolean;
+  terminalAvailable?: boolean;
   ttydAvailable?: boolean;
   port?: number;
+  ttydPort?: number;
   uptime?: number;
   workspaceDir?: string;
+  wsUrl?: string;
 }
 
 // Observability types
@@ -570,16 +613,6 @@ export interface HookDryRunResult {
   reason: string;
   durationMs: number;
   contextOutput: string;
-}
-
-export interface HookExecutionLog {
-  id: string;
-  hookName: string;
-  eventType: string;
-  decision: string;
-  reason: string;
-  durationMs: number;
-  timestamp: number;
 }
 
 export interface HookStats {

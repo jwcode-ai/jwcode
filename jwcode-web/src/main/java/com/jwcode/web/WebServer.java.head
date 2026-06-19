@@ -105,7 +105,7 @@ public class WebServer {
         // 任务管理 API
         server.createContext("/api/tasks", new TaskHandler(TaskStore.getInstance()));
         server.createContext("/api/files", new FilesHandler());
-        server.createContext("/api/system/status", new SystemStatusHandler());
+        server.createContext("/api/system", new SystemStatusHandler());
         server.createContext("/api/checkpoints", new CheckpointsHandler());
 
         // Terminal — ttyd sidecar for web-based terminal access

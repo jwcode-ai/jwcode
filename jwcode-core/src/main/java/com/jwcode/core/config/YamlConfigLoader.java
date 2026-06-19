@@ -242,6 +242,22 @@ public class YamlConfigLoader {
         if (source.getSettings() != null) {
             mergeSettings(jwcodeConfig.getSettings(), source.getSettings());
         }
+
+        // 合并默认模型配置
+        if (source.getDefaultModels() != null && !source.getDefaultModels().isEmpty()) {
+            source.getDefaultModels().forEach((mode, ref) -> {
+                if (ref != null && !ref.isBlank()) {
+                    jwcodeConfig.getDefaultModels().put(mode, ref);
+                }
+            });
+        }
+
+        // 合并 Agent 模型绑定
+        if (source.getAgentModelBindings() != null && !source.getAgentModelBindings().isEmpty()) {
+            source.getAgentModelBindings().forEach((agentId, binding) -> {
+                jwcodeConfig.getAgentModelBindings().merge(agentId, binding, (existing, incoming) -> incoming);
+            });
+        }
     }
     
     private JwcodeConfig.ProviderConfig mergeProviderConfig(
@@ -580,6 +596,7 @@ public class YamlConfigLoader {
      */
     public synchronized void saveConfig(JwcodeConfig config) {
         ensureDefaultProvider(config);
+        config.ensureDefaultsInitialized();
         saveConfig(config, userConfigPath);
     }
     

@@ -2,6 +2,7 @@ package com.jwcode.core.a2a.dispatcher;
 
 import com.jwcode.core.a2a.model.*;
 import com.jwcode.core.agent.Agent;
+import com.jwcode.core.agent.AgentRuntimeRegistry;
 import com.jwcode.core.agent.AgentRegistry;
 import com.jwcode.core.hook.HookChain;
 import com.jwcode.core.hook.HookContext;
@@ -436,6 +437,12 @@ public class LocalAgentDispatcher implements AgentDispatcher {
             logger.severe(msg);
             throw new IllegalArgumentException(msg);
         }
+        AgentRuntimeRegistry runtimeRegistry = AgentRuntimeRegistry.getInstance();
+        if (!runtimeRegistry.isEnabled(agentId)) {
+            String msg = "Agent is disabled: " + agentId;
+            logger.warning(msg);
+            return TaskOutput.failure(msg);
+        }
 
         logger.info("LocalDispatcher: executing sub-agent task via LLM | agent=" + agentName
             + " | taskId=" + task.getTaskId() + " | description=" + task.getDescription());
@@ -477,6 +484,7 @@ public class LocalAgentDispatcher implements AgentDispatcher {
 
         // 4. 执行查询（异步非阻塞：orTimeout 替代 get 阻塞）
         TaskOutput output;
+        runtimeRegistry.beginInstance(agentId);
         try {
             LLMQueryEngine.QueryResult result = engine.query(taskPrompt)
                 .orTimeout(DEFAULT_SYNC_TIMEOUT_MS, TimeUnit.MILLISECONDS)
@@ -513,6 +521,7 @@ public class LocalAgentDispatcher implements AgentDispatcher {
             triggerSubagentHook(HookEventType.SUBAGENT_STOP, agentName, task);
             // 归还引擎到池（子任务 session 通常是一次性的，完成后清理）
             enginePool.evict(poolKey);
+            runtimeRegistry.endInstance(agentId);
         }
         return output;
     }

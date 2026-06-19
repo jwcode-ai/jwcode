@@ -12,6 +12,7 @@ import com.fasterxml.jackson.databind.JsonDeserializer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
@@ -73,6 +74,20 @@ public class JwcodeConfig {
      */
     @JsonProperty("settings")
     private GlobalSettings settings = new GlobalSettings();
+
+    /**
+     * 默认模型配置（按模式区分）
+     * 格式: { "global": "provider:modelId", "plan": "provider:modelId", "act": "provider:modelId" }
+     */
+    @JsonProperty("default-models")
+    private Map<String, String> defaultModels = new HashMap<>();
+
+    /**
+     * Agent 模型绑定配置
+     * key: agentId, value: AgentModelBinding
+     */
+    @JsonProperty("agent-model-bindings")
+    private Map<String, AgentModelBinding> agentModelBindings = new HashMap<>();
     
     /**
      * 获取指定提供商的配置
@@ -696,6 +711,139 @@ public class JwcodeConfig {
     
     // ==================== 静态方法 ====================
     
+    /**
+     * Agent 模型绑定配置
+     */
+    @Data
+    @NoArgsConstructor
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class AgentModelBinding {
+
+        @JsonProperty("mode")
+        private String mode = "mode-default";  // "mode-default" | "specified"
+
+        @JsonProperty("model-ref")
+        private String modelRef;  // "provider:modelId", 仅 mode=specified 时有效
+
+        /**
+         * 检查是否为默认模式
+         */
+        @JsonIgnore
+        public boolean isModeDefault() {
+            return "mode-default".equals(mode) || mode == null;
+        }
+
+        /**
+         * 检查是否为指定模型模式
+         */
+        @JsonIgnore
+        public boolean isSpecified() {
+            return "specified".equals(mode) && modelRef != null && !modelRef.isBlank();
+        }
+    }
+
+    /**
+     * 获取默认模型引用字符串 (provider:modelId)
+     *
+     * @param mode 执行模式（"global", "plan", "act"）
+     * @return 模型引用字符串，如 "deepseek:deepseek-chat"
+     */
+    @JsonIgnore
+    public String getDefaultModelRef(String mode) {
+        if (defaultModels != null && defaultModels.containsKey(mode)) {
+            String ref = defaultModels.get(mode);
+            if (ref != null && !ref.isBlank()) {
+                return ref;
+            }
+        }
+        // 回退到全局默认
+        if (!"global".equals(mode) && defaultModels != null && defaultModels.containsKey("global")) {
+            String ref = defaultModels.get("global");
+            if (ref != null && !ref.isBlank()) {
+                return ref;
+            }
+        }
+        // 最后回退到 old-style default-provider 第一个模型
+        ProviderConfig provider = getDefaultProvider();
+        if (provider != null && !provider.getModels().isEmpty()) {
+            String providerName = getDefaultProviderName();
+            return providerName + ":" + provider.getModels().get(0).getId();
+        }
+        return null;
+    }
+
+    /**
+     * 获取 Agent 的模型绑定配置
+     */
+    @JsonIgnore
+    public AgentModelBinding getAgentModelBinding(String agentId) {
+        if (agentModelBindings != null && agentModelBindings.containsKey(agentId)) {
+            return agentModelBindings.get(agentId);
+        }
+        return null;
+    }
+
+    /**
+     * 解析 ModelRef 字符串为 provider 和 modelId
+     * 格式: "provider:modelId"
+     */
+    @JsonIgnore
+    public static ModelRefParts parseModelRef(String modelRef) {
+        if (modelRef == null || modelRef.isBlank()) {
+            return null;
+        }
+        int colonIdx = modelRef.indexOf(':');
+        if (colonIdx <= 0 || colonIdx >= modelRef.length() - 1) {
+            return null;
+        }
+        return new ModelRefParts(modelRef.substring(0, colonIdx), modelRef.substring(colonIdx + 1));
+    }
+
+    /**
+     * 查找指定 provider:modelId 对应的 ModelDefinition
+     */
+    @JsonIgnore
+    public ModelDefinition findModelByRef(String modelRef) {
+        ModelRefParts parts = parseModelRef(modelRef);
+        if (parts == null) return null;
+        ProviderConfig provider = providers.get(parts.provider);
+        if (provider == null) return null;
+        return provider.findModel(parts.modelId).orElse(null);
+    }
+
+    /**
+     * ModelRef 解析结果
+     */
+    @Data
+    @AllArgsConstructor
+    public static class ModelRefParts {
+        private String provider;
+        private String modelId;
+    }
+
+    /**
+     * 确保已知字段兼容性初始化
+     */
+    @JsonIgnore
+    public void ensureDefaultsInitialized() {
+        if (defaultModels == null) {
+            defaultModels = new HashMap<>();
+        }
+        if (!defaultModels.containsKey("global")) {
+            ProviderConfig provider = getDefaultProvider();
+            String providerName = getDefaultProviderName();
+            if (provider != null && !provider.getModels().isEmpty()) {
+                String ref = providerName + ":" + provider.getModels().get(0).getId();
+                defaultModels.put("global", ref);
+                defaultModels.putIfAbsent("plan", ref);
+                defaultModels.putIfAbsent("act", ref);
+            }
+        }
+        if (agentModelBindings == null) {
+            agentModelBindings = new HashMap<>();
+        }
+    }
+
     /**
      * 从 YAML 文件加载配置
      */

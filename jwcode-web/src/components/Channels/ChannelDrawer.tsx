@@ -25,7 +25,7 @@ export function ChannelDrawer({ onClose }: { onClose: () => void }) {
     <div className="fixed inset-0 z-50 flex justify-end bg-black/50 backdrop-blur-sm animate-fade-in" onClick={onClose}>
       <div className="w-[440px] bg-dark-surface h-full overflow-y-auto flex flex-col border-l border-dark-border" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between px-6 py-4 border-b border-dark-border">
-          <h2 className="font-semibold text-dark-text">{editing ? '编辑渠道' : '新建渠道'}</h2>
+          <h2 className="font-semibold text-dark-text">{editing ? '编辑频道' : '新建频道'}</h2>
           <button onClick={onClose} className="p-1 rounded-lg text-dark-muted hover:text-dark-text hover:bg-dark-hover transition-colors">
             <X className="w-5 h-5" />
           </button>
@@ -36,14 +36,14 @@ export function ChannelDrawer({ onClose }: { onClose: () => void }) {
 
           {/* 基础信息 */}
           <Section title="基础信息">
-            <Field label="渠道名称" required>
+            <Field label="频道名称" required>
               <input value={form.name} onChange={e => upd('name', e.target.value)} placeholder="例如：研发群机器人" className={INPUT} />
             </Field>
-            <Field label="渠道类型">
+            <Field label="频道类型">
               <select value={form.type} onChange={e => upd('type', e.target.value as ChannelType)} className={INPUT} disabled={!!editing}>
                 {(Object.keys(CHANNEL_LABELS) as ChannelType[]).map(t => <option key={t} value={t}>{CHANNEL_LABELS[t]}</option>)}
               </select>
-              {editing && <Hint>渠道类型创建后不可修改</Hint>}
+              {editing && <Hint>频道类型创建后不可修改</Hint>}
             </Field>
           </Section>
 
@@ -70,7 +70,7 @@ export function ChannelDrawer({ onClose }: { onClose: () => void }) {
 
           <div className="flex items-center justify-between rounded-lg border border-dark-border px-3 py-2.5">
             <div>
-              <p className="text-sm text-dark-text">启用渠道</p>
+              <p className="text-sm text-dark-text">启用频道</p>
               <p className="text-xs text-dark-muted">关闭后停止收发消息</p>
             </div>
             <Toggle checked={form.enabled} onChange={v => upd('enabled', v)} />

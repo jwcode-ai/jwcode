@@ -3303,10 +3303,10 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                 }
                 
                 @Override
-                public void onStepComplete(String stepName, String result) {
+                public void onStepComplete(String stepName, String result, boolean success) {
                     String json = String.format(
-                        "{\"step\":\"%s\",\"result\":\"%s\",\"status\":\"complete\"}",
-                        escapeJson(stepName), escapeJson(result)
+                        "{\"step\":\"%s\",\"result\":\"%s\",\"status\":\"%s\"}",
+                        escapeJson(stepName), escapeJson(result), success ? "success" : "error"
                     );
                     sendMessage(querySessionId, MessageType.STEP_COMPLETE, json);
                     WebSocketLogBroadcaster.getInstance().broadcast(
@@ -3514,7 +3514,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
      */
     private void sendStepComplete(WebSocket conn, String stepName, String result) {
         String json = String.format(
-            "{\"step\":\"%s\",\"result\":\"%s\",\"status\":\"complete\"}",
+            "{\"step\":\"%s\",\"result\":\"%s\"}",
             escapeJson(stepName), escapeJson(result)
         );
         sendMessage(conn, MessageType.STEP_COMPLETE, json);

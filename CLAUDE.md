@@ -90,6 +90,109 @@ default-provider: deepseek
 
 **Key files:** `jwcode-core/.../llm/` -- AbstractHttpLLMService, ServiceConfig, ServiceRegistry, ServiceProvider, OpenAILLMService, OpenAIServiceProvider, AnthropicMessageConverter, AnthropicLLMService, AnthropicServiceProvider
 
+## Model Binding System (v3.2)
+
+**Architecture:** 三级优先级模型选择 + 按 ModelRef 缓存 LLMService：
+
+```
+                    ┌─────────────────────────────┐
+                    │      ModelResolver          │
+                    │  resolveForAgent(agentId,   │
+                    │    executionMode)            │
+                    └──────────┬──────────────────┘
+                               │
+          ┌────────────────────┼────────────────────┐
+          ▼                    ▼                    ▼
+   Agent 指定模型       模式默认模型          全局默认模型
+  (mode=specified)    (plan/act default)    (global default)
+          │                    │                    │
+          └────────────┬───────┘────────────────────┘
+                       ▼
+              LLMFactory.getLLMService(modelRef)
+                       │
+              ┌────────┴────────┐
+              ▼                 ▼
+      LLMService[Map]    LLMService[Map]
+       (per ModelRef       (per ModelRef
+         cache)              cache)
+```
+
+**Config YAML format (新增字段):**
+```yaml
+providers:
+  deepseek:
+    # ... existing provider config ...
+    models:
+      - id: deepseek-chat
+        max-tokens: 8192
+
+# 三级默认模型（全局/Plan/Act），格式: "provider:modelId"
+default-models:
+  global: "deepseek:deepseek-chat"
+  plan: "deepseek:deepseek-chat"
+  act: "deepseek:deepseek-chat"
+
+# Agent 级模型绑定（可选）
+agent-model-bindings:
+  orchestrator:
+    mode: specified          # "mode-default" | "specified"
+    model-ref: "deepseek:deepseek-chat"
+  coder:
+    mode: mode-default
+```
+
+**Selection priority:**
+| Priority | Level | Description |
+|----------|-------|-------------|
+| 1 (highest) | Agent specified | Agent 的 `model-binding.mode=specified` + `model-ref` |
+| 2 | Mode default | 当前执行模式（Plan/Act）的默认模型 |
+| 3 (fallback) | Global default | 全局默认模型，模式默认或 Agent 指定不可用时的最终回退 |
+
+**Fallback chain:**
+1. Agent 指定模型不可用 → 尝试模式默认模型 → 尝试全局默认模型
+2. 模式默认不可用 → 尝试全局默认模型
+3. 全局默认不可用 → 返回错误，要求用户重新配置
+4. 删除/禁用默认模型 → API 拒绝（返回 400）
+
+**Key classes:**
+| Class | File | Purpose |
+|-------|------|---------|
+| `ModelResolver` | `llm/ModelResolver.java` | 按 agentId + executionMode 解析模型；validate model availability (provider/key/enabled) |
+| `ResolvedModel` | `llm/ResolvedModel.java` | 解析结果：modelRef, usable, fallback, fallbackReason, error |
+| `AgentModelBinding` | `config/JwcodeConfig.java` (inner) | Agent 模型绑定配置：mode, modelRef |
+| `LLMFactory` | `llm/LLMFactory.java` | 改爲 `Map<String,LLMService>` 按 ModelRef 缓存；新增 `getLLMService(modelRef)` |
+
+**How the resolution flows at runtime:**
+```
+StreamingWebSocketHandler (on user message)
+  → PlanModeManager.isPlanMode() → executionMode = "plan" | "act"
+  → Session.getCurrentAgentId() → agentId
+  → LLMFactory.getModelResolver().resolveForAgent(agentId, executionMode)
+    → check agent-model-bindings → check default-models.{plan|act} → check default-models.global
+    → returns ResolvedModel (with fallback info)
+  → LLMFactory.createQueryEngine(session, toolRegistry, toolExecutor, agentRegistry, modelRef)
+    → LLMFactory.getLLMService(modelRef) → cached or create new LLMService
+    → LLMQueryEngine uses the resolved LLMService
+```
+
+**REST API:**
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `GET /api/models` | GET | 返回 `isGlobalDefault`, `isPlanDefault`, `isActDefault` 标记 |
+| `POST /api/models/defaults` | POST | 设置默认模型 `{ "global": "p:m", "plan": "p:m", "act": "p:m" }` |
+| `POST /api/models/delete` | POST | 拒绝删除默认模型（返回 400） |
+| `POST /api/models/toggle` | POST | 拒绝禁用默认模型（返回 400） |
+| `GET /api/agents` | GET | 返回 `modelBinding` + `effectivePlanModel`/`effectiveActModel`（含 fallback 状态） |
+| `POST /api/agents/{id}/model` | POST | 设置 Agent 模型绑定 `{ "mode": "specified", "modelRef": "p:m" }` |
+
+**Frontend components:**
+| Component | File | Purpose |
+|-----------|------|---------|
+| `ModelsView` | `components/Models/ModelsView.tsx` | 模型行显示三色默认徽章（全局绿/Plan蓝/Act黄）及 G/P/A 快速设置按钮 |
+| `AgentsView` | `components/Agents/AgentsView.tsx` | Agent 模型选择器：跟随默认/指定模型下拉、Plan/Act 生效模型及降级警示 |
+
+**Backward compatibility:** 旧 config.yaml 不含 `default-models` 或 `agent-model-bindings` 时，`ensureDefaultsInitialized()` 自动从 `default-provider` 第一个启用模型初始化三个默认值。配置保存时自动补齐。
+
 
 **Four-layer Harness Engineering (v3.2):**
 - L4 Observability: CostTracker, ObservationPipeline, Doctor, analytics

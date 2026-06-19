@@ -13,6 +13,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.List;
 import java.util.logging.Logger;
 
@@ -135,11 +136,17 @@ public class FilesHandler implements HttpHandler {
             if ("GET".equalsIgnoreCase(method)) {
                 if (path.equals("/api/files/read")) {
                     handleReadFile(exchange);
+                } else if (path.equals("/api/files/download")) {
+                    handleDownload(exchange);
                 } else {
                     handleListFiles(exchange);
                 }
             } else if ("POST".equalsIgnoreCase(method)) {
-                handleCreateFile(exchange);
+                if (path.equals("/api/files/upload")) {
+                    handleUpload(exchange);
+                } else {
+                    handleCreateFile(exchange);
+                }
             } else if ("PUT".equalsIgnoreCase(method)) {
                 if (path.equals("/api/files/write")) {
                     handleWriteFile(exchange);
@@ -266,6 +273,84 @@ public class FilesHandler implements HttpHandler {
         } catch (Exception e) {
             sendError(exchange, 500, "Failed to delete file: " + e.getMessage());
         }
+    }
+
+    /**
+     * 文件下载：以二进制流返回指定文件，浏览器触发下载。
+     * 支持任意二进制文件（图片、压缩包等）。
+     */
+    private void handleDownload(HttpExchange exchange) throws IOException {
+        String filePath = getQueryParam(exchange, "path");
+        if (filePath == null || filePath.isEmpty()) {
+            sendError(exchange, 400, "Missing path parameter");
+            return;
+        }
+
+        Path resolved = resolveAndValidate(filePath);
+        if (!Files.exists(resolved) || !Files.isRegularFile(resolved)) {
+            sendError(exchange, 404, "File not found");
+            return;
+        }
+
+        byte[] bytes = Files.readAllBytes(resolved);
+        String fileName = resolved.getFileName().toString();
+        String contentType = Files.probeContentType(resolved);
+        if (contentType == null) contentType = "application/octet-stream";
+
+        exchange.getResponseHeaders().set("Content-Type", contentType);
+        exchange.getResponseHeaders().set("Content-Disposition",
+            "attachment; filename=\"" + fileName.replace("\"", "") + "\"");
+        exchange.sendResponseHeaders(200, bytes.length);
+        try (OutputStream os = exchange.getResponseBody()) {
+            os.write(bytes);
+        }
+    }
+
+    /**
+     * 文件上传：接收 JSON {path, content, base64}，写入工作区。
+     * base64=true 时 content 为 base64 编码（支持二进制文件），否则按 UTF-8 文本处理。
+     */
+    private void handleUpload(HttpExchange exchange) throws IOException {
+        ObjectNode input = parseBody(exchange);
+        if (input == null || !input.hasNonNull("path")) {
+            sendError(exchange, 400, "Missing path");
+            return;
+        }
+
+        String filePath = input.get("path").asText();
+        String content = input.hasNonNull("content") ? input.get("content").asText("") : "";
+        boolean base64 = input.hasNonNull("base64") && input.get("base64").asBoolean(false);
+
+        Path resolved = resolveAndValidate(filePath);
+        try {
+            Files.createDirectories(resolved.getParent());
+            byte[] data = base64
+                ? Base64.getDecoder().decode(content)
+                : content.getBytes(StandardCharsets.UTF_8);
+            Files.write(resolved, data);
+
+            ObjectNode payload = objectMapper.createObjectNode();
+            payload.put("path", resolved.toString());
+            payload.put("size", data.length);
+            sendSuccess(exchange, 201, payload);
+        } catch (IllegalArgumentException e) {
+            sendError(exchange, 400, "Invalid base64 content: " + e.getMessage());
+        } catch (Exception e) {
+            sendError(exchange, 500, "Failed to upload file: " + e.getMessage());
+        }
+    }
+
+    /** 从 query string 中提取指定参数（URL 解码），找不到返回 null。 */
+    private String getQueryParam(HttpExchange exchange, String key) {
+        String query = exchange.getRequestURI().getQuery();
+        if (query == null) return null;
+        for (String part : query.split("&")) {
+            int idx = part.indexOf('=');
+            if (idx > 0 && key.equals(part.substring(0, idx))) {
+                return java.net.URLDecoder.decode(part.substring(idx + 1), StandardCharsets.UTF_8);
+            }
+        }
+        return null;
     }
 
     private List<ObjectNode> listFiles(Path dirPath) {

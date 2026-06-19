@@ -1,11 +1,11 @@
-﻿import { apiClient } from './client';
+﻿import { apiClient, buildApiUrl } from './client';
 import type { ApiResponse } from './client';
 import type {
   Model, Tool, Skill, Agent, FileNode, Session,
   Task, CreateTaskInput, UpdateTaskInput,
   ObservabilitySummary, CostData, TraceRunSummary, TraceRunDetail, PaginatedEvents,
   HookRule, HookRuleFormData, HookDryRunRequest, HookDryRunResult,
-  HookExecutionLog, HookStats, HookEventCategory, HookAgentInfo,
+  HookStats, HookEventCategory, HookAgentInfo,
   Channel, ChannelFormData
 } from '../../types';
 
@@ -41,6 +41,9 @@ export const api = {
         apiClient.post<{ provider: string; modelId: string; removed: boolean }>('/api/models/delete', { provider, modelId }),
     test: (id: string) => apiClient.post<{ success: boolean; message: string }>(`/api/models/${id}/test`),
     toggle: (provider: string, modelId: string) => apiClient.post<{ provider: string; modelId: string; enabled: boolean }>('/api/models/toggle', { provider, modelId }),
+    /** 设置默认模型（全局/Plan/Act） */
+    setDefaults: (defaults: { global?: string; plan?: string; act?: string }) =>
+        apiClient.post<{ defaults: Record<string, string> }>('/api/models/defaults', defaults),
   },
 
   // Tool related
@@ -55,8 +58,10 @@ export const api = {
   skills: {
     list: () => apiClient.get<Skill[]>('/api/skills'),
     get: (id: string) => apiClient.get<Skill>(`/api/skills/${id}`),
+    create: (data: Partial<Skill> & { id: string }) => apiClient.post<Skill>('/api/skills', data),
     update: (id: string, data: Partial<Skill>) => apiClient.put<Skill>(`/api/skills/${id}`, data),
     toggle: (id: string, enabled: boolean) => apiClient.post<void>(`/api/skills/${id}/toggle`, { enabled }),
+    import: (data: { fileName: string; content: string }) => apiClient.post<Skill>('/api/skills/import', data),
   },
 
   // Agent related
@@ -67,6 +72,11 @@ export const api = {
     update: (id: string, data: Partial<Agent>) => apiClient.put<Agent>(`/api/agents/${id}`, data),
     delete: (id: string) => apiClient.delete<void>(`/api/agents/${id}`),
     setActive: (id: string) => apiClient.post<void>(`/api/agents/${id}/activate`),
+    toggle: (id: string, enabled: boolean) =>
+        apiClient.post<{ agentId: string; enabled: boolean; instanceCount: number; state: Agent['state'] }>(`/api/agents/${id}/toggle`, { enabled }),
+    /** 设置 Agent 的模型绑定 */
+    setModelBinding: (agentId: string, data: { mode: 'mode-default' | 'specified'; modelRef?: string }) =>
+        apiClient.post<{ agentId: string; mode: string; modelRef?: string }>(`/api/agents/${agentId}/model`, data),
   },
 
   // File related
@@ -76,6 +86,43 @@ export const api = {
     create: (path: string, content: string) => apiClient.post<void>('/api/files', { path, content }),
     update: (path: string, content: string) => apiClient.put<void>('/api/files/write', { path, content }),
     delete: (path: string) => apiClient.delete<void>(`/api/files?path=${encodeURIComponent(path)}`),
+    /** 下载文件：以二进制流拉取并触发浏览器下载 */
+    download: async (path: string): Promise<ApiResponse<void>> => {
+      try {
+        const headers: Record<string, string> = {};
+        const token = localStorage.getItem('auth_token');
+        if (token) headers.Authorization = `Bearer ${token}`;
+        const res = await fetch(buildApiUrl(`/api/files/download?path=${encodeURIComponent(path)}`), { headers });
+        if (!res.ok) {
+          let msg = `HTTP ${res.status}`;
+          try { const j = await res.json(); if (j?.error) msg = j.error; } catch { /* ignore */ }
+          return { success: false, error: msg };
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = path.split(/[\\/]/).pop() || 'download';
+        a.click();
+        URL.revokeObjectURL(url);
+        return { success: true };
+      } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : 'Download failed' };
+      }
+    },
+    /** 上传文件：读取为 base64 后 POST，支持二进制 */
+    upload: async (file: File, targetPath: string): Promise<ApiResponse<{ path: string; size: number }>> => {
+      try {
+        const base64 = await readFileAsBase64(file);
+        return apiClient.post<{ path: string; size: number }>('/api/files/upload', {
+          path: targetPath,
+          content: base64,
+          base64: true,
+        });
+      } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : 'Upload failed' };
+      }
+    },
   },
 
   // Session related
@@ -159,16 +206,11 @@ export const api = {
     batchToggle: (names: string[], enabled: boolean) => apiClient.post<void>('/api/hooks/batch-toggle', { names, enabled }),
     dryRun: (data: HookDryRunRequest) => apiClient.post<HookDryRunResult>('/api/hooks/dry-run', data),
     stats: () => apiClient.get<HookStats>('/api/hooks/stats'),
-    logs: () => apiClient.get<HookExecutionLog[]>('/api/hooks/logs'),
     events: () => apiClient.get<HookEventCategory[]>('/api/hooks/events'),
     agents: () => apiClient.get<HookAgentInfo[]>('/api/hooks/agents'),
     export: () => apiClient.get<{version: string; hooks: HookRule[]; lifecycleMappings: Record<string,string>}>('/api/hooks/export'),
     import: (data: {hooks: HookRule[]; lifecycleMappings?: Record<string,string>; mergeMode?: string}) =>
       apiClient.post<{status: string; reloaded: boolean; count: number}>('/api/hooks/import', data),
-    lifecycleMappings: {
-      get: () => apiClient.get<Record<string, string>>('/api/hooks/lifecycle-mappings'),
-      save: (mappings: Record<string, string>) => apiClient.put<void>('/api/hooks/lifecycle-mappings', mappings),
-    },
   },
 
   // Channel management (WeChat / Feishu / DingTalk ...)
@@ -186,5 +228,19 @@ export const api = {
     },
   },
 };
+
+/** 读取 File 为 base64 字符串（去掉 data URL 前缀），支持二进制文件上传 */
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      const commaIdx = result.indexOf(',');
+      resolve(commaIdx >= 0 ? result.slice(commaIdx + 1) : result);
+    };
+    reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
+    reader.readAsDataURL(file);
+  });
+}
 
 export default api;

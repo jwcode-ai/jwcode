@@ -101,7 +101,7 @@ public class ChannelMessageDispatcher {
                     @Override
                     public void onContentChunk(String chunk) { contentBuf.append(chunk); }
                     @Override
-                    public void onStepComplete(String name, String result) {}
+                    public void onStepComplete(String name, String result, boolean success) {}
                     @Override
                     public void onStepThinking(String name, String thought) {}
                     @Override

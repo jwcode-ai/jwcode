@@ -28,7 +28,6 @@ const SessionTabs = lazy(() => import('./components/Chat/SessionTabs').then(m =>
 const SessionGrid = lazy(() => import('./components/Chat/SessionGrid').then(m => ({ default: m.SessionGrid })));
 const SettingsPanel = lazy(() => import('./components/Settings/SettingsPanel').then(m => ({ default: m.SettingsPanel })));
 const LogsPanel = lazy(() => import('./components/Logs/LogsPanel').then(m => ({ default: m.LogsPanel })));
-const ObservabilityView = lazy(() => import('./components/Observability/ObservabilityView').then(m => ({ default: m.ObservabilityView })));
 
 const HookApprovalModal = lazy(() => import('./components/Hook/HookApprovalModal').then(m => ({ default: m.HookApprovalModal })));
 const HookConfigView = lazy(() => import('./components/Hook/HookConfigView').then(m => ({ default: m.HookConfigView })));
@@ -58,7 +57,6 @@ const TAB_KEYS: Record<string, string> = {
   hooks: 'nav.hooks',
   settings: 'nav.settings',
   logs: 'nav.logs',
-  observability: 'nav.observability',
 };
 
 const TABS: Tab[] = [
@@ -70,10 +68,9 @@ const TABS: Tab[] = [
   { id: 'skills', title: '技能', icon: 'Target' },
   { id: 'agents', title: 'Agents', icon: 'Users' },
   { id: 'hooks', title: 'Hooks', icon: 'Shield' },
-  { id: 'channels', title: '渠道', icon: 'MessageCircle' },
+  { id: 'channels', title: '频道', icon: 'MessageCircle' },
   { id: 'settings', title: '设置', icon: 'Settings' },
   { id: 'logs', title: '日志', icon: 'ScrollText' },
-  { id: 'observability', title: '监控', icon: 'Activity' },
 ];
 
 const ICON_MAP: Record<string, LucideIcon> = {
@@ -793,8 +790,6 @@ function App() {
         return <SettingsPanel onNavigate={handleTabChange} />;
       case 'logs':
         return <LogsPanel logs={logs} onClear={handleClearLogs} />;
-      case 'observability':
-        return <ObservabilityView />;
       default:
         return null;
     }

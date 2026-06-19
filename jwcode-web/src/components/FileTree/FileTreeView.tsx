@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import Editor from '@monaco-editor/react';
-import { FolderTree, Folder, File, ChevronRight, ChevronDown, RefreshCw, Home, Search, Save, X } from 'lucide-react';
+import { FolderTree, Folder, File, ChevronRight, ChevronDown, RefreshCw, Home, Search, Save, X, Upload, Download } from 'lucide-react';
 import type { FileNode } from '../../types';
 import { api } from '../../services/api';
 import { toast } from '../../stores/toastStore';
@@ -29,6 +29,9 @@ export function FileTreeView() {
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [selectedDir, setSelectedDir] = useState<string>('');
+  const uploadInputRef = useRef<HTMLInputElement>(null);
 
   // Load file content when selected
   useEffect(() => {
@@ -128,21 +131,60 @@ export function FileTreeView() {
     setOriginalContent('');
   };
 
+  const handleDownload = useCallback(async (filePath: string) => {
+    const result = await api.files.download(filePath);
+    if (!result.success) {
+      toast.error(result.error || '下载失败');
+    } else {
+      toast.success('已开始下载');
+    }
+  }, []);
+
+  const handleUploadClick = () => uploadInputRef.current?.click();
+
+  const handleFiles = useCallback(async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return;
+    // 上传目标目录：选中的目录 > 选中文件所在目录 > 工作区根
+    const dir = selectedDir || (selectedFile ? selectedFile.replace(/[\\/][^\\/]+$/, '') : '');
+    setUploading(true);
+    let ok = 0, fail = 0;
+    for (const file of Array.from(fileList)) {
+      const targetPath = dir ? `${dir}/${file.name}` : file.name;
+      const result = await api.files.upload(file, targetPath);
+      if (result.success) ok++; else fail++;
+    }
+    setUploading(false);
+    if (ok > 0) toast.success(`已上传 ${ok} 个文件`);
+    if (fail > 0) toast.error(`${fail} 个文件上传失败`);
+    await loadFiles();
+  }, [selectedDir, selectedFile]);
+
   const isModified = fileContent !== originalContent;
 
   const renderNode = (node: FileNode, depth = 0) => {
     const isDir = node.type === 'directory';
     const isSel = selectedFile === node.path;
+    const isSelDir = selectedDir === node.path;
     return (
       <div key={node.id}>
         <div
-          className={`flex items-center gap-1 px-2 py-0.5 cursor-pointer rounded text-xs transition-colors ${isSel ? 'bg-accent-blue/20 text-accent-blue' : 'hover:bg-dark-hover'}`}
+          className={`group flex items-center gap-1 px-2 py-0.5 cursor-pointer rounded text-xs transition-colors ${isSel ? 'bg-accent-blue/20 text-accent-blue' : isSelDir ? 'bg-accent-blue/10' : 'hover:bg-dark-hover'}`}
           style={{ paddingLeft: `${depth * 14 + 6}px` }}
-          onClick={() => isDir ? toggleFolder(node.id) : setSelectedFile(node.path)}
+          onClick={() => isDir ? (setSelectedDir(node.path), toggleFolder(node.id)) : setSelectedFile(node.path)}
+          title={isDir ? '点击设为上传目录并展开' : node.path}
         >
           {isDir && <span className="text-dark-muted shrink-0">{node.expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</span>}
           {isDir ? <Folder size={12} className="text-accent-yellow shrink-0" /> : <span className="w-3" />}
-          <span className="truncate">{node.name}</span>
+          <span className="truncate flex-1">{node.name}</span>
+          {!isDir && (
+            <button
+              onClick={(e) => { e.stopPropagation(); void handleDownload(node.path); }}
+              className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-dark-border text-dark-muted hover:text-dark-text shrink-0"
+              title="下载"
+            >
+              <Download size={11} />
+            </button>
+          )}
         </div>
         {isDir && node.expanded && node.children?.map(c => renderNode(c, depth + 1))}
       </div>
@@ -158,6 +200,9 @@ export function FileTreeView() {
         <div className="flex items-center justify-between px-3 py-2 border-b border-dark-border">
           <h2 className="text-xs font-semibold flex items-center gap-1.5"><FolderTree size={14} />文件浏览器</h2>
           <div className="flex items-center gap-0.5">
+            <button onClick={handleUploadClick} disabled={uploading} className="p-1 rounded hover:bg-dark-hover disabled:opacity-50" title={selectedDir ? `上传到 ${selectedDir}` : '上传到工作区根目录'}>
+              <Upload size={12} className={uploading ? 'animate-pulse' : ''} />
+            </button>
             <button onClick={() => loadFiles()} disabled={loading} className="p-1 rounded hover:bg-dark-hover" title="刷新"><RefreshCw size={12} className={loading ? 'animate-spin' : ''} /></button>
             <button onClick={() => { setFiles(files.map(f => ({ ...f, expanded: false }))); setSelectedFile(null); }} className="p-1 rounded hover:bg-dark-hover" title="折叠"><Home size={12} /></button>
           </div>
@@ -169,6 +214,13 @@ export function FileTreeView() {
           </div>
         </div>
         <div className="flex-1 overflow-y-auto py-1">{filteredFiles.map(n => renderNode(n))}</div>
+        <input
+          ref={uploadInputRef}
+          type="file"
+          multiple
+          className="hidden"
+          onChange={(e) => { void handleFiles(e.target.files); e.currentTarget.value = ''; }}
+        />
       </div>
 
       {/* Editor Panel */}
@@ -189,6 +241,7 @@ export function FileTreeView() {
                 >
                   <Save size={10} />{saving ? '保存中...' : '保存'}
                 </button>
+                <button onClick={() => void handleDownload(selectedFile)} className="p-1 rounded hover:bg-dark-hover" title="下载"><Download size={12} /></button>
                 <button onClick={handleCloseFile} className="p-1 rounded hover:bg-dark-hover" title="关闭"><X size={12} /></button>
               </div>
             </div>

@@ -6,8 +6,8 @@ describe('terminalStore', () => {
     useTerminalStore.setState({
       isOpen: false,
       status: 'idle',
-      ttydPort: null,
-      ttydWsUrl: null,
+      port: null,
+      wsUrl: null,
       errorMessage: null,
     });
   });
@@ -16,7 +16,7 @@ describe('terminalStore', () => {
     const state = useTerminalStore.getState();
     expect(state.status).toBe('idle');
     expect(state.isOpen).toBe(false);
-    expect(state.ttydPort).toBeNull();
+    expect(state.port).toBeNull();
   });
 
   it('openTerminal sets isOpen to true', () => {
@@ -49,8 +49,8 @@ describe('terminalStore', () => {
     useTerminalStore.getState().setRunning(8090, 'ws://127.0.0.1:8090/ws');
     const s = useTerminalStore.getState();
     expect(s.status).toBe('running');
-    expect(s.ttydPort).toBe(8090);
-    expect(s.ttydWsUrl).toBe('ws://127.0.0.1:8090/ws');
+    expect(s.port).toBe(8090);
+    expect(s.wsUrl).toBe('ws://127.0.0.1:8090/ws');
   });
 
   it('setError stores error message and status', () => {
@@ -65,8 +65,8 @@ describe('terminalStore', () => {
     useTerminalStore.getState().setIdle();
     const s = useTerminalStore.getState();
     expect(s.status).toBe('idle');
-    expect(s.ttydPort).toBeNull();
-    expect(s.ttydWsUrl).toBeNull();
+    expect(s.port).toBeNull();
+    expect(s.wsUrl).toBeNull();
   });
 
   it('setStarting clears previous error', () => {

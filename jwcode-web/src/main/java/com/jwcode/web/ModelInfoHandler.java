@@ -54,6 +54,8 @@ public class ModelInfoHandler implements HttpHandler {
                     handleDeleteModel(exchange);
                 } else if ("/api/models/update".equals(path)) {
                     handleUpdateModel(exchange);
+                } else if ("/api/models/defaults".equals(path)) {
+                    handleSetDefaults(exchange);
                 } else {
                     sendError(exchange, 404, "Not found: " + path);
                 }
@@ -83,16 +85,19 @@ public class ModelInfoHandler implements HttpHandler {
         }
         
         if (config != null && config.getProviders() != null) {
-            // 遍历所有 provider，收集所有模型的完整信息
+            config.ensureDefaultsInitialized();
+            String globalDefaultRef = config.getDefaultModelRef("global");
+            String planDefaultRef = config.getDefaultModelRef("plan");
+            String actDefaultRef = config.getDefaultModelRef("act");
             String defaultProviderName = config.getDefaultProviderName();
-            JwcodeConfig.ModelDefinition defaultModel = config.getDefaultModel();
-            
+
             for (Map.Entry<String, JwcodeConfig.ProviderConfig> entry : config.getProviders().entrySet()) {
                 String providerName = entry.getKey();
                 JwcodeConfig.ProviderConfig provider = entry.getValue();
-                
+
                 if (provider.getModels() != null) {
                     for (JwcodeConfig.ModelDefinition model : provider.getModels()) {
+                        String modelRef = providerName + ":" + model.getId();
                         Map<String, Object> modelInfo = new HashMap<>();
                         modelInfo.put("id", model.getId());
                         modelInfo.put("name", model.getName());
@@ -100,13 +105,15 @@ public class ModelInfoHandler implements HttpHandler {
                         modelInfo.put("maxTokens", model.getMaxTokens());
                         modelInfo.put("temperature", model.getTemperature());
                         modelInfo.put("contextWindow", model.getContextWindow());
-                        modelInfo.put("isDefault", providerName.equals(defaultProviderName) 
-                            && defaultModel != null && model.getId().equals(defaultModel.getId()));
+                        modelInfo.put("isDefault", modelRef.equals(globalDefaultRef));
+                        modelInfo.put("isGlobalDefault", modelRef.equals(globalDefaultRef));
+                        modelInfo.put("isPlanDefault", modelRef.equals(planDefaultRef));
+                        modelInfo.put("isActDefault", modelRef.equals(actDefaultRef));
                         modelInfo.put("provider", providerName);
                         modelInfo.put("apiType", provider.getApiType() != null ? provider.getApiType() : "openai-completions");
                         modelInfo.put("status", model.isEnabled() ? "online" : "offline");
                         modelInfo.put("priority", model.getPriority());
-                        
+
                         if (model.getCost() != null) {
                             Map<String, Object> costInfo = new HashMap<>();
                             costInfo.put("input", model.getCost().getInput());
@@ -116,11 +123,11 @@ public class ModelInfoHandler implements HttpHandler {
                             modelInfo.put("cost", costInfo);
                             modelInfo.put("price", costInfo);
                         }
-                        
+
                         modelInfo.put("load", 0);
                         modelInfo.put("maxLoad", 100);
                         modelInfo.put("tokens", 0);
-                        
+
                         models.add(modelInfo);
                     }
                 }
@@ -320,8 +327,15 @@ public class ModelInfoHandler implements HttpHandler {
             return;
         }
 
+        // Prevent disabling a default model
+        boolean currentlyEnabled = target.isEnabled();
+        if (currentlyEnabled && isModelAnyDefault(config, providerName, modelId)) {
+            sendError(exchange, 400, "Cannot disable a default model. Please set a different default model first.");
+            return;
+        }
+
         // Toggle enabled state
-        boolean newEnabled = !target.isEnabled();
+        boolean newEnabled = !currentlyEnabled;
         target.setEnabled(newEnabled);
 
         // Save config
@@ -401,6 +415,12 @@ public class ModelInfoHandler implements HttpHandler {
         }
         if (target == null) {
             sendError(exchange, 404, "Model '" + modelId + "' not found in provider '" + providerName + "'");
+            return;
+        }
+
+        // Prevent deleting a default model
+        if (isModelAnyDefault(config, providerName, modelId)) {
+            sendError(exchange, 400, "Cannot delete a default model. Please set a different default model first.");
             return;
         }
 
@@ -558,6 +578,95 @@ public class ModelInfoHandler implements HttpHandler {
         result.put("modelId", modelId);
         result.put("model", modelData);
         sendSuccess(exchange, 200, result);
+    }
+
+    /**
+     * 设置默认模型 POST /api/models/defaults
+     * 请求体: { "global": "provider:modelId", "plan": "provider:modelId", "act": "provider:modelId" }
+     * 所有字段可选，只更新提供的字段。
+     */
+    @SuppressWarnings("unchecked")
+    private void handleSetDefaults(HttpExchange exchange) throws IOException {
+        InputStream is = exchange.getRequestBody();
+        String body = new String(is.readAllBytes(), StandardCharsets.UTF_8);
+
+        Map<String, Object> requestMap;
+        try {
+            requestMap = mapper.readValue(body, Map.class);
+        } catch (Exception e) {
+            sendError(exchange, 400, "Invalid JSON: " + e.getMessage());
+            return;
+        }
+
+        YamlConfigLoader loader = YamlConfigLoader.getInstance();
+        JwcodeConfig config = loader.getConfig();
+        config.ensureDefaultsInitialized();
+
+        // Validate each provided modelRef
+        String[] modes = {"global", "plan", "act"};
+        for (String mode : modes) {
+            if (requestMap.containsKey(mode)) {
+                String modelRef = (String) requestMap.get(mode);
+                if (modelRef == null || modelRef.isBlank()) {
+                    sendError(exchange, 400, mode + " modelRef cannot be empty");
+                    return;
+                }
+                if (!validateModelRefExists(config, modelRef)) {
+                    sendError(exchange, 400, "Model '" + modelRef + "' not found in configuration for " + mode + " default");
+                    return;
+                }
+                config.getDefaultModels().put(mode, modelRef);
+            }
+        }
+
+        // Save config
+        try {
+            loader.saveConfig(config);
+            logger.info("Updated default models: " + config.getDefaultModels());
+        } catch (Exception e) {
+            sendError(exchange, 500, "Failed to save config: " + e.getMessage());
+            return;
+        }
+
+        // Hot-reload LLMFactory
+        try {
+            LLMFactory factory = LLMFactory.getGlobalInstance();
+            if (factory != null) {
+                Path userPath = loader.getUserConfigPath();
+                if (userPath != null) {
+                    factory.reloadConfig(userPath.toString());
+                }
+            }
+        } catch (Exception e) {
+            logger.warning("Failed to reload LLMFactory after defaults update: " + e.getMessage());
+        }
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("defaults", new HashMap<>(config.getDefaultModels()));
+        sendSuccess(exchange, 200, result);
+    }
+
+    /**
+     * 验证 ModelRef 对应的模型是否存在于配置中
+     */
+    private boolean validateModelRefExists(JwcodeConfig config, String modelRef) {
+        JwcodeConfig.ModelRefParts parts = JwcodeConfig.parseModelRef(modelRef);
+        if (parts == null) return false;
+        JwcodeConfig.ProviderConfig provider = config.getProvider(parts.getProvider());
+        if (provider == null) return false;
+        return provider.findModel(parts.getModelId()).isPresent();
+    }
+
+    /**
+     * 检查模型是否被设为任何默认（全局/Plan/Act）
+     */
+    private boolean isModelAnyDefault(JwcodeConfig config, String providerName, String modelId) {
+        config.ensureDefaultsInitialized();
+        String modelRef = providerName + ":" + modelId;
+        String globalRef = config.getDefaultModelRef("global");
+        String planRef = config.getDefaultModelRef("plan");
+        String actRef = config.getDefaultModelRef("act");
+        return modelRef.equals(globalRef) || modelRef.equals(planRef) || modelRef.equals(actRef);
     }
 
     private void sendSuccess(HttpExchange exchange, int statusCode, Object data) throws IOException {

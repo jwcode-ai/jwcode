@@ -8,7 +8,7 @@ interface ChannelsState {
   error: string | null;
   formOpen: boolean;
   editing: Channel | null;
-  qrChannel: Channel | null;   // 当前正在扫码登录的渠道
+  qrChannel: Channel | null;   // 当前正在扫码登录的频道
 
   load: () => Promise<void>;
   create: (data: ChannelFormData) => Promise<boolean>;

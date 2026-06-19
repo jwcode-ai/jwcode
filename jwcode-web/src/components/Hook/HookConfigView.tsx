@@ -1,39 +1,19 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useCallback } from 'react';
 import { useHooksStore } from '../../stores/hooksStore';
 import { HookRuleTable } from './HookRuleTable';
 import { HookRuleDrawer } from './HookRuleDrawer';
 import { HookStatsCards } from './HookStatsCards';
-import { HookLogsPanel } from './HookLogsPanel';
-import { LifecycleMappingPanel } from './LifecycleMappingPanel';
-import { Plus, Upload, Download, RefreshCw } from 'lucide-react';
+import { Download, Plus, RefreshCw, Upload, X } from 'lucide-react';
 
 export function HookConfigView() {
   const {
     rules, stats, events, agents, loading, error,
-    formOpen, logsExpanded,
-    loadAll, loadLogs, openForm, clearError,
-    setLogsExpanded,
+    formOpen, loadAll, openForm, clearError,
   } = useHooksStore();
-
-  const logsTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     loadAll();
   }, []);
-
-  // Poll logs only when panel is expanded
-  useEffect(() => {
-    if (logsExpanded) {
-      loadLogs();
-      logsTimerRef.current = setInterval(() => loadLogs(), 5000);
-      return () => {
-        if (logsTimerRef.current) clearInterval(logsTimerRef.current);
-      };
-    }
-    return () => {
-      if (logsTimerRef.current) clearInterval(logsTimerRef.current);
-    };
-  }, [logsExpanded]);
 
   const handleExport = useCallback(async () => {
     const { api } = await import('../../services/api');
@@ -60,7 +40,7 @@ export function HookConfigView() {
       try {
         const data = JSON.parse(text);
         const { api } = await import('../../services/api');
-        const mode = confirm('合并到现有配置？\n"确定"=合并 / "取消"=替换') ? 'merge' : 'replace';
+        const mode = confirm('合并到现有配置吗？\n"确定"=合并 / "取消"=替换') ? 'merge' : 'replace';
         const res = await api.hooks.import({ ...data, mergeMode: mode });
         if (res.success) {
           loadAll();
@@ -70,73 +50,76 @@ export function HookConfigView() {
       }
     };
     input.click();
-  }, []);
+  }, [loadAll]);
 
   return (
-    <div className="flex flex-col h-full p-4 gap-4 overflow-auto">
+    <div className="flex h-full flex-col bg-dark-bg text-dark-text">
       {/* Toolbar */}
-      <div className="flex items-center justify-between flex-shrink-0">
-        <h2 className="text-lg font-semibold text-gray-100">Hook 配置</h2>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-dark-border px-6 py-4">
+        <div>
+          <h2 className="text-base font-semibold text-dark-text">Hook 配置</h2>
+          <p className="mt-0.5 text-xs text-dark-muted">在工具执行、任务流转等生命周期事件上挂载拦截器，实现审批与自定义逻辑</p>
+        </div>
         <div className="flex items-center gap-2">
           <button
             onClick={loadAll}
-            className="p-2 hover:bg-gray-700 rounded text-gray-400 transition"
             title="刷新"
+            className="rounded-lg p-2 text-dark-muted transition-colors hover:bg-dark-hover hover:text-dark-text"
           >
-            <RefreshCw size={16} />
+            <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
           </button>
           <button
             onClick={handleImport}
-            className="flex items-center gap-1 px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 text-gray-200 rounded transition"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-dark-border bg-dark-surface px-3 py-2 text-sm text-dark-text transition-colors hover:bg-dark-hover"
           >
-            <Upload size={14} /> 导入
+            <Upload size={14} />
+            导入
           </button>
           <button
             onClick={handleExport}
-            className="flex items-center gap-1 px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 text-gray-200 rounded transition"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-dark-border bg-dark-surface px-3 py-2 text-sm text-dark-text transition-colors hover:bg-dark-hover"
           >
-            <Download size={14} /> 导出
+            <Download size={14} />
+            导出
           </button>
           <button
             onClick={() => openForm()}
-            className="flex items-center gap-1 px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 text-white rounded transition"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-accent-blue px-3 py-2 text-sm text-white transition-colors hover:bg-accent-blue/90"
           >
-            <Plus size={14} /> 添加规则
+            <Plus size={14} />
+            新增规则
           </button>
         </div>
       </div>
 
-      {/* Error banner */}
-      {error && (
-        <div className="bg-red-900/50 border border-red-700 text-red-200 px-4 py-2 rounded flex items-center justify-between">
-          <span>{error}</span>
-          <button onClick={clearError} className="text-red-400 hover:text-red-300">×</button>
-        </div>
-      )}
+      {/* Body */}
+      <div className="flex-1 overflow-auto px-6 py-4">
+        {error && (
+          <div className="mb-3 flex items-center justify-between rounded-lg border border-accent-red/40 bg-accent-red/10 px-4 py-2 text-sm text-accent-red">
+            <span>{error}</span>
+            <button onClick={clearError} className="text-accent-red/70 transition-colors hover:text-accent-red">
+              <X size={16} />
+            </button>
+          </div>
+        )}
 
-      {/* Stats */}
-      <HookStatsCards stats={stats} />
+        <HookStatsCards stats={stats} />
 
-      {/* Rule table */}
-      {loading ? (
-        <div className="flex-1 flex items-center justify-center text-gray-500">加载中...</div>
-      ) : (
-        <HookRuleTable
-          rules={rules}
-          onEdit={(rule) => openForm(rule)}
-        />
-      )}
+        <section className="mt-4 min-w-0 rounded-xl border border-dark-border bg-dark-surface p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-dark-text">规则列表</h3>
+            <span className="text-xs text-dark-muted">{rules.length} 条</span>
+          </div>
+          {loading && rules.length === 0 ? (
+            <div className="flex h-[520px] items-center justify-center text-dark-muted">加载中...</div>
+          ) : (
+            <div className="min-h-[520px]">
+              <HookRuleTable rules={rules} onEdit={(rule) => openForm(rule)} />
+            </div>
+          )}
+        </section>
+      </div>
 
-      {/* Lifecycle Mappings */}
-      <LifecycleMappingPanel events={events} agents={agents} />
-
-      {/* Logs */}
-      <HookLogsPanel
-        expanded={logsExpanded}
-        onToggle={() => setLogsExpanded(!logsExpanded)}
-      />
-
-      {/* Form Drawer */}
       {formOpen && <HookRuleDrawer events={events} agents={agents} />}
     </div>
   );

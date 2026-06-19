@@ -45,8 +45,7 @@
     "hooks": "Hooks",
     "agentFlow": "Agent Flow",
     "settings": "Settings",
-    "logs": "Logs",
-    "observability": "Observability"
+    "logs": "Logs"
   },
   "chat": {
     "newSession": "New Session",
@@ -277,8 +276,37 @@
   },
   "skills": {
     "title": "Skills Manager",
+    "list": "Skill List",
     "noSkills": "No skills available",
-    "loadFailed": "Failed to load skills"
+    "loadFailed": "Failed to load skills",
+    "loadFailedFallback": "Load failed",
+    "enable": "Enable",
+    "disable": "Disable",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "new": "New Skill",
+    "import": "Import",
+    "importTitle": "Import Skill",
+    "edit": "Edit",
+    "save": "Save",
+    "cancel": "Cancel",
+    "retry": "Retry",
+    "refresh": "Refresh",
+    "tags": "Tags",
+    "none": "None",
+    "source": "Source",
+    "localSkill": "Local skill",
+    "systemPrompt": "System Prompt",
+    "selectSkill": "Select a skill",
+    "fieldId": "ID",
+    "fieldName": "Name",
+    "fieldCategory": "Category",
+    "fieldTrigger": "Trigger",
+    "fieldTools": "Tools",
+    "description": "Description",
+    "saving": "Saving",
+    "chooseFile": "Choose skill file",
+    "importHint": "Supports `.skill.md` files."
   },
   "agents": {
     "title": "Agent Manager",

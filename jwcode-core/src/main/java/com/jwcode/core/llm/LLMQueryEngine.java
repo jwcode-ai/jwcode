@@ -296,7 +296,7 @@ public class LLMQueryEngine {
         void onStepStart(String stepName, String description);
         void onStepThinking(String stepName, String thought);
         void onStepAction(String stepName, String action);
-        void onStepComplete(String stepName, String result);
+        void onStepComplete(String stepName, String result, boolean success);
         
         void onToolResult(String toolName, String result, String toolCallId);
         
@@ -760,7 +760,7 @@ public class LLMQueryEngine {
                 }
             }
             logger.severe("[LLMQueryEngine] API error [" + response.getErrorCode() + "]: " + response.getErrorMessage());
-            triggerStepComplete("LLM查询", "API错误: " + response.getErrorMessage());
+            triggerStepComplete("LLM查询", "API错误: " + response.getErrorMessage(), false);
             return CompletableFuture.completedFuture(
                 QueryResult.error(response.getErrorMessage())
             );
@@ -892,7 +892,7 @@ public class LLMQueryEngine {
                 logger.info("[LLMQueryEngine] 检测到结束标记 " + FINISH_MARKER + "，结束对话");
                 // 【任务生命周期】检查任务是否全部完成
                 taskLifecycleManager.checkTaskCompletion(session);
-                triggerStepComplete("LLM查询", "完成回复");
+                triggerStepComplete("LLM查询", "完成回复", true);
                 return CompletableFuture.completedFuture(
                     QueryResult.success(assistantMessage)
                 );
@@ -914,7 +914,7 @@ public class LLMQueryEngine {
 
                 if (emptyResponseCount >= maxEmpty) {
                     logger.warning("[LLMQueryEngine] 空回复次数已达上限，强制结束对话");
-                    triggerStepComplete("LLM查询", "空回复过多，已自动结束");
+                    triggerStepComplete("LLM查询", "空回复过多，已自动结束", false);
                     return CompletableFuture.completedFuture(
                         QueryResult.error("对话无响应，已自动结束")
                     );
@@ -929,7 +929,7 @@ public class LLMQueryEngine {
 
                 if (consecutiveThinkingOnlyRounds >= MAX_CONSECUTIVE_THINKING_ONLY_ROUNDS) {
                     logger.warning("[LLMQueryEngine] 纯思考轮数已达上限，强制结束对话");
-                    triggerStepComplete("LLM查询", "模型持续思考但无行动，已自动终止");
+                    triggerStepComplete("LLM查询", "模型持续思考但无行动，已自动终止", false);
                     return CompletableFuture.completedFuture(
                         QueryResult.error("模型持续思考但无行动，已自动终止")
                     );
@@ -1060,7 +1060,7 @@ public class LLMQueryEngine {
                 }
             }
             logger.severe("[LLMQueryEngine] API error [" + response.getErrorCode() + "]: " + response.getErrorMessage());
-            triggerStepComplete("LLM查询", "API错误: " + response.getErrorMessage());
+            triggerStepComplete("LLM查询", "API错误: " + response.getErrorMessage(), false);
             return CompletableFuture.completedFuture(
                 QueryResult.error(response.getErrorMessage())
             );
@@ -1191,7 +1191,7 @@ public class LLMQueryEngine {
 
                 logger.info("[LLMQueryEngine] 检测到结束标记 " + FINISH_MARKER + "，结束对话");
 
-                triggerStepComplete("LLM查询", "完成回复");
+                triggerStepComplete("LLM查询", "完成回复", true);
                 return CompletableFuture.completedFuture(
                     QueryResult.success(assistantMessage)
                 );
@@ -1211,7 +1211,7 @@ public class LLMQueryEngine {
 
                 if (emptyResponseCount >= maxEmpty) {
                     logger.warning("[LLMQueryEngine] 空回复次数已达上限，强制结束对话");
-                    triggerStepComplete("LLM查询", "空回复过多，已自动结束");
+                    triggerStepComplete("LLM查询", "空回复过多，已自动结束", false);
                     return CompletableFuture.completedFuture(
                         QueryResult.error("对话无响应，已自动结束")
                     );
@@ -1226,7 +1226,7 @@ public class LLMQueryEngine {
 
                 if (consecutiveThinkingOnlyRounds >= MAX_CONSECUTIVE_THINKING_ONLY_ROUNDS) {
                     logger.warning("[LLMQueryEngine] 纯思考轮数已达上限，强制结束对话");
-                    triggerStepComplete("LLM查询", "模型持续思考但无行动，已自动终止");
+                    triggerStepComplete("LLM查询", "模型持续思考但无行动，已自动终止", false);
                     if (contentConsumer != null) {
                         contentConsumer.accept("\n\n---\n⚠️ **模型持续思考但无行动，已自动终止。**\n\n[FINISH]");
                     }
@@ -1281,7 +1281,7 @@ public class LLMQueryEngine {
                 result.getToolName(), result.getResult(), success, null, result.getToolCallId()));
             String resultPreview = truncate(result.getResult(), 100);
             pipeline.publish(new ObservationEvent.StepComplete("工具执行",
-                result.getToolName() + " → " + resultPreview));
+                result.getToolName() + " → " + resultPreview, success));
         });
 
         int toolIndex = 1;
@@ -1299,7 +1299,7 @@ public class LLMQueryEngine {
             Tool<?, ?, ?> tool = findTool(toolName);
             if (tool == null) {
                 logger.warning("[LLMQueryEngine] Tool not found: " + toolName + " [toolCallId=" + tc.getId() + "]");
-                pipeline.publish(new ObservationEvent.StepComplete("工具执行", "未找到工具: " + toolName));
+                pipeline.publish(new ObservationEvent.StepComplete("工具执行", "未找到工具: " + toolName, false));
                 streamingExec.submit(CompletableFuture.completedFuture(
                     new ToolExecutionResult(tc.getId(), toolName,
                         tc.getFunction().getArguments(), "Error: Tool not found: " + toolName)));
@@ -1410,8 +1410,8 @@ public class LLMQueryEngine {
     /**
      * 触发步骤完成回调
      */
-    private void triggerStepComplete(String stepName, String result) {
-        pipeline.publish(new ObservationEvent.StepComplete(stepName, result));
+    private void triggerStepComplete(String stepName, String result, boolean success) {
+        pipeline.publish(new ObservationEvent.StepComplete(stepName, result, success));
     }
     
     /**
@@ -1987,7 +1987,7 @@ public class LLMQueryEngine {
         // 3. Token budget exhausted check
         if (tokenBudget.isExhausted()) {
             logger.warning("[LLMQueryEngine] Token budget exhausted: " + tokenBudget);
-            triggerStepComplete("LLM查询", "Token 预算已耗尽");
+            triggerStepComplete("LLM查询", "Token 预算已耗尽", false);
             if (contentConsumer != null) {
                 contentConsumer.accept("\n\n---\n⚠️ **Token 预算已耗尽，任务被迫终止。**\n\n请使用 `/compact` 压缩上下文后重试，或开始新会话。\n\n[FINISH]");
             }
@@ -2006,7 +2006,7 @@ public class LLMQueryEngine {
         // 5. Iteration limit (backup safety net for TokenBudget)
         if (config.getMaxIterations() > 0 && iteration >= config.getMaxIterations()) {
             logger.warning("[LLMQueryEngine] Max iterations reached: " + config.getMaxIterations());
-            triggerStepComplete("LLM查询", "达到最大迭代次数限制");
+            triggerStepComplete("LLM查询", "达到最大迭代次数限制", false);
             return PreFlightResult.abort(CompletableFuture.completedFuture(
                 QueryResult.error("达到最大迭代次数限制")));
         }
@@ -2031,7 +2031,7 @@ public class LLMQueryEngine {
         if (consecutiveToolOnlyRounds >= toolOnlyThreshold) {
             logger.warning("[LLMQueryEngine] Stagnation: " + consecutiveToolOnlyRounds
                 + " consecutive tool-only rounds, force terminating");
-            triggerStepComplete("LLM查询", "检测到任务停滞（连续" + consecutiveToolOnlyRounds + "轮仅工具调用无进展）");
+            triggerStepComplete("LLM查询", "检测到任务停滞（连续" + consecutiveToolOnlyRounds + "轮仅工具调用无进展）", false);
             if (contentConsumer != null) {
                 contentConsumer.accept("\n\n---\n⚠️ **任务停滞：连续 " + consecutiveToolOnlyRounds + " 轮工具调用无进展，已自动终止。**\n\n[FINISH]");
             }
@@ -2042,7 +2042,7 @@ public class LLMQueryEngine {
         // 7. Thinking-only stagnation
         if (consecutiveThinkingOnlyRounds >= thinkingOnlyThreshold) {
             logger.warning("[LLMQueryEngine] Thinking-only stagnation: " + consecutiveThinkingOnlyRounds);
-            triggerStepComplete("LLM查询", "模型持续思考但无行动，已自动终止");
+            triggerStepComplete("LLM查询", "模型持续思考但无行动，已自动终止", false);
             if (contentConsumer != null) {
                 contentConsumer.accept("\n\n---\n⚠️ **模型持续思考但无行动，已自动终止。**\n\n[FINISH]");
             }
@@ -2053,7 +2053,7 @@ public class LLMQueryEngine {
         // 8. Consecutive failed tool rounds
         if (consecutiveFailedToolRounds >= failedToolThreshold) {
             logger.warning("[LLMQueryEngine] Consecutive failed tool rounds: " + consecutiveFailedToolRounds);
-            triggerStepComplete("LLM查询", "连续" + consecutiveFailedToolRounds + "轮工具调用全部失败，已自动终止");
+            triggerStepComplete("LLM查询", "连续" + consecutiveFailedToolRounds + "轮工具调用全部失败，已自动终止", false);
             if (contentConsumer != null) {
                 contentConsumer.accept("\n\n---\n⚠️ **连续" + consecutiveFailedToolRounds + "轮工具调用全部失败，已自动终止。**\n\n请检查工具配置或网络连接后重试。\n\n[FINISH]");
             }

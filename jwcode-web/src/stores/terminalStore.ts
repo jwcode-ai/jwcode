@@ -5,8 +5,8 @@ export type TerminalStatus = 'idle' | 'starting' | 'running' | 'stopping' | 'err
 interface TerminalState {
   isOpen: boolean;
   status: TerminalStatus;
-  ttydPort: number | null;
-  ttydWsUrl: string | null;
+  port: number | null;
+  wsUrl: string | null;
   errorMessage: string | null;
 
   openTerminal: () => void;
@@ -22,16 +22,16 @@ interface TerminalState {
 export const useTerminalStore = create<TerminalState>((set) => ({
   isOpen: false,
   status: 'idle',
-  ttydPort: null,
-  ttydWsUrl: null,
+  port: null,
+  wsUrl: null,
   errorMessage: null,
 
   openTerminal: () => set({ isOpen: true }),
   closeTerminal: () => set({ isOpen: false }),
   toggleTerminal: () => set((s) => ({ isOpen: !s.isOpen })),
   setStarting: () => set({ status: 'starting', errorMessage: null }),
-  setRunning: (port, wsUrl) => set({ status: 'running', ttydPort: port, ttydWsUrl: wsUrl }),
+  setRunning: (port, wsUrl) => set({ status: 'running', port, wsUrl }),
   setStopping: () => set({ status: 'stopping' }),
-  setIdle: () => set({ status: 'idle', ttydPort: null, ttydWsUrl: null, errorMessage: null }),
+  setIdle: () => set({ status: 'idle', port: null, wsUrl: null, errorMessage: null }),
   setError: (message) => set({ status: 'error', errorMessage: message }),
 }));

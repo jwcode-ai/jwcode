@@ -15,15 +15,15 @@ export function ChannelConfigView() {
       {/* Toolbar */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-dark-border shrink-0">
         <div>
-          <h2 className="font-semibold text-base">渠道管理</h2>
-          <p className="text-xs text-dark-muted mt-0.5">接入微信、飞书、钉钉，用户可通过渠道发送任务并实时接收进度与结果</p>
+          <h2 className="font-semibold text-base">频道管理</h2>
+          <p className="text-xs text-dark-muted mt-0.5">接入微信、飞书、钉钉，用户可通过频道发送任务并实时接收进度与结果</p>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={() => load()} title="刷新" className="p-2 rounded-lg text-dark-muted hover:text-dark-text hover:bg-dark-hover transition-colors">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
           <button onClick={() => openForm()} className="bg-accent-blue hover:bg-accent-blue/90 text-white text-sm px-3 py-2 rounded-lg flex items-center gap-1.5 transition-colors">
-            <Plus className="w-4 h-4" /> 新建渠道
+            <Plus className="w-4 h-4" /> 新建频道
           </button>
         </div>
       </div>

@@ -60,7 +60,7 @@ public class TestHarnessDemo {
             0, 0)); // Turn 4: still cache miss
 
         publish(pipeline, new ObservationEvent.Checkpoint("Environment check passed"));
-        publish(pipeline, new ObservationEvent.StepComplete("init", "all tools available"));
+        publish(pipeline, new ObservationEvent.StepComplete("init", "all tools available", true));
 
         publish(pipeline, new ObservationEvent.ContextCompressed(15, 8, 12000,
             "Compressed 7 old messages to save tokens"));

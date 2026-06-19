@@ -23,6 +23,16 @@ public class RouteRegistry {
     private final Map<String, Route> routes = new ConcurrentHashMap<>();
     private final Map<String, String> modelToRoute = new ConcurrentHashMap<>();
 
+    /**
+     * 清空所有路由和模型映射。
+     * 在配置热重载时使用，保证旧路由不会残留。
+     */
+    public void clear() {
+        routes.clear();
+        modelToRoute.clear();
+        logger.info("[RouteRegistry] All routes cleared");
+    }
+
     // ==================== 注册 ====================
 
     /**

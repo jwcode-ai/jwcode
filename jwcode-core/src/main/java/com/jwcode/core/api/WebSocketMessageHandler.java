@@ -639,7 +639,7 @@ public class WebSocketMessageHandler {
                 }
 
                 @Override
-                public void onStepComplete(String stepName, String result) {
+                public void onStepComplete(String stepName, String result, boolean success) {
                     broadcastToSession(session.getId(), Map.of(
                             "type", "step_complete",
                             "sessionId", session.getId(),

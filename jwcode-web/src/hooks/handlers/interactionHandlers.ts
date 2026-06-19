@@ -97,7 +97,7 @@ export function handleStepMessage(rawType: string, rawData: any, sessionId: stri
           chatStore.updateStep(sessionId, lastStep.id, { action: stepData.action });
           break;
         case "step_complete":
-          chatStore.updateStep(sessionId, lastStep.id, { status: "success", result: stepData.result });
+          chatStore.updateStep(sessionId, lastStep.id, { status: stepData.status ?? "success", result: stepData.result });
           break;
       }
     }

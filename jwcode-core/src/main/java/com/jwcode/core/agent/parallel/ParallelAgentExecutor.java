@@ -1,6 +1,7 @@
 package com.jwcode.core.agent.parallel;
 
 import com.jwcode.core.agent.Agent;
+import com.jwcode.core.agent.AgentRuntimeRegistry;
 import com.jwcode.core.agent.AgentRegistry;
 import com.jwcode.core.agent.SharedContextBus;
 import com.jwcode.core.agent.SubAgentContextStore;
@@ -609,6 +610,8 @@ public class ParallelAgentExecutor {
     private SubAgentResult doExecute(SubAgentTask task, Session session, CancellationToken token) {
         String taskId = task.getTaskId();
         long startTime = System.currentTimeMillis();
+        String runtimeAgentId = null;
+        boolean runtimeStarted = false;
         
         try {
             // 检查取消
@@ -621,6 +624,13 @@ public class ParallelAgentExecutor {
             // 解析 Agent
             Agent agent = resolveAgent(task);
             task.setExecutingAgent(agent);
+            runtimeAgentId = agent.getId();
+            AgentRuntimeRegistry runtimeRegistry = AgentRuntimeRegistry.getInstance();
+            if (!runtimeRegistry.isEnabled(runtimeAgentId)) {
+                throw new IllegalStateException("Agent is disabled: " + runtimeAgentId);
+            }
+            runtimeRegistry.beginInstance(runtimeAgentId);
+            runtimeStarted = true;
             
             // 构建提示词
             String prompt = buildTaskPrompt(task, session);
@@ -691,6 +701,10 @@ public class ParallelAgentExecutor {
             stats.recordFailed();
             logger.log(Level.SEVERE, "[ParallelAgent] Task failed: " + taskId, e);
             throw new CompletionException(e);
+        } finally {
+            if (runtimeStarted && runtimeAgentId != null) {
+                AgentRuntimeRegistry.getInstance().endInstance(runtimeAgentId);
+            }
         }
     }
     
@@ -900,8 +914,8 @@ public class ParallelAgentExecutor {
                 StepMessageBroadcaster.getInstance().broadcastStepAction(task.getTaskId(), action);
             }
             @Override
-            public void onStepComplete(String stepName, String result) {
-                StepMessageBroadcaster.getInstance().broadcastStepComplete(task.getTaskId(), result, true);
+            public void onStepComplete(String stepName, String result, boolean success) {
+                StepMessageBroadcaster.getInstance().broadcastStepComplete(task.getTaskId(), result, success);
             }
             @Override
             public void onToolResult(String toolName, String result, String toolCallId) {

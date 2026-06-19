@@ -45,8 +45,7 @@
     "hooks": "Hooks",
     "agentFlow": "Agent Flow",
     "settings": "设置",
-    "logs": "日志",
-    "observability": "可观测性"
+    "logs": "日志"
   },
   "chat": {
     "newSession": "新建会话",
@@ -277,8 +276,37 @@
   },
   "skills": {
     "title": "技能管理",
+    "list": "技能列表",
     "noSkills": "暂无技能",
-    "loadFailed": "加载技能失败"
+    "loadFailed": "加载技能失败",
+    "loadFailedFallback": "加载失败",
+    "enable": "启用",
+    "disable": "禁用",
+    "enabled": "已启用",
+    "disabled": "已关闭",
+    "new": "新建技能",
+    "import": "导入",
+    "importTitle": "导入技能",
+    "edit": "编辑",
+    "save": "保存",
+    "cancel": "取消",
+    "retry": "重试",
+    "refresh": "刷新",
+    "tags": "标签",
+    "none": "无",
+    "source": "来源",
+    "localSkill": "本地技能",
+    "systemPrompt": "系统提示词",
+    "selectSkill": "选择一个技能",
+    "fieldId": "ID",
+    "fieldName": "名称",
+    "fieldCategory": "分类",
+    "fieldTrigger": "触发词",
+    "fieldTools": "所需工具",
+    "description": "描述",
+    "saving": "保存中",
+    "chooseFile": "选择技能文件",
+    "importHint": "支持 .skill.md 文件"
   },
   "agents": {
     "title": "Agent 管理",

@@ -31,7 +31,7 @@ public class StepCallbackAdapter implements ObservationPipeline.Observer {
         } else if (event instanceof ObservationEvent.Thinking e) {
             callback.onStepThinking(e.stepName(), e.content());
         } else if (event instanceof ObservationEvent.StepComplete e) {
-            callback.onStepComplete(e.stepName(), e.result());
+            callback.onStepComplete(e.stepName(), e.result(), e.success());
         } else if (event instanceof ObservationEvent.ToolResult e) {
             callback.onToolResult(e.toolName(), e.result(), e.toolCallId());
         } else if (event instanceof ObservationEvent.ContentChunk e) {

@@ -16,8 +16,8 @@ export function ChannelTable() {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-center">
         <div className="text-5xl mb-3">🔌</div>
-        <p className="text-dark-text font-medium">还没有配置任何渠道</p>
-        <p className="text-sm text-dark-muted mt-1">点击右上角「新建渠道」接入微信、飞书或钉钉</p>
+        <p className="text-dark-text font-medium">还没有配置任何频道</p>
+        <p className="text-sm text-dark-muted mt-1">点击右上角「新建频道」接入微信、飞书或钉钉</p>
       </div>
     );
   }
@@ -27,7 +27,7 @@ export function ChannelTable() {
       <table className="w-full text-sm">
         <thead>
           <tr className="bg-dark-hover/40 text-xs text-dark-muted">
-            <th className="text-left py-2.5 px-4 font-medium">渠道名称</th>
+            <th className="text-left py-2.5 px-4 font-medium">频道名称</th>
             <th className="text-left py-2.5 px-4 font-medium">类型</th>
             <th className="text-left py-2.5 px-4 font-medium">AppID</th>
             <th className="text-left py-2.5 px-4 font-medium">连接</th>
@@ -64,7 +64,7 @@ export function ChannelTable() {
                   <IconBtn title="编辑" onClick={() => openForm(ch)} className="text-blue-400 hover:bg-blue-500/10">
                     <Pencil className="w-4 h-4" />
                   </IconBtn>
-                  <IconBtn title="删除" onClick={() => confirm(`确认删除渠道「${ch.name}」？`) && remove(ch.id)} className="text-red-400 hover:bg-red-500/10">
+                  <IconBtn title="删除" onClick={() => confirm(`确认删除频道「${ch.name}」？`) && remove(ch.id)} className="text-red-400 hover:bg-red-500/10">
                     <Trash2 className="w-4 h-4" />
                   </IconBtn>
                 </div>
