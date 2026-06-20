@@ -123,6 +123,13 @@ jobs:
         working-directory: ts-cli
         run: npm ci
 
+      - name: Sync version from git tag
+        working-directory: ts-cli
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "Setting package.json version to $VERSION from tag $GITHUB_REF_NAME"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+
       - name: Build CLI before publish
         working-directory: ts-cli
         run: node build.mjs
