@@ -2,6 +2,8 @@ package com.jwcode.core.llm.route;
 
 import com.jwcode.core.llm.ServiceConfig;
 
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.http.HttpRequest;
 import java.time.Duration;
 import java.util.*;
@@ -56,9 +58,19 @@ public class RouteRegistry {
             default -> Protocol.OPENAI_COMPATIBLE_CHAT;
         };
 
-        Endpoint endpoint = new Endpoint(config.getBaseUrl(), "/v1/messages");
+        // 剥离 baseUrl 中的路径段，避免与 endpoint path 重复（如 /v1/v1/chat/completions）
+        String baseUrl = config.getBaseUrl();
+        String cleanBaseUrl = baseUrl;
+        try {
+            URI uri = new URI(baseUrl);
+            if (uri.getPath() != null && !uri.getPath().isEmpty() && !uri.getPath().equals("/")) {
+                cleanBaseUrl = new URI(uri.getScheme(), uri.getAuthority(), null, null, null).toString();
+            }
+        } catch (URISyntaxException ignored) {}
+
+        Endpoint endpoint = new Endpoint(cleanBaseUrl, "/v1/messages");
         if (protocol == Protocol.OPENAI_COMPATIBLE_CHAT) {
-            endpoint = new Endpoint(config.getBaseUrl(), "/v1/chat/completions");
+            endpoint = new Endpoint(cleanBaseUrl, "/v1/chat/completions");
         }
 
         // 从 config 构建 Auth

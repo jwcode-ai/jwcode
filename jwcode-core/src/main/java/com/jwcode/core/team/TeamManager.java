@@ -267,6 +267,8 @@ public class TeamManager {
                 String content = Files.readString(membersFilePath);
                 Map<String, List<TeamMember>> membersMap = objectMapper.readValue(
                         content, new TypeReference<Map<String, List<TeamMember>>>() {});
+                // 过滤 _comment 等非 List 字段，避免反序列化失败
+                membersMap.entrySet().removeIf(e -> !(e.getValue() instanceof List));
                 teamMembers.putAll(membersMap);
             }
         } catch (IOException e) {

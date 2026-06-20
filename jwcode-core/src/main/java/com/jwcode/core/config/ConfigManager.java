@@ -171,6 +171,10 @@ public class ConfigManager {
         
         try {
             String content = Files.readString(path);
+            // 剥离 UTF-8 BOM (0xFEFF)，避免 Jackson 解析报错
+            if (!content.isEmpty() && content.charAt(0) == '﻿') {
+                content = content.substring(1);
+            }
             Map<String, Object> map;
             
             if (path.toString().endsWith(".yaml") || path.toString().endsWith(".yml")) {

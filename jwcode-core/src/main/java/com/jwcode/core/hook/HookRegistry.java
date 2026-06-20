@@ -334,7 +334,11 @@ public class HookRegistry {
             List<String> eventNames = (List<String>) entry.getOrDefault("events", List.of());
             List<HookEventType> events = eventNames.stream()
                 .map(n -> {
-                    try { return HookEventType.valueOf(n.toUpperCase()); }
+                    // 驼峰/帕斯卡 → UPPER_SNAKE_CASE: PreToolUse → PRE_TOOL_USE
+                    String snakeCase = n.replaceAll("([a-z])([A-Z])", "$1_$2")
+                                        .replaceAll("([A-Z]+)([A-Z][a-z])", "$1_$2")
+                                        .toUpperCase();
+                    try { return HookEventType.valueOf(snakeCase); }
                     catch (IllegalArgumentException e) {
                         logger.warning("[HookRegistry] Unknown event type: " + n);
                         return null;
@@ -352,6 +356,10 @@ public class HookRegistry {
             }
 
             String typeStr = (String) impl.get("type");
+            // 兼容旧配置：command → SHELL
+            if ("command".equalsIgnoreCase(typeStr)) {
+                typeStr = "SHELL";
+            }
             HookImplementationType implType;
             try {
                 implType = HookImplementationType.valueOf(typeStr.toUpperCase());
