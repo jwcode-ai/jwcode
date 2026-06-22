@@ -3720,10 +3720,10 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                 }
                 
                 @Override
-                public void onTokenUpdate(long usedTokens, long totalBudget, double usageRatio) {
+                public void onTokenUpdate(long promptTokens, long completionTokens, long totalBudget, double usageRatio) {
                     String json = String.format(
                         "{\"promptTokens\":%d,\"completionTokens\":%d,\"totalTokens\":%d,\"usageRatio\":%.3f,\"model\":\"%s\"}",
-                        usedTokens, 0, usedTokens, usageRatio, engine.getModelName());
+                        promptTokens, completionTokens, promptTokens + completionTokens, usageRatio, engine.getModelName());
                     sendMessage(querySessionId, MessageType.TOKEN_UPDATE, json);
                 }
 

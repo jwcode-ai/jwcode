@@ -102,6 +102,13 @@ export function handleStreamMessage(rawType: string, rawData: any, sessionId: st
 
     case 'complete':
       chatStore.endGeneration(sessionId);
+      // 生成结束时刷新 token 估算（若后端未返回 usage，则使用启发式估算）
+      {
+        const msgs = useChatStore.getState().messagesBySession[sessionId] || [];
+        if (msgs.length > 0) {
+          useTokenStore.getState().recalculateFromMessages(msgs);
+        }
+      }
       break;
 
     case 'generation_paused':

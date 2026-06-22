@@ -7,6 +7,7 @@ import { useTerminalStore } from './stores/terminalStore';
 import { useSettingsStore } from './stores/settingsStore';
 import { useExecutionModeStore } from './stores/executionModeStore';
 import { useWorkflowStore } from './stores/workflowStore';
+import { useTokenStore } from './stores/tokenStore';
 import { useHookApprovalStore } from './stores/useHookApprovalStore';
 import wsService from './services/websocket';
 import { useWebSocket } from './hooks/useWebSocket';
@@ -365,6 +366,15 @@ function App() {
   const handleClearMessages = useCallback(() => {
     if (activeSessionId) clearMessages(activeSessionId);
   }, [activeSessionId, clearMessages]);
+
+  // 会话切换时基于已有消息刷新 token 估算（兜底：后端未返回 usage 时使用启发式估算）
+  useEffect(() => {
+    if (!activeSessionId) return;
+    const msgs = useChatStore.getState().messagesBySession[activeSessionId];
+    if (msgs && msgs.length > 0) {
+      useTokenStore.getState().recalculateFromMessages(msgs);
+    }
+  }, [activeSessionId]);
 
   const sendMessage = useCallback(async (sessionId: string, content: string, referencedFiles?: string[]) => {
     if (!content.trim()) return;

@@ -313,11 +313,12 @@ public class LLMQueryEngine {
         
         /**
          * Token 用量更新（实时推送 Token 预算变化）
-         * @param usedTokens 已用 token 数
+         * @param promptTokens 已用 prompt token 数（累计）
+         * @param completionTokens 已用 completion token 数（累计）
          * @param totalBudget 总预算
          * @param usageRatio 使用率 (0.0~1.0)
          */
-        default void onTokenUpdate(long usedTokens, long totalBudget, double usageRatio) {}
+        default void onTokenUpdate(long promptTokens, long completionTokens, long totalBudget, double usageRatio) {}
 
         default void onContextCompressed(int originalCount, int compressedCount,
                                          long tokensSaved, String summary) {}
@@ -535,7 +536,7 @@ public class LLMQueryEngine {
                 " completion (total used=" + tokenBudget.getUsedTotal() + "/" + tokenBudget.getTotalBudget() + ")");
             // 实时推送 Token 更新到回调
             if (stepCallback != null) {
-                stepCallback.onTokenUpdate(tokenBudget.getUsedTotal(), tokenBudget.getTotalBudget(), tokenBudget.usageRatio());
+                stepCallback.onTokenUpdate(tokenBudget.getUsedPromptTokens(), tokenBudget.getUsedCompletionTokens(), tokenBudget.getTotalBudget(), tokenBudget.usageRatio());
             }
         }
 
@@ -833,7 +834,7 @@ public class LLMQueryEngine {
                 response.getModel() != null ? response.getModel() : "unknown"));
             // 实时推送 Token 更新到回调
             if (stepCallback != null) {
-                stepCallback.onTokenUpdate(tokenBudget.getUsedTotal(), tokenBudget.getTotalBudget(), tokenBudget.usageRatio());
+                stepCallback.onTokenUpdate(tokenBudget.getUsedPromptTokens(), tokenBudget.getUsedCompletionTokens(), tokenBudget.getTotalBudget(), tokenBudget.usageRatio());
             }
         }
 
