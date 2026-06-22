@@ -19,7 +19,7 @@
     <img src="https://img.shields.io/badge/Java-17%2B-blue?logo=openjdk" alt="Java 17+" />
     <img src="https://img.shields.io/badge/Node-18%2B-green?logo=node.js" alt="Node 18+" />
     <img src="https://img.shields.io/badge/license-Apache%202.0-red" alt="License" />
-    <img src="https://img.shields.io/badge/agents-16-orange" alt="16 Agents" />
+    <img src="https://img.shields.io/badge/workflow%20roles-3-orange" alt="3 workflow roles" />
     <img src="https://img.shields.io/badge/tools-50%2B-purple" alt="50+ Tools" />
     <img src="https://img.shields.io/badge/Java%20files-889-yellow" alt="889 Java files" />
   </p>
@@ -33,7 +33,7 @@
 >
 > ---
 >
-> **JWCode** is a fully open-source AI coding agent built with Java 17. It features both a Web UI and a terminal TUI, supports multiple LLM providers (DeepSeek / Claude / OpenAI), includes a LangGraph-like agent graph engine, 50+ built-in tools, a plugin API, and Docker sandbox security.
+> **JWCode** is a fully open-source AI coding agent built with Java 17. It features both a Web UI and a terminal TUI, supports multiple LLM providers (DeepSeek / Claude / OpenAI), includes a Workflow IR + EffectVM runtime for goal workflows, 50+ built-in tools, a plugin API, and Docker sandbox security.
 >
 > Unlike OpenAI Codex CLI (which only open-sourced the shell — the core agent is closed), **JWCode's entire agent system is fully open-source**.
 
@@ -98,9 +98,9 @@ default-provider: deepseek
 
 | 特性 | 说明 | Feature |
 |------|------|---------|
-| 🤖 **16 种 Agent** | Orchestrator、Coder、Architect、Debug、Reviewer 等 | 16 specialized agents for different tasks |
+| 🤖 **Workflow 角色** | Orchestrator + explorer / coder / verifier | Runtime workflow roles |
 | 🔧 **50+ 内置工具** | 文件编辑、Bash、Git、Web、浏览器、MCP 等 | 50+ built-in tools |
-| 🧠 **Agent Graph 引擎** | LangGraph 风格的 DAG 图编排 + BSP 执行 | LangGraph-like DAG orchestration engine |
+| 🧠 **Workflow runtime** | Goal mode uses Workflow IR + EffectVM; old graph APIs are compatibility paths | Workflow execution runtime |
 | 🌐 **多 LLM 支持** | DeepSeek / Claude / OpenAI / 兼容任意 OpenAI API | Support any OpenAI-compatible API |
 | 🖥️ **双界面** | Web SPA (React) + 终端 TUI (Ink) | Web SPA + Terminal TUI |
 | 🔒 **安全体系** | Docker 沙箱、命令注入检测、7 层权限分类 | Docker sandbox, injection detection, permission system |
@@ -127,9 +127,9 @@ default-provider: deepseek
           ┌────────────────────────────┼────────────────────────────┐
           ▼                            ▼                            ▼
    ┌─────────────┐           ┌─────────────────┐          ┌────────────────┐
-   │  Agent 系统  │           │  Agent Graph     │          │   LLM 服务层    │
-   │  16 Agents   │◄──────────│  LangGraph-DAG   │─────────►│  Multi-Provider │
-   │  + Swarm     │           │  Pregel BSP      │          │  DeepSeek       │
+   │  Agent 系统  │           │  Workflow IR     │          │   LLM 服务层    │
+   │  1+3 Roles    │◄──────────│  Workflow IR     │─────────►│  Multi-Provider │
+   │              │           │  EffectVM        │          │  DeepSeek       │
    └──────┬──────┘           └────────┬────────┘          │  Claude         │
           │                           │                    │  OpenAI         │
           ▼                           ▼                    └────────────────┘
@@ -148,7 +148,7 @@ default-provider: deepseek
    └─────────────────────────────────────────────┘
 ```
 
-### Agent Graph 引擎（类 LangGraph）
+### Workflow runtime
 
 ```
 ┌─────────────────────────────────────────────┐
@@ -177,21 +177,10 @@ default-provider: deepseek
 | Agent | 职责 | Responsibility |
 |-------|------|---------------|
 | `OrchestratorAgent` | 任务分解与子 Agent 编排 | Task decomposition and sub-agent orchestration |
-| `EnhancedOrchestratorAgent` | 增强版编排，支持图路由 | Enhanced orchestration with graph routing |
-| `CoderAgent` | 代码生成与修改 | Code generation and modification |
-| `ArchitectAgent` | 架构设计与技术方案 | Architecture design and tech planning |
-| `DebugAgent` | 调试与错误分析 | Debugging and error analysis |
-| `ReviewerAgent` | 代码审查 | Code review |
-| `ExplorerAgent` | 代码库探索阅读 | Codebase exploration (read-only) |
-| `EvaluatorAgent` | 方案评估与决策 | Solution evaluation and decision making |
-| `TestAgent` | 测试编写与执行 | Test writing and execution |
-| `DocAgent` | 文档生成 | Documentation generation |
-| `CompactorAgent` | 上下文压缩 | Context compaction |
-| `MemoryAgent` | 记忆管理 | Memory management |
-| `TaskAgent` | 任务执行 | Task execution |
-| `ConfigurableAgent` | 可动态配置的通用 Agent | Configurable generic agent |
-| `DefaultAgent` | 默认兜底 Agent | Default fallback agent |
-| `AgentSwarm` | 多 Agent 群体协作 | Multi-agent swarm collaboration |
+| `OrchestratorAgent` | 计划拆解与 workflow 编排入口 | Plan decomposition and workflow entry |
+| `explorer` | 读取仓库上下文 | Read-only repository exploration |
+| `coder` | 执行代码修改 | Code changes |
+| `verifier` | 回归检查与风险总结 | Verification and risk review |
 
 ---
 
@@ -255,7 +244,7 @@ default-provider: deepseek
 | **后端语言** | **Java 17** | Rust | TypeScript | TypeScript |
 | **自托管** | ✅ 完全自托管 | ❌ 依赖云端 | ❌ 依赖云端 | ❌ 依赖云端 |
 | **多 LLM** | ✅ DeepSeek/Claude/OpenAI | ❌ 仅 OpenAI | ❌ 仅 Claude | ✅ 多模型 |
-| **Agent 系统** | ✅ 16 Agent + 图编排 | ❌ 单一 Agent | ✅ 内置 | ✅ 内置 |
+| **Agent 系统** | ✅ 1 注册 Agent + 3 workflow 角色 | ❌ 单一 Agent | ✅ 内置 | ✅ 内置 |
 | **Web UI** | ✅ React SPA | ❌ CLI only | ✅ CLI only | ✅ IDE |
 | **终端 TUI** | ✅ Ink TUI | ✅ Ink TUI | ❌ | ❌ |
 | **Docker 沙箱** | ✅ | ✅ | ❌ | ❌ |
@@ -268,7 +257,7 @@ default-provider: deepseek
 
 - [x] v1.0 基础 Agent 系统 + Tool 框架
 - [x] v2.0 多 LLM 适配层 + WebSocket 流式通信
-- [x] v3.0 Plan/Act/Goal 模式 + Agent Graph 图引擎
+- [x] v3.0 Plan/Act/Goal 模式 + Workflow IR 执行
 - [x] v3.1 任务黑板系统 + 渠道集成（微信）
 - [x] v3.2 三级模型绑定 + 插件 API
 - [ ] **v4.0 VS Code 扩展** — 直接在编辑器中连接 JWCode 后端

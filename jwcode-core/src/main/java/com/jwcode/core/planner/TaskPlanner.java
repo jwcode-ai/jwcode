@@ -513,7 +513,7 @@ public class TaskPlanner {
                 .stepNumber(Integer.parseInt(matcher.group(1)))
                 .action(matcher.group(2).trim())
                 .description(matcher.group(2).trim())
-                .agentType("default")
+                .agentType("orchestrator")
                 .build());
         }
         
@@ -522,7 +522,7 @@ public class TaskPlanner {
                 .stepNumber(1)
                 .action("执行任务")
                 .description(request)
-                .agentType("default")
+                .agentType("orchestrator")
                 .build());
         }
         
@@ -559,8 +559,11 @@ public class TaskPlanner {
             return "architect";
         }
         
-        return context != null && context.getPreferredAgent() != null ? 
-            context.getPreferredAgent() : "default";
+        if (context != null && context.getPreferredAgent() != null
+            && agentRegistry.get(context.getPreferredAgent()) != null) {
+            return context.getPreferredAgent();
+        }
+        return "orchestrator";
     }
     
     private void analyzeDependencies(List<PlanStep> steps) {

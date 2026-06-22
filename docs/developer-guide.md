@@ -100,13 +100,10 @@ com.jwcode.core
 ├── agent/           # Agent 系统（多Agent分层架构）
 │   ├── OrchestratorAgent       # 主控指挥家
 │   ├── EnhancedOrchestratorAgent # 增强版（PDCA循环）
-│   ├── TaskAgent               # AI回复→结构化任务解析器 ← v1.1
-│   ├── TaskExecutionAgent      # 结构化任务逐步执行器 ← v1.1
-│   ├── CoderAgent/DebugAgent/  # 专业Worker Agent
-│   │   ReviewerAgent/TestAgent/
-│   │   DocAgent/ExploreAgent/
-│   │   ArchitectAgent
-│   ├── CompactorAgent          # 上下文压缩专家
+│   ├── OrchestratorAgent       # 主控指挥家
+│   ├── EnhancedOrchestratorAgent # 增强版（PDCA循环）
+│   ├── MemoryAgent             # 工作目录级记忆
+│   ├── CompactorAgent          # 上下文压缩服务
 │   └── fork/                   # 子Agent Fork机制
 ├── aicl/            # AICL 协议引擎（上下文生命周期管理）← v1.1
 │   ├── BlockPriority           # 6级优先级枚举
@@ -153,9 +150,9 @@ com.jwcode.core
 | ToolExecutor | 执行工具调用 | ToolRegistry, PermissionChecker |
 | SessionManager | 管理会话生命周期 | SessionStore, SessionId |
 | ToolRegistry | 工具注册和查找 | Tool |
-| EnhancedOrchestratorAgent | 主Agent：意图识别、PDCA循环、调度子Agent | IntentAnalyzer, TaskAgent, A2AFacade, PlanTaskBroadcaster |
-| TaskAgent | AI回复→结构化任务解析（阶段/模式/依赖） | StructuredTask |
-| TaskExecutionAgent | 结构化任务逐步执行（并发/串行调度） | A2AFacade, PlanTaskBroadcaster |
+| EnhancedOrchestratorAgent | 主Agent：意图识别、PDCA循环、调度 workflow 角色 | IntentAnalyzer, A2AFacade, PlanTaskBroadcaster |
+| MemoryAgent | 工作目录级记忆 | WorkspaceMemoryStore |
+| CompactorAgent | 上下文压缩服务 | LLMService |
 | StructuredTask | 结构化任务模型（执行模式+阶段+并发组） | PlanTask |
 | ContextAssembler | AICL Priority-LRU 淘汰引擎 | ContextBlock, BlockPriority |
 | ContextBlock | AICL 上下文块（id/type/priority/state/ttl/generation） | BlockPriority, BlockLifecycle |
@@ -533,16 +530,14 @@ Plan/Act 模式下的任务执行链路：
 
 ```
 用户输入 → EnhancedOrchestratorAgent.processConfirmedPlan()
-  ├── TaskAgent.parsePlan()       → List<StructuredTask>
-  ├── broadcastStructuredTasks()  → WebSocket → 前端
-  └── TaskExecutionAgent.execute()
-        ├── SEQUENTIAL: 拓扑排序 → 逐个 A2AFacade.submitTaskSync()
-        └── CONCURRENT: 线程池 CompletableFuture.allOf()
+  ├── workflow/runtime/defaultWorkflow()
+  ├── EffectVM.execute()
+  └── LocalAgentHand.execute()
 ```
 
 ### 添加新的任务解析规则
 
-在 `TaskAgent.java` 中扩展解析能力：
+在 workflow 角色或 `EnhancedOrchestratorAgent` 中扩展执行逻辑：
 
 ```java
 // 1. 添加新的阶段关键词

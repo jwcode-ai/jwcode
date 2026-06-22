@@ -8,9 +8,14 @@ JwCode 支持多 Agent 架构，允许针对不同类型的任务使用专门的
 
 | Agent | 描述 | 特点 |
 |-------|------|------|
-| `default` | 通用助手 | 适合大多数任务 |
+| `orchestrator` | Task orchestration | General fallback for act/plan/goal workflows |
+| `architect` | Architecture design | Design and technical planning |
 | `coder` | 编码专家 | 擅长编写、重构和优化代码 |
 | `debug` | 调试专家 | 专注于问题诊断和修复 |
+| `reviewer` | Code review | Review and quality checks |
+| `test` | Testing | Test writing and verification |
+| `doc` | Documentation | Documentation generation |
+| `explore` | Exploration | Read-only codebase exploration |
 
 ### 命令
 

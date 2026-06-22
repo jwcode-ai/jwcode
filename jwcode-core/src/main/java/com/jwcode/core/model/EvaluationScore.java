@@ -4,7 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * EvaluationScore — 评估分数模型（EvaluatorAgent 核心）。
+ * EvaluationScore — 评估分数模型。
  *
  * <p>4 维加权评分体系，支持硬门槛否决机制。
  * 权重配置通过 {@link SprintContract} 传递，支持任务级覆盖。</p>

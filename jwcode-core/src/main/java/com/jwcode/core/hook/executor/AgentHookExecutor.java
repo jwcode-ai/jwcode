@@ -67,7 +67,7 @@ public class AgentHookExecutor implements HookExecutor {
                               HookPriority priority, long timeoutMs,
                               boolean failOpen, boolean enabled) {
         this.name = name;
-        this.agentName = agentName != null ? agentName : "ExploreAgent";
+        this.agentName = agentName != null ? agentName : "explorer";
         this.agentCallback = agentCallback;
         this.priority = priority;
         this.timeoutMs = timeoutMs;

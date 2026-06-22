@@ -1566,7 +1566,7 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
      * 根据 role 推断 agentType
      */
     private String inferAgentType(String role) {
-        if (role == null) return "default";
+        if (role == null) return "orchestrator";
         String lower = role.toLowerCase();
         if (lower.contains("code") || lower.contains("coder") || lower.contains("编码") || lower.contains("开发")) {
             return "coder";
@@ -1575,7 +1575,7 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
             return "debug";
         }
         if (lower.contains("review") || lower.contains("审查") || lower.contains("审核")) {
-            return "review";
+            return "reviewer";
         }
         if (lower.contains("test") || lower.contains("测试")) {
             return "test";
@@ -1589,7 +1589,7 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
         if (lower.contains("architect") || lower.contains("架构") || lower.contains("设计")) {
             return "architect";
         }
-        return "default";
+        return "orchestrator";
     }
     
     // ==================== 公共方法 ====================

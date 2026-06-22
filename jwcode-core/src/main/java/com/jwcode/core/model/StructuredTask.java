@@ -74,10 +74,9 @@ public class StructuredTask {
     /** 日志列表 */
     private List<String> logs;
 
-    /** 
-     * 任务上下文 — 注入到子Agent执行时的上下文信息。
+    /**
+     * 任务上下文 - 注入到下游执行时的上下文信息。
      * 包含：文件路径、依赖模块、约束条件、关键代码片段等。
-     * 由 TaskAgent 从 AI plan 中提取，TaskExecutionAgent 执行时注入到 A2A 任务。
      */
     private Map<String, String> context;
 
@@ -137,7 +136,7 @@ public class StructuredTask {
         private String title;
         private String description;
         private String status = "pending";
-        private String agentType = "default";
+        private String agentType = "orchestrator";
         private List<String> dependencies = new ArrayList<>();
         private List<StructuredTask> children = new ArrayList<>();
         private ExecutionMode executionMode = ExecutionMode.SEQUENTIAL;

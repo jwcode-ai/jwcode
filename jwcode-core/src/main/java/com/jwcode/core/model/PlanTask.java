@@ -56,7 +56,7 @@ public class PlanTask {
         private String title;
         private String description;
         private String status = "pending";
-        private String agentType = "default";
+        private String agentType = "orchestrator";
         private List<String> dependencies = new ArrayList<>();
         private List<PlanTask> children = new ArrayList<>();
         private String result;

@@ -1,7 +1,7 @@
 import { memo, useRef, useCallback, useState, useMemo, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
-import { CheckCircle2, RefreshCw, Zap, Square, Pause, Play } from 'lucide-react';
+import { CheckCircle2, RefreshCw, Zap, Square, Pause, Play, Mic } from 'lucide-react';
 import { Message, TabId, LogEntry, FileNode } from '../../types';
 import { MessageBubble } from './MessageBubble';
 import { SlashCommandMenu } from '../SlashCommandMenu';
@@ -16,6 +16,7 @@ import { ContextManager } from './ContextManager';
 import { SessionTaskBoard } from './SessionTaskBoard';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import wsService from '../../services/websocket';
+import { toast } from '../../stores/toastStore';
 
 interface ChatPanelProps {
   messages: Message[];
@@ -80,6 +81,182 @@ export const ChatPanel = memo(function ChatPanel({
   const isComposingRef = useRef(false);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const lastEscRef = useRef(0);
+
+  // Voice input — 离线语音识别 (MediaRecorder + Vosk backend)
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const recorderSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const recorderProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const audioSamplesRef = useRef<Float32Array[]>([]);
+  const isSpeechSupported = typeof window !== 'undefined' &&
+    !!navigator.mediaDevices?.getUserMedia;
+
+  const writeString = (view: DataView, offset: number, str: string) => {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  };
+
+  /** Encode Float32Array PCM samples into a WAV blob (16kHz, 16-bit, mono) */
+  const encodeWav = (samples: Float32Array[], sr: number): Blob => {
+    let totalLen = 0;
+    for (const s of samples) totalLen += s.length;
+    const merged = new Float32Array(totalLen);
+    let offset = 0;
+    for (const s of samples) {
+      merged.set(s, offset);
+      offset += s.length;
+    }
+
+    const numChannels = 1;
+    const bitsPerSample = 16;
+    const byteRate = sr * numChannels * bitsPerSample / 8;
+    const blockAlign = numChannels * bitsPerSample / 8;
+    const dataSize = merged.length * blockAlign;
+    const buffer = new ArrayBuffer(44 + dataSize);
+    const view = new DataView(buffer);
+
+    // RIFF header
+    writeString(view, 0, 'RIFF');
+    view.setUint32(4, 36 + dataSize, true);
+    writeString(view, 8, 'WAVE');
+    // fmt chunk
+    writeString(view, 12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, numChannels, true);
+    view.setUint32(24, sr, true);
+    view.setUint32(28, byteRate, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, bitsPerSample, true);
+    // data chunk
+    writeString(view, 36, 'data');
+    view.setUint32(40, dataSize, true);
+
+    // Write PCM samples (float32 -> int16)
+    let idx = 44;
+    for (let i = 0; i < merged.length; i++) {
+      const s = Math.max(-1, Math.min(1, merged[i]!));
+      view.setInt16(idx, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+      idx += 2;
+    }
+
+    return new Blob([buffer], { type: 'audio/wav' });
+  };
+
+  const startVoiceInput = useCallback(async () => {
+    if (!isSpeechSupported) {
+      toast.error(t('chat.voiceUnsupported'));
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const audioContext = new AudioContext({ sampleRate: 16000 });
+      const source = audioContext.createMediaStreamSource(stream);
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+      const samples: Float32Array[] = [];
+
+      processor.onaudioprocess = (e) => {
+        const channel = e.inputBuffer.getChannelData(0);
+        samples.push(new Float32Array(channel));
+      };
+
+      source.connect(processor);
+      processor.connect(audioContext.destination);
+
+      mediaStreamRef.current = stream;
+      audioContextRef.current = audioContext;
+      recorderSourceRef.current = source;
+      recorderProcessorRef.current = processor;
+      audioSamplesRef.current = samples;
+
+      setIsRecording(true);
+    } catch (err: any) {
+      if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError') {
+        toast.error('麦克风权限被拒绝，请在浏览器设置中允许麦克风访问');
+      } else {
+        toast.error(t('chat.voiceError'));
+      }
+    }
+  }, [isSpeechSupported, t]);
+
+  const stopVoiceInput = useCallback(async () => {
+    const stream = mediaStreamRef.current;
+    const audioCtx = audioContextRef.current;
+    const processor = recorderProcessorRef.current;
+    const source = recorderSourceRef.current;
+    const samples = audioSamplesRef.current;
+
+    setIsRecording(false);
+    setIsTranscribing(true);
+
+    if (processor && source) {
+      source.disconnect(processor);
+      processor.disconnect();
+    }
+    if (source) source.disconnect();
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    if (audioCtx && audioCtx.state !== 'closed') await audioCtx.close();
+
+    mediaStreamRef.current = null;
+    audioContextRef.current = null;
+    recorderSourceRef.current = null;
+    recorderProcessorRef.current = null;
+
+    if (!samples || samples.length === 0) {
+      setIsTranscribing(false);
+      return;
+    }
+
+    try {
+      const sampleRate = audioCtx ? audioCtx.sampleRate : 16000;
+      const wavBlob = encodeWav(samples, sampleRate);
+
+      const response = await fetch('/api/speech/recognize', {
+        method: 'POST',
+        body: wavBlob,
+        headers: { 'Content-Type': 'audio/wav' },
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || `HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (data.text) {
+        setInput(input + data.text);
+        if (textareaRef.current) {
+          textareaRef.current.focus();
+          textareaRef.current.style.height = 'auto';
+          textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, window.innerHeight * 0.4) + 'px';
+        }
+      }
+    } catch (err: any) {
+      toast.error(err.message || t('chat.voiceError'));
+    } finally {
+      setIsTranscribing(false);
+    }
+  }, [input, setInput, t]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      const stream = mediaStreamRef.current;
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      const audioCtx = audioContextRef.current;
+      if (audioCtx && audioCtx.state !== 'closed') audioCtx.close();
+    };
+  }, []);
+
+  const toggleVoiceInput = useCallback(() => {
+    if (isRecording || isTranscribing) {
+      stopVoiceInput();
+    } else {
+      startVoiceInput();
+    }
+  }, [isRecording, isTranscribing, startVoiceInput, stopVoiceInput]);
 
   // Input history
   const { navigate, reset: resetHistory } = useInputHistory(sessionId);
@@ -496,11 +673,32 @@ export const ChatPanel = memo(function ChatPanel({
               )}
             </div>
           ) : (
-            <button onClick={handleSend} disabled={!input.trim()} aria-label={t('a11y.send')}
-              className="px-4 py-3 text-white rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2 bg-accent-green">
-              <Zap size={16} aria-hidden="true" />
-              <span className="hidden sm:inline">{t('chat.sendBtn')}</span>
-            </button>
+            <div className="flex gap-1.5 shrink-0">
+              {isSpeechSupported && (
+                <button onClick={toggleVoiceInput}
+                  aria-label={isRecording ? t('chat.voiceListening') : isTranscribing ? t('chat.voiceTranscribing') : t('chat.voiceInput')}
+                  title={isRecording ? t('chat.voiceListening') : isTranscribing ? t('chat.voiceTranscribing') : t('chat.voiceInput')}
+                  disabled={isTranscribing}
+                  className={`px-3 py-3 rounded-lg transition-all flex items-center gap-1.5 ${
+                    isRecording
+                      ? 'bg-accent-red text-white animate-pulse-soft shadow-lg shadow-accent-red/30'
+                      : isTranscribing
+                      ? 'bg-accent-blue text-white animate-pulse-soft'
+                      : 'text-dark-muted hover:text-dark-text hover:bg-dark-hover'
+                  }`}>
+                  {isTranscribing ? (
+                    <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <Mic size={16} aria-hidden="true" />
+                  )}
+                </button>
+              )}
+              <button onClick={handleSend} disabled={!input.trim()} aria-label={t('a11y.send')}
+                className="px-4 py-3 text-white rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2 bg-accent-green">
+                <Zap size={16} aria-hidden="true" />
+                <span className="hidden sm:inline">{t('chat.sendBtn')}</span>
+              </button>
+            </div>
           )}
         </div>
       </div>

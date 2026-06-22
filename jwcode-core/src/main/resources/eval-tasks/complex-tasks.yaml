@@ -76,7 +76,7 @@ tasks:
 
   - id: COMPLEX_005
     name: "Agent 协作任务：生成代码并审查"
-    description: "让 CoderAgent 生成代码，ReviewerAgent 审查，验证 Agent 协作"
+    description: "让代码角色生成代码，评审角色审查，验证 workflow 协作"
     difficulty: COMPLEX
     capability: agent_collab
     userPrompt: "请帮我完成以下任务：1) 在 jwcode-core/src/main/java/com/jwcode/core/eval/ 下创建一个 StringUtils.java 工具类，包含 isEmpty、isBlank、truncate 三个静态方法 2) 检查生成的代码是否符合 Java 编码规范"

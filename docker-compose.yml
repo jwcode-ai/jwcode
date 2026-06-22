@@ -1,0 +1,50 @@
+name: jwcode
+
+services:
+  jwcode:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      tags:
+        - "jwcode/jwcode:latest"
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    volumes:
+      # Config persistence (generated on first start from env vars)
+      - jwcode-config:/home/jwcode/.jwcode
+      # Workspace — mount your project directory here
+      - ${JWCODE_WORKSPACE:-.}:/jwcode/workspace
+      # Docker sandbox (optional — remove to disable sandbox execution)
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      # Default LLM provider
+      - JWCODE_PROVIDER=${JWCODE_PROVIDER:-deepseek}
+      # API keys — set in .env file or pass inline
+      - JWCODE_API_KEY_DEEPSEEK=${JWCODE_API_KEY_DEEPSEEK:-}
+      - JWCODE_API_KEY_CLAUDE=${JWCODE_API_KEY_CLAUDE:-}
+      - JWCODE_API_KEY_OPENAI=${JWCODE_API_KEY_OPENAI:-}
+      # Custom base URLs (optional — uses provider defaults if unset)
+      - JWCODE_BASE_URL_DEEPSEEK=${JWCODE_BASE_URL_DEEPSEEK:-}
+      - JWCODE_BASE_URL_CLAUDE=${JWCODE_BASE_URL_CLAUDE:-}
+      - JWCODE_BASE_URL_OPENAI=${JWCODE_BASE_URL_OPENAI:-}
+      # Custom model IDs (optional — uses provider defaults if unset)
+      - JWCODE_MODEL_DEEPSEEK=${JWCODE_MODEL_DEEPSEEK:-}
+      - JWCODE_MODEL_CLAUDE=${JWCODE_MODEL_CLAUDE:-}
+      - JWCODE_MODEL_OPENAI=${JWCODE_MODEL_OPENAI:-}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/api/system"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+        reservations:
+          memory: 512m
+
+volumes:
+  jwcode-config:

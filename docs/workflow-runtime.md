@@ -10,10 +10,9 @@ status, cancellation, pause, and checkpoint visibility.
 - Workflow execution uses the dedicated HTTP and WebSocket workflow paths.
 - Workflow IR v1 accepts JSON IR only. JS-like workflow text is not parsed.
 - Writer/checkpoint behavior remains local through `MemoryLayer.writeCheckpoint`.
-- `EnhancedOrchestratorAgent`, A2A local dispatch, Pregel graph execution,
-  `SharedContextBus`, and `ParallelAgentExecutor` remain legacy/compatibility
-  paths. They are not removed, but new durable execution behavior should target
-  `Workflow IR + EffectVM`.
+- `EnhancedOrchestratorAgent`, A2A local dispatch, `SharedContextBus`, and
+  `ParallelAgentExecutor` remain legacy/compatibility paths. They are not
+  removed, but new durable execution behavior should target `Workflow IR + EffectVM`.
 
 ## Compatibility Paths
 
@@ -22,7 +21,6 @@ existing callers and should not be deleted as part of durable workflow work:
 
 - `EnhancedOrchestratorAgent` for confirmed-plan orchestration.
 - A2A local dispatch for legacy sub-agent task routing.
-- Pregel/compiled graph execution for graph-based agent experiments.
 - `SharedContextBus` for older multi-agent coordination state.
 - `ParallelAgentExecutor` for legacy AgentTool execution and fallback.
 

@@ -8,7 +8,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * EvaluationReport — 完整评估报告（EvaluatorAgent 输出）。
+ * EvaluationReport — 完整评估报告。
  *
  * <p>包含 4 维评分、硬门槛检查结果、总体 verdict 和改进建议。
  * 评估报告将作为反馈注入 Generator 的下一轮迭代上下文。</p>
@@ -152,7 +152,7 @@ public class EvaluationReport {
         report.summary = "评估失败: " + failureReason;
         report.detailedFeedback = "评估无法完成: " + failureReason;
         report.thresholdFailures = List.of(failureReason);
-        report.improvementSuggestions = List.of("请检查 EvaluatorAgent 是否正常运行");
+        report.improvementSuggestions = List.of("请检查评估运行时是否正常运行");
         return report;
     }
 

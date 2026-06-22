@@ -43,7 +43,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 2. 按难度级别依次执行（SIMPLE → MEDIUM → COMPLEX）
  * 3. 每个任务：
  *    a. 客观验收检查（文件存在、内容匹配、编译检查等）
- *    b. （可选）AI 评审（通过 EvaluatorAgent 评分）
+ *    b. （可选）AI 评审（通过内置评审 prompt 评分）
  *    c. 记录执行轨迹
  * 4. 生成综合报告（Markdown + JSON）
  * 5. 保存到 eval-results/ 目录
@@ -299,7 +299,7 @@ public class CapabilityEvalSuite {
      *   <li><b>完整模式</b>：通过 LLMQueryEngine 提交给 AI 真实执行，记录工具调用轨迹</li>
      *   <li><b>模拟模式</b>：跳过 LLM 调用，直接做验收检查</li>
      *   <li><b>验收检查</b>：无论哪种模式，都执行客观验收检查</li>
-     *   <li><b>AI 评审</b>：复杂任务启用 AI 评分（通过 EvaluatorAgent）</li>
+     *   <li><b>AI 评审</b>：复杂任务启用 AI 评分（通过内置评审 prompt）</li>
      * </ol>
      */
     private EvalResult executeSingleTask(EvalTask task) {
@@ -622,7 +622,7 @@ public class CapabilityEvalSuite {
         return sb.toString();
     }
 
-    /** EvaluatorAgent 的 System Prompt（简化版，用于 AI 评审） */
+    /** 内置评审 System Prompt（简化版，用于 AI 评审） */
     private static final String EVALUATOR_SYSTEM_PROMPT = """
         # Evaluator Agent — Quality Evaluation Expert
 

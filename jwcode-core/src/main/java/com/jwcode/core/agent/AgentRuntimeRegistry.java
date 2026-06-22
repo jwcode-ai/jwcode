@@ -80,7 +80,7 @@ public final class AgentRuntimeRegistry {
 
     private static String normalize(String agentId) {
         if (agentId == null || agentId.isBlank()) {
-            return "default";
+            return "orchestrator";
         }
         return agentId.trim().toLowerCase();
     }

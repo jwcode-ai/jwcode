@@ -188,6 +188,16 @@
             <version>${sqlite.version}</version>
         </dependency>
 
+        <!-- Vosk 离线语音识别 -->
+        <dependency>
+            <groupId>com.alphacephei</groupId>
+            <artifactId>vosk</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>net.java.dev.jna</groupId>
+            <artifactId>jna</artifactId>
+        </dependency>
+
         <!-- 测试依赖 -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>

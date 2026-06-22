@@ -1,0 +1,44 @@
+# Git
+.git/
+.gitattributes
+.gitignore
+
+# Maven build artifacts
+target/
+*.jar
+*.war
+
+# Node / Frontend
+node_modules/
+dist/
+jwcode-web/node/
+jwcode-web/node_modules/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# JWCode runtime data
+.jwcode/
+logs/
+session_*/
+eval-results/
+integration-test-*/
+auto-*/
+
+# Other projects
+ts-cli/
+docs/
+
+# Logs
+*.log
+*.bak
+
+# JVM crash dumps
+hs_err_pid*
+replay_pid*

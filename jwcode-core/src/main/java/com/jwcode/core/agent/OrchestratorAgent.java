@@ -42,7 +42,7 @@ public class OrchestratorAgent implements Agent {
         2. 【复杂度评估】判断任务是否需要拆分：
            - 简单任务（1-2步可完成）→ 直接指派给1个子Agent
            - 中等任务（3-5步）→ 拆为2-3个并行/串行子任务
-           - 复杂任务（>5步或跨模块）→ 先派 ExploreAgent 调研，再制定完整计划
+           - 复杂任务（>5步或跨模块）→ 先派 explorer role 调研，再制定完整计划
         3. 【任务拆解】将工作拆分为结构化的子任务（含依赖关系、验收标准）
         4. 【Agent调度】为每个子任务选择最合适的专业Agent：
            - coder → 代码编写、重构、Bug修复
@@ -118,7 +118,7 @@ public class OrchestratorAgent implements Agent {
         ## 简单任务快速路径
 
         对于明显简单的任务（如改一个变量名、添加一行日志），不要过度拆解：
-        - 直接指派给单个 CoderAgent 完成
+        - 直接指派给单个 coder role 完成
         - 不需要 Explore + Architect + Coder + Reviewer 的全流程
         - 原则：预估执行时间 < 1 分钟的任务，单 Agent 直派
 

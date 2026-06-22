@@ -41,7 +41,7 @@ public class DynamicExecutionEngine {
                 int totalSteps = plan != null && plan.getSteps() != null ? plan.getSteps().size() : 0;
                 if (plan != null && plan.getSteps() != null) {
                     for (PlanStep step : plan.getSteps()) {
-                        String role = step.getAgentType() != null ? step.getAgentType() : "default";
+                        String role = step.getAgentType() != null ? step.getAgentType() : "orchestrator";
                         log.info("[DynamicExecutionEngine] scheduled step {} for workflow runtime role {}",
                             step.getStepNumber(), role);
                     }
