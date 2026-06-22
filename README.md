@@ -21,7 +21,7 @@
     <img src="https://img.shields.io/badge/license-Apache%202.0-red" alt="License" />
     <img src="https://img.shields.io/badge/agents-16-orange" alt="16 Agents" />
     <img src="https://img.shields.io/badge/tools-50%2B-purple" alt="50+ Tools" />
-    <img src="https://img.shields.io/badge/Java%20files-821-yellow" alt="821 Java files" />
+    <img src="https://img.shields.io/badge/Java%20files-889-yellow" alt="889 Java files" />
   </p>
 </div>
 
@@ -227,10 +227,9 @@ default-provider: deepseek
 | `jwcode-core` | **核心引擎**：Agent、Tool、LLM 编排、图引擎、安全 | Core engine: agents, tools, LLM, graph, security | ~630 |
 | `jwcode-web` | HTTP/WS 服务器 + React SPA 前端 + TS CLI | HTTP/WS server + React SPA + TS CLI | 104 前端 |
 | `jwcode-mcp` | MCP 客户端接口 | MCP client interface | 1 |
-| `jwcode-parser` | Tree-sitter 代码分析 | Tree-sitter code analysis | 8 |
-| `jwcode-plugin-api` | 插件开发 API，第三方扩展入口 | Plugin API for third-party extensions | |
+| `jwcode-plugin-api` | 插件开发 API，第三方扩展入口 | Plugin API for third-party extensions | 4 |
 
-- **Java 源文件**: 821 | **前端文件**: 104 | **配置文件**: 30+
+- **Java 源文件**: 889 | **前端文件**: 104 | **配置文件**: 30+
 
 ---
 
