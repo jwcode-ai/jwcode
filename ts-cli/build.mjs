@@ -88,26 +88,38 @@ function downloadProguard(dest) {
   console.log('[build] Extracting proguard.jar...');
   const extractDir = join(dirname(dest), '.proguard_extract');
   try {
+    if (existsSync(extractDir)) rmRecursive(extractDir);
+    // Use powershell on Windows, unzip on Linux/macOS
     if (process.platform === 'win32') {
       execFileSync('powershell', [
         '-Command',
         `Expand-Archive -Path '${zipDest.replace(/'/g, "''")}' -DestinationPath '${extractDir.replace(/'/g, "''")}' -Force`
       ], { stdio: 'inherit' });
-      const result = execFileSync('powershell', [
-        '-Command',
-        `Get-ChildItem -Recurse -Filter 'proguard.jar' '${extractDir.replace(/'/g, "''")}' | Select-Object -First 1 -ExpandProperty FullName`
-      ], { stdio: ['ignore', 'pipe', 'pipe'] });
-      const jarPath = result.toString().trim();
-      if (!jarPath) throw new Error('proguard.jar not found in extracted ZIP');
-      copyFileSync(jarPath, dest);
     } else {
-      execFileSync('unzip', ['-o', '-j', zipDest, 'lib/proguard.jar', '-d', dirname(dest)], { stdio: 'inherit' });
+      execFileSync('unzip', ['-o', zipDest, '-d', extractDir], { stdio: 'inherit' });
     }
+    // Search for proguard.jar anywhere in the extracted tree (ZIP structure varies by version)
+    const found = findFileRecursive(extractDir, 'proguard.jar');
+    if (!found) throw new Error('proguard.jar not found in extracted ZIP');
+    copyFileSync(found, dest);
     console.log('[build] ProGuard JAR ready:', dest);
   } finally {
     if (existsSync(zipDest)) unlinkSync(zipDest);
     if (existsSync(extractDir)) rmRecursive(extractDir);
   }
+}
+
+function findFileRecursive(dir, filename) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      const found = findFileRecursive(full, filename);
+      if (found) return found;
+    } else if (entry.name === filename) {
+      return full;
+    }
+  }
+  return null;
 }
 
 function rmRecursive(dir) {
