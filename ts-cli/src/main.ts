@@ -122,6 +122,7 @@ async function cmdStart(args: Record<string, string | boolean>): Promise<void> {
   console.log(`  Workspace: ${workspaceDir}`);
   console.log(`  HTTP API:  http://localhost:${httpPort}`);
   console.log(`  WebSocket: ws://localhost:${wsPort}/ws`);
+  console.log(`  Web UI:    http://localhost:${httpPort}`);
 
   // Ensure JAR exists: build from source (dev) or download from GitHub Releases
   if (!findJar(installDir) || build) {

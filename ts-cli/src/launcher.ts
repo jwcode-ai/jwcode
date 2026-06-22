@@ -152,6 +152,10 @@ export function findJava(): string {
 /**
  * Ensure the backend JAR exists by downloading from GitHub Releases if needed.
  * Returns the JAR path, or null if download fails.
+ *
+ * Tries the current version first, then falls back to previous patch versions.
+ * This handles the case where a new npm release was published but the
+ * corresponding GitHub Release hasn't been created yet.
  */
 export async function ensureBackendJar(installDir: string): Promise<string | null> {
   const existing = findJar(installDir);
@@ -171,57 +175,87 @@ export async function ensureBackendJar(installDir: string): Promise<string | nul
     return null;
   }
 
-  const urls = [
-    `https://ghproxy.com/https://github.com/jwcode-ai/jwcode/releases/download/v${version}/jwcode-web.jar`,
-    `https://github.com/jwcode-ai/jwcode/releases/download/v${version}/jwcode-web.jar`,
-  ];
+  // Build version fallback list: current first, then previous patch versions
+  const versionsToTry = generateVersionFallbacks(version);
 
   console.log(`[launcher] Backend JAR not found. Downloading from GitHub Releases...`);
 
   mkdirSync(backendDir, { recursive: true });
 
-  for (const url of urls) {
-    console.log(`[launcher] Trying: ${url}`);
-    try {
-      const response = await fetch(url);
-      if (!response.ok) {
-        console.log(`[launcher] HTTP ${response.status}, trying next source...`);
-        continue;
-      }
+  for (const v of versionsToTry) {
+    const urls = [
+      `https://ghproxy.com/https://github.com/jwcode-ai/jwcode/releases/download/v${v}/jwcode-web.jar`,
+      `https://github.com/jwcode-ai/jwcode/releases/download/v${v}/jwcode-web.jar`,
+    ];
 
-      const reader = response.body?.getReader();
-      if (!reader) {
-        console.log('[launcher] No response body, trying next source...');
-        continue;
-      }
-
-      const chunks: Uint8Array[] = [];
-      let downloaded = 0;
-      const total = Number(response.headers.get('content-length') || 0);
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-        downloaded += value.length;
-        if (total > 0) {
-          const pct = Math.round((downloaded / total) * 100);
-          process.stdout.write(`\r[launcher] Downloading... ${pct}% (${(downloaded / 1024 / 1024).toFixed(1)} MB)`);
+    for (const url of urls) {
+      console.log(`[launcher] Trying v${v}: ${url}`);
+      try {
+        const response = await fetch(url);
+        if (!response.ok) {
+          console.log(`[launcher] HTTP ${response.status}, trying next source...`);
+          continue;
         }
-      }
 
-      const buf = Buffer.concat(chunks);
-      writeFileSync(jarPath, buf);
-      console.log(`\n[launcher] Download complete: ${jarPath} (${(buf.length / 1024 / 1024).toFixed(1)} MB)`);
-      return jarPath;
-    } catch (err) {
-      console.log(`[launcher] Download failed: ${err instanceof Error ? err.message : String(err)}`);
-      console.log('[launcher] Trying next source...');
+        const reader = response.body?.getReader();
+        if (!reader) {
+          console.log('[launcher] No response body, trying next source...');
+          continue;
+        }
+
+        const chunks: Uint8Array[] = [];
+        let downloaded = 0;
+        const total = Number(response.headers.get('content-length') || 0);
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          downloaded += value.length;
+          if (total > 0) {
+            const pct = Math.round((downloaded / total) * 100);
+            process.stdout.write(`\r[launcher] Downloading... ${pct}% (${(downloaded / 1024 / 1024).toFixed(1)} MB)`);
+          }
+        }
+
+        const buf = Buffer.concat(chunks);
+        writeFileSync(jarPath, buf);
+        console.log(`\n[launcher] Download complete: ${jarPath} (${(buf.length / 1024 / 1024).toFixed(1)} MB)`);
+        return jarPath;
+      } catch (err) {
+        console.log(`[launcher] Download failed: ${err instanceof Error ? err.message : String(err)}`);
+        const isLast = v === versionsToTry[versionsToTry.length - 1] && url === urls[urls.length - 1];
+        if (!isLast) console.log('[launcher] Trying next source...');
+      }
     }
   }
 
   console.error('[launcher] All download sources failed.');
+  console.error('[launcher]');
+  console.error('[launcher] The backend JAR could not be downloaded from GitHub Releases.');
+  console.error('[launcher] This usually means the GitHub Release for this version does not exist yet.');
+  console.error('[launcher]');
+  console.error('[launcher] To fix this:');
+  console.error('[launcher]   1. Run: gh release create v' + version + ' --generate-notes --title "v' + version + '"');
+  console.error('[launcher]   2. Then manually attach the JAR, or reinstall from source.');
+  console.error('[launcher]');
+  console.error('[launcher] Or build from source: git clone https://github.com/jwcode-ai/jwcode && cd jwcode && mvn package -pl jwcode-web -am -DskipTests');
   return null;
+}
+
+/**
+ * Generate version fallback list for JAR download.
+ * Tries the current version first, then up to 5 previous patch versions.
+ */
+function generateVersionFallbacks(version: string): string[] {
+  const versions: string[] = [version];
+  const parts = version.split('.').map(Number);
+  if (parts.length === 3 && parts[2] > 0) {
+    for (let patch = parts[2] - 1; patch >= Math.max(0, parts[2] - 5); patch--) {
+      versions.push(`${parts[0]}.${parts[1]}.${patch}`);
+    }
+  }
+  return [...new Set(versions)];
 }
 
 export function buildBackend(projectRoot: string): void {
