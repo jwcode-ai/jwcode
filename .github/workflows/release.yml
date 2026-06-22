@@ -98,4 +98,7 @@ jobs:
 
       - name: Publish to npm
         working-directory: ts-cli
-        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
+      # TODO: enable --provenance once @jwcode npm scope is linked to jwcode-ai GitHub org
