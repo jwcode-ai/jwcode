@@ -11,11 +11,13 @@ env:
 
 jobs:
   # ============================================================================
-  # Job 1: Build npm package (CLI + JAR)
+  # Single job: build → release → publish (no artifact upload between jobs)
   # ============================================================================
-  build-package:
-    name: Build npm package
+  release:
+    name: Build & Release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -56,74 +58,21 @@ jobs:
       - name: Rename npm tarball to stable name
         working-directory: ts-cli
         run: |
-          mv jwcode-cli-*.tgz "jwcode-cli-${{ github.ref_name }}.tgz"
-
-      - name: Upload npm package artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: npm-package
-          path: ts-cli/jwcode-cli-${{ github.ref_name }}.tgz
-          compression-level: 0
-          retention-days: 3
-
-      - name: Upload backend JAR as separate artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-jar
-          path: ts-cli/backend/jwcode-web.jar
-          compression-level: 0
-          retention-days: 3
-
-  # ============================================================================
-  # Job 2: Create GitHub Release + publish to npm
-  # ============================================================================
-  release:
-    name: Create Release & Publish
-    needs: [build-package]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          registry-url: 'https://registry.npmjs.org'
-
-      - name: Download npm package
-        uses: actions/download-artifact@v4
-        with:
-          name: npm-package
-          path: npm-package
-
-      - name: Download backend JAR
-        uses: actions/download-artifact@v4
-        with:
-          name: backend-jar
-          path: backend-jar
-
-      - name: Copy JAR to ts-cli/backend for publish
-        run: |
-          mkdir -p ts-cli/backend
-          cp backend-jar/jwcode-web.jar ts-cli/backend/jwcode-web.jar
+          mkdir -p assets
+          mv jwcode-cli-*.tgz "assets/jwcode-cli-${{ github.ref_name }}.tgz"
+          cp backend/jwcode-web.jar "assets/jwcode-web.jar"
 
       - name: Create GitHub Release & upload all assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ github.ref_name }}"
-          ASSETS=$(find npm-package backend-jar -type f | tr '\n' ' ')
+          ASSETS=$(find assets -type f | tr '\n' ' ')
           echo "Tag: $TAG"
           echo "Uploading assets: $ASSETS"
           # Delete existing release for this tag to start fresh (e.g. on workflow re-run)
           gh release delete "$TAG" --yes 2>/dev/null || true
           gh release create "$TAG" $ASSETS --generate-notes --title "$TAG"
-
-      - name: Install dependencies for publish
-        working-directory: ts-cli
-        run: npm ci
 
       - name: Sync version from git tag
         working-directory: ts-cli

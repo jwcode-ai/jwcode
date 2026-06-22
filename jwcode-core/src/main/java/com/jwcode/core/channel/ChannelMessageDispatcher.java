@@ -149,7 +149,6 @@ public class ChannelMessageDispatcher {
             @Override public void onStepComplete(String stepName, String result, boolean success) {}
             @Override public void onContentChunk(String chunk) {}
             @Override public void onThinkingChunk(String chunk) {}
-            @Override public void onSwarmEvent(String eventType, String eventData) {}
             @Override public void onTokenUpdate(long promptTokens, long completionTokens, long totalBudget, double usageRatio) {}
             @Override public void onContextCompressed(int originalCount, int compressedCount, long tokensSaved, String summary) {}
 

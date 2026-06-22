@@ -202,43 +202,4 @@ public sealed interface ObservationEvent {
             this(taskId, stepIndex, description, action, stepPrompt, agentType, Instant.now());
         }
     }
-
-    /**
-     * Swarm subtask start - a sub-task in Agent Swarm has begun.
-     */
-    record SwarmTaskStarted(String agentId, String taskId, String description, String type, int priority, Instant timestamp) implements ObservationEvent {
-        public SwarmTaskStarted(String agentId, String taskId, String description, String type, int priority) {
-            this(agentId, taskId, description, type, priority, Instant.now());
-        }
-    }
-
-    /**
-     * Swarm subtask completed - a sub-task in Agent Swarm has finished.
-     */
-    record SwarmTaskCompleted(String agentId, String taskId, String description, boolean success, long durationMs, Instant timestamp) implements ObservationEvent {
-        public SwarmTaskCompleted(String agentId, String taskId, String description, boolean success, long durationMs) {
-            this(agentId, taskId, description, success, durationMs, Instant.now());
-        }
-    }
-
-    /**
-     * Swarm progress update - real-time execution progress report.
-     */
-    record SwarmProgress(int completedTasks, int totalTasks, Instant timestamp) implements ObservationEvent {
-        public SwarmProgress(int completedTasks, int totalTasks) {
-            this(completedTasks, totalTasks, Instant.now());
-        }
-    }
-
-    /**
-     * Swarm agent execution - a SwarmAgent is executing a sub-task via LLM.
-     */
-    record SwarmAgentExecution(String agentId, String taskId, String agentRole,
-                                String task, long durationMs, boolean success,
-                                String result, Instant timestamp) implements ObservationEvent {
-        public SwarmAgentExecution(String agentId, String taskId, String agentRole,
-                                    String task, long durationMs, boolean success, String result) {
-            this(agentId, taskId, agentRole, task, durationMs, success, result, Instant.now());
-        }
-    }
 }

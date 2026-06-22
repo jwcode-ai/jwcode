@@ -204,7 +204,7 @@ StreamingWebSocketHandler (on user message)
 | Module | Purpose |
 |--------|---------|
 | `jwcode-common` | Shared utilities: auth, config, helpers (6 files) |
-| `jwcode-core` | Core engine: 48 tools, 17 agents, LLM orchestration, planner, hooks (~630 files) |
+| `jwcode-core` | Core engine: 50+ tools, 16 agents, LLM orchestration, planner, hooks (~630 files) |
 | `jwcode-web` | HTTP/WS server (`com.sun.net.httpserver`) + React SPA frontend (Vite+Tailwind) |
 | `jwcode-mcp` | MCP client interface (1 file) |
 | `jwcode-parser` | Tree-sitter code analysis (8 files) |
@@ -227,38 +227,26 @@ StreamingWebSocketHandler (on user message)
 - All tool execution passes through `PermissionManager` → `HookChain` → execution
 - Session recovery uses checkpoints + message replay buffer
 
-**Agent Graph System (v3.2 — LangGraph-inspired):**
-- Declarative DAG-based orchestration replacing hardcoded if-else agent pipelines
-- Channel-based state with typed reducers (LastValue, BinaryOp, Topic, Ephemeral)
-- BSP (Bulk Synchronous Parallel) execution: per-superstep plan → execute → write → checkpoint
-- Channel version tracking for fine-grained "which node saw what" incremental execution
-- Interrupt/resume with checkpoint persistence at any superstep boundary
+**Agent Graph System — 实际运行架构 (Workflow IR + EffectVM):**
 
-| Component | Purpose |
-|-----------|---------|
-| `AgentGraph` | Builder DSL: `addNode` / `addEdge` / `addConditionalEdge` / `compile` |
-| `CompiledAgentGraph` | PregelLoop execution engine with channel version tracking |
-| `OrchestratorGraphFactory` | Pre-built workflows: featureDev, bugFix, review, refactor, conditional routing |
-| `GraphState` | Channel collection + subscriber mapping per node |
-| `GraphNode` | Agent wrapper with triggers, writes, retryPolicy, timeout |
-| `GraphEdge` | Simple edges (A→B) or conditional edges (router function) |
-| `Channel<T>` | Typed state slot: `get()` / `update()` / `checkpoint()` / `consume()` |
+实际的 Agent 编排并非通过 LangGraph 风格的图引擎执行，而是使用 **Workflow IR + EffectVM** 运行时：
 
-**Channel semantics (LangGraph equivalents):**
-| Channel | LangGraph | Behavior |
-|---------|-----------|----------|
-| `LastValueChannel<T>` | `LastValue` | Last writer wins (default) |
-| `BinaryOpChannel<T>` | `BinaryOperatorAggregate` | Reducer-merge (e.g. message list append) |
-| `TopicChannel<E>` | `Topic` | Accumulating pub/sub, drained on consume |
-| `EphemeralChannel<T>` | `EphemeralValue` | Not persisted in checkpoints |
+```
+AgentTool.execute()
+  → 构建 WorkflowIR（AgentNode / ToolNode / ParallelNode / PipelineNode）
+  → 序列化为 JSON 到 ~/.jwcode/workflows/<runId>/
+  → EffectVM 执行：
+      LocalAgentHand（LLM 子 Agent 调用）
+      ToolHand（工具节点执行）
+  → 结果聚合并返回
+```
 
-**Checkpoint storage backends:**
-| Backend | File | Use case |
-|---------|------|----------|
-| `InMemoryCheckpointStorage` | `checkpoint/InMemoryCheckpointStorage.java` | Ephemeral sessions, tests |
-| `SqliteCheckpointStorage` | `checkpoint/SqliteCheckpointStorage.java` | Cross-restart durability, WAL mode |
-
-SQLite schema: `checkpoints` (id, session, step, ts, source, channel_values) + `channel_versions` + `versions_seen` + `writes`. Database stored at `~/.jwcode/checkpoints/<sessionId>.db`.
+| 组件 | 文件 | 职责 |
+|------|------|------|
+| `AgentTool` | `tool/AgentTool.java` | 子 Agent 创建与编排入口，构建 WorkflowIR |
+| `LocalAgentHand` | `hands/LocalAgentHand.java` | 子 Agent LLM 调用执行（支持代理模式 / LLM 模式 / 全引擎模式）|
+| `ToolHand` | `hands/ToolHand.java` | Workflow 中 ToolNode 的执行 |
+| `EffectVM` | `runtime/` | Workflow IR 运行时引擎 |
 
 ## Task Management System — Blackboard Pattern (v3.1)
 
@@ -364,10 +352,9 @@ Bash 的 `cd` 命令只在当前进程有效，不会持久化到会话。AI 的
 
 - **Entry point:** `jwcode-web/.../WebLauncher.java` (starts `WebServer` with `com.sun.net.httpserver`)
 - **Agent system:** `jwcode-core/.../agent/` — 17 types: Orchestrator, Coder, Debugger, Architect, Reviewer, Explorer, etc.
-- **Agent graph:** `jwcode-core/.../graph/` — AgentGraph builder, CompiledAgentGraph (PregelLoop), OrchestratorGraphFactory
-- **Graph channels:** `jwcode-core/.../graph/channel/` — LastValueChannel, BinaryOpChannel, TopicChannel, EphemeralChannel (typed state slots for the agent graph)
+- **Agent system:** `jwcode-core/.../agent/` — 16 types: Orchestrator, Coder, Debugger, Architect, Reviewer, Explorer, etc.
+- **Workflow runtime:** `jwcode-core/.../hands/` — LocalAgentHand, ToolHand; `jwcode-core/.../tool/AgentTool.java` (Workflow IR builder)
 - **Messaging channels:** `jwcode-core/.../channel/` — ChannelAdapter, ChannelRegistry, ChannelMessageDispatcher, `wechat/` (external messaging integrations: WeChat now, Feishu/DingTalk pluggable)
-- **Checkpoint storage:** `jwcode-core/.../checkpoint/` — CheckpointStorage, InMemoryCheckpointStorage, SqliteCheckpointStorage
 - **Tools:** `jwcode-core/.../tool/` — 48 tools: `execution/`, `shell/`, `analysis/`, `permission/`, `io/` (plus ChangeDirectoryTool for directory switching)
 - **Task system:** `jwcode-core/.../task/` — `TaskStore` (blackboard), `ActiveTask` (session projection), `TaskLifecycleManager` (intent detection + AIPlanner integration)
 - **Mode system:** `jwcode-core/.../plan/PlanModeManager.java` — NORMAL/PLAN/ACT/GOAL modes with tool permission isolation

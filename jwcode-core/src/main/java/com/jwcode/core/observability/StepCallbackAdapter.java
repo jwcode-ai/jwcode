@@ -53,15 +53,6 @@ public class StepCallbackAdapter implements ObservationPipeline.Observer {
                 e.arguments(),
                 true));
             callback.onStepAction(e.toolName(), "执行 " + e.toolName());
-        } else if (event instanceof ObservationEvent.SwarmTaskStarted e) {
-            String data = "{\"agentId\":\"" + escapeJson(e.agentId()) + "\",\"taskId\":\"" + escapeJson(e.taskId()) + "\",\"description\":\"" + escapeJson(e.description()) + "\",\"type\":\"" + e.type() + "\",\"priority\":" + e.priority() + "}";
-            callback.onSwarmEvent("task_start", data);
-        } else if (event instanceof ObservationEvent.SwarmTaskCompleted e) {
-            String data = "{\"agentId\":\"" + escapeJson(e.agentId()) + "\",\"taskId\":\"" + escapeJson(e.taskId()) + "\",\"description\":\"" + escapeJson(e.description()) + "\",\"success\":" + e.success() + ",\"durationMs\":" + e.durationMs() + "}";
-            callback.onSwarmEvent("task_complete", data);
-        } else if (event instanceof ObservationEvent.SwarmProgress e) {
-            String data = "{\"completedTasks\":" + e.completedTasks() + ",\"totalTasks\":" + e.totalTasks() + "}";
-            callback.onSwarmEvent("progress", data);
         }
         // 其他事件类型 StepCallback 不支持，静默丢弃
     }

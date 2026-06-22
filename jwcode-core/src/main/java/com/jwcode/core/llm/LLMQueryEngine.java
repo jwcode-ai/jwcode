@@ -110,9 +110,6 @@ public class LLMQueryEngine {
     private java.util.List<String> lastToolNames = new java.util.ArrayList<>();
     // 【优化】重复工具检测计数器
     private int repeatedToolPatternCount = 0;
-    // AgentSwarm 共享实例 + 锁
-    private com.jwcode.core.advanced.swarm.AgentSwarm sharedSwarm;
-    private final Object swarmLock = new Object();
     // 【修复】纯思考无行动检测：连续仅有 reasoning 但无文本/无工具调用的轮数
     private int consecutiveThinkingOnlyRounds = 0;
     // 【修复】连续失败工具轮数检测：连续 N 轮工具调用全部失败则强制终止
@@ -300,13 +297,6 @@ public class LLMQueryEngine {
         default void onThinkingChunk(String chunk) {}
 
         /**
-         * Swarm event - real-time Agent Swarm execution event.
-         * @param eventType event type: task_start / task_complete / progress
-         * @param eventData JSON-encoded event payload
-         */
-        default void onSwarmEvent(String eventType, String eventData) {}
-        
-        /**
          * 流式工具调用片段（实时推送部分工具调用参数）
          */
         default void onToolCallChunk(LLMService.StreamToolCallEvent event) {}
@@ -324,20 +314,6 @@ public class LLMQueryEngine {
                                          long tokensSaved, String summary) {}
     }
     
-    /**
-     * 执行查询
-     */
-    private com.jwcode.core.advanced.swarm.AgentSwarm getSharedAgentSwarm() {
-        if (sharedSwarm == null) {
-            synchronized (swarmLock) {
-                if (sharedSwarm == null) {
-                    sharedSwarm = new com.jwcode.core.advanced.swarm.AgentSwarm(llmService);
-                }
-            }
-        }
-        return sharedSwarm;
-    }
-
     public CompletableFuture<QueryResult> query(String prompt) {
         Agent currentAgent = agentRegistry != null ? agentRegistry.getCurrent() : null;
         String agentName = currentAgent != null ? currentAgent.getName() : "default";
@@ -381,8 +357,6 @@ public class LLMQueryEngine {
         // 【优化】重置无进展检测计数器
         resetStagnationDetectors();
 
-        // Auto Swarm: 如果启用，分析任务复杂度并注入分解计划
-        checkAndInjectSwarmPlan(prompt);
 
         // 开始对话循环，初始空回复计数为 0
         return runConversationLoop(0, 0);
@@ -748,8 +722,6 @@ public class LLMQueryEngine {
         // 【优化】重置无进展检测计数器
         resetStagnationDetectors();
 
-        // Auto Swarm: 如果启用，分析任务复杂度并注入分解计划
-        checkAndInjectSwarmPlan(prompt);
 
         return runStreamConversationLoop(0, 0, contentConsumer, thinkingConsumer, toolCallConsumer);
     }
@@ -1897,35 +1869,6 @@ public class LLMQueryEngine {
 
     // ==================== 数据类 ====================
     
-    private void checkAndInjectSwarmPlan(String prompt) {
-        Boolean autoSwarmEnabled = session.getMetadata("autoSwarmEnabled");
-        if (!Boolean.TRUE.equals(autoSwarmEnabled)) {
-            autoSwarmEnabled = Boolean.parseBoolean(
-                com.jwcode.core.config.ConfigManager.getInstance().get("autoSwarm.enabled"));
-        }
-        if (!Boolean.TRUE.equals(autoSwarmEnabled)) return;
-
-        try {
-            // Use shared AgentSwarm instead of creating new one each query (prevents thread pool leak)
-            com.jwcode.core.advanced.swarm.AgentSwarm swarm = getSharedAgentSwarm();
-            com.jwcode.core.advanced.swarm.AutoSwarmTrigger trigger =
-                new com.jwcode.core.advanced.swarm.AutoSwarmTrigger(swarm);
-            com.jwcode.core.advanced.swarm.AutoSwarmTrigger.TaskAnalysis analysis = trigger.analyzeTask(prompt);
-            logger.info("[AutoSwarm] 复杂度=" + analysis.getComplexity() + " 触发=" + analysis.isShouldUseSwarm());
-
-            if (analysis.isShouldUseSwarm()) {
-                var result = swarm.executeComplexTask(prompt, null, pipeline::publish);
-                String plan = result.getFinalResult() != null ? result.getFinalResult().toString() : "";
-                session.addMessage(Message.createSystemMessage(
-                    "[自动 Agent Swarm 分析]\n" + plan +
-                    "\n\n请基于以上 Swarm 分析结果继续执行任务。"));
-                logger.info("[AutoSwarm] 已注入 Swarm 分解计划 (" + result.getSubTaskCount() + " 个子任务)");
-            }
-        } catch (Exception e) {
-            logger.warning("[AutoSwarm] 分析失败: " + e.getMessage());
-        }
-    }
-
     public static class EngineConfig {
         private int maxIterations = 50; // 默认 50 轮迭代上限，防止无限循环
         private Duration timeout = Duration.ofMinutes(5);
