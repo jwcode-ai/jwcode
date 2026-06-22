@@ -6,7 +6,7 @@ on:
       - 'v*'
 
 env:
-  NODE_VERSION: '20'
+  NODE_VERSION: '22'
   JAVA_VERSION: '17'
 
 jobs:
@@ -64,6 +64,7 @@ jobs:
           name: npm-package
           path: ts-cli/jwcode-cli-${{ github.ref_name }}.tgz
           compression-level: 0
+          retention-days: 3
 
       - name: Upload backend JAR as separate artifact
         uses: actions/upload-artifact@v4
@@ -71,6 +72,7 @@ jobs:
           name: backend-jar
           path: ts-cli/backend/jwcode-web.jar
           compression-level: 0
+          retention-days: 3
 
   # ============================================================================
   # Job 2: Create GitHub Release + publish to npm
