@@ -42,5 +42,25 @@ nul
 # === Node.js portable ===
 jwcode-web/node/
 
+# === Docs (internal, not for distribution) ===
+docs/ARCHITECTURE_V2.md
+docs/FRONTEND_ANALYSIS.md
+docs/JWCODE_PRODUCT_DESIGN.md
+docs/UI_DESIGN_SUGGESTIONS.md
+
+# === Removed modules ===
+jwcode-parser/
+
+# === Logs & temp ===
+*.log
+*.bak
+
+# === JVM ===
+hs_err_pid*
+replay_pid*
+
+# === Auto-generated ===
+.attach_*
+
 # Nested ts-cli git repo
 ts-cli/.git/
