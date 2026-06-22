@@ -3727,7 +3727,6 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                     sendMessage(querySessionId, MessageType.TOKEN_UPDATE, json);
                 }
 
-                @Override
                 public void onSwarmEvent(String eventType, String eventData) {
                     // 将 Swarm 事件转换为 AgentFlowView 识别的 dispatch/complete 格式
                     try {

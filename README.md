@@ -45,10 +45,10 @@
 
 ```bash
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/jwcode/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ngwlh/jwcode/main/install.sh | sh
 
 # Windows
-powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/jwcode/main/install.ps1 | iex"
+powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/ngwlh/jwcode/main/install.ps1 | iex"
 ```
 
 ### 手动启动 / Manual Start
@@ -303,7 +303,7 @@ cd ts-cli && npm run go
 
 - 📖 [完整文档](docs/)
 - 💬 微信群 / Discord（建设中）
-- 🐛 [Issues](https://github.com/jwcode/jwcode/issues)
+- 🐛 [Issues](https://github.com/ngwlh/jwcode/issues)
 - ⭐ Star 我们——让更多 Java 开发者看到！
 
 ---

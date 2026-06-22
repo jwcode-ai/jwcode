@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # JWCode installer — one-command setup.
-# curl -fsSL https://raw.githubusercontent.com/jwcode/main/install.sh | sh
+# curl -fsSL https://raw.githubusercontent.com/ngwlh/jwcode/main/install.sh | sh
 #
 # Detects: Java 17+, Node 18+, OS/platform
 # Installs: JWCode CLI (npm), backend JAR, daemon service
@@ -89,7 +89,7 @@ check_permissions() {
 download_backend() {
   info "Downloading JWCode backend (${JWCODE_VERSION})..."
   local jar_url jar_path
-  jar_url="https://github.com/jwcode/jwcode/releases/${JWCODE_VERSION}/download/jwcode-web.jar"
+  jar_url="https://github.com/ngwlh/jwcode/releases/${JWCODE_VERSION}/download/jwcode-web.jar"
   jar_path="${JWCODE_BACKEND_DIR}/jwcode-web.jar"
 
   if command -v curl &>/dev/null; then
@@ -172,7 +172,7 @@ print_summary() {
   echo "    jwcode doctor         # Run diagnostics"
   echo ""
   echo "  Config: ${JWCODE_HOME}/config.yaml"
-  echo "  Docs:   https://github.com/jwcode/jwcode"
+  echo "  Docs:   https://github.com/ngwlh/jwcode"
   echo ""
 }
 
