@@ -206,13 +206,17 @@ public class LspClientImpl implements LspService {
                 }
                 
                 if (inputReader != null) {
-                    try { inputReader.close(); } catch (IOException ignored) {}
+                    try { inputReader.close(); } catch (IOException ignored) {
+                        LOGGER.finest("Failed to close LSP input reader");
+                    }
                 }
-                
+
                 if (outputWriter != null) {
-                    try { outputWriter.close(); } catch (IOException ignored) {}
+                    try { outputWriter.close(); } catch (IOException e) {
+                        LOGGER.finest("Failed to close LSP output writer: " + e.getMessage());
+                    }
                 }
-                
+
                 // 清理挂起的请求
                 pendingRequests.forEach((id, request) -> {
                     request.future.completeExceptionally(

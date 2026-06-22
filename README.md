@@ -1,5 +1,7 @@
 # JWCode
 
+Durable workflow runtime notes: [docs/workflow-runtime.md](docs/workflow-runtime.md)
+
 > Java AI Coding Tool — v1.0.0-SNAPSHOT | 5 模块 | 17 Agent | 47 Tool
 > 最后自动生成: 2026-05-26
 

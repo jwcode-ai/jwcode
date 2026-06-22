@@ -12,13 +12,16 @@ import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
+import java.util.logging.Logger;
 
 /**
  * 团队管理器
  * 管理团队的创建、删除、成员管理等操作
  */
 public class TeamManager {
-    
+
+    private static final Logger LOGGER = Logger.getLogger(TeamManager.class.getName());
+
     private static final String DATA_DIR = ".jwcode";
     private static final String TEAMS_FILE = "teams.json";
     private static final String MEMBERS_FILE = "team_members.json";
@@ -272,7 +275,7 @@ public class TeamManager {
                 teamMembers.putAll(membersMap);
             }
         } catch (IOException e) {
-            System.err.println("加载团队数据失败: " + e.getMessage());
+            LOGGER.warning("Failed to load team data: " + e.getMessage());
         }
     }
     
@@ -289,7 +292,7 @@ public class TeamManager {
             String membersContent = objectMapper.writeValueAsString(teamMembers);
             Files.writeString(membersFilePath, membersContent);
         } catch (IOException e) {
-            System.err.println("保存团队数据失败: " + e.getMessage());
+            LOGGER.warning("Failed to save team data: " + e.getMessage());
         }
     }
     

@@ -1,9 +1,8 @@
 package com.jwcode.core.tool;
 
-import com.jwcode.core.a2a.model.ErrorSummary;
-import com.jwcode.core.a2a.model.RetryPolicy;
-import com.jwcode.core.a2a.retry.RetryOrchestrator;
-import com.jwcode.core.a2a.retry.RetryStrategy;
+import com.jwcode.core.tool.retry.RetryOrchestrator;
+import com.jwcode.core.tool.retry.RetryPolicy;
+import com.jwcode.core.tool.retry.RetryStrategy;
 
 import java.nio.file.Path;
 import java.util.List;

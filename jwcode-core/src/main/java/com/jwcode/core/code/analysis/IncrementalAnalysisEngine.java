@@ -9,6 +9,7 @@ import com.jwcode.core.code.semantic.GraphStats;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.logging.Logger;
 
 /**
  * 增量分析引擎 - 高效处理大项目的核心组件
@@ -35,7 +36,9 @@ import java.util.concurrent.*;
  * @since 2.0.0
  */
 public class IncrementalAnalysisEngine {
-    
+
+    private static final Logger LOGGER = Logger.getLogger(IncrementalAnalysisEngine.class.getName());
+
     private final SyntaxEngine syntaxEngine;
     private final SmartProjectAnalyzer projectAnalyzer;
     private final AnalysisCache cache;
@@ -208,7 +211,7 @@ public class IncrementalAnalysisEngine {
                     results.put(file, tree);
                 } catch (Exception e) {
                     // 记录错误但不中断其他文件
-                    System.err.println("解析失败: " + file + " - " + e.getMessage());
+                    LOGGER.warning("Parse failed: " + file + " - " + e.getMessage());
                 }
             }, executor))
             .toList();
@@ -229,7 +232,7 @@ public class IncrementalAnalysisEngine {
         try {
             query = syntaxEngine.createQuery(queryPattern);
         } catch (Exception e) {
-            System.err.println("查询编译失败: " + e.getMessage());
+            LOGGER.warning("Query compilation failed: " + e.getMessage());
             return List.of();
         }
         List<QueryMatch> allMatches = new ArrayList<>();
@@ -239,7 +242,7 @@ public class IncrementalAnalysisEngine {
                 List<QueryMatch> matches = query.execute(entry.getValue());
                 allMatches.addAll(matches);
             } catch (Exception e) {
-                System.err.println("查询失败: " + entry.getKey() + " - " + e.getMessage());
+                LOGGER.warning("Query failed: " + entry.getKey() + " - " + e.getMessage());
             }
         }
         

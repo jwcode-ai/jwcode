@@ -3,6 +3,7 @@ package com.jwcode.web;
 import com.jwcode.core.api.AgentFlowBroadcaster;
 import com.jwcode.core.api.PlanTaskBroadcaster;
 import com.jwcode.core.config.ConfigInitializer;
+import com.jwcode.core.log.LoggingBridge;
 import com.jwcode.core.config.ConfigManager;
 import com.jwcode.core.config.JwcodeConfig;
 import com.jwcode.core.config.YamlConfigLoader;
@@ -47,6 +48,8 @@ public class WebServer {
     private final ToolRegistry toolRegistry;
     private final String workspaceDir;
     private CodebaseIndexer codebaseIndexer;
+    private com.jwcode.core.channel.ChannelRegistry channelRegistry;
+    private com.jwcode.core.channel.ChannelMessageDispatcher channelDispatcher;
 
     public WebServer(int port, int wsPort, ToolRegistry toolRegistry, String workspaceDir) {
         this.port = port;
@@ -73,24 +76,25 @@ public class WebServer {
     }
 
     public void start() throws IOException {
+        LoggingBridge.install();
         new ConfigInitializer().initialize();
 
         try {
             sandboxExecutor = new com.jwcode.core.tool.shell.DockerSandboxExecutor(Path.of(workspaceDir));
             com.jwcode.core.tool.BashTool.setBackgroundExecutor(sandboxExecutor);
-            System.out.println("[WebServer] Docker sandbox initialized");
+            logger.info("Docker sandbox initialized");
         } catch (Exception e) {
-            System.err.println("[WebServer] Sandbox init failed: " + e.getMessage());
+            logger.warning("Sandbox init failed: " + e.getMessage());
         }
 
         try {
             int pluginCount = PluginManager.getInstance().discoverAndLoadAll();
             if (pluginCount > 0) {
                 toolRegistry.registerPluginTools(PluginManager.getInstance());
-                System.out.println("[WebServer] Loaded plugins: " + pluginCount);
+                logger.info("Loaded plugins: " + pluginCount);
             }
         } catch (Exception e) {
-            System.err.println("[WebServer] Plugin init failed: " + e.getMessage());
+            logger.warning("Plugin init failed: " + e.getMessage());
         }
 
         server = HttpServer.create(new InetSocketAddress(port), 0);
@@ -113,6 +117,7 @@ public class WebServer {
         server.createContext("/api/files", new FilesHandler());
         server.createContext("/api/system", new SystemStatusHandler());
         server.createContext("/api/checkpoints", new CheckpointsHandler());
+        server.createContext("/api/workflows", new WorkflowHandler(toolRegistry, workspaceDir));
         server.createContext("/api/observability", new ObservabilityHandler());
 
         MetricsHandler metricsHandler = new MetricsHandler();
@@ -141,14 +146,13 @@ public class WebServer {
         }
 
         {
-            com.jwcode.core.channel.ChannelRegistry channelRegistry =
-                new com.jwcode.core.channel.ChannelRegistry();
+            channelRegistry = new com.jwcode.core.channel.ChannelRegistry();
             channelRegistry.registerFactory("wechat",
                 cfg -> new com.jwcode.core.channel.wechat.WechatChannelAdapter());
             channelRegistry.load();
-            com.jwcode.core.channel.ChannelMessageDispatcher dispatcher =
+            channelDispatcher =
                 new com.jwcode.core.channel.ChannelMessageDispatcher(toolRegistry, channelRegistry);
-            dispatcher.start();
+            channelDispatcher.start();
             server.createContext("/api/channels", new ChannelsHandler(channelRegistry));
         }
 
@@ -188,8 +192,6 @@ public class WebServer {
 
         logger.info("Web UI server started: http://localhost:" + port);
         logger.info("WebSocket server started: ws://localhost:" + wsPort);
-        System.out.println("[WebServer] Web UI started: http://localhost:" + port);
-        System.out.println("[WebServer] WebSocket port: " + wsPort);
     }
 
     public void stop() {
@@ -205,6 +207,16 @@ public class WebServer {
         }
         if (terminalHandler != null) {
             terminalHandler.shutdown();
+        }
+        if (channelDispatcher != null) {
+            try { channelDispatcher.stop(); } catch (Exception e) {
+                logger.warning("Channel dispatcher stop error: " + e.getMessage());
+            }
+        }
+        if (channelRegistry != null) {
+            try { channelRegistry.shutdown(); } catch (Exception e) {
+                logger.warning("Channel registry shutdown error: " + e.getMessage());
+            }
         }
         if (sandboxExecutor != null) {
             sandboxExecutor.shutdown();
@@ -248,7 +260,7 @@ public class WebServer {
                 });
 
             codebaseIndexer.startWatching();
-            System.out.println("[WebServer] Semantic search enabled");
+            logger.info("Semantic search enabled");
         } catch (Exception e) {
             logger.warning("Codebase index init failed: " + e.getMessage());
             codebaseIndexer = null;
@@ -451,4 +463,3 @@ public class WebServer {
         return wsPort;
     }
 }
-

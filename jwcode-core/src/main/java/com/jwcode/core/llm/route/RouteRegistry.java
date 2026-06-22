@@ -66,7 +66,9 @@ public class RouteRegistry {
             if (uri.getPath() != null && !uri.getPath().isEmpty() && !uri.getPath().equals("/")) {
                 cleanBaseUrl = new URI(uri.getScheme(), uri.getAuthority(), null, null, null).toString();
             }
-        } catch (URISyntaxException ignored) {}
+        } catch (URISyntaxException e) {
+            logger.warning("Invalid baseUrl: " + baseUrl + " — " + e.getMessage());
+        }
 
         Endpoint endpoint = new Endpoint(cleanBaseUrl, "/v1/messages");
         if (protocol == Protocol.OPENAI_COMPATIBLE_CHAT) {

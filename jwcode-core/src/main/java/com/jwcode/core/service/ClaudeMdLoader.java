@@ -388,7 +388,9 @@ public class ClaudeMdLoader {
                 files.filter(p -> p.toString().endsWith(".md"))
                     .sorted()
                     .forEach(paths::add);
-            } catch (IOException ignored) {}
+            } catch (IOException e) {
+                logger.finest("Cannot list rules directory: " + e.getMessage());
+            }
         }
 
         return paths;

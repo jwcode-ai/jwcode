@@ -54,6 +54,7 @@ public class Session {
     private int maxMessageHistory = 0; // 默认 0 表示不限制
     private String currentAgentId; // 当前绑定的 Agent ID，用于子代理上下文隔离
     private final Set<String> injectedFragmentIds = new java.util.HashSet<>(); // 已注入的片段 ID
+    private volatile int workingDirectoryVersion; // 工作目录变更版本号（用于环境缓存刷新）
     private EventSystem eventSystem; // 事件系统（EventBus + EventStore + SessionProjector）
     
     public Session(String id, String workingDirectory) {
@@ -90,9 +91,18 @@ public class Session {
     public String getTitle() { return title; }
     public void setTitle(String title) { this.title = title; this.updatedAt = Instant.now(); }
     public String getWorkingDirectory() { return workingDirectory; }
-    public void setWorkingDirectory(String workingDirectory) { 
-        this.workingDirectory = workingDirectory != null ? workingDirectory : System.getProperty("user.dir"); 
-        this.updatedAt = Instant.now(); 
+    public void setWorkingDirectory(String workingDirectory) {
+        this.workingDirectory = workingDirectory != null ? workingDirectory : System.getProperty("user.dir");
+        this.workingDirectoryVersion++;
+        this.updatedAt = Instant.now();
+    }
+
+    /**
+     * 获取工作目录变更版本号。
+     * 每次工作目录变更时递增，用于环境缓存刷新检测。
+     */
+    public int getWorkingDirectoryVersion() {
+        return workingDirectoryVersion;
     }
     public String getModel() { return model; }
     public void setModel(String model) { this.model = model; this.updatedAt = Instant.now(); }

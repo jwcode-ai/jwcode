@@ -29,7 +29,7 @@ import java.util.logging.Logger;
  * <h3>架构位置</h3>
  * <p>
  * HookChain 位于 Governance Layer（横向切面），横跨 4 层架构的各层边界。
- * 在 {@code ToolExecutor}、{@code StateMachine}、{@code A2AFacade} 等关键节点
+ * 在 {@code ToolExecutor}、{@code StateMachine}、{@code Workflow Runtime} 等关键节点
  * 被调用，形成生命周期拦截网络。
  * </p>
  *
@@ -39,6 +39,29 @@ import java.util.logging.Logger;
 public class HookChain {
 
     private static final Logger logger = Logger.getLogger(HookChain.class.getName());
+
+    /** 全局 HookChain 引用（供 TaskStore 等组件无依赖注入地触发 Hook 事件） */
+    private static volatile HookChain globalInstance;
+
+    /**
+     * 设置全局 HookChain 实例（由 HookSystemInitializer 在初始化时调用）。
+     */
+    public static void setGlobalInstance(HookChain chain) {
+        globalInstance = chain;
+        logger.fine("[HookChain] Global instance set");
+    }
+
+    /**
+     * 获取全局 HookChain 实例。
+     */
+    public static HookChain getGlobalInstance() {
+        return globalInstance;
+    }
+
+    /** 检查全局 HookChain 是否可用。 */
+    public static boolean isGloballyAvailable() {
+        return globalInstance != null;
+    }
 
     private final HookRegistry registry;
     private final HookAuditLogger auditLogger;

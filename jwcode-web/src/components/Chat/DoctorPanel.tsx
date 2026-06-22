@@ -20,7 +20,7 @@ export const DoctorPanel = memo(function DoctorPanel() {
       setRunning(false);
     };
     wsService.onMessage(handler);
-    wsService.send({ type: 'doctor' as any });
+    wsService.send({ type: 'doctor' });
   };
 
   return (
@@ -31,8 +31,8 @@ export const DoctorPanel = memo(function DoctorPanel() {
       </button>
       {results.length > 0 && (
         <div className="space-y-0.5 text-xs font-mono">
-          {results.map((r, i) => (
-            <div key={i} className={r.ok ? 'text-accent-green' : 'text-accent-red'}>
+          {results.map((r) => (
+            <div key={r.name} className={r.ok ? 'text-accent-green' : 'text-accent-red'}>
               {r.ok ? '✅' : '❌'} {r.name}: {r.detail}
             </div>
           ))}

@@ -12,6 +12,7 @@ import com.jwcode.core.config.JwcodeConfig;
 import com.jwcode.core.config.YamlConfigLoader;
 import com.jwcode.core.llm.*;
 import com.jwcode.core.index.CodebaseIndexer;
+import com.jwcode.core.memory.FileMemoryLayer;
 import com.jwcode.core.permission.PermissionManager;
 import com.jwcode.core.plan.PlanModeManager;
 import com.jwcode.core.session.Session;
@@ -19,6 +20,23 @@ import com.jwcode.core.service.ContextWindowManager;
 import com.jwcode.core.tool.Tool;
 import com.jwcode.core.tool.ToolExecutor;
 import com.jwcode.core.tool.ToolRegistry;
+import com.jwcode.core.hands.LocalAgentHand;
+import com.jwcode.core.hands.ToolHand;
+import com.jwcode.core.workflow.EffectVM;
+import com.jwcode.core.workflow.WorkflowArtifactStore;
+import com.jwcode.core.workflow.WorkflowCompiler;
+import com.jwcode.core.workflow.WorkflowEvent;
+import com.jwcode.core.workflow.WorkflowEventBus;
+import com.jwcode.core.workflow.WorkflowIR;
+import com.jwcode.core.workflow.WorkflowInput;
+import com.jwcode.core.workflow.WorkflowLedger;
+import com.jwcode.core.workflow.WorkflowResult;
+import com.jwcode.core.workflow.WorkflowState;
+import com.jwcode.core.workflow.WorkflowStatus;
+import com.jwcode.core.workflow.ir.AgentNode;
+import com.jwcode.core.workflow.ir.ErrorMode;
+import com.jwcode.core.workflow.ir.PhaseNode;
+import com.jwcode.core.workflow.ir.PipelineNode;
 import com.jwcode.web.WebSessionManager;
 
 import org.java_websocket.WebSocket;
@@ -26,15 +44,21 @@ import org.java_websocket.handshake.ClientHandshake;
 import org.java_websocket.server.WebSocketServer;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
@@ -81,6 +105,9 @@ import java.util.logging.Logger;
 public class StreamingWebSocketHandler extends WebSocketServer {
     
     private static final Logger logger = Logger.getLogger(StreamingWebSocketHandler.class.getName());
+    private static final ObjectMapper WORKFLOW_MAPPER = new ObjectMapper().registerModule(new JavaTimeModule());
+    private static final WorkflowCompiler WORKFLOW_COMPILER = new WorkflowCompiler();
+    private static final String PLAN_SYSTEM_PROMPT_MARKER = "[JWCODE_PLAN_SYSTEM_PROMPT]";
     
     // 心跳检测配置
     private static final long PING_INTERVAL_MS = 30000; // 30秒发送一次 ping
@@ -88,10 +115,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     private static final long CONNECTION_TIMEOUT_MS = 300000; // 5分钟无活动则断开
     
     // 认证配置（从系统配置读取）
-    private String validToken = "default-token"; // 默认与前端一致，可通过系统属性/环境变量覆盖
-    
-    // 已认证的连接集合
-    private final Map<WebSocket, Boolean> authenticatedConnections;
+    private final com.jwcode.web.auth.WebSocketAuthenticator authenticator;
     
     private final Map<String, Session> sessions;
     private final ToolRegistry toolRegistry;
@@ -105,6 +129,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     
     // 跟踪每个 sessionId 正在执行的 Future，连接断开时取消
     private final Map<String, java.util.concurrent.Future<?>> runningQueryFutures;
+    private final Map<String, java.util.concurrent.Future<?>> runningWorkflowFutures;
     
     // 跟踪被暂停的查询（sessionId -> 暂停锁对象）
     private final Set<String> pausedQuerySessions;
@@ -179,9 +204,11 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         this.logListeners = new ConcurrentHashMap<>();
         this.lastPongTime = new ConcurrentHashMap<>();
         this.lastActivityTime = new ConcurrentHashMap<>();
-        this.authenticatedConnections = new ConcurrentHashMap<>();
+        this.authenticator = new com.jwcode.web.auth.WebSocketAuthenticator(
+            (conn, type, payload) -> sendMessage(conn, MessageType.valueOf(type.toUpperCase()), payload));
         this.pendingMessages = new ConcurrentHashMap<>();
         this.runningQueryFutures = new ConcurrentHashMap<>();
+        this.runningWorkflowFutures = new ConcurrentHashMap<>();
         this.pausedQuerySessions = ConcurrentHashMap.newKeySet();
         
         // 初始化查询线程池：核心 4，最大 16，60 秒回收，有界队列 100
@@ -217,7 +244,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         });
         
         // 从配置读取有效 token
-        loadConfig();
+        loadPermissionConfig();
 
         // 初始化 Hook 审批系统 — Bash/FileWrite 操作需要用户确认
         try {
@@ -227,9 +254,9 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             registry.register(new com.jwcode.core.hook.FileWriteAuditHook());
             var auditLogger = new com.jwcode.core.hook.HookAuditLogger();
             this.hookChain = new com.jwcode.core.hook.HookChain(registry, auditLogger);
-            System.out.println("[WS] Hook系统已初始化: BashSafety + FileWriteAudit (shell/文件写入需用户确认)");
+            logger.info("Hook system initialized: BashSafety + FileWriteAudit");
         } catch (Exception e) {
-            System.err.println("[WS] Hook init failed: " + e.getMessage());
+            logger.warning("Hook init failed: " + e.getMessage());
         }
 
         // 启动心跳检测（ScheduledExecutorService 替代手工线程）
@@ -278,65 +305,9 @@ public class StreamingWebSocketHandler extends WebSocketServer {
     }
     
     /**
-     * 检查连接是否已认证
+     * 从配置加载权限设置（token 由 WebSocketAuthenticator 管理）。
      */
-    private boolean isAuthenticated(WebSocket conn) {
-        Boolean authenticated = authenticatedConnections.get(conn);
-        return authenticated != null && authenticated;
-    }
-    
-    /**
-     * 处理认证消息
-     */
-    private void handleAuthMessage(WebSocket conn, ClientMessage msg) {
-        // 防御：validToken 不应为空（正常启动后应已加载或生成）
-        if (validToken == null || validToken.isEmpty()) {
-            logger.severe("认证失败: validToken 未配置");
-            sendMessage(conn, MessageType.AUTH_FAILED, "Server configuration error: token not set");
-            return;
-        }
-        String token = msg.token;
-        
-        if (token == null || token.isEmpty()) {
-            logger.warning("认证失败: token 为空");
-            sendMessage(conn, MessageType.AUTH_FAILED, "Token is required");
-            return;
-        }
-        
-        if (validToken.equals(token)) {
-            authenticatedConnections.put(conn, true);
-            logger.info("认证成功: " + conn.getRemoteSocketAddress());
-            sendMessage(conn, MessageType.AUTH_SUCCESS, "Authenticated");
-        } else {
-            logger.warning("认证失败: " + conn.getRemoteSocketAddress() + ", token=" + maskToken(token));
-            sendMessage(conn, MessageType.AUTH_FAILED, "Invalid token");
-        }
-    }
-    
-    /**
-     * 脱敏显示 token
-     */
-    private String maskToken(String token) {
-        if (token == null || token.length() < 8) return "***";
-        return token.substring(0, 4) + "****" + token.substring(token.length() - 4);
-    }
-    
-    /**
-     * 检查连接是否已认证，如未认证则拒绝
-     */
-    private boolean checkAuthentication(WebSocket conn) {
-        if (!isAuthenticated(conn)) {
-            sendMessage(conn, MessageType.AUTH_REQUIRED, "Authentication required");
-            return false;
-        }
-        return true;
-    }
-    
-    /**
-     * 从配置加载设置
-     * 优先级：系统属性 > 环境变量 > 配置文件 > 默认值
-     */
-    private void loadConfig() {
+    private void loadPermissionConfig() {
         // 0. 传播权限配置到 PermissionManager（必须在早期返回之前执行）
         try {
             JwcodeConfig config = YamlConfigLoader.getInstance().getConfig();
@@ -356,55 +327,6 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             logger.fine("无法传播权限配置: " + e.getMessage());
         }
 
-        // 1. 先尝试从系统属性读取
-        String tokenFromProp = System.getProperty("jwcode.websocket.token");
-        if (tokenFromProp != null && !tokenFromProp.isEmpty()) {
-            this.validToken = tokenFromProp;
-            logger.info("从系统属性加载 WebSocket token");
-            return;
-        }
-
-        // 2. 尝试从环境变量读取
-        String tokenFromEnv = System.getenv("JWCODE_WEBSOCKET_TOKEN");
-        if (tokenFromEnv != null && !tokenFromEnv.isEmpty()) {
-            this.validToken = tokenFromEnv;
-            logger.info("从环境变量加载 WebSocket token");
-            return;
-        }
-
-        // 3. 尝试从 YAML 配置读取（通过全局设置）
-        try {
-            JwcodeConfig config = YamlConfigLoader.getInstance().getConfig();
-            if (config != null && config.getSettings() != null) {
-                JwcodeConfig.AdvancedSettings advanced = config.getSettings().getAdvanced();
-                if (advanced != null) {
-                    // 这里可以扩展读取 websocket 配置
-                }
-            }
-        } catch (Exception e) {
-            logger.fine("无法从 YAML 配置加载: " + e.getMessage());
-        }
-
-        // 4. 所有配置源均未提供 token，使用默认值（与前端 'default-token' 一致）
-        //    生产环境请通过 -Djwcode.websocket.token=xxx 或 JWCODE_WEBSOCKET_TOKEN=xxx 配置自定义 token
-        try {
-            java.nio.file.Path jwcodeDir = java.nio.file.Paths.get(
-                System.getProperty("user.home"), ".jwcode");
-            java.nio.file.Path tokenFile = jwcodeDir.resolve(".websocket_token");
-            if (java.nio.file.Files.exists(tokenFile)) {
-                String fileToken = java.nio.file.Files.readString(tokenFile).trim();
-                if (!fileToken.isEmpty()) {
-                    this.validToken = fileToken;
-                    logger.info("从 " + tokenFile + " 加载 WebSocket token");
-                    return;
-                }
-            }
-            logger.info("使用默认 WebSocket token (default-token)，可通过系统属性/环境变量覆盖");
-            java.nio.file.Files.createDirectories(jwcodeDir);
-            java.nio.file.Files.writeString(tokenFile, this.validToken);
-        } catch (Exception e) {
-            logger.info("使用默认 WebSocket token (default-token)");
-        }
     }
     
     /**
@@ -639,7 +561,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         }
         
         // 清理认证状态
-        authenticatedConnections.remove(conn);
+        authenticator.removeConnection(conn);
         
         // 清理会话关联（双向映射）
         String sessionId = connectionSessions.remove(conn);
@@ -668,12 +590,12 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             
             // 处理认证（不需要认证）
             if ("auth".equals(clientMsg.type)) {
-                handleAuthMessage(conn, clientMsg);
+                authenticator.handleAuth(conn, clientMsg.token);
                 return;
             }
             
             // 其他消息需要认证
-            if (!isAuthenticated(conn)) {
+            if (!authenticator.isAuthenticated(conn)) {
                 logger.warning("连接未认证: " + conn.getRemoteSocketAddress());
                 sendMessage(conn, MessageType.AUTH_REQUIRED, "Authentication required");
                 return;
@@ -692,6 +614,23 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                 case "plan":
                     logger.info("处理 plan 消息");
                     handlePlanMessage(conn, clientMsg);
+                    break;
+                case "workflow_start":
+                    logger.info("handle workflow_start message");
+                    handleWorkflowStart(conn, clientMsg);
+                    break;
+                case "workflow_resume":
+                    logger.info("handle workflow_resume message");
+                    handleWorkflowResume(conn, clientMsg);
+                    break;
+                case "workflow_status":
+                    handleWorkflowStatus(conn, clientMsg);
+                    break;
+                case "workflow_cancel":
+                    handleWorkflowCancel(conn, clientMsg);
+                    break;
+                case "workflow_pause":
+                    handleWorkflowPause(conn, clientMsg);
                     break;
                 case "ping":
                     lastPongTime.put(conn, System.currentTimeMillis());
@@ -831,8 +770,10 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                     sendMessage(conn, MessageType.EXIT, "Server shutting down...");
                     // 异步关闭，先让响应发出去
                     new Thread(() -> {
-                        try { Thread.sleep(500); } catch (InterruptedException ignored) {}
-                        System.exit(0);
+                        try { Thread.sleep(500); } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            System.exit(0);
+                        }
                     }).start();
                     break;
                 default:
@@ -1082,6 +1023,411 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         });
         runningQueryFutures.put(finalSessionId, future);
     }
+
+    private void handleWorkflowStart(WebSocket conn, ClientMessage msg) {
+        String sessionId = getOrGenerateSessionId(conn, msg);
+        Session session = sessions.get(sessionId);
+        if (session == null) {
+            session = createNewSession(sessionId, msg.model);
+        }
+        connectionSessions.put(conn, sessionId);
+        activeSessionConnections.put(sessionId, conn);
+
+        String runId = msg.runId != null && !msg.runId.isBlank()
+            ? msg.runId
+            : "wf-" + UUID.randomUUID();
+
+        try {
+            WorkflowIR ir = resolveWorkflowIR(msg, runId);
+            WorkflowInput input = buildWorkflowInput(sessionId, msg);
+            saveWorkflowIR(runId, ir);
+            sendMessage(conn, MessageType.WORKFLOW_STARTED, workflowRunJson(runId, sessionId, "RUNNING"), sessionId);
+            sendMessage(conn, MessageType.START, "", sessionId);
+            java.util.concurrent.Future<?> future = queryExecutor.submit(() -> executeWorkflowRun(sessionId, runId, ir, input));
+            runningWorkflowFutures.put(runId, future);
+        } catch (Exception e) {
+            logger.log(java.util.logging.Level.SEVERE, "workflow_start failed", e);
+            sendMessage(conn, MessageType.WORKFLOW_ERROR, workflowErrorJson(runId, e.getMessage()), sessionId);
+        }
+    }
+
+    private void handleWorkflowResume(WebSocket conn, ClientMessage msg) {
+        String sessionId = getOrGenerateSessionId(conn, msg);
+        connectionSessions.put(conn, sessionId);
+        activeSessionConnections.put(sessionId, conn);
+
+        if (msg.runId == null || msg.runId.isBlank()) {
+            sendMessage(conn, MessageType.WORKFLOW_ERROR, workflowErrorJson("", "workflow_resume requires runId"), sessionId);
+            return;
+        }
+
+        try {
+            WorkflowLedger existingLedger = new WorkflowLedger(msg.runId, workflowRunDirectory(msg.runId));
+            if (existingLedger.replayState().status() == com.jwcode.core.workflow.WorkflowStatus.CANCELLED && !msg.forceResume) {
+                sendMessage(conn, MessageType.WORKFLOW_ERROR,
+                    workflowErrorJson(msg.runId, "Cannot resume cancelled workflow without forceResume=true"), sessionId);
+                return;
+            }
+            WorkflowIR ir = hasWorkflowIR(msg) ? resolveWorkflowIR(msg, msg.runId) : readWorkflowIR(msg.runId);
+            WorkflowInput input = buildWorkflowInput(sessionId, msg);
+            saveWorkflowIR(msg.runId, ir);
+            sendMessage(conn, MessageType.WORKFLOW_STARTED, workflowRunJson(msg.runId, sessionId, "RESUMING"), sessionId);
+            java.util.concurrent.Future<?> future = queryExecutor.submit(() -> executeWorkflowRun(sessionId, msg.runId, ir, input));
+            runningWorkflowFutures.put(msg.runId, future);
+        } catch (Exception e) {
+            logger.log(java.util.logging.Level.SEVERE, "workflow_resume failed", e);
+            sendMessage(conn, MessageType.WORKFLOW_ERROR, workflowErrorJson(msg.runId, e.getMessage()), sessionId);
+        }
+    }
+
+    private void handleWorkflowStatus(WebSocket conn, ClientMessage msg) {
+        String sessionId = getOrGenerateSessionId(conn, msg);
+        if (msg.runId == null || msg.runId.isBlank()) {
+            sendMessage(conn, MessageType.WORKFLOW_ERROR, workflowErrorJson("", "workflow_status requires runId"), sessionId);
+            return;
+        }
+        try {
+            Path runDir = workflowRunDirectory(msg.runId);
+            WorkflowState state = Files.exists(runDir.resolve("events.jsonl"))
+                ? new WorkflowLedger(msg.runId, runDir).replayState()
+                : new WorkflowState(msg.runId);
+            ObjectNode json = WORKFLOW_MAPPER.createObjectNode();
+            json.put("runId", msg.runId);
+            json.put("sessionId", sessionId);
+            json.put("status", state.status().name());
+            json.put("completedEffects", state.completedEffectsCount());
+            json.put("completedPhases", state.completedPhasesCount());
+            json.put("tokensUsed", state.tokensUsed());
+            sendMessage(conn, MessageType.WORKFLOW_PROGRESS, json.toString(), sessionId);
+        } catch (Exception e) {
+            sendMessage(conn, MessageType.WORKFLOW_ERROR, workflowErrorJson(msg.runId, e.getMessage()), sessionId);
+        }
+    }
+
+    private void handleWorkflowCancel(WebSocket conn, ClientMessage msg) {
+        String sessionId = getOrGenerateSessionId(conn, msg);
+        if (msg.runId == null || msg.runId.isBlank()) {
+            sendMessage(conn, MessageType.WORKFLOW_ERROR, workflowErrorJson("", "workflow_cancel requires runId"), sessionId);
+            return;
+        }
+        java.util.concurrent.Future<?> future = runningWorkflowFutures.remove(msg.runId);
+        if (future != null) {
+            future.cancel(true);
+        }
+        try {
+            new WorkflowLedger(msg.runId, workflowRunDirectory(msg.runId)).append("run.cancelled", Map.of());
+        } catch (Exception e) {
+            logger.fine("Failed to append workflow cancellation: " + e.getMessage());
+        }
+        sendMessage(conn, MessageType.WORKFLOW_FINISHED, workflowRunJson(msg.runId, sessionId, "CANCELLED"), sessionId);
+    }
+
+    private void handleWorkflowPause(WebSocket conn, ClientMessage msg) {
+        String sessionId = getOrGenerateSessionId(conn, msg);
+        if (msg.runId == null || msg.runId.isBlank()) {
+            sendMessage(conn, MessageType.WORKFLOW_ERROR, workflowErrorJson("", "workflow_pause requires runId"), sessionId);
+            return;
+        }
+        try {
+            new WorkflowLedger(msg.runId, workflowRunDirectory(msg.runId)).append("run.paused", Map.of());
+        } catch (Exception e) {
+            logger.fine("Failed to append workflow pause: " + e.getMessage());
+        }
+        sendMessage(conn, MessageType.WORKFLOW_PROGRESS, workflowRunJson(msg.runId, sessionId, "PAUSED"), sessionId);
+    }
+
+    private void executeWorkflowRun(String sessionId, String runId, WorkflowIR ir, WorkflowInput input) {
+        Path runDir = workflowRunDirectory(runId);
+        WorkflowEventBus eventBus = new WorkflowEventBus();
+        eventBus.subscribe(event -> sendWorkflowEvent(sessionId, event));
+        try {
+            WorkflowLedger ledger = new WorkflowLedger(runId, runDir, eventBus);
+            EffectVM vm = new EffectVM(
+                ledger,
+                new WorkflowArtifactStore(runDir),
+                createWorkflowAgentHand(sessionId),
+                createWorkflowToolHand(),
+                createWorkflowMemoryLayer());
+            WorkflowResult result = vm.execute(runId, ir, input);
+            if (result.status() == WorkflowStatus.COMPLETED) {
+                ObjectNode done = WORKFLOW_MAPPER.createObjectNode();
+                done.put("runId", runId);
+                done.put("sessionId", sessionId);
+                done.put("status", result.status().name());
+                done.set("output", result.output());
+                sendMessage(sessionId, MessageType.WORKFLOW_FINISHED, done.toString());
+                sendMessage(sessionId, MessageType.COMPLETE, "");
+            } else if (result.status() == WorkflowStatus.PAUSED) {
+                sendMessage(sessionId, MessageType.WORKFLOW_PROGRESS, workflowRunJson(runId, sessionId, "PAUSED"));
+            } else if (result.status() == WorkflowStatus.CANCELLED) {
+                sendMessage(sessionId, MessageType.WORKFLOW_FINISHED, workflowRunJson(runId, sessionId, "CANCELLED"));
+                sendMessage(sessionId, MessageType.COMPLETE, "");
+            } else {
+                sendMessage(sessionId, MessageType.WORKFLOW_ERROR, workflowErrorJson(runId, result.errorMessage()));
+                sendMessage(sessionId, MessageType.ERROR, result.errorMessage() == null ? "Workflow failed" : result.errorMessage());
+            }
+        } catch (Exception e) {
+            logger.log(java.util.logging.Level.SEVERE, "workflow execution failed", e);
+            sendMessage(sessionId, MessageType.WORKFLOW_ERROR, workflowErrorJson(runId, e.getMessage()));
+            sendMessage(sessionId, MessageType.ERROR, e.getMessage() == null ? "Workflow failed" : e.getMessage());
+        } finally {
+            runningWorkflowFutures.remove(runId);
+        }
+    }
+
+    private LLMQueryEngine.StepCallback createWorkflowStepCallback(String sessionId) {
+        return new LLMQueryEngine.StepCallback() {
+            @Override
+            public void onStepStart(String stepName, String description) {
+                String json = String.format(
+                    "{\"step\":\"%s\",\"description\":\"%s\",\"status\":\"start\"}",
+                    escapeJson(stepName), escapeJson(description));
+                sendMessage(sessionId, MessageType.STEP_START, json);
+            }
+
+            @Override
+            public void onStepThinking(String stepName, String thought) {
+                String json = String.format(
+                    "{\"step\":\"%s\",\"thought\":\"%s\",\"status\":\"thinking\"}",
+                    escapeJson(stepName), escapeJson(thought));
+                sendMessage(sessionId, MessageType.STEP_THINKING, json);
+            }
+
+            @Override
+            public void onStepAction(String stepName, String action) {
+                String json = String.format(
+                    "{\"step\":\"%s\",\"action\":\"%s\",\"status\":\"action\"}",
+                    escapeJson(stepName), escapeJson(action));
+                sendMessage(sessionId, MessageType.STEP_ACTION, json);
+            }
+
+            @Override
+            public void onStepComplete(String stepName, String result, boolean success) {
+                String json = String.format(
+                    "{\"step\":\"%s\",\"result\":\"%s\",\"status\":\"%s\"}",
+                    escapeJson(stepName), escapeJson(result), success ? "success" : "error");
+                sendMessage(sessionId, MessageType.STEP_COMPLETE, json);
+            }
+
+            @Override
+            public void onToolResult(String toolName, String result, String toolCallId) {
+                String json = String.format(
+                    "{\"id\":\"%s\",\"toolName\":\"%s\",\"result\":\"%s\"}",
+                    escapeJson(toolCallId), escapeJson(toolName), escapeJson(result));
+                sendMessage(sessionId, MessageType.TOOL_RESULT, json);
+            }
+
+            @Override
+            public void onToolCallChunk(LLMService.StreamToolCallEvent event) {
+                String json = String.format(
+                    "{\"id\":\"%s\",\"name\":\"%s\",\"args\":\"%s\",\"complete\":%b,\"index\":%d}",
+                    escapeJson(event.getId()),
+                    escapeJson(event.getName()),
+                    escapeJson(event.getArguments()),
+                    event.isComplete(),
+                    event.getIndex());
+                sendMessage(sessionId, MessageType.TOOL_CALL, json);
+            }
+        };
+    }
+
+    private LocalAgentHand createWorkflowAgentHand(String sessionId) {
+        ToolExecutor toolExecutor = createWorkflowToolExecutor();
+        try {
+            JwcodeConfig config = YamlConfigLoader.getInstance().getConfig();
+            LLMService llmService = LLMFactory.fromConfig(config).getLLMService();
+            return new LocalAgentHand(
+                llmService,
+                toolExecutor,
+                Path.of(defaultWorkingDirectory),
+                null,
+                createWorkflowMemoryLayer(),
+                createWorkflowStepCallback(sessionId));
+        } catch (Exception e) {
+            logger.warning("Workflow LocalAgentHand falling back to echo mode: " + e.getMessage());
+            return new LocalAgentHand();
+        }
+    }
+
+    private ToolHand createWorkflowToolHand() {
+        return new ToolHand(createWorkflowToolExecutor(), Path.of(defaultWorkingDirectory));
+    }
+
+    private ToolExecutor createWorkflowToolExecutor() {
+        return new ToolExecutor(
+            this.toolRegistry,
+            new com.jwcode.core.permission.PermissionManagerChecker(),
+            null,
+            this.hookChain);
+    }
+
+    private WorkflowIR resolveWorkflowIR(ClientMessage msg, String runId) {
+        JsonNode irNode = firstWorkflowIRNode(msg);
+        if (irNode != null) {
+            return WORKFLOW_COMPILER.fromJson(irNode.toString());
+        }
+        if (msg.data != null && msg.data.trim().startsWith("{")) {
+            try {
+                return WORKFLOW_COMPILER.fromJson(msg.data);
+            } catch (Exception ignored) {
+                // data may be an arbitrary payload, not an IR.
+            }
+        }
+        return defaultWorkflowIR(runId, msg.message != null ? msg.message : msg.data);
+    }
+
+    private boolean hasWorkflowIR(ClientMessage msg) {
+        if (firstWorkflowIRNode(msg) != null) {
+            return true;
+        }
+        if (msg.data == null || !msg.data.trim().startsWith("{")) {
+            return false;
+        }
+        try {
+            WORKFLOW_COMPILER.fromJson(msg.data);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private JsonNode firstWorkflowIRNode(ClientMessage msg) {
+        if (isWorkflowIRNode(msg.workflow)) return msg.workflow;
+        if (isWorkflowIRNode(msg.ir)) return msg.ir;
+        if (isWorkflowIRNode(msg.dataNode)) return msg.dataNode;
+        return null;
+    }
+
+    private boolean isWorkflowIRNode(JsonNode node) {
+        return node != null && node.isObject() && node.has("root");
+    }
+
+    private WorkflowInput buildWorkflowInput(String sessionId, ClientMessage msg) {
+        JsonNode payload;
+        if (msg.input != null && !msg.input.isNull()) {
+            payload = msg.input;
+        } else {
+            ObjectNode object = WORKFLOW_MAPPER.createObjectNode();
+            if (msg.message != null) object.put("message", msg.message);
+            if (msg.dataNode != null && !msg.dataNode.isNull()) object.set("data", msg.dataNode);
+            else if (msg.data != null) object.put("data", msg.data);
+            object.put("workingDirectory", defaultWorkingDirectory);
+            payload = object;
+        }
+        Map<String, Object> metadata = new java.util.LinkedHashMap<>();
+        metadata.put("transport", "websocket");
+        metadata.put("projectId", msg.projectId != null && !msg.projectId.isBlank()
+            ? msg.projectId
+            : Path.of(defaultWorkingDirectory).toAbsolutePath().normalize().toString());
+        metadata.put("memoryEnabled", msg.memoryEnabled == null || msg.memoryEnabled);
+        metadata.put("checkpointPolicy", msg.checkpointPolicy == null || msg.checkpointPolicy.isBlank()
+            ? "phase-and-token"
+            : msg.checkpointPolicy);
+        if (msg.forceResume) {
+            metadata.put("forceResume", true);
+        }
+        return new WorkflowInput(sessionId, payload, metadata);
+    }
+
+    private WorkflowIR defaultWorkflowIR(String runId, String message) {
+        String request = message == null || message.isBlank() ? "Execute the requested workflow." : message;
+        List<String> readTools = List.of("FileReadTool", "BatchReadTool", "GrepTool", "GlobTool", "ToolSearch", "SmartAnalyzeTool");
+        List<String> codeTools = List.of("FileReadTool", "BatchReadTool", "GrepTool", "GlobTool", "FileEditTool",
+            "FileWriteTool", "BashTool", "PowerShell", "TodoWrite");
+        List<String> verifyTools = List.of("FileReadTool", "BatchReadTool", "GrepTool", "GlobTool", "BashTool",
+            "PowerShell", "GitTool", "LSPTool");
+        return new WorkflowIR(
+            "websocket-" + runId,
+            new PipelineNode("root-pipeline", List.of(
+                new PhaseNode("p1-explore", "explore", List.of(
+                    new AgentNode("e1-explore", "explorer",
+                        "Explore the repository and clarify implementation constraints for this request:\n\n" + request,
+                        readTools, null, 0, 0))),
+                new PhaseNode("p2-code", "code", List.of(
+                    new AgentNode("e2-code", "coder",
+                        "Implement the requested change using the exploration result as context:\n\n" + request,
+                        codeTools, null, 0, 0))),
+                new PhaseNode("p3-verify", "verify", List.of(
+                    new AgentNode("e3-verify", "verifier",
+                        "Verify the implementation, run appropriate checks, and summarize remaining risk for:\n\n" + request,
+                        verifyTools, null, 0, 0)))
+            ), ErrorMode.FAIL_FAST),
+            null,
+            "workflow-ir.v1");
+    }
+
+    private void sendWorkflowEvent(String sessionId, WorkflowEvent event) {
+        String json = workflowEventJson(event);
+        sendMessage(sessionId, MessageType.WORKFLOW_EVENT, json);
+        if (event.totalEffects() > 0 || event.totalPhases() > 0) {
+            sendMessage(sessionId, MessageType.WORKFLOW_PROGRESS, json);
+        }
+    }
+
+    private String workflowEventJson(WorkflowEvent event) {
+        ObjectNode json = WORKFLOW_MAPPER.createObjectNode();
+        json.put("eventId", event.eventId());
+        json.put("runId", event.runId());
+        json.put("type", event.type());
+        json.put("timestamp", event.timestamp().toString());
+        json.put("sequence", event.sequence());
+        if (event.phaseId() != null) json.put("phaseId", event.phaseId());
+        if (event.effectId() != null) json.put("effectId", event.effectId());
+        json.put("completedEffects", event.completedEffects());
+        json.put("totalEffects", event.totalEffects());
+        json.put("completedPhases", event.completedPhases());
+        json.put("totalPhases", event.totalPhases());
+        json.put("tokensUsed", event.tokensUsed());
+        json.put("tokensRemaining", event.tokensRemaining());
+        json.set("data", WORKFLOW_MAPPER.valueToTree(event.data()));
+        return json.toString();
+    }
+
+    private String workflowRunJson(String runId, String sessionId, String status) {
+        ObjectNode json = WORKFLOW_MAPPER.createObjectNode();
+        json.put("runId", runId);
+        json.put("sessionId", sessionId);
+        json.put("status", status);
+        json.put("workflowRoot", workflowRunDirectory(runId).toString());
+        return json.toString();
+    }
+
+    private String workflowErrorJson(String runId, String error) {
+        ObjectNode json = WORKFLOW_MAPPER.createObjectNode();
+        json.put("runId", runId == null ? "" : runId);
+        json.put("error", error == null ? "Workflow failed" : error);
+        return json.toString();
+    }
+
+    private Path workflowRootDirectory() {
+        return Path.of(System.getProperty(
+            "jwcode.workflow.root",
+            Path.of(System.getProperty("user.home"), ".jwcode", "workflows").toString()));
+    }
+
+    private Path workflowRunDirectory(String runId) {
+        return workflowRootDirectory().resolve(runId);
+    }
+
+    private FileMemoryLayer createWorkflowMemoryLayer() {
+        return new FileMemoryLayer(Path.of(System.getProperty(
+            "jwcode.memory.root",
+            Path.of(System.getProperty("user.home"), ".jwcode").toString())));
+    }
+
+    private void saveWorkflowIR(String runId, WorkflowIR ir) throws Exception {
+        Path runDir = workflowRunDirectory(runId);
+        Files.createDirectories(runDir);
+        Files.writeString(runDir.resolve("ir.json"), WORKFLOW_COMPILER.toJson(ir), StandardCharsets.UTF_8);
+    }
+
+    private WorkflowIR readWorkflowIR(String runId) throws Exception {
+        Path irFile = workflowRunDirectory(runId).resolve("ir.json");
+        if (!Files.exists(irFile)) {
+            throw new IllegalArgumentException("Workflow IR not found for runId: " + runId);
+        }
+        return WORKFLOW_COMPILER.fromJson(Files.readString(irFile, StandardCharsets.UTF_8));
+    }
     
     /**
      * Plan 模式的系统提示词 - 用于指导 AI 进行任务规划
@@ -1097,7 +1443,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
      * FileReadTool 等）来探索项目结构、读取文件内容，以做出更准确的分析。
      */
     private String getPlanSystemPrompt() {
-        return """
+        return PLAN_SYSTEM_PROMPT_MARKER + "\n" + """
             # Plan 模式 — 只读需求分析专家
 
             ## 当前工作目录
@@ -1174,6 +1520,13 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             - 用 FileReadTool 读取关键文件的具体内容
             - 基于实际代码内容做出准确的分析和判断
             """;
+    }
+
+    private int clearPlanSystemPrompt(Session session) {
+        if (session == null) {
+            return 0;
+        }
+        return session.removeSystemMessagesContaining(PLAN_SYSTEM_PROMPT_MARKER);
     }
     
     /**
@@ -1429,7 +1782,9 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                             if (!finalResponse.hasError()) {
                                 fullContentBuilder.append(finalResponse.getContent());
                             }
-                        } catch (Exception ignored) {}
+                        } catch (Exception e) {
+                            logger.warning("Plan final response (max rounds) failed: " + e.getMessage());
+                        }
                         finished = true;
                         break;
                     }
@@ -1448,7 +1803,9 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                             if (!finalResponse.hasError()) {
                                 fullContentBuilder.append(finalResponse.getContent());
                             }
-                        } catch (Exception ignored) {}
+                        } catch (Exception e) {
+                            logger.warning("Plan final response (tool errors) failed: " + e.getMessage());
+                        }
                         finished = true;
                         break;
                     }
@@ -1796,6 +2153,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                     } else {
                         success = modeManager.enterActMode();
                     }
+                    sessions.values().forEach(this::clearPlanSystemPrompt);
                     break;
                 default:
                     logger.warning("plan_mode_change: 未知模式 " + newModeStr);
@@ -1806,8 +2164,10 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             logger.info("PlanMode 切换: " + previousModeStr + " → " + newModeStr + ", success=" + success);
             
             // 广播模式切换事件到所有客户端（保持与 PlanModeManager 监听器一致的广播方式）
+            String resolvedSessionId = getOrGenerateSessionId(conn, msg);
             String modeEventJson = String.format(
-                "{\"previousMode\":\"%s\",\"newMode\":\"%s\",\"success\":%b,\"timestamp\":%d}",
+                "{\"sessionId\":\"%s\",\"previousMode\":\"%s\",\"newMode\":\"%s\",\"success\":%b,\"timestamp\":%d}",
+                escapeJson(resolvedSessionId),
                 escapeJson(previousModeStr),
                 escapeJson(newModeStr),
                 success,
@@ -1821,7 +2181,8 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             
             // 发送 ack 给请求客户端
             sendMessage(conn, MessageType.PLAN_MODE_CHANGE, 
-                "{\"ack\":true,\"previousMode\":\"" + escapeJson(previousModeStr) 
+                "{\"ack\":true,\"sessionId\":\"" + escapeJson(resolvedSessionId)
+                + "\",\"previousMode\":\"" + escapeJson(previousModeStr) 
                 + "\",\"newMode\":\"" + escapeJson(newModeStr) + "\",\"success\":" + success + "}");
             
         } catch (Exception e) {
@@ -2524,16 +2885,15 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         // Reuse the plan execution flow — LLM generates the final implementation
         connectionSessions.put(conn, sessionId);
         activeSessionConnections.put(sessionId, conn);
-        sendMessage(conn, MessageType.PLAN_START, escapeJson("Executing plan..."));
         final WebSocket clientConn = conn;
         final Session clientSession = session;
         final String finalSessionId = sessionId;
         cancelRunningQuery(finalSessionId);
         java.util.concurrent.Future<?> future = queryExecutor.submit(() -> {
-            executePlanQuery(clientConn, clientSession,
-                "The user has approved the plan. Now execute it step by step. " +
-                "Refer to the task list above and implement each task." +
-                (msg.message != null && !msg.message.isEmpty() ? " User instructions: " + msg.message : ""));
+            executeQuery(clientConn, clientSession,
+                "The user has approved the plan. Execute it step by step in Act mode. " +
+                "Use the existing plan and task list as the implementation guide." +
+                (msg.message != null && !msg.message.isEmpty() ? "\n\nApproved plan:\n" + msg.message : ""));
         });
         runningQueryFutures.put(finalSessionId, future);
     }
@@ -2625,7 +2985,9 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             // Parse steps count from data (default: 1)
             int steps = 1;
             if (msg.data != null && !msg.data.isEmpty()) {
-                try { steps = Integer.parseInt(msg.data.trim()); } catch (NumberFormatException ignored) {}
+                try { steps = Integer.parseInt(msg.data.trim()); } catch (NumberFormatException ignored) {
+                    // Use default steps=1
+                }
             }
             if (steps < 1) steps = 1;
             // Remove the last N assistant + user message pairs
@@ -2709,7 +3071,9 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                 var config = com.jwcode.core.config.YamlConfigLoader.getInstance().getConfig();
                 var modelDef = config.getDefaultModel();
                 report.append("  Max tokens: ").append(modelDef != null ? modelDef.getMaxTokens() : "unknown").append("\n");
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                logger.fine("Failed to get model config for token report: " + e.getMessage());
+            }
             sendMessage(conn, MessageType.NOTIFICATION, escapeJson(report.toString()));
         } catch (Exception e) {
             logger.warning("handleTokensCommand error: " + e.getMessage());
@@ -2876,7 +3240,9 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             sendCommandComplete(conn, msg, name, result.getMessage());
             sendMessage(conn, MessageType.EXIT, "Server shutting down...");
             new Thread(() -> {
-                try { Thread.sleep(500); } catch (InterruptedException ignored) {}
+                try { Thread.sleep(500); } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
                 System.exit(0);
             }).start();
             return;
@@ -2968,7 +3334,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
                 session.setModel(defaultModel);
             } else {
                 // 没有配置模型，记录警告
-                System.err.println("[警告] 未配置默认模型，请检查配置文件");
+                logger.warning("No default model configured, check config file");
                 session.setModel("unknown");
             }
         }
@@ -3054,7 +3420,12 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             || type == MessageType.COMPLETE
             || type == MessageType.ERROR
             || type == MessageType.STEP_COMPLETE
-            || type == MessageType.TOOL_RESULT;
+            || type == MessageType.TOOL_RESULT
+            || type == MessageType.WORKFLOW_STARTED
+            || type == MessageType.WORKFLOW_EVENT
+            || type == MessageType.WORKFLOW_PROGRESS
+            || type == MessageType.WORKFLOW_FINISHED
+            || type == MessageType.WORKFLOW_ERROR;
     }
     
     /**
@@ -3131,6 +3502,11 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             case STEP_COMPLETE:
             case NOTIFICATION:
             case LOG:
+            case WORKFLOW_STARTED:
+            case WORKFLOW_EVENT:
+            case WORKFLOW_PROGRESS:
+            case WORKFLOW_FINISHED:
+            case WORKFLOW_ERROR:
                 sessionStore.appendMessage(sessionId, type.name().toLowerCase(), data);
                 break;
             default:
@@ -3435,6 +3811,12 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             };
             
             // 执行流式查询
+            int removedPlanPrompts = clearPlanSystemPrompt(session);
+            if (removedPlanPrompts > 0) {
+                logger.info("Cleared " + removedPlanPrompts
+                    + " stale Plan system prompt(s) before Act query, sessionId=" + querySessionId);
+            }
+
             LLMQueryEngine.QueryResult result = engine.queryStream(message, contentConsumer, thinkingConsumer, toolCallConsumer).join();
             
             // 发送实时 Token 用量（修复: Act 模式缺少 Token 更新推送）
@@ -3599,6 +3981,15 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             if (root.has("data")) msg.data = root.get("data").asText();
             if (root.has("model")) msg.model = root.get("model").asText();
             if (root.has("token")) msg.token = root.get("token").asText();
+            if (root.has("runId")) msg.runId = root.get("runId").asText();
+            if (root.has("workflow")) msg.workflow = root.get("workflow");
+            if (root.has("ir")) msg.ir = root.get("ir");
+            if (root.has("input")) msg.input = root.get("input");
+            if (root.has("data")) msg.dataNode = root.get("data");
+            if (root.has("projectId")) msg.projectId = root.get("projectId").asText();
+            if (root.has("memoryEnabled")) msg.memoryEnabled = root.get("memoryEnabled").asBoolean();
+            if (root.has("checkpointPolicy")) msg.checkpointPolicy = root.get("checkpointPolicy").asText();
+            if (root.has("forceResume")) msg.forceResume = root.get("forceResume").asBoolean(false);
         } catch (Exception e) {
             logger.warning("Jackson 解析 JSON 失败，回退到正则解析: " + e.getMessage());
             // 回退到正则解析
@@ -3608,6 +3999,7 @@ public class StreamingWebSocketHandler extends WebSocketServer {
             msg.data = extractJsonValue(json, "data");
             msg.model = extractJsonValue(json, "model");
             msg.token = extractJsonValue(json, "token");
+            msg.runId = extractJsonValue(json, "runId");
         }
         
         return msg;
@@ -3761,6 +4153,11 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         DOCS_UPDATED,       // 文档更新完成
         TOMBSTONE,          // Tombstone 消息：通知前端清理孤立 assistant 消息
         EXIT,                // 退出后端服务
+        WORKFLOW_STARTED,
+        WORKFLOW_EVENT,
+        WORKFLOW_PROGRESS,
+        WORKFLOW_FINISHED,
+        WORKFLOW_ERROR,
         COMMAND_START,      // command_start event
         COMMAND_OUTPUT,     // command_output event (v2 streaming, unused in v1)
         COMMAND_COMPLETE,   // command_complete event
@@ -3907,5 +4304,14 @@ public class StreamingWebSocketHandler extends WebSocketServer {
         String data;
         String model;
         String token;
+        String runId;
+        JsonNode workflow;
+        JsonNode ir;
+        JsonNode input;
+        JsonNode dataNode;
+        String projectId;
+        Boolean memoryEnabled;
+        String checkpointPolicy;
+        boolean forceResume;
     }
 }

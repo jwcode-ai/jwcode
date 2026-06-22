@@ -204,7 +204,7 @@ StreamingWebSocketHandler (on user message)
 | Module | Purpose |
 |--------|---------|
 | `jwcode-common` | Shared utilities: auth, config, helpers (6 files) |
-| `jwcode-core` | Core engine: 47 tools, 17 agents, LLM orchestration, planner, hooks (~630 files) |
+| `jwcode-core` | Core engine: 48 tools, 17 agents, LLM orchestration, planner, hooks (~630 files) |
 | `jwcode-web` | HTTP/WS server (`com.sun.net.httpserver`) + React SPA frontend (Vite+Tailwind) |
 | `jwcode-mcp` | MCP client interface (1 file) |
 | `jwcode-parser` | Tree-sitter code analysis (8 files) |
@@ -260,6 +260,106 @@ StreamingWebSocketHandler (on user message)
 
 SQLite schema: `checkpoints` (id, session, step, ts, source, channel_values) + `channel_versions` + `versions_seen` + `writes`. Database stored at `~/.jwcode/checkpoints/<sessionId>.db`.
 
+## Task Management System — Blackboard Pattern (v3.1)
+
+任务系统采用**黑板架构**（Blackboard Pattern），通过 `TaskStore` 中央黑板统一管理所有任务状态：
+
+```
+                    ┌─────────────────────────────────┐
+                    │       TaskStore (黑�?)            │
+                    │   EventType: CREATED/UPDATED/    │
+                    │   COMPLETED/DELETED              │
+                    │   Subscription: subscribe()       │
+                    └──────────┬──────────────────────┘
+                               │ 事件流
+              ┌────────────────┼────────────────┬──────────────┐
+              ▼                ▼                ▼              ▼
+      ActiveTask(视图)    AIPlanner(写)    TaskCreate(写)    HookChain
+      会话层投影            自动分解步骤       AI 手动创建      TASK_CREATED
+                                                                 TASK_COMPLETED
+```
+
+### 核心组件
+
+| 组件 | 文件 | 职责 |
+|------|------|------|
+| `TaskStore` | `task/TaskStore.java` | 中央黑板：KV 存储 + EventType 事件 + 订阅系统 + 持久化 |
+| `ActiveTask` | `task/ActiveTask.java` | 会话层黑板投影，通过 TaskEvent 同步 |
+| `TaskLifecycleManager` | `task/TaskLifecycleManager.java` | 意图检测 + AIPlanner 分解，结果写入黑板 |
+| `Task (model)` | `task/Task.java` | 任务数据模型（id, title, status, priority, parentId） |
+
+### EventType 事件系统
+
+| 事件 | 触发时机 | Hook 映射 |
+|------|----------|-----------|
+| `CREATED` | TaskStore.create() | → `TASK_CREATED` |
+| `UPDATED` | TaskStore.update() | — |
+| `STATUS_CHANGED` | 状态字段变化 | — |
+| `COMPLETED` | 状态变为 COMPLETED | → `TASK_COMPLETED` |
+| `DELETED` | TaskStore.delete() | — |
+
+### AI 如何使用任务工具
+
+在系统提示词（`SystemPromptAssembler.defaultCorePrompt()`）中已内置指引：
+
+```
+Use TaskCreate, TaskUpdate, TaskList, and TaskGet tools to track your work:
+- Multi-step task (3+ steps): create a TaskCreate for each step
+- Set active step to 'in_progress' via TaskUpdate when starting work
+- Set task to 'completed' via TaskUpdate when done
+- Use TaskList to review remaining work after context compression
+```
+
+### Task 生命周�?Hook 事件
+
+当任务被创建或完成时，自动通过全局 `HookChain` 触发 `TASK_CREATED` / `TASK_COMPLETED` 事件。
+用户可在 `.jwcode/hooks.json` 中配置 shell 脚本响应：
+
+```json
+{
+  "hooks": [{
+    "name": "notify-on-task-done",
+    "events": ["TASK_COMPLETED"],
+    "implementation": { "type": "SHELL", "command": "echo 'Task done: $TASK_ID'" },
+    "priority": "USER",
+    "enabled": true
+  }]
+}
+```
+
+## Working Directory Management
+
+AI 通过 **ChangeDirectory 工具**切换会话的工作目录（不依赖 Bash cd）：
+
+```
+AI: ChangeDirectory("/home/user/other-project")
+  → Session.setWorkingDirectory()
+  → SystemPromptAssembler.invalidateEnvironmentCache()
+  → session.removeSystemMessagesContaining("Working Directory")
+  → <environment> next assembly picks up new directory
+```
+
+| 组件 | 文件 | 职责 |
+|------|------|------|
+| `ChangeDirectoryTool` | `tool/ChangeDirectoryTool.java` | 切换工具：解析路径、验证存在、更新 Session、刷新缓存 |
+| `ChangeDirectoryInput` | `tool/input/ChangeDirectoryInput.java` | 输入 record：path |
+| `Session.workingDirectory` | `session/Session.java` | 会话级工作目录，包含版本号用于缓存失效 |
+| `SystemPromptAssembler.invalidateEnvironmentCache()` | `config/SystemPromptAssembler.java` | 静态方法，失效 <environment> 缓存段 |
+
+Bash 的 `cd` 命令只在当前进程有效，不会持久化到会话。AI 的 BashTool 检测到 `cd` 时会提示使用 ChangeDirectory。
+
+## Mode System (Plan / Act / Goal)
+
+| 模式 | 后端枚举 | 权限 |
+|------|---------|------|
+| **NORMAL** | `Mode.NORMAL` | 全部正常 |
+| **PLAN** | `Mode.PLAN` | 只读 + 任务工具（TaskCreate/Update/List/Get） |
+| **ACT** | `Mode.ACT` | 写工具自动审批 |
+| **GOAL** | `Mode.GOAL` | 任务 + 只读工具始终允许，写工具需要活跃 Task |
+
+- `PlanModeManager.java` — 模式状态机 + 权限检查
+- `executionModeStore.ts` — 前端 zustand 状态管理，`toggleMode()` 三态循环: plan → goal → act → plan
+
 ## Key Paths
 
 - **Entry point:** `jwcode-web/.../WebLauncher.java` (starts `WebServer` with `com.sun.net.httpserver`)
@@ -268,7 +368,9 @@ SQLite schema: `checkpoints` (id, session, step, ts, source, channel_values) + `
 - **Graph channels:** `jwcode-core/.../graph/channel/` — LastValueChannel, BinaryOpChannel, TopicChannel, EphemeralChannel (typed state slots for the agent graph)
 - **Messaging channels:** `jwcode-core/.../channel/` — ChannelAdapter, ChannelRegistry, ChannelMessageDispatcher, `wechat/` (external messaging integrations: WeChat now, Feishu/DingTalk pluggable)
 - **Checkpoint storage:** `jwcode-core/.../checkpoint/` — CheckpointStorage, InMemoryCheckpointStorage, SqliteCheckpointStorage
-- **Tools:** `jwcode-core/.../tool/` — 47 tools: `execution/`, `shell/`, `analysis/`, `permission/`, `io/`
+- **Tools:** `jwcode-core/.../tool/` — 48 tools: `execution/`, `shell/`, `analysis/`, `permission/`, `io/` (plus ChangeDirectoryTool for directory switching)
+- **Task system:** `jwcode-core/.../task/` — `TaskStore` (blackboard), `ActiveTask` (session projection), `TaskLifecycleManager` (intent detection + AIPlanner integration)
+- **Mode system:** `jwcode-core/.../plan/PlanModeManager.java` — NORMAL/PLAN/ACT/GOAL modes with tool permission isolation
 - **WebSocket handler:** `jwcode-web/.../stream/StreamingWebSocketHandler.java` (3062 lines)
 - **React frontend:** `jwcode-web/src/` — Vite+React SPA, zustand stores, Tailwind CSS
 - **TS CLI:** `ts-cli/src/` — esbuild-bundled Ink/React TUI, `ws` for WebSocket
@@ -462,7 +564,13 @@ External channel (WeChat iLink long-poll / Feishu WS / DingTalk webhook)
 | `systemHandlers.ts` | token_update, auth_*, log, commands_list, ping, workspace_changed |
 | `interactionHandlers.ts` | hook_ask, task_update, step_*, todo_update, todo_item_done |
 
-**Recent optimizations:**
+**Recent optimizations (v3.1 — Blackboard + Directory):**
+- **Task blackboard pattern:** TaskStore enhanced with EventType enum + Subscription system; two previously disconnected task systems (TaskStore + ActiveTask) now unified through events
+- **System prompt task guidance:** AI explicitly instructed when to use TaskCreate/Update/List/Get in `defaultCorePrompt()` and all task tool prompts
+- **ChangeDirectory tool:** AI can switch working directory without Bash cd; updates Session.workingDirectory + refreshes `<environment>` cache
+- **Goal mode:** New mode level between Plan and Act — task tools + read-only always allowed, write tools require active Task
+- **Task lifecycle hooks:** TASK_CREATED / TASK_COMPLETED events fired through global HookChain; users can configure shell hooks in `.jwcode/hooks.json`
+- **Plan mode task unblocked:** TaskCreate/TaskUpdate/TaskList/TaskGet now allowed in Plan mode for structured planning
 - ChatPanel uses `react-virtuoso` for virtualized message list with `followOutput`
 - WebSocket infinite reconnect (exponential backoff, no max attempts)
 - FileTreeView split-pane with Monaco Editor for file preview/edit + save

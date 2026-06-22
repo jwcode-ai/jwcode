@@ -1,24 +1,29 @@
 package com.jwcode.web;
 
+import com.jwcode.core.log.LoggingBridge;
 import com.jwcode.core.tool.ToolRegistry;
 import java.util.concurrent.CountDownLatch;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * Web UI 启动器
  */
 public class WebLauncher {
 
+    private static final Logger LOGGER = Logger.getLogger(WebLauncher.class.getName());
+
     public static void main(String[] args) {
         try {
             run(args);
         } catch (Throwable t) {
-            System.err.println("[WebLauncher] 致命错误: " + t.getMessage());
-            t.printStackTrace();
+            LOGGER.log(Level.SEVERE, "Fatal error: " + t.getMessage(), t);
             System.exit(1);
         }
     }
 
     private static void run(String[] args) {
+        LoggingBridge.install();
         int httpPort = 8080;
         int wsPort = 8081;
         String workspaceDir = null;
@@ -27,14 +32,14 @@ public class WebLauncher {
                 httpPort = Integer.parseInt(args[0]);
                 wsPort = httpPort + 1;
             } catch (NumberFormatException e) {
-                System.err.println("无效的端口号，使用默认端口");
+                LOGGER.warning("Invalid port number, using default: " + e.getMessage());
             }
         }
         if (args.length > 1) {
             try {
                 wsPort = Integer.parseInt(args[1]);
             } catch (NumberFormatException e) {
-                System.err.println("无效的 WebSocket 端口号");
+                LOGGER.warning("Invalid WebSocket port number, using default: " + e.getMessage());
             }
         }
         if (args.length > 2) {
@@ -47,13 +52,13 @@ public class WebLauncher {
             SystemStatusHandler.setWebServer(server);
             server.start();
 
-            System.out.println("\n═══════════════════════════════════════════════════");
-            System.out.println("  JWCode Backend Ready");
-            System.out.println("═══════════════════════════════════════════════════");
-            System.out.println("  HTTP API:   http://localhost:" + httpPort);
-            System.out.println("  WebSocket:  ws://localhost:" + wsPort + "/ws");
-            System.out.println("  Web UI:     http://localhost:" + httpPort);
-            System.out.println("═══════════════════════════════════════════════════\n");
+            LOGGER.info("\n═══════════════════════════════════════════════════\n"
+                + "  JWCode Backend Ready\n"
+                + "═══════════════════════════════════════════════════\n"
+                + "  HTTP API:   http://localhost:" + httpPort + "\n"
+                + "  WebSocket:  ws://localhost:" + wsPort + "/ws\n"
+                + "  Web UI:     http://localhost:" + httpPort + "\n"
+                + "═══════════════════════════════════════════════════\n");
 
             CountDownLatch shutdownLatch = new CountDownLatch(1);
 
@@ -67,13 +72,12 @@ public class WebLauncher {
                 Thread.currentThread().interrupt();
             }
 
-            System.out.println("\nShutting down...");
+            LOGGER.info("Shutting down...");
             server.stop();
-            System.out.println("Server stopped.");
+            LOGGER.info("Server stopped.");
 
         } catch (Exception e) {
-            System.err.println("Startup failed: " + e.getMessage());
-            e.printStackTrace();
+            LOGGER.log(Level.SEVERE, "Startup failed: " + e.getMessage(), e);
         }
     }
 }

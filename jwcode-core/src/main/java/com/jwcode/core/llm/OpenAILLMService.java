@@ -19,6 +19,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 import java.util.logging.Level;
 
@@ -35,6 +37,12 @@ import java.util.logging.Level;
 public class OpenAILLMService implements LLMService {
     
     private static final ObjectMapper mapper = new ObjectMapper();
+    /** IO 线程池 — 替代 ForkJoinPool.commonPool()，避免线程饥饿导致请求排队 */
+    private static final ExecutorService IO_EXECUTOR = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "openai-io-" + r.hashCode());
+        t.setDaemon(true);
+        return t;
+    });
     private final HttpClient httpClient;
     private final ServiceConfig config;
     private int currentKeyIndex = 0;
@@ -67,7 +75,7 @@ public class OpenAILLMService implements LLMService {
             if (apiKey == null || apiKey.isEmpty()) {
                 throw new IllegalStateException("No API key configured");
             }
-            
+
             String url = normalizeUrl(config.getBaseUrl());
             log.info("[OpenAI] ==========================================");
             log.info("[OpenAI] Request: POST " + url);
@@ -219,7 +227,7 @@ public class OpenAILLMService implements LLMService {
             }
             
             return LLMResponse.error("MAX_RETRIES", "Max retries exceeded");
-        });
+        }, IO_EXECUTOR);
     }
     
     @Override
@@ -350,7 +358,7 @@ public class OpenAILLMService implements LLMService {
             }
             
             return LLMResponse.error("MAX_RETRIES", "Stream request failed after " + maxRetries + " retries");
-        });
+        }, IO_EXECUTOR);
     }
     
     /**
@@ -651,7 +659,7 @@ public class OpenAILLMService implements LLMService {
             } catch (Exception e) {
                 return LLMTestResult.error(e.getMessage(), "Check network connection");
             }
-        });
+        }, IO_EXECUTOR);
     }
     
     @Override
@@ -699,7 +707,7 @@ public class OpenAILLMService implements LLMService {
                 log.warning("[OpenAI] Embed failed: " + e.getMessage());
             }
             return new float[0];
-        });
+        }, IO_EXECUTOR);
     }
 
     @Override

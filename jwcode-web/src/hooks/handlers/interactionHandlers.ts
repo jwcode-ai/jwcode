@@ -6,6 +6,7 @@ import { useSettingsStore } from "../../stores/settingsStore";
 import wsService from "../../services/websocket";
 import { errLog } from "../../stores/errorStore";
 import type { SessionTask } from "../../types";
+import { normalizeBlackboardTaskStatus, useWorkflowStore } from "../../stores/workflowStore";
 
 const DEBUG = false;
 
@@ -22,7 +23,7 @@ export function handleHookAsk(rawData: any, sessionId: string) {
 
     const settingsStore = useSettingsStore.getState();
     if (approvalStore.isSessionAllowed(toolName) || approvalStore.autoMode || settingsStore?.yolo?.enabled) {
-      wsService.send({ type: "hook_allow" as any, data: JSON.stringify({ approvalId }) });
+      wsService.send({ type: "hook_allow", data: JSON.stringify({ approvalId }) });
       return;
     }
 
@@ -52,6 +53,7 @@ export function handleTaskUpdate(rawData: any, sessionId: string) {
   try {
     const data = typeof rawData === "string" ? JSON.parse(rawData) : (rawData || {});
     const sessionStore = useSessionStore.getState();
+    const board = useWorkflowStore.getState();
     const { action, taskId, data: taskData } = data;
 
     if (action === "created" && taskData) {
@@ -62,14 +64,41 @@ export function handleTaskUpdate(rawData: any, sessionId: string) {
       };
       const existing = sessionStore.tasksBySession[sessionId] || [];
       sessionStore.setSessionTasks(sessionId, [...existing, sessionTask]);
+      board.upsertTask(sessionId, {
+        id: sessionTask.id,
+        title: sessionTask.title,
+        description: sessionTask.description,
+        status: normalizeBlackboardTaskStatus(taskData.status),
+        source: "task",
+        progress: taskData.progress != null ? Number(taskData.progress) : undefined,
+        raw: data,
+      });
     } else if ((action === "updated" || action === "status_changed") && taskData) {
       sessionStore.updateTaskPlanStatus(sessionId, taskId, {
         backendStatus: taskData.status, progress: taskData.progress,
+      });
+      board.upsertTask(sessionId, {
+        id: taskId,
+        title: taskData.title || taskId,
+        description: taskData.description,
+        status: normalizeBlackboardTaskStatus(taskData.status),
+        source: "task",
+        progress: taskData.progress != null ? Number(taskData.progress) : undefined,
+        raw: data,
       });
     } else if (action === "deleted") {
       const existing = sessionStore.tasksBySession[sessionId] || [];
       sessionStore.setSessionTasks(sessionId, existing.filter(t => t.id !== taskId && t.backendId !== taskId));
     }
+    board.recordEvent(sessionId, {
+      type: "task_update",
+      source: "task",
+      title: taskData?.title || taskId || "Task update",
+      message: action,
+      status: taskData?.status,
+      taskId,
+      data,
+    });
   } catch (e) {
     DEBUG && console.warn("[WS] task_update parse error:", e);
   }
@@ -116,6 +145,7 @@ export function handleTodoUpdate(rawData: any, sessionId: string) {
 
     if (tasks.length > 0 && sessionId) {
       const sessionStore = useSessionStore.getState();
+      const board = useWorkflowStore.getState();
       tasks.forEach((task: any) => {
         const title = task.content || task.title || task.name || "";
         if (title.trim()) {
@@ -130,7 +160,25 @@ export function handleTodoUpdate(rawData: any, sessionId: string) {
               if (added) sessionStore.toggleSessionTask(sessionId, added.id);
             }
           }
+          const id = String(task.id || task.taskId || title.trim());
+          const isCompleted = task.completed || task.status === "completed" || task.status === "COMPLETED" || task.status === "done" || task.activeForm === "completed";
+          board.upsertTask(sessionId, {
+            id,
+            title: title.trim(),
+            description: task.description,
+            status: normalizeBlackboardTaskStatus(task.status, isCompleted),
+            source: "todo",
+            raw: task,
+          });
         }
+      });
+      board.recordEvent(sessionId, {
+        type: "todo_update",
+        source: "todo",
+        title: "Todo list updated",
+        message: `${tasks.length} items`,
+        status: "updated",
+        data: parsed,
       });
     }
   } catch (e) { DEBUG && console.warn("[WS] todo_update parse error:", e); }
@@ -144,6 +192,20 @@ export function handleTodoItemDone(rawData: any, sessionId: string) {
       const tasks = useSessionStore.getState().getSessionTasks(sessionId);
       const match = tasks.find(t => t.title === taskTitle && !t.completed);
       if (match) useSessionStore.getState().toggleSessionTask(sessionId, match.id);
+      useWorkflowStore.getState().upsertTask(sessionId, {
+        id: match?.id || taskTitle,
+        title: taskTitle,
+        status: "completed",
+        source: "todo",
+      });
+      useWorkflowStore.getState().recordEvent(sessionId, {
+        type: "todo_item_done",
+        source: "todo",
+        title: taskTitle,
+        status: "completed",
+        taskId: match?.id || taskTitle,
+        data: doneData,
+      });
     }
   } catch (e) { DEBUG && console.warn("[WS] todo_item_done parse error:", e); }
 }
@@ -152,6 +214,7 @@ export function handleSwarmEvent(rawData: any, sessionId: string) {
   try {
     const data = typeof rawData === "string" ? JSON.parse(rawData) : (rawData || {});
     const swarmStore = useSwarmStore.getState();
+    useWorkflowStore.getState().ingestAgentFlowEvent(sessionId, data);
     const eventType = data.eventType;
     const eventData = data.data;
 

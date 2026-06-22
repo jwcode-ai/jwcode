@@ -8,6 +8,8 @@
         </encoder>
     </appender>
 
+    <appender name="WEBSOCKET" class="com.jwcode.web.stream.WebSocketLogAppender" />
+
     <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>${user.home}/.jwcode/logs/jwcode.log</file>
         <immediateFlush>true</immediateFlush>
@@ -24,8 +26,8 @@
     <logger name="com.jwcode" level="INFO" additivity="false">
         <appender-ref ref="CONSOLE" />
         <appender-ref ref="FILE" />
+        <appender-ref ref="WEBSOCKET" />
     </logger>
-    <logger name="com.jwcode.core.a2a" level="INFO" />
     <logger name="com.jwcode.core.tool" level="INFO" />
 
     <logger name="org.java_websocket" level="WARN" />

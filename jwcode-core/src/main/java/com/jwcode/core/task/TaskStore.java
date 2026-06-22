@@ -14,6 +14,7 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
@@ -100,28 +101,111 @@ public class TaskStore {
         load();
     }
     
-    // ==================== 事件监听器 ====================
-    
+    // ==================== 黑板事件系统 (Blackboard Pattern) ====================
+
+    /**
+     * 任务事件类型枚举 — 替代旧的 String action。
+     */
+    public enum EventType {
+        CREATED,      // 任务创建
+        UPDATED,      // 任务更新（含状态变更）
+        STATUS_CHANGED, // 仅状态变化（UPDATED 的子集）
+        DELETED,      // 任务删除
+        COMPLETED     // 任务完成（状态变为 COMPLETED 时触发 UPDATED + COMPLETED）
+    }
+
     /**
      * 任务变更事件 — 当任务被创建、更新或删除时触发。
+     * <p>扩展为包含事件类型枚举、旧状态/新状态、sessionId 等上下文。</p>
      */
     public static class TaskEvent {
-        private final String action;  // "created" | "updated" | "deleted"
+        private final EventType eventType;
+        private final String action;   // 兼容旧版: "created" | "updated" | "deleted"
         private final Task task;
-        
-        public TaskEvent(String action, Task task) {
-            this.action = action;
-            this.task = task;
+        private final TaskStatus oldStatus;
+        private final TaskStatus newStatus;
+        private final String sessionId;
+
+        public TaskEvent(EventType eventType, Task task) {
+            this(eventType, task, null, null, null);
         }
-        
+
+        public TaskEvent(EventType eventType, Task task, TaskStatus oldStatus, TaskStatus newStatus, String sessionId) {
+            this.eventType = eventType;
+            this.action = eventType.name().toLowerCase();
+            this.task = task;
+            this.oldStatus = oldStatus;
+            this.newStatus = newStatus;
+            this.sessionId = sessionId;
+        }
+
+        public EventType getEventType() { return eventType; }
         public String getAction() { return action; }
         public Task getTask() { return task; }
         public String getTaskId() { return task != null ? task.getId() : null; }
+        public TaskStatus getOldStatus() { return oldStatus; }
+        public TaskStatus getNewStatus() { return newStatus; }
+        public String getSessionId() { return sessionId; }
+
+        /** 是否为状态变更事件（如 RUNNING → COMPLETED） */
+        public boolean isStatusTransition() {
+            return oldStatus != null && newStatus != null && oldStatus != newStatus;
+        }
     }
-    
+
+    /** 订阅句柄，用于取消订阅 */
+    public static class Subscription {
+        private final String id;
+        private final Consumer<TaskEvent> listener;
+        private final java.util.function.Predicate<TaskEvent> filter;
+
+        Subscription(Consumer<TaskEvent> listener, java.util.function.Predicate<TaskEvent> filter) {
+            this.id = UUID.randomUUID().toString().substring(0, 8);
+            this.listener = listener;
+            this.filter = filter;
+        }
+
+        public String getId() { return id; }
+        boolean matches(TaskEvent event) { return filter == null || filter.test(event); }
+        void dispatch(TaskEvent event) { listener.accept(event); }
+    }
+
+    /** 所有订阅 */
+    private final List<Subscription> subscriptions = new CopyOnWriteArrayList<>();
+
     /**
-     * 添加任务变更监听器。
-     * <p>当任务被创建、更新或删除时，所有注册的监听器会被调用。</p>
+     * 订阅任务变更事件。
+     *
+     * @param listener 事件处理回调
+     * @return 订阅句柄（可调用 unsubscribe 取消）
+     */
+    public Subscription subscribe(Consumer<TaskEvent> listener) {
+        return subscribe(listener, null);
+    }
+
+    /**
+     * 订阅满足过滤条件的任务变更事件。
+     *
+     * @param listener 事件处理回调
+     * @param filter   事件过滤器（返回 true 才通知）
+     * @return 订阅句柄
+     */
+    public Subscription subscribe(Consumer<TaskEvent> listener, java.util.function.Predicate<TaskEvent> filter) {
+        Subscription sub = new Subscription(listener, filter);
+        subscriptions.add(sub);
+        return sub;
+    }
+
+    /**
+     * 按 sessionId 订阅任务事件（黑板投影的便捷方法）。
+     */
+    public Subscription subscribeBySession(String sessionId, Consumer<TaskEvent> listener) {
+        return subscribe(listener, event -> sessionId.equals(event.getSessionId()));
+    }
+
+    /**
+     * 添加任务变更监听器（向后兼容的旧版 API）。
+     * <p>内部创建 Subscription 并自动管理生命周期。</p>
      *
      * @param listener 监听器，接收 TaskEvent
      */
@@ -130,21 +214,43 @@ public class TaskStore {
             taskListeners.add(listener);
         }
     }
-    
+
     /**
-     * 移除任务变更监听器。
+     * 移除任务变更监听器（向后兼容的旧版 API）。
      *
      * @param listener 之前注册的监听器
      */
     public void removeTaskListener(Consumer<TaskEvent> listener) {
         taskListeners.remove(listener);
     }
-    
+
     /**
-     * 通知所有监听器
+     * 取消订阅。
      */
-    private void notifyListeners(String action, Task task) {
-        TaskEvent event = new TaskEvent(action, task);
+    public void unsubscribe(Subscription subscription) {
+        if (subscription != null) {
+            subscriptions.remove(subscription);
+        }
+    }
+
+    /**
+     * 取消所有订阅（用于测试或重置）。
+     */
+    public void unsubscribeAll() {
+        subscriptions.clear();
+        taskListeners.clear();
+    }
+
+    /**
+     * 通知所有监听器和订阅者。
+     */
+    private void notifyListeners(EventType eventType, Task task, TaskStatus oldStatus, TaskStatus newStatus) {
+        TaskEvent event = new TaskEvent(eventType, task, oldStatus, newStatus, null);
+
+        // 通过全局 HookChain 触发任务生命周期 Hook（TASK_CREATED / TASK_COMPLETED）
+        fireTaskHooks(eventType, task);
+
+        // 通知旧版监听器（向后兼容）
         for (Consumer<TaskEvent> listener : taskListeners) {
             try {
                 listener.accept(event);
@@ -152,11 +258,60 @@ public class TaskStore {
                 logger.warn("TaskListener error: " + e.getMessage());
             }
         }
+
+        // 通知新版订阅者（支持过滤）
+        for (Subscription sub : subscriptions) {
+            try {
+                if (sub.matches(event)) {
+                    sub.dispatch(event);
+                }
+            } catch (Exception e) {
+                logger.warn("TaskSubscription error [" + sub.getId() + "]: " + e.getMessage());
+            }
+        }
     }
-    
+
+    /**
+     * 通过全局 HookChain 触发任务生命周期 Hook 事件。
+     * <p>映射关系：</p>
+     * <ul>
+     *   <li>CREATED → TASK_CREATED</li>
+     *   <li>COMPLETED → TASK_COMPLETED</li>
+     * </ul>
+     */
+    private void fireTaskHooks(EventType eventType, Task task) {
+        try {
+            com.jwcode.core.hook.HookChain hookChain = com.jwcode.core.hook.HookChain.getGlobalInstance();
+            if (hookChain == null || task == null) return;
+
+            com.jwcode.core.hook.HookEventType hookEvent = switch (eventType) {
+                case CREATED -> com.jwcode.core.hook.HookEventType.TASK_CREATED;
+                case COMPLETED -> com.jwcode.core.hook.HookEventType.TASK_COMPLETED;
+                default -> null;
+            };
+            if (hookEvent == null) return;
+
+            com.jwcode.core.hook.HookContext context = new com.jwcode.core.hook.HookContext.Builder(hookEvent)
+                .sessionId(null)
+                .agentName("system")
+                .taskId(task.getId())
+                .metadata(Map.of(
+                    "taskTitle", task.getTitle() != null ? task.getTitle() : "",
+                    "taskStatus", task.getStatus() != null ? task.getStatus().name() : "",
+                    "taskPriority", task.getPriority()
+                ))
+                .build();
+
+            hookChain.execute(context);
+            logger.debug("[TaskStore] Fired hook: {} for task {}", hookEvent, task.getId());
+        } catch (Exception e) {
+            logger.warn("[TaskStore] Hook event failed: {}", e.getMessage());
+        }
+    }
+
     /**
      * 创建新任务
-     * 
+     *
      * @param task 任务对象
      * @return 创建的任务
      */
@@ -164,27 +319,27 @@ public class TaskStore {
         if (task == null) {
             throw new IllegalArgumentException("Task cannot be null");
         }
-        
+
         if (task.getId() == null || task.getId().isEmpty()) {
             throw new IllegalArgumentException("Task ID cannot be null or empty");
         }
-        
+
         tasks.put(task.getId(), task);
         logger.debug("Task created: {}", task.getId());
-        
+
         if (autoSaveEnabled) {
             save();
         }
-        
-        // 通知监听器
-        notifyListeners("created", task);
-        
+
+        // 通知监听器（CREATED 事件）
+        notifyListeners(EventType.CREATED, task, null, task.getStatus());
+
         return task;
     }
-    
+
     /**
      * 更新任务
-     * 
+     *
      * @param task 任务对象
      * @return 更新后的任务，如果任务不存在返回 null
      */
@@ -192,29 +347,39 @@ public class TaskStore {
         if (task == null || task.getId() == null) {
             return null;
         }
-        
-        if (!tasks.containsKey(task.getId())) {
+
+        Task oldTask = tasks.get(task.getId());
+        if (oldTask == null) {
             logger.warn("Task not found for update: {}", task.getId());
             return null;
         }
-        
+
+        TaskStatus oldStatus = oldTask.getStatus();
         task.setUpdatedAt(java.time.LocalDateTime.now());
         tasks.put(task.getId(), task);
         logger.debug("Task updated: {}", task.getId());
-        
+
         if (autoSaveEnabled) {
             save();
         }
-        
+
         // 通知监听器
-        notifyListeners("updated", task);
-        
+        EventType eventType = EventType.UPDATED;
+        // 如果状态发生变化，额外触发 STATUS_CHANGED 和可能的 COMPLETED
+        if (oldStatus != task.getStatus()) {
+            notifyListeners(EventType.STATUS_CHANGED, task, oldStatus, task.getStatus());
+            if (task.getStatus() == TaskStatus.COMPLETED) {
+                notifyListeners(EventType.COMPLETED, task, oldStatus, task.getStatus());
+            }
+        }
+        notifyListeners(eventType, task, oldStatus, task.getStatus());
+
         return task;
     }
-    
+
     /**
      * 删除任务
-     * 
+     *
      * @param taskId 任务ID
      * @return true 如果删除成功
      */
@@ -222,18 +387,18 @@ public class TaskStore {
         if (taskId == null || taskId.isEmpty()) {
             return false;
         }
-        
+
         Task removed = tasks.remove(taskId);
         if (removed != null) {
             logger.debug("Task deleted: {}", taskId);
             if (autoSaveEnabled) {
                 save();
             }
-            // 通知监听器
-            notifyListeners("deleted", removed);
+            // 通知监听器（DELETED 事件）
+            notifyListeners(EventType.DELETED, removed, removed.getStatus(), null);
             return true;
         }
-        
+
         return false;
     }
     

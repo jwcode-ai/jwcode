@@ -300,6 +300,8 @@ export type WSMessageType =
   | 'plan_thinking'
   | 'plan_complete'
   | 'plan_error'
+  | 'plan_confirm'
+  | 'plan_refine'
   | 'plan_mode_change'
   | 'plan_tasks'
   | 'plan_task_start'
@@ -321,6 +323,10 @@ export type WSMessageType =
   | 'stop'
   | 'pause'
   | 'resume'
+  | 'workflow_start'
+  | 'workflow_cancel'
+  | 'workflow_pause'
+  | 'workflow_resume'
   | 'generation_paused'
   | 'generation_resumed'
   // Hook 审批消息
@@ -335,6 +341,7 @@ export type WSMessageType =
   | 'token_update'
   // Infrastructure & diagnostics
   | 'degradation_update'
+  | 'doctor'
   | 'doctor_result'
   | 'context_compressed'
   | 'compaction_progress'
@@ -355,6 +362,10 @@ export interface WSMessage {
   data?: string;
   sessionId?: string;
   message?: string;
+  runId?: string;
+  projectId?: string;
+  memoryEnabled?: boolean;
+  checkpointPolicy?: string;
   token?: string;
   seq?: number; // 消息序号，用于 ACK 确认
 }

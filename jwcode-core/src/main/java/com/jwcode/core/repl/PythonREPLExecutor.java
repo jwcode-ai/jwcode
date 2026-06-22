@@ -390,8 +390,22 @@ public class PythonREPLExecutor extends REPLExecutor {
     }
     
     /**
+     * 检查内存使用是否超过限制
+     *
+     * Python 以子进程运行，不消耗 JVM 堆内存；
+     * 子进程内存由操作系统管理，JVM 的 totalMemory/freeMemory 不反映其实际使用量。
+     * 此处跳过 JVM 堆检查以避免误报。
+     *
+     * @return false 始终返回 false，子进程内存由操作系统限制
+     */
+    @Override
+    protected boolean isMemoryExceeded() {
+        return false; // 子进程型 REPL，不检查 JVM 堆内存
+    }
+
+    /**
      * 获取 Python 版本
-     * 
+     *
      * @return Python 版本字符串
      */
     public String getPythonVersion() {

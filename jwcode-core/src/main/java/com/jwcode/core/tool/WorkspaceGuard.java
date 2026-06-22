@@ -1,7 +1,5 @@
 package com.jwcode.core.tool;
 
-import com.jwcode.core.a2a.model.ErrorSummary;
-
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Objects;

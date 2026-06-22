@@ -2,6 +2,7 @@ package com.jwcode.core.hook;
 
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.logging.Logger;
 
 /**
  * FileWriteAuditHook — 文件修改前需用户审批。
@@ -12,6 +13,8 @@ import java.util.concurrent.CompletableFuture;
  * <p>项目级 Hook，fail-open（超时默认放行）。</p>
  */
 public class FileWriteAuditHook implements HookExecutor {
+
+    private static final Logger logger = Logger.getLogger(FileWriteAuditHook.class.getName());
 
     private static final Set<String> TARGET_TOOLS = Set.of("FileWriteTool", "FileEditTool");
 
@@ -47,7 +50,9 @@ public class FileWriteAuditHook implements HookExecutor {
             try {
                 var fpNode = ctx.getToolResult().get("filePath");
                 if (fpNode != null) return fpNode.asText();
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                logger.finest("Cannot extract path from tool result: " + e.getMessage());
+            }
         }
         if (ctx.getToolInput() != null) {
             try {
@@ -55,7 +60,9 @@ public class FileWriteAuditHook implements HookExecutor {
                 if (fpNode == null) fpNode = ctx.getToolInput().get("file_path");
                 if (fpNode == null) fpNode = ctx.getToolInput().get("path");
                 if (fpNode != null) return fpNode.asText();
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                logger.finest("Cannot extract path from tool input: " + e.getMessage());
+            }
         }
         return null;
     }

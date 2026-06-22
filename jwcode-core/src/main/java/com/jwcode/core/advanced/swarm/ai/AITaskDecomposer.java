@@ -43,7 +43,7 @@ public class AITaskDecomposer {
     public CompletableFuture<DecompositionResult> decomposeWithAI(String taskDescription) {
         return CompletableFuture.supplyAsync(() -> {
             try {
-                System.out.println("[AITaskDecomposer] 使用 AI 分解任务: " + taskDescription.substring(0, Math.min(50, taskDescription.length())));
+                logger.info("AI decomposing task: " + taskDescription.substring(0, Math.min(50, taskDescription.length())));
                 
                 // 【修复】移除模拟 AI 响应 - 必须调用真实 AI
                 String aiResponse = executeRealAI(taskDescription);
@@ -51,12 +51,12 @@ public class AITaskDecomposer {
                 // 解析 AI 响应
                 DecompositionResult result = parseAIResponse(aiResponse);
                 
-                System.out.println("[AITaskDecomposer] AI 分解完成: " + result.getSubTasks().size() + " 个子任务");
+                logger.info("AI decomposition complete: " + result.getSubTasks().size() + " subtasks");
                 return result;
                 
             } catch (Exception e) {
                 // 【修复】不再降级，直接抛出异常
-                System.out.println("[AITaskDecomposer] AI 分解失败: " + e.getMessage());
+                logger.warning("AI decomposition failed: " + e.getMessage());
                 throw new IllegalStateException(
                     "AI Task Decomposition failed for: " + taskDescription + 
                     ". Cause: " + e.getMessage() + 

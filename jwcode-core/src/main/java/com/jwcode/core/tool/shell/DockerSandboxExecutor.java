@@ -141,7 +141,9 @@ public class DockerSandboxExecutor implements BackgroundCommandExecutor {
             return output + "\n[TIMEOUT after " + DEFAULT_TIMEOUT_SEC + "s]";
         }
         // 清理 cid 文件
-        try { Files.deleteIfExists(cidFile); } catch (IOException ignored) {}
+        try { Files.deleteIfExists(cidFile); } catch (IOException e) {
+            logger.finest("Cannot delete cid file: " + e.getMessage());
+        }
         return output.toString();
     }
 
@@ -150,7 +152,9 @@ public class DockerSandboxExecutor implements BackgroundCommandExecutor {
             if (Files.exists(cidFile)) {
                 return Files.readString(cidFile).trim();
             }
-        } catch (IOException ignored) {}
+        } catch (IOException e) {
+            logger.finest("Cannot read cid file: " + e.getMessage());
+        }
         return "";
     }
 

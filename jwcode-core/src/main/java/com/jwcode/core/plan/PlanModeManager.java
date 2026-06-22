@@ -52,18 +52,19 @@ public class PlanModeManager {
     public enum Mode {
         NORMAL("normal"),
         PLAN("plan"),
-        ACT("act");
-        
+        ACT("act"),
+        GOAL("goal");
+
         private final String value;
-        
+
         Mode(String value) {
             this.value = value;
         }
-        
+
         public String getValue() {
             return value;
         }
-        
+
         public static Mode fromString(String s) {
             for (Mode mode : values()) {
                 if (mode.value.equals(s)) {
@@ -89,9 +90,11 @@ public class PlanModeManager {
     
     /** Plan Mode 下始终允许的工具名称 */
     private static final Set<String> PLAN_MODE_ALWAYS_ALLOWED_TOOLS = Set.of(
-        // "TodoWrite" 已移除：Plan 模式只做计划，不做任何写操作（包括 TodoWrite）
+        // 任务管理工具 — Plan 模式下允许规划/查看任务清单
+        "TaskCreate", "TaskUpdate", "TaskList", "TaskGet",
         "AskUserQuestion",
         "SmartAnalyze",
+        "SmartAnalyzeTool",
         "ToolSearch",
         "Config"
     );
@@ -220,6 +223,18 @@ public class PlanModeManager {
      * Check if a tool is allowed in Plan Mode.
      */
     public boolean isToolAllowedInCurrentMode(ToolCategory category, SideEffect sideEffect, String toolName) {
+        if (currentMode == Mode.GOAL) {
+            // Goal 模式下：任务工具 + 只读工具始终允许
+            if (toolName != null && GOAL_MODE_ALWAYS_ALLOWED_TOOLS.contains(toolName)) return true;
+            // 写工具有条件允许（需要调用方进一步检查活跃 Task）
+            if (toolName != null && (toolName.equals("Bash") || toolName.equals("PowerShell")
+                || toolName.equals("FileWrite") || toolName.equals("FileEdit")
+                || toolName.equals("FileDelete") || toolName.equals("FileCreate"))) {
+                return isWriteToolAllowedInGoalMode(toolName);
+            }
+            // 其他未列出的只读工具默认允许
+            return true;
+        }
         if (currentMode != Mode.PLAN) return true;
         if (toolName != null && PLAN_MODE_ALWAYS_BLOCKED_TOOLS.contains(toolName)) return false;
         if (toolName != null && PLAN_MODE_ALWAYS_ALLOWED_TOOLS.contains(toolName)) return true;
@@ -232,7 +247,14 @@ public class PlanModeManager {
     public boolean isActMode() {
         return currentMode == Mode.ACT;
     }
-    
+
+    /**
+     * 是否处于 Goal Mode
+     */
+    public boolean isGoalMode() {
+        return currentMode == Mode.GOAL;
+    }
+
     /**
      * 是否处于 Normal Mode
      */
@@ -342,7 +364,81 @@ public class PlanModeManager {
         logger.info("Exited act mode (autoApproveWrite=false)");
         return true;
     }
-    
+
+    // ==================== Goal Mode ====================
+
+    /** Goal Mode 下始终允许的工具（任务 + 只读工具） */
+    private static final Set<String> GOAL_MODE_ALWAYS_ALLOWED_TOOLS = Set.of(
+        "TaskCreate", "TaskUpdate", "TaskList", "TaskGet",
+        "AskUserQuestion", "SmartAnalyze", "SmartAnalyzeTool", "ToolSearch", "Config",
+        "Glob", "Grep", "FileRead"
+    );
+
+    /**
+     * 进入 Goal Mode
+     *
+     * @param goalDescription 目标描述
+     * @return 是否成功切换
+     */
+    public synchronized boolean enterGoalMode(String goalDescription) {
+        if (currentMode == Mode.GOAL) {
+            logger.fine("Already in goal mode");
+            return true;
+        }
+
+        Mode previousMode = currentMode;
+        currentMode = Mode.GOAL;
+        planModeLocked = false;
+        saveMode();
+
+        // Goal 模式下，任务创建/更新无需审批，写操作需要活跃 Task
+        PermissionManager.getInstance().setAutoApproveWrite(false);
+
+        ModeChangeEvent event = new ModeChangeEvent(previousMode, Mode.GOAL,
+            goalDescription != null ? goalDescription : "Entered goal mode");
+        history.add(event);
+        notifyListeners(event);
+
+        logger.info(String.format("Entered goal mode: %s", goalDescription));
+        return true;
+    }
+
+    /**
+     * 退出 Goal Mode
+     *
+     * @return 是否成功切换
+     */
+    public synchronized boolean exitGoalMode() {
+        if (currentMode != Mode.GOAL) {
+            return false;
+        }
+
+        Mode previousMode = currentMode;
+        currentMode = Mode.NORMAL;
+        saveMode();
+
+        PermissionManager.getInstance().setAutoApproveWrite(false);
+
+        ModeChangeEvent event = new ModeChangeEvent(previousMode, Mode.NORMAL, "Exited goal mode");
+        history.add(event);
+        notifyListeners(event);
+
+        logger.info("Exited goal mode");
+        return true;
+    }
+
+    /**
+     * Goal Mode 下检查写工具是否需要活跃 Task。
+     * Bash、FileWrite、FileEdit 等写工具在 Goal 模式下只允许
+     * 当存在活跃 Task（且状态为 RUNNING/EXECUTING）时使用。
+     */
+    public boolean isWriteToolAllowedInGoalMode(String toolName) {
+        if (currentMode != Mode.GOAL) return true;
+        if (GOAL_MODE_ALWAYS_ALLOWED_TOOLS.contains(toolName)) return true;
+        // 写工具属于 GOAL_MODE_ALWAYS_ALLOWED_TOOLS 之外的工具，需要检查是否有活跃 Task
+        return false; // 由调用方根据活跃 Task 状态进一步判断
+    }
+
     // ==================== 权限检查 ====================
     
     /**
@@ -353,13 +449,30 @@ public class PlanModeManager {
      * @return 权限检查结果
      */
     public <I> PermissionResult checkToolPermission(Tool<I, ?, ?> tool, I input) {
+        String toolName = tool.getName();
+
+        // Goal Mode 检查
+        if (currentMode == Mode.GOAL) {
+            if (GOAL_MODE_ALWAYS_ALLOWED_TOOLS.contains(toolName)) {
+                return PermissionResult.allowed();
+            }
+            // 写工具需要活跃 Task 上下文
+            if (!isWriteToolAllowedInGoalMode(toolName)) {
+                return PermissionResult.denied(
+                    "工具 '" + toolName + "' 在 Goal Mode 下不可用。\n"
+                    + "Goal Mode 要求先使用 TaskCreate 创建任务清单以定义目标分解，\n"
+                    + "然后通过 TaskUpdate 将任务标记为 RUNNING 后方可执行写操作。\n"
+                    + "请先：1) 用 TaskCreate 创建任务 2) 用 TaskUpdate 将任务设为 RUNNING"
+                );
+            }
+            return PermissionResult.allowed();
+        }
+
         // 非 Plan Mode 下，所有工具都允许
         if (currentMode != Mode.PLAN) {
             return PermissionResult.allowed();
         }
-        
-        String toolName = tool.getName();
-        
+
         // 始终允许的工具
         if (PLAN_MODE_ALWAYS_ALLOWED_TOOLS.contains(toolName)) {
             return PermissionResult.allowed();

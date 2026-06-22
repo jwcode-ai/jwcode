@@ -50,15 +50,28 @@ public class TaskCreateTool implements Tool<TaskCreateInput, TaskCreateOutput, V
     @Override
     public String getPrompt() {
         return """
-               使用 TaskCreate 工具创建新任务。
-               
+               TaskCreate — 创建新任务以跟踪工作进度。
+
+               ## 何时使用：
+               - 多步骤任务（3+ 步）— 为每个步骤创建一个任务来跟踪进度
+               - 用户明确要求使用任务列表跟踪进度
+               - 用户提供了一系列需要完成的事项（编号列表或逗号分隔）
+               - 收到新指令后，将需求拆解为可跟踪的任务
+               - 在 Plan/Goal 模式下，将计划分解为具体任务
+
+               ## 何时跳过：
+               - 单个简单的任务（1 步就能完成）
+               - 琐碎任务（少于 3 个步骤的简单变更）
+               - 纯对话或信息咨询
+               - 快速的文件查看或搜索
+
                参数:
                - title: 任务标题（必需）
                - description: 任务描述（可选）
                - priority: 优先级 1-10（可选，默认 5）
                - tags: 标签列表（可选）
                - parentId: 父任务ID（可选，用于创建子任务）
-               
+
                示例:
                - {"title": "修复登录bug"} - 创建简单任务
                - {"title": "实现用户管理", "description": "包括增删改查功能", "priority": 8} - 创建高优先级任务

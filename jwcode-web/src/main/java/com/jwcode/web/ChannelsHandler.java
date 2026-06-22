@@ -13,6 +13,7 @@ import com.sun.net.httpserver.HttpHandler;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.logging.Logger;
@@ -79,8 +80,13 @@ public class ChannelsHandler implements HttpHandler {
                 m.put("token", c.token != null && !c.token.isEmpty() ? "***" : "");
                 m.put("encodingAESKey", c.encodingAESKey != null && !c.encodingAESKey.isEmpty() ? "***" : "");
                 m.put("enabled", c.enabled);
-                m.put("extra", c.extra);
                 m.put("connected", registry.getAdapter(c.id).map(ChannelAdapter::isConnected).orElse(false));
+                // 脱敏 extra 中的敏感字段（bot_token 等）
+                Map<String, String> maskedExtra = new HashMap<>(c.extra);
+                if (maskedExtra.containsKey("bot_token") && !maskedExtra.get("bot_token").isEmpty()) {
+                    maskedExtra.put("bot_token", "***");
+                }
+                m.put("extra", maskedExtra);
                 return m;
             }).toList();
             sendSuccess(ex, list);
@@ -156,16 +162,30 @@ public class ChannelsHandler implements HttpHandler {
 
     // ── WeChat QR ────────────────────────────────────────────
 
+    /** 获取渠道配置的 token（优先用 frontend 传入的，否则回退到渠道配置的 token） */
+    private String resolveToken(String id, String frontendToken) {
+        if (frontendToken != null && !frontendToken.isBlank()) return frontendToken;
+        return registry.getConfig(id)
+                .map(c -> c.token)
+                .orElse("");
+    }
+
     private void getWechatQrCode(HttpExchange ex, String id) throws Exception {
-        String tempToken = queryParam(ex, "token");
+        String tempToken = resolveToken(id, queryParam(ex, "token"));
         var adapter = registry.getAdapter(id)
                 .filter(a -> a instanceof WechatChannelAdapter)
                 .map(a -> (WechatChannelAdapter) a);
         if (adapter.isEmpty()) { sendError(ex, 404, "Wechat channel not found or not started"); return; }
-        sendSuccess(ex, adapter.get().getLoginQrCode(tempToken));
+        com.fasterxml.jackson.databind.JsonNode qrResp = adapter.get().getLoginQrCode(tempToken);
+        log.info("[Wechat] QR code generated for channel=" + id
+                + " errocde=" + qrResp.path("errcode").asText()
+                + " has_qrcode_img=" + (qrResp.path("data").path("qrcode_img_content").asText("").length() > 0)
+                + " has_qrcode_id=" + (qrResp.path("data").path("qrcode").asText("").length() > 0));
+        sendSuccess(ex, qrResp);
     }
 
     private void pollWechatQrStatus(HttpExchange ex, String id, String qrcode, String tempToken) throws Exception {
+        tempToken = resolveToken(id, tempToken);
         var adapter = registry.getAdapter(id)
                 .filter(a -> a instanceof WechatChannelAdapter)
                 .map(a -> (WechatChannelAdapter) a);
@@ -173,6 +193,11 @@ public class ChannelsHandler implements HttpHandler {
         com.fasterxml.jackson.databind.JsonNode[] out = new com.fasterxml.jackson.databind.JsonNode[1];
         boolean confirmed = adapter.get().isConfirmedAfterPoll(tempToken, qrcode, out);
         if (confirmed) registry.persist(); // 扫码确认后落盘 bot_token
+        // 记录原始 WeChat API 响应体，方便调试
+        if (out[0] != null) {
+            log.info("[Wechat] QR status raw response for channel=" + id
+                    + " => " + out[0].toString());
+        }
         sendSuccess(ex, out[0]);
     }
 

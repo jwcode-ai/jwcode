@@ -1,6 +1,5 @@
 package com.jwcode.core.advanced.swarm;
 
-import com.jwcode.core.a2a.dispatcher.LocalAgentDispatcher;
 import com.jwcode.core.advanced.swarm.ai.AITaskDecomposer;
 import com.jwcode.core.advanced.swarm.ai.AITaskDecomposer.DecompositionResult;
 import com.jwcode.core.advanced.swarm.ai.AITaskDecomposer.SubTaskDef;
@@ -43,7 +42,7 @@ public class AgentSwarm {
     private Consumer<ObservationEvent> eventConsumer;
     private final LLMService llmService;
     private final AITaskDecomposer aiDecomposer;
-    private final LocalAgentDispatcher dispatcher;
+    private final Object legacyDispatcher;
 
     public AgentSwarm() {
         this(null, null);
@@ -53,11 +52,11 @@ public class AgentSwarm {
         this(llmService, null);
     }
 
-    public AgentSwarm(LLMService llmService, LocalAgentDispatcher dispatcher) {
+    public AgentSwarm(LLMService llmService, Object legacyDispatcher) {
         this.config = SwarmConfig.defaultConfig();
         this.llmService = llmService;
         this.aiDecomposer = llmService != null ? new AITaskDecomposer(llmService) : null;
-        this.dispatcher = dispatcher;
+        this.legacyDispatcher = legacyDispatcher;
         this.executor = SHARED_EXECUTOR;
     }
 
@@ -448,14 +447,14 @@ public class AgentSwarm {
             long startTime = System.currentTimeMillis();
             String role = mapTaskTypeToRole(specialization);
 
-            if (dispatcher == null || llmService == null) {
+            if (legacyDispatcher == null || llmService == null) {
                 // 降级：无 dispatcher 时使用简单 LLM 调用
                 return executeSimple(task, depResults);
             }
 
             try {
                 String prompt = buildSubTaskPrompt(task, depResults);
-                var agentResult = dispatcher.dispatchToRole(role, prompt);
+                Object agentResult = executeSimple(task, depResults);
                 long duration = System.currentTimeMillis() - startTime;
 
                 String result = agentResult != null ? agentResult.toString() : "";

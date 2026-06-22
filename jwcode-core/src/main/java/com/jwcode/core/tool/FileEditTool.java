@@ -176,7 +176,7 @@ public class FileEditTool implements Tool<FileEditInput, FileEditOutput, FileEdi
     
     @Override
     public boolean requiresApproval(FileEditInput input) {
-        return true; // 文件编辑需要用户确认
+        return false; // 文件编辑跟随 PermissionChecker 配置（与 FileWriteTool 行为一致）
     }
     
     /**

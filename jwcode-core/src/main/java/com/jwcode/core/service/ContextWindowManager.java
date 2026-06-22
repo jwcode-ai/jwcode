@@ -31,6 +31,8 @@ public class ContextWindowManager {
     public static final int SAFETY_MARGIN = 1000;
     // 默认最大消息数
     public static final int DEFAULT_MAX_MESSAGES = 50;
+    // 触发压缩的消息数阈值（即使 tokens 未超限，消息过多也触发压缩）
+    public static final int COMPACT_MESSAGE_THRESHOLD = 80;
     // 默认最小保留消息数
     public static final int DEFAULT_MIN_MESSAGES = 4;
     
@@ -95,10 +97,13 @@ public class ContextWindowManager {
         // 估算当前 Token 数
         int estimatedTokens = estimateTokens(messages);
         
-        // 只检查 token 是否超限，不再检查消息数限制
-        // 【修复】force=true 时绕过估算检查，解决 TokenBudget 与 estimateTokens 口径不一致
-        // 导致紧急压缩被跳过的问题（estimateTokens 启发式低估了实际 token 数）
-        if (!force && estimatedTokens <= contextLimit - SAFETY_MARGIN) {
+        // 两种触发条件满足其一即压缩：
+        //   a) 估算 token 超限（force=true 时绕过估算检查，用于 TokenBudget 紧急场景）
+        //   b) 消息数量超过 COMPACT_MESSAGE_THRESHOLD
+        // 【修复】TokenBudget 跟踪实际 API token 用量，而 estimateTokens 启发式可能低估，
+        // 导致 Auto-compact 检测到 usage=84% 但 prepareMessages 因 estimateTokens 未超限而不做压缩。
+        if (!force && estimatedTokens <= contextLimit - SAFETY_MARGIN
+            && messages.size() <= COMPACT_MESSAGE_THRESHOLD) {
             return messages;
         }
         

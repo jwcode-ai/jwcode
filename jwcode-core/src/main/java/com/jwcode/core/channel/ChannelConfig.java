@@ -3,6 +3,7 @@ package com.jwcode.core.channel;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class ChannelConfig {
     public String id = UUID.randomUUID().toString();
@@ -13,7 +14,7 @@ public class ChannelConfig {
     public String token;
     public String encodingAESKey;
     public boolean enabled = true;
-    public Map<String, String> extra = new HashMap<>();
+    public Map<String, String> extra = new ConcurrentHashMap<>();
 
     // Getters/setters for Jackson
     public String getId() { return id; }
@@ -33,5 +34,12 @@ public class ChannelConfig {
     public boolean isEnabled() { return enabled; }
     public void setEnabled(boolean enabled) { this.enabled = enabled; }
     public Map<String, String> getExtra() { return extra; }
-    public void setExtra(Map<String, String> extra) { this.extra = extra; }
+    public void setExtra(Map<String, String> extra) {
+        // Jackson 反序列化时包装为 ConcurrentHashMap 保证线程安全
+        if (extra instanceof ConcurrentHashMap) {
+            this.extra = extra;
+        } else {
+            this.extra = new ConcurrentHashMap<>(extra);
+        }
+    }
 }

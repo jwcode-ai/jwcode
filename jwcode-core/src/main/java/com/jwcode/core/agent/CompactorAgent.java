@@ -1,8 +1,5 @@
 package com.jwcode.core.agent;
 
-import com.jwcode.core.a2a.model.AgentCard;
-import com.jwcode.core.a2a.model.Capabilities;
-import com.jwcode.core.a2a.model.Skill;
 import com.jwcode.core.service.PostCompactRecoveryService;
 import com.jwcode.core.llm.LLMService;
 import com.jwcode.core.model.Message;
@@ -11,13 +8,12 @@ import com.jwcode.core.service.StructuredCompactionStrategy;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.logging.Logger;
 
 /**
  * CompactorAgent - context compaction specialist (layer 2.5 horizontal service agent).
- * All agents (including Orchestrator) can invoke it via A2A protocol to compact context.
+ * Workflow/runtime agents can invoke it to compact context.
  * Prioritizes StructuredCompactionStrategy (Markdown-based), falls back to SimpleCompactionStrategy.
  */
 public class CompactorAgent {
@@ -135,26 +131,6 @@ public class CompactorAgent {
 
     public CompletableFuture<CompactionResult> compactAsync(CompactionRequest request) {
         return CompletableFuture.supplyAsync(() -> compact(request));
-    }
-
-    public static AgentCard createAgentCard() {
-        return AgentCard.builder()
-            .name("Compactor")
-            .description("Context compression expert")
-            .agentType("compactor")
-            .skills(List.of(
-                Skill.builder()
-                    .id("compact-context")
-                    .name("Compact Context")
-                    .description("Compress conversation history using LLM summarization")
-                    .inputSchema(Map.of("messages", "List<Message>", "strategy", "String"))
-                    .outputSchema(Map.of("compactedMessages", "List<Message>", "tokensSaved", "long"))
-                    .build()
-            ))
-            .capabilities(Capabilities.builder()
-                .streaming(false).pushNotifications(false).websocket(false)
-                .batchProcessing(false).maxConcurrentTasks(3).build())
-            .build();
     }
 
     public CompactorTrigger getTrigger() { return trigger; }

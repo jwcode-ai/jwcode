@@ -82,7 +82,10 @@ class ConnectionState {
 
     void broadcastLog(StreamingWebSocketHandler.LogEntry entry) {
         for (Consumer<StreamingWebSocketHandler.LogEntry> listener : logListeners.values()) {
-            try { listener.accept(entry); } catch (Exception ignored) {}
+            try { listener.accept(entry); } catch (Exception e) {
+                java.util.logging.Logger.getLogger(ConnectionState.class.getName())
+                    .finest("Log listener error: " + e.getMessage());
+            }
         }
     }
 

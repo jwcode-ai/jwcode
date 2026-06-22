@@ -110,7 +110,9 @@ public class ObservabilityHandler implements HttpHandler {
                     try {
                         if ("page".equals(kv[0])) page = Integer.parseInt(kv[1]);
                         if ("size".equals(kv[0])) size = Math.min(Integer.parseInt(kv[1]), 200);
-                    } catch (NumberFormatException ignored) {}
+                    } catch (NumberFormatException ignored) {
+                        // Use default page/size
+                    }
                 }
             }
         }

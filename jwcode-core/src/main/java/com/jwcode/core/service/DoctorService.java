@@ -197,7 +197,9 @@ public class DoctorService {
                         "Config should define at least one LLM provider",
                         "See docs/CONFIG_GUIDE.md for the config schema"));
                 }
-            } catch (IOException ignored) {}
+            } catch (IOException e) {
+                logger.warning("Cannot read config for validation: " + e.getMessage());
+            }
         }
         check.durationMs = System.currentTimeMillis() - start;
         return check;
@@ -239,7 +241,9 @@ public class DoctorService {
                         "missing api-keys", "api-keys: [sk-...]",
                         "Add your API key to providers.<name>.api-keys in config.yaml"));
                 }
-            } catch (IOException ignored) {}
+            } catch (IOException e) {
+                logger.warning("Cannot read config for API key check: " + e.getMessage());
+            }
         }
         check.durationMs = System.currentTimeMillis() - start;
         return check;
@@ -293,7 +297,9 @@ public class DoctorService {
                     check.summary = host + " reachable";
                     check.detail = "Connected to " + host + ":443";
                     break;
-                } catch (IOException ignored) {}
+                } catch (IOException e) {
+                    logger.fine("Cannot connect to " + host + ": " + e.getMessage());
+                }
             }
             if (check.status == CheckStatus.FAIL) {
                 check.addIssue(new DoctorIssue("error",

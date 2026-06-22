@@ -31,10 +31,10 @@ public class AITaskPlanner {
     }
 
     public AITaskPlanner(LLMService llmService, ToolRegistry toolRegistry,
-                         com.jwcode.core.a2a.A2AFacade a2aFacade) {
+                         Object ignoredLegacyDispatcher) {
         this.aiPlanner = new AIPlanner(llmService);
         this.dependencyAnalyzer = new SmartDependencyAnalyzer();
-        this.executionEngine = new DynamicExecutionEngine(toolRegistry, a2aFacade);
+        this.executionEngine = new DynamicExecutionEngine(toolRegistry);
         this.executionTracer = new ExecutionTracer();
         this.learningMemory = new AILearningMemory();
     }

@@ -1,6 +1,6 @@
 package com.jwcode.core.tool;
 
-import com.jwcode.core.a2a.model.ErrorSummary;
+import com.jwcode.core.tool.ErrorSummary;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;

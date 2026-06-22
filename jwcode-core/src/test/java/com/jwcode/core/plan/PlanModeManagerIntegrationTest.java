@@ -3,6 +3,8 @@ package com.jwcode.core.plan;
 import com.jwcode.core.tool.Tool;
 import com.jwcode.core.tool.ToolCategory;
 import com.jwcode.core.tool.SideEffect;
+import com.jwcode.core.tool.SmartAnalyzeTool;
+import com.jwcode.core.tool.input.SmartAnalyzeInput;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -76,6 +78,23 @@ class PlanModeManagerIntegrationTest {
     void testInitialModeFlags() {
         assertFalse(manager.isPlanMode(), "NORMAL 模式 isPlanMode() 应返回 false");
         assertFalse(manager.isActMode(), "NORMAL 模式 isActMode() 应返回 false");
+    }
+
+    @Test
+    @Order(21)
+    @DisplayName("PLAN mode allows SmartAnalyzeTool")
+    void testPlanModeAllowsSmartAnalyzeTool() {
+        manager.enterPlanMode("Analyze project structure");
+
+        SmartAnalyzeTool tool = new SmartAnalyzeTool();
+        SmartAnalyzeInput input = new SmartAnalyzeInput(tempDir.toString());
+
+        assertTrue(
+                manager.isToolAllowedInCurrentMode(tool.getCategory(), SideEffect.READ_ONLY, tool.getName()),
+                "SmartAnalyzeTool should pass the lightweight Plan Mode gate");
+        assertTrue(
+                manager.checkToolPermission(tool, input).isAllowed(),
+                "SmartAnalyzeTool should pass the full Plan Mode permission check");
     }
 
     // ========================================================================

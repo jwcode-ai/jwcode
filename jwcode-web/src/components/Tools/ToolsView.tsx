@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Wrench, Search, RefreshCw, ToggleLeft, ToggleRight, ChevronRight, ChevronDown, AlertTriangle, Lock } from 'lucide-react';
-import { usePlanStore } from '../../stores/planStore';
+import { useExecutionModeStore } from '../../stores/executionModeStore';
 import { api, type Tool } from '../../services/api';
 
 export function ToolsView() {
-  const planMode = usePlanStore((s) => s.mode);
+  const planMode = useExecutionModeStore((s) => s.mode);
   const [tools, setTools] = useState<Tool[]>([]);
   const [filteredTools, setFilteredTools] = useState<Tool[]>([]);
   const [loading, setLoading] = useState(true);

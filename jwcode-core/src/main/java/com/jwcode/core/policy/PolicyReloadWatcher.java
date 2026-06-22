@@ -49,7 +49,9 @@ public class PolicyReloadWatcher implements Runnable {
             watcherThread.interrupt();
         }
         if (watchService != null) {
-            try { watchService.close(); } catch (IOException ignored) {}
+            try { watchService.close(); } catch (IOException e) {
+                logger.finest("Failed to close watch service: " + e.getMessage());
+            }
         }
     }
 

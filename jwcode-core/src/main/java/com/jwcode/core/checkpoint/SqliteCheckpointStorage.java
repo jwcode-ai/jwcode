@@ -186,10 +186,14 @@ public class SqliteCheckpointStorage implements CheckpointStorage {
 
             connection.commit();
         } catch (SQLException e) {
-            try { connection.rollback(); } catch (SQLException ignored) {}
+            try { connection.rollback(); } catch (SQLException ex) {
+                logger.log(Level.FINEST, "Rollback failed after checkpoint error", ex);
+            }
             logger.log(Level.WARNING, "Failed to save checkpoint: " + cp.getId(), e);
         } finally {
-            try { connection.setAutoCommit(true); } catch (SQLException ignored) {}
+            try { connection.setAutoCommit(true); } catch (SQLException ex) {
+                logger.log(Level.FINEST, "Failed to restore auto-commit", ex);
+            }
         }
     }
 
@@ -363,7 +367,9 @@ public class SqliteCheckpointStorage implements CheckpointStorage {
                     channelVersions.put(crs.getString(1), crs.getLong(2));
                 }
             }
-        } catch (SQLException ignored) {}
+        } catch (SQLException e) {
+            logger.log(Level.FINE, "Failed to load channel versions for checkpoint " + id, e);
+        }
 
         // Load versions seen
         Map<String, Map<String, Long>> versionsSeen = new LinkedHashMap<>();
@@ -376,7 +382,9 @@ public class SqliteCheckpointStorage implements CheckpointStorage {
                             .put(vrs.getString(2), vrs.getLong(3));
                 }
             }
-        } catch (SQLException ignored) {}
+        } catch (SQLException e) {
+            logger.log(Level.FINE, "Failed to load versions seen for checkpoint " + id, e);
+        }
 
         // Parse updated channels
         List<String> updatedChannels = new ArrayList<>();

@@ -55,11 +55,14 @@ public class TaskGetTool implements Tool<TaskGetInput, TaskGetOutput, Void> {
     @Override
     public String getPrompt() {
         return """
-               使用 TaskGet 工具获取任务详情。
-               
+               TaskGet — 获取单个任务的详细信息。
+
+               当你需要查看某个任务的完整详情（包括描述、标签、时间线等）时使用。
+               TaskList 返回概览摘要，TaskGet 返回完整详情。
+
                参数:
                - id: 任务ID（必需）
-               
+
                示例:
                - {"id": "task-xxx"} - 获取指定任务的详细信息
                """;

@@ -18,6 +18,8 @@ import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.regex.Pattern;
 
+import static com.jwcode.core.task.TaskStatus.*;
+
 /**
  * 任务生命周期管理器 — 会话级任务状态机核心。
  *
@@ -56,6 +58,8 @@ public class TaskLifecycleManager {
     private final LLMService llmService;
     private final AIPlanner aiPlanner;
     private final ObservationPipeline pipeline;
+    private static final String AI_TASK_PLANNING_PROPERTY = "jwcode.task.aiPlanning";
+    private static final String AI_TASK_PLANNING_METADATA = "aiTaskPlanningEnabled";
 
     public TaskLifecycleManager(LLMService llmService, ObservationPipeline pipeline) {
         this.llmService = llmService;
@@ -121,6 +125,13 @@ public class TaskLifecycleManager {
 
         publishTaskStateChanged(null, newTask.getStatus(), "用户发起新任务");
 
+        // 3b. 在 TaskStore（黑板）中创建顶层任务
+        TaskStore taskStore = TaskStore.getInstance();
+        Task topTask = new Task(prompt, "自动创建: " + prompt);
+        topTask.setId(newTask.getTaskId());
+        topTask.setStatus(PENDING);
+        taskStore.create(topTask);
+
         // 4. 规划任务（异步）
         planTask(session, newTask);
     }
@@ -161,6 +172,9 @@ public class TaskLifecycleManager {
             publishTaskPlanUpdated(task);
             logger.info("[TaskLifecycle] 步骤完成 [{}/{}]: {}",
                 current.getIndex() + 1, task.getSteps().size(), current.getDescription());
+
+            // 同步更新 TaskStore（黑板模式）：将顶层任务进度 +1
+            syncCompletedStepToTaskStore(task);
         }
 
         TaskStep next = task.advanceToNextStep();
@@ -173,6 +187,31 @@ public class TaskLifecycleManager {
         } else {
             // 无下一步，检查是否全部完成
             checkTaskCompletion(session);
+        }
+    }
+
+    /**
+     * 将步骤完成进度同步到 TaskStore（黑板模式）。
+     * 更新顶层任务的进度百分比（已完成步骤数 / 总步骤数）。
+     */
+    private void syncCompletedStepToTaskStore(ActiveTask task) {
+        try {
+            TaskStore taskStore = TaskStore.getInstance();
+            Task topTask = taskStore.get(task.getTaskId());
+            if (topTask != null) {
+                int completed = task.getCompletedCount();
+                int total = task.getSteps().size();
+                int progress = total > 0 ? (completed * 100 / total) : 0;
+                topTask.updateProgress(progress);
+                if (progress >= 100) {
+                    topTask.setStatus(TaskStatus.COMPLETED);
+                } else {
+                    topTask.setStatus(TaskStatus.RUNNING);
+                }
+                taskStore.update(topTask);
+            }
+        } catch (Exception e) {
+            logger.warn("[TaskLifecycle] 同步进度到 TaskStore 失败", e);
         }
     }
 
@@ -367,14 +406,14 @@ public class TaskLifecycleManager {
         task.setStatus(TaskStatus.PLANNING);
         publishTaskStateChanged(oldStatus, TaskStatus.PLANNING, "开始规划任务步骤");
 
+        if (!shouldUseAIPlanning(session)) {
+            completeSingleStepPlan(session, task, "快速单步骤模式");
+            return;
+        }
+
         if (aiPlanner == null) {
-            // 降级：单步骤任务
             logger.warn("[TaskLifecycle] AIPlanner 不可用，降级为单步骤任务");
-            task.setSteps(List.of(new TaskStep(0, task.getDescription())));
-            task.setStatus(TaskStatus.PLANNED);
-            task.setCurrentStepIndex(-1);
-            publishTaskStateChanged(TaskStatus.PLANNING, TaskStatus.PLANNED, "单步骤模式");
-            injectTaskPlanSystemMessage(session, task);
+            completeSingleStepPlan(session, task, "单步骤模式");
             return;
         }
 
@@ -386,16 +425,29 @@ public class TaskLifecycleManager {
                     List<PlanStep> planSteps = aiPlanner.decompose(task.getDescription(), analysis).join();
 
                     List<TaskStep> steps = new ArrayList<>();
+                    TaskStore taskStore = TaskStore.getInstance();
+                    String topTaskId = task.getTaskId();
+
                     for (int i = 0; i < planSteps.size(); i++) {
                         PlanStep ps = planSteps.get(i);
+                        String stepDesc = ps.getDescription() != null ? ps.getDescription() : ps.getAction();
                         TaskStep ts = new TaskStep(
                             i,
-                            ps.getDescription() != null ? ps.getDescription() : ps.getAction(),
+                            stepDesc,
                             ps.getAction(),
                             ps.getStepPrompt(),
                             ps.getAgentType()
                         );
                         steps.add(ts);
+
+                        // 同步创建 TaskStore 条目（黑板模式：步骤作为顶层任务的子任务）
+                        if (taskStore.get(topTaskId) != null) {
+                            Task stepTask = new Task(stepDesc, ps.getStepPrompt());
+                            stepTask.setParentId(topTaskId);
+                            stepTask.setStatus(PENDING);
+                            stepTask.setPriority(5);
+                            taskStore.create(stepTask);
+                        }
                     }
 
                     task.setSteps(steps);
@@ -412,22 +464,36 @@ public class TaskLifecycleManager {
 
                 } catch (Exception e) {
                     logger.error("[TaskLifecycle] 规划失败", e);
-                    // 降级为单步骤
-                    task.setSteps(List.of(new TaskStep(0, task.getDescription())));
-                    task.setStatus(TaskStatus.PLANNED);
-                    task.setCurrentStepIndex(-1);
-                    publishTaskStateChanged(TaskStatus.PLANNING, TaskStatus.PLANNED, "规划失败，降级为单步骤");
-                    injectTaskPlanSystemMessage(session, task);
+                    completeSingleStepPlan(session, task, "规划失败，降级为单步骤");
                 }
                 return null;
             });
 
         } catch (Exception e) {
             logger.error("[TaskLifecycle] 启动规划异常", e);
-            task.setSteps(List.of(new TaskStep(0, task.getDescription())));
-            task.setStatus(TaskStatus.PLANNED);
-            injectTaskPlanSystemMessage(session, task);
+            completeSingleStepPlan(session, task, "启动规划异常，降级为单步骤");
         }
+    }
+
+    private boolean shouldUseAIPlanning(Session session) {
+        Object metadataValue = session != null ? session.getMetadata(AI_TASK_PLANNING_METADATA) : null;
+        if (metadataValue instanceof Boolean enabled) {
+            return enabled;
+        }
+        if (metadataValue instanceof String text) {
+            return Boolean.parseBoolean(text);
+        }
+        return Boolean.parseBoolean(System.getProperty(AI_TASK_PLANNING_PROPERTY, "false"));
+    }
+
+    private void completeSingleStepPlan(Session session, ActiveTask task, String reason) {
+        task.setSteps(List.of(new TaskStep(0, task.getDescription())));
+        task.setStatus(TaskStatus.PLANNED);
+        task.setCurrentStepIndex(-1);
+        publishTaskStateChanged(TaskStatus.PLANNING, TaskStatus.PLANNED, reason);
+        publishTaskPlanUpdated(task);
+        logger.info("[TaskLifecycle] {}: {}", reason, task.getDescription());
+        injectTaskPlanSystemMessage(session, task);
     }
 
     // ==================== 上下文重置 ====================

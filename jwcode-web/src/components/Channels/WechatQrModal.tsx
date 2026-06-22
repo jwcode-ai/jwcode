@@ -1,69 +1,142 @@
 import { useEffect, useRef, useState } from 'react';
+import QRCode from 'qrcode';
 import { Modal } from '../common/Modal';
 import { api } from '../../services/api';
 import type { Channel } from '../../types';
 
 type Phase = 'loading' | 'waiting' | 'scanned' | 'confirmed' | 'expired' | 'error';
 
+const POLL_INTERVAL_MS = 2000;
+const MAX_POLL_FAILURES = 5;
+
 export function WechatQrModal({ channel, onClose }: { channel: Channel; onClose: () => void }) {
   const [phase, setPhase] = useState<Phase>('loading');
-  const [qrUrl, setQrUrl] = useState<string | null>(null);       // QR 图片 URL
-  const [wechatUrl, setWechatUrl] = useState<string | null>(null); // 原始微信链接
-  const [imgFailed, setImgFailed] = useState(false);
+  const [wechatUrl, setWechatUrl] = useState<string | null>(null);   // 原始微信链接
+  const [qrcodeId, setQrcodeId] = useState<string | null>(null);     // 轮询用的二维码标识
   const [errMsg, setErrMsg] = useState<string>('');
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const pollFailuresRef = useRef(0);
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelledRef = useRef(false);
 
-  const stopPoll = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
+  const stopPoll = () => {
+    if (pollTimerRef.current) { clearTimeout(pollTimerRef.current); pollTimerRef.current = null; }
+    cancelledRef.current = true;
+  };
+
+  const generateQrOnCanvas = async (text: string) => {
+    if (!canvasRef.current) return;
+    try {
+      await QRCode.toCanvas(canvasRef.current, text, {
+        width: 240,
+        margin: 2,
+        color: { dark: '#000000ff', light: '#ffffffff' },
+      });
+    } catch (e) {
+      // canvas 生成失败时回退到旧方案（极少发生）
+      console.warn('[WechatQr] Canvas QR generation failed, falling back to URL:', e);
+    }
+  };
+
+  const doPoll = async () => {
+    if (cancelledRef.current || !qrcodeId) return;
+    try {
+      const res = await api.channels.wechat.qrcodeStatus(channel.id, channel.token || '', qrcodeId);
+      // iLink 返回 { data: { status, ret, bot_token, ... }, errcode, ret, errmsg }
+      // 后端包一层 { success, data: <iLink raw> }
+      const payload: any = (res as any)?.data?.data ?? (res as any)?.data;
+      const status: string = payload?.status;
+      const ret: number = payload?.ret;
+
+      // 成功收到响应，重置失败计数
+      pollFailuresRef.current = 0;
+
+      // confirmed 检查必须先于 scaned — iLink 确认后 status 仍为 scaned + ret=0
+      if (status === 'confirmed' || (status === 'scaned' && ret === 0)) {
+        setPhase('confirmed');
+        setTimeout(onClose, 1200);
+        return; // 停止轮询
+      } else if (status === 'scaned' || status === 'scanned') {
+        setPhase('scanned');
+      } else if (status === 'expired' || status === 'canceled') {
+        setPhase('expired');
+        return; // 停止轮询
+      }
+      // 其他情况（waiting / undefined）继续轮询
+
+      // 安排下一次轮询（递归 setTimeout 而非 setInterval，防止并发堆积）
+      if (!cancelledRef.current) {
+        pollTimerRef.current = setTimeout(doPoll, POLL_INTERVAL_MS);
+      }
+    } catch (e) {
+      pollFailuresRef.current++;
+      console.warn("[WechatQr] poll error (" + pollFailuresRef.current + "/" + MAX_POLL_FAILURES + ")", e);
+      if (pollFailuresRef.current >= MAX_POLL_FAILURES) {
+        setPhase('error');
+        setErrMsg('轮询状态失败次数过多，请刷新二维码重试');
+      } else if (!cancelledRef.current) {
+        // 失败后重试，带指数退避
+        const backoff = Math.min(1000 * Math.pow(2, pollFailuresRef.current), 10000);
+        pollTimerRef.current = setTimeout(doPoll, backoff);
+      }
+    }
+  };
+
+  const startPoll = () => {
+    stopPoll();
+    cancelledRef.current = false;
+    pollFailuresRef.current = 0;
+    // 第一次轮询延迟 1 秒后开始（给用户一点看 QR 码的时间）
+    pollTimerRef.current = setTimeout(doPoll, 1000);
+  };
 
   const fetchQr = async () => {
-    setPhase('loading'); setQrUrl(null); setWechatUrl(null); setImgFailed(false); setErrMsg('');
+    setPhase('loading');
+    setWechatUrl(null);
+    setQrcodeId(null);
+    setErrMsg('');
+    pollFailuresRef.current = 0;
+
     try {
-      const res = await api.channels.wechat.qrcode(channel.id, '');
+      const res = await api.channels.wechat.qrcode(channel.id, channel.token || '');
       const inner = (res as any)?.data?.data ?? (res as any)?.data;
       const wcUrl: string = inner?.qrcode_img_content;
       const qrcode: string = inner?.qrcode;
       if (!res.success || !wcUrl || !qrcode) {
         setPhase('error');
-        setErrMsg((res as any)?.error || `字段缺失: ${JSON.stringify(inner)}`);
+        setErrMsg(`字段缺失: ${JSON.stringify(inner)}`);
         return;
       }
       setWechatUrl(wcUrl);
-      // 用 Google Charts 生成二维码图片（国内访问不到时会触发 onError 降级）
-      setQrUrl(`https://chart.googleapis.com/chart?cht=qr&chs=240x240&chld=M|1&chl=${encodeURIComponent(wcUrl)}`);
+      setQrcodeId(qrcode);
+
+      // 生成本地 QR 码到 canvas（不依赖 Google Charts，国内可用）
+      await generateQrOnCanvas(wcUrl);
+
       setPhase('waiting');
-      startPoll(qrcode);
-    } catch (e: any) { setPhase('error'); setErrMsg(String(e?.message ?? e)); }
+      // 轮询由 useEffect([qrcodeId]) 自动启动
+    } catch (e: any) {
+      setPhase('error');
+      setErrMsg(String(e?.message ?? e));
+    }
   };
 
-  const startPoll = (qrcode: string) => {
-    stopPoll();
-    pollRef.current = setInterval(async () => {
-      try {
-        const res = await api.channels.wechat.qrcodeStatus(channel.id, '', qrcode);
-        // iLink 返回 { data: { status, ret, bot_token, ... }, errcode, ret, errmsg }
-        // 后端包一层 { success, data: <iLink raw> }
-        const payload: any = (res as any)?.data?.data ?? (res as any)?.data;
-        const status: string = payload?.status;
-        const ret: number = payload?.ret;
-        // 控制台调试（用户 F12 即可看到每次返回的原始 payload）
-        // eslint-disable-next-line no-console
-        console.debug('[WechatQr] poll', { status, ret, payload });
-
-        // confirmed 检查必须先于 scaned — iLink 确认后 status 仍为 scaned + ret=0
-        if (status === 'confirmed' || (status === 'scaned' && ret === 0)) {
-          stopPoll(); setPhase('confirmed'); setTimeout(onClose, 1200);
-        } else if (status === 'scaned' || status === 'scanned') {
-          setPhase('scanned');
-        } else if (status === 'expired' || status === 'canceled') { stopPoll(); setPhase('expired'); }
-        // iLink 在手机端确认后，status 会从 scaned 保持不变 + ret=0 视为确认成功
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.warn("[WechatQr] poll error", e);
-      }
-    }, 2000);
+  const handleRetry = () => {
+    fetchQr();
   };
 
-  useEffect(() => { fetchQr(); return stopPoll; }, []); // eslint-disable-line
+  useEffect(() => {
+    fetchQr();
+    return stopPoll;
+  }, []); // eslint-disable-line
+
+  // 当 qrcodeId 变更时重新启动轮询
+  useEffect(() => {
+    if (qrcodeId) {
+      startPoll();
+    }
+    return stopPoll;
+  }, [qrcodeId]); // eslint-disable-line
 
   return (
     <Modal isOpen onClose={onClose} title={`扫码登录 · ${channel.name}`} size="sm">
@@ -72,22 +145,14 @@ export function WechatQrModal({ channel, onClose }: { channel: Channel; onClose:
         <div className="relative w-60 h-60 rounded-lg bg-white flex items-center justify-center overflow-hidden">
           {phase === 'loading' && <span className="text-gray-400 text-sm">二维码生成中...</span>}
 
-          {/* QR 图片（Google Charts 失败时隐藏，显示降级提示） */}
-          {qrUrl && !imgFailed && phase !== 'error' && phase !== 'expired' && (
-            <img
-              src={qrUrl}
-              alt="微信登录二维码"
-              className="w-full h-full object-contain"
-              onError={() => setImgFailed(true)}
+          {/* Canvas 渲染的 QR 码（纯本地生成，无外部依赖） */}
+          {phase !== 'error' && phase !== 'expired' && (
+            <canvas
+              ref={canvasRef}
+              width={240}
+              height={240}
+              className={`w-full h-full object-contain ${phase === 'waiting' ? '' : 'opacity-30'}`}
             />
-          )}
-          {/* imgFailed 降级：Google Charts 国内不可用 */}
-          {imgFailed && phase === 'waiting' && (
-            <div className="flex flex-col items-center justify-center gap-2 px-4 text-center">
-              <span className="text-3xl">🔔</span>
-              <p className="text-xs text-gray-500">二维码图片加载失败</p>
-              <p className="text-xs text-gray-400">请点击下方按钮在新标签页打开</p>
-            </div>
           )}
 
           {/* 状态遮罩 */}
@@ -104,32 +169,32 @@ export function WechatQrModal({ channel, onClose }: { channel: Channel; onClose:
           {phase === 'expired' && (
             <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center text-white gap-2">
               <span className="text-sm">二维码已失效</span>
-              <button onClick={fetchQr} className="text-xs bg-green-600 hover:bg-green-500 px-3 py-1 rounded">点击刷新</button>
+              <button onClick={handleRetry} className="text-xs bg-green-600 hover:bg-green-500 px-3 py-1 rounded">点击刷新</button>
             </div>
           )}
           {phase === 'error' && (
             <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center text-red-300 gap-2 px-4 text-center">
               <span className="text-xs">{errMsg || '未知错误'}</span>
-              <button onClick={fetchQr} className="text-xs bg-blue-600 hover:bg-blue-500 px-3 py-1 rounded text-white">重试</button>
+              <button onClick={handleRetry} className="text-xs bg-blue-600 hover:bg-blue-500 px-3 py-1 rounded text-white">重试</button>
             </div>
           )}
         </div>
 
         <p className="text-sm text-dark-muted text-center">
-          {phase === 'waiting' && (imgFailed ? '请在新标签页打开后用微信扫码' : '请使用微信扫描二维码授权机器人')}
+          {phase === 'waiting' && '请使用微信扫描二维码授权机器人'}
           {phase === 'scanned' && '已扫描，请在手机上确认...'}
           {phase === 'confirmed' && '机器人已授权并启动'}
           {phase === 'loading' && '正在连接 iLink 服务...'}
-          {(phase === 'expired' || phase === 'error') && '二维码已失效'}
+          {(phase === 'expired' || phase === 'error') && (phase === 'expired' ? '二维码已失效' : '')}
         </p>
 
-        {/* 新标签页打开按钮（始终可用，作为主要或备用扫码方式） */}
+        {/* 备用打开方式：直接打开 WeChat URL */}
         {wechatUrl && phase === 'waiting' && (
           <button
             onClick={() => window.open(wechatUrl, '_blank', 'width=480,height=600,noopener')}
             className="w-full flex items-center justify-center gap-2 text-sm bg-green-600/15 hover:bg-green-600/25 text-green-400 border border-green-600/40 px-3 py-2.5 rounded-lg transition-colors"
           >
-            <span>🔔</span> 在新标签页打开二维码
+            <span>🔔</span> 在新标签页打开（备用）
           </button>
         )}
       </div>

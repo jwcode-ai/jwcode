@@ -34,7 +34,7 @@ A good decomposition feels inevitable — each piece is small enough to verify b
 - Independent tasks run in parallel
 - Dependent tasks follow topological order
 - Pass only the minimum context each agent needs — references, not full files
-- Share intermediate results via SharedContextBus
+- Share intermediate results through WorkflowLedger artifacts
 
 ### Step 4: Verify Results
 - Check each sub-task result against its acceptance criteria
