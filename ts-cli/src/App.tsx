@@ -260,7 +260,7 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
               )}
               <Box flexDirection="column">
                 <Box>
-                  <Text color={t.primary} bold>&gt;_ JWCode v3.0.0</Text>
+                  <Text color={t.primary} bold>&gt;_ JWCode v{process.env.APP_VERSION || '3.0.0'}</Text>
                 </Box>
                 <Box>
                   <Text dimColor>model:     </Text>
@@ -271,7 +271,11 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
                   <Text dimColor>directory: </Text>
                   <Text color={t.warning}>{process.cwd()}</Text>
                 </Box>
-                {showAnimal && welcomeActive && (
+                <Box>
+                  <Text dimColor>web:        </Text>
+                  <Text color="blue" underline>{backendUrl}</Text>
+                </Box>
+                {showAnimal && (
                   <Box>
                     <Text dimColor>{anim.variant.tip}</Text>
                   </Box>
@@ -283,7 +287,6 @@ export function App({ backendUrl, wsUrl, onExit }: AppProps) {
             <Box key="tip-line" paddingLeft={3} marginBottom={1} flexDirection="column">
               <Text dimColor>/ commands   @ files   ?? history   Ctrl+E expand   Ctrl+. swap mascot</Text>
               <Text dimColor>Tab plan mode   Esc pause/stop   /help for everything</Text>
-              <Text dimColor>Web UI: <Text color="blue" underline>http://localhost:8080</Text></Text>
             </Box>
           )}
           {/* flexGrow=0 when palette open: prevents Yoga layout overflow + Ink ghost content duplication */}

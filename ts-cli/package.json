@@ -1,6 +1,6 @@
 {
   "name": "@jwcode/cli",
-  "version": "3.0.18",
+  "version": "3.0.19",
   "description": "JWCode — Java AI Coding Tool TypeScript CLI",
   "type": "module",
   "main": "dist/cli.js",

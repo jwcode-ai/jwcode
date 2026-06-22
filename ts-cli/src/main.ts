@@ -46,7 +46,7 @@ import {
 import { loadConfig } from './config.js';
 import type { ChildProcess } from 'node:child_process';
 
-const VERSION = '3.0.0';
+const VERSION = process.env.APP_VERSION || '3.0.0';
 
 function printUsage(): void {
   console.log(`JWCode CLI v${VERSION}`);
@@ -122,7 +122,6 @@ async function cmdStart(args: Record<string, string | boolean>): Promise<void> {
   console.log(`  Workspace: ${workspaceDir}`);
   console.log(`  HTTP API:  http://localhost:${httpPort}`);
   console.log(`  WebSocket: ws://localhost:${wsPort}/ws`);
-  console.log(`  Web UI:    http://localhost:${httpPort}`);
 
   // Ensure JAR exists: build from source (dev) or download from GitHub Releases
   if (!findJar(installDir) || build) {

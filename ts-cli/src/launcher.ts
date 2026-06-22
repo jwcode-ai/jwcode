@@ -17,6 +17,7 @@ import { homedir, platform } from 'node:os';
 import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const MIN_BACKEND_JAR_BYTES = 200 * 1024;
 
 /**
  * Find the installation directory where jwcode's backend JAR lives.
@@ -205,7 +206,8 @@ export async function ensureBackendJar(installDir: string): Promise<string | nul
 
         const chunks: Uint8Array[] = [];
         let downloaded = 0;
-        const total = Number(response.headers.get('content-length') || 0);
+        const contentLength = response.headers.get('content-length');
+        const total = Number(contentLength || 0);
 
         while (true) {
           const { done, value } = await reader.read();
@@ -219,6 +221,14 @@ export async function ensureBackendJar(installDir: string): Promise<string | nul
         }
 
         const buf = Buffer.concat(chunks);
+        if (buf.length < MIN_BACKEND_JAR_BYTES) {
+          console.log(
+            `\n[launcher] Download too small for v${v}, trying next source: ${buf.length} bytes ` +
+            `(content-length: ${contentLength ?? 'unknown'}, minimum: ${MIN_BACKEND_JAR_BYTES} bytes) ${url}`
+          );
+          continue;
+        }
+
         writeFileSync(jarPath, buf);
         console.log(`\n[launcher] Download complete: ${jarPath} (${(buf.length / 1024 / 1024).toFixed(1)} MB)`);
         return jarPath;

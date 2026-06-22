@@ -3,6 +3,12 @@
  * Uses packages=external to avoid CJS/ESM interop issues.
  */
 import * as esbuild from 'esbuild';
+import { readFileSync, existsSync, mkdirSync, copyFileSync, unlinkSync, readdirSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const pkg = JSON.parse(readFileSync(join(__dirname, 'package.json'), 'utf-8'));
 
 await esbuild.build({
   entryPoints: ['src/main.ts'],
@@ -16,17 +22,15 @@ await esbuild.build({
   minify: true,
   keepNames: true,
   logLevel: 'info',
+  define: {
+    'process.env.APP_VERSION': JSON.stringify(pkg.version),
+  },
 });
 
 console.log('[build] Bundle: dist/cli.js');
 
 // Copy fat JAR from Maven build if it exists (dev convenience)
-import { existsSync, mkdirSync, copyFileSync, unlinkSync, readdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
 
 function isProguardOutput(jarPath) {
   try {
