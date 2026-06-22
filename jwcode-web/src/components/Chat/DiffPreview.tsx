@@ -131,7 +131,7 @@ function renderUnifiedDiff(text: string) {
       className = 'text-accent-blue font-bold bg-accent-blue/5';
     }
     return (
-      <div key={i} className={`text-xs font-mono leading-snug px-2 ${className}`}
+      <div key={`${i}-${line.substring(0, 20)}`} className={`text-xs font-mono leading-snug px-2 ${className}`}
            style={{ minHeight: '1.25rem' }}>
         <span className="select-none inline-block w-4 text-dark-muted text-right mr-1">
           {className.includes('text-accent-blue') ? '@' : prefix}

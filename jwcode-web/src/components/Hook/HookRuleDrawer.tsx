@@ -192,7 +192,7 @@ export function HookRuleDrawer({ events, agents }: Props) {
             const done = i < step;
             return (
               <button
-                key={i}
+                key={s.title}
                 onClick={() => setStep(i)}
                 className={`relative flex-1 border-b-2 px-2 py-2.5 text-center text-xs transition-colors ${
                   active

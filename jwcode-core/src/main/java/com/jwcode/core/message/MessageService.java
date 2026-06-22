@@ -13,13 +13,16 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Logger;
 
 /**
  * 消息服务
  * 支持多渠道消息发送和消息模板
  */
 public class MessageService {
-    
+
+    private static final Logger LOGGER = Logger.getLogger(MessageService.class.getName());
+
     public enum Channel {
         CONSOLE,   // 控制台输出
         SLACK,     // Slack 消息
@@ -234,7 +237,7 @@ public class MessageService {
             Files.writeString(historyFile, logEntry, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
             
         } catch (IOException e) {
-            System.err.println("记录消息历史失败: " + e.getMessage());
+            LOGGER.warning("Failed to record message history: " + e.getMessage());
         }
     }
     

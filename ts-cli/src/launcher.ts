@@ -366,10 +366,24 @@ export function startBackend(opts: StartOptions): ChildProcess {
   console.log(`[launcher] Starting backend: ${java} -jar ${jarPath}`);
   console.log(`[launcher] Workspace: ${workspaceDir}`);
 
-  const args = ['-jar', jarPath, String(port), String(wsPort), workspaceDir];
+  const args = [
+    '-Dfile.encoding=UTF-8',
+    '-Dsun.stdout.encoding=UTF-8',
+    '-Dsun.stderr.encoding=UTF-8',
+    '-jar',
+    jarPath,
+    String(port),
+    String(wsPort),
+    workspaceDir,
+  ];
   const proc = spawn(java, args, {
     cwd: workspaceDir,
-    env: { ...process.env, JWCODE_WS_PORT: String(wsPort) },
+    env: {
+      ...process.env,
+      JWCODE_WS_PORT: String(wsPort),
+      LANG: process.env.LANG || 'zh_CN.UTF-8',
+      LC_ALL: process.env.LC_ALL || 'zh_CN.UTF-8',
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });

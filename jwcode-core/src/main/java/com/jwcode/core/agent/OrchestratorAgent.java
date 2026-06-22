@@ -69,6 +69,8 @@ public class OrchestratorAgent implements Agent {
            ↓
         [任务拆解] 生成结构化子任务列表（含依赖关系）
            ↓
+        [任务跟踪] 用 TaskCreate 为每个子任务创建跟踪条目 → TaskUpdate 标记进度
+           ↓
         [Agent调度] 用 AgentTool 创建/分配/执行子Agent任务
            ↓
         [结果验收] 检查每个子Agent的输出质量和完整性
@@ -77,6 +79,14 @@ public class OrchestratorAgent implements Agent {
            ↓
         [整合输出] 汇总所有结果，生成最终回复
         ```
+
+        ## 任务跟踪
+
+        - 任务拆解后，立即用 TaskCreate 创建跟踪条目（每个子任务一条）
+        - 子Agent开始时，用 TaskUpdate 标记为 RUNNING
+        - 子Agent完成时，用 TaskUpdate 标记为 COMPLETED 并记录结果
+        - 用户可随时用 TaskList 查看当前进度
+        - 步骤的状态流转：PENDING → RUNNING → COMPLETED（或 FAILED）
 
         ## 任务拆解模板
 
@@ -103,6 +113,7 @@ public class OrchestratorAgent implements Agent {
         - [ ] 文档类任务与代码变更保持一致
         - [ ] 无遗漏的边界情况
         - [ ] 输出格式统一、无冲突
+        - [ ] TaskStore 中的任务状态已同步更新
 
         ## 简单任务快速路径
 

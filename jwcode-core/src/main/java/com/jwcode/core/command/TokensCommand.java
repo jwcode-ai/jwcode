@@ -2,9 +2,11 @@ package com.jwcode.core.command;
 
 import com.jwcode.core.config.YamlConfigLoader;
 import com.jwcode.core.session.Session;
+import java.util.logging.Logger;
 
 /** /tokens - report token usage for the session. */
 public class TokensCommand implements Command {
+    private static final Logger logger = Logger.getLogger(TokensCommand.class.getName());
     @Override public String getName() { return "tokens"; }
     @Override public String getDescription() { return "Show token usage details"; }
     @Override public String getUsage() { return "tokens"; }
@@ -27,7 +29,9 @@ public class TokensCommand implements Command {
         try {
             var modelDef = YamlConfigLoader.getInstance().getConfig().getDefaultModel();
             report.append("  Max tokens: ").append(modelDef != null ? modelDef.getMaxTokens() : "unknown").append("\n");
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            logger.fine("Token count fallback: " + e.getMessage());
+        }
         return CommandResult.success(report.toString());
     }
 }

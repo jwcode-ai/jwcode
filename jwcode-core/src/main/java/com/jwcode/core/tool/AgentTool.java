@@ -4,16 +4,36 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jwcode.core.agent.Agent;
-import com.jwcode.core.agent.AgentRegistry;
-import com.jwcode.core.agent.SharedContextBus;
-import com.jwcode.core.agent.parallel.*;
+import com.jwcode.core.agent.parallel.ParallelExecutionResult;
+import com.jwcode.core.agent.parallel.SubAgentResult;
+import com.jwcode.core.agent.parallel.SubAgentTask;
 import com.jwcode.core.api.StepMessageBroadcaster;
+import com.jwcode.core.hands.AgentRequest;
+import com.jwcode.core.hands.AgentResult;
+import com.jwcode.core.hands.LocalAgentHand;
 import com.jwcode.core.llm.LLMMessage;
 import com.jwcode.core.llm.LLMResponse;
 import com.jwcode.core.llm.LLMService;
 import com.jwcode.core.session.Session;
 import com.jwcode.core.tool.context.ToolExecutionContext;
+import com.jwcode.core.workflow.EffectVM;
+import com.jwcode.core.workflow.WorkflowArtifactStore;
+import com.jwcode.core.workflow.WorkflowBudget;
+import com.jwcode.core.workflow.WorkflowIR;
+import com.jwcode.core.workflow.WorkflowInput;
+import com.jwcode.core.workflow.WorkflowLedger;
+import com.jwcode.core.workflow.WorkflowResult;
+import com.jwcode.core.workflow.ir.AgentNode;
+import com.jwcode.core.workflow.ir.ErrorMode;
+import com.jwcode.core.workflow.ir.ParallelNode;
+import com.jwcode.core.workflow.ir.PhaseNode;
+import com.jwcode.core.workflow.ir.PipelineNode;
+import com.jwcode.core.workflow.ir.WorkflowNode;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -24,7 +44,7 @@ import java.util.stream.Collectors;
 /**
  * Agent 工具 - Phase 2 增强版
  * 
- * 多代理协作管理工具，集成 ParallelAgentExecutor，支持：
+ * 多代理协作管理工具，集成 Workflow Runtime，支持：
  * - 创建和管理多个 Agent
  * - 并行执行子任务
  * - 分配任务给 Agent
@@ -54,15 +74,12 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
     private static final AgentManager agentManager = new AgentManager();
     
     // 并行执行器
-    private volatile ParallelAgentExecutor parallelExecutor;
+    private final WorkflowBlackboard sharedBus = new WorkflowBlackboard();
     
     // LLM 服务（用于真正的 Agent 执行）
     private volatile LLMService llmService;
-    private volatile AgentRegistry agentRegistry;
     
     // 【修复】用于同步注册到全局 AgentRegistry
-    private static volatile AgentRegistry sharedAgentRegistry;
-    private final SharedContextBus sharedBus = new SharedContextBus();
     
     // 执行统计
     private final AtomicInteger executionCounter = new AtomicInteger(0);
@@ -221,11 +238,11 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
                     case "create_parallel":
                         return createAgentsParallel(normalizedInput, context.getSession());
                     case "assign":
-                        return assignTask(normalizedInput, context.getSession());
+                        return assignTask(normalizedInput, context);
                     case "execute":
-                        return executeTasks(normalizedInput, context.getSession());
+                        return executeTasks(normalizedInput, context);
                     case "auto_execute":
-                        return autoExecuteTasks(normalizedInput, context.getSession());
+                        return autoExecuteTasks(normalizedInput, context);
                     case "status":
                         return getAgentStatus(normalizedInput, context.getSession());
                     case "list":
@@ -401,16 +418,7 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
     // ==================== 初始化 ====================
     
     private void ensureExecutorInitialized(ToolExecutionContext context) {
-        if (parallelExecutor == null) {
-            synchronized (this) {
-                if (parallelExecutor == null) {
-                    agentRegistry = context.getAgentRegistry();
-                    llmService = context.getLLMService();
-                    parallelExecutor = new ParallelAgentExecutor(agentRegistry, llmService, sharedBus);
-                    logger.info("ParallelAgentExecutor initialized");
-                }
-            }
-        }
+        llmService = context.getLLMService();
     }
     
     // ==================== 核心操作 ====================
@@ -524,245 +532,105 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
     }
     
     /**
-     * 分配任务给 Agent（自动提交到 ParallelAgentExecutor 执行）
+     * 分配任务给 Agent（自动提交到 Workflow Runtime 执行）
      */
-    private ToolResult<Map<String, Object>> assignTask(Map<String, Object> args, Session session) {
+    private ToolResult<Map<String, Object>> assignTask(Map<String, Object> args, ToolExecutionContext toolContext) {
+        Session session = toolContext.getSession();
         String agentId = (String) args.get("agent_id");
         String task = (String) args.get("task");
         String context = (String) args.get("context");
-        Long timeout = args.get("timeout") instanceof Number ? 
-            ((Number) args.get("timeout")).longValue() : DEFAULT_TASK_TIMEOUT_MS;
-        
+        Long timeout = args.get("timeout") instanceof Number
+            ? ((Number) args.get("timeout")).longValue()
+            : DEFAULT_TASK_TIMEOUT_MS;
+
         if (agentId == null || agentId.isEmpty()) {
-            return ToolResult.error("agent_id 参数是必需的");
+            return ToolResult.error("agent_id parameter is required");
         }
-        
         if (task == null || task.isEmpty()) {
-            return ToolResult.error("task 参数是必需的");
+            return ToolResult.error("task parameter is required");
         }
-        
+
         AgentInfo agent = agentManager.getAgent(agentId);
         if (agent == null) {
-            return ToolResult.error("未找到 Agent：" + agentId);
+            return ToolResult.error("Agent not found: " + agentId);
         }
-        
         if (agent.status != AgentStatus.IDLE) {
-            return ToolResult.error("Agent 当前状态为 " + agent.status + "，无法分配新任务");
+            return ToolResult.error("Agent is not idle: " + agent.status);
         }
-        
+
         agent.assignTask(task, context);
-        
-        // 构建 SubAgentTask 并提交到 ParallelAgentExecutor
         Map<String, Object> taskContext = new HashMap<>();
         if (context != null && !context.isEmpty()) {
             taskContext.put("user_context", context);
         }
-        
-        SubAgentTask subTask = SubAgentTask.builder()
-            .name(agent.name)
-            .role(agent.role)
-            .taskDescription(task)
-            .agentType(inferAgentType(agent.role))
-            .timeout(timeout)
-            .context(taskContext)
-            .build();
-        
-        CompletableFuture<ParallelExecutionResult> parallelFuture = 
-            parallelExecutor.executeAsync(List.of(subTask), session, timeout);
-        
-        CompletableFuture<SubAgentResult> subAgentFuture = parallelFuture.thenApply(result -> {
-            List<SubAgentResult> results = result.getResults();
-            if (results != null && !results.isEmpty()) {
-                return results.get(0);
-            }
-            return SubAgentResult.failure(subTask.getTaskId(), "No result returned");
-        }).exceptionally(ex -> {
-            return SubAgentResult.failure(subTask.getTaskId(), ex.getMessage());
-        });
-        
-        agent.executionFuture = subAgentFuture;
-        agent.taskId = subTask.getTaskId();
+
+        Map<String, Object> singleTask = new HashMap<>();
+        singleTask.put("name", agent.name);
+        singleTask.put("role", agent.role);
+        singleTask.put("task", task);
+        singleTask.put("agent_type", inferAgentType(agent.role));
+        singleTask.put("timeout", timeout);
+        singleTask.put("context", taskContext);
+
+        Map<String, Object> executeArgs = new HashMap<>();
+        executeArgs.put("action", "execute");
+        executeArgs.put("tasks", List.of(singleTask));
+        executeArgs.put("parallel", false);
+        executeArgs.put("timeout", timeout);
+
+        ToolResult<Map<String, Object>> workflowResult =
+            executeTasksViaWorkflowRuntime(executeArgs, List.of(singleTask), false, timeout, toolContext);
+
+        String taskId = "agent-task-" + executionCounter.incrementAndGet();
+        SubAgentResult subAgentResult = workflowResult.isSuccess()
+            ? SubAgentResult.success(taskId, workflowResult.getContent())
+            : SubAgentResult.failure(taskId, workflowResult.getContent());
+        agent.executionFuture = CompletableFuture.completedFuture(subAgentResult);
+        agent.taskId = taskId;
         agent.taskTimeout = timeout;
-        
-        subAgentFuture.whenComplete((result, error) -> {
-            if (error != null) {
-                agent.executionResult = SubAgentResult.failure(agent.taskId, error.getMessage());
-                agent.failTask(error.getMessage());
-            } else if (result != null) {
-                agent.executionResult = result;
-                if (result.isSuccess()) {
-                    agent.completeTask(result.getOutput());
-                } else {
-                    agent.failTask(result.getError());
-                }
-            }
-        });
-        
-        session.getLogger().info("AgentTool: 分配任务并提交执行 - agentId=" + agentId + ", taskId=" + subTask.getTaskId() + ", task=" + task);
-        
-        StringBuilder content = new StringBuilder();
-        content.append("任务分配成功！\n\n");
-        content.append("Agent: ").append(agent.name).append(" (").append(agentId).append(")\n");
-        content.append("任务ID: ").append(subTask.getTaskId()).append("\n");
-        content.append("任务：").append(task).append("\n");
-        content.append("超时：").append(timeout).append("ms\n");
-        
-        if (context != null && !context.isEmpty()) {
-            content.append("上下文：").append(context).append("\n");
+        agent.executionResult = subAgentResult;
+        if (subAgentResult.isSuccess()) {
+            agent.completeTask(subAgentResult.getOutput());
+        } else {
+            agent.failTask(subAgentResult.getError());
         }
-        
-        content.append("\nAgent 状态已更新为：working\n");
-        content.append("任务已自动提交到执行器，可通过 status 或 query 查询进度。\n");
-        
-        Map<String, Object> metadata = new HashMap<>();
+
+        session.getLogger().info("AgentTool: assigned task via workflow runtime - agentId="
+            + agentId + ", taskId=" + taskId + ", task=" + task);
+
+        Map<String, Object> metadata = workflowResult.getMetadata() != null
+            ? new HashMap<>(workflowResult.getMetadata())
+            : new HashMap<>();
         metadata.put("agent_id", agentId);
-        metadata.put("task_id", subTask.getTaskId());
+        metadata.put("task_id", taskId);
         metadata.put("task", task);
         metadata.put("timeout", timeout);
-        metadata.put("status", "working");
-        
-        ToolResult<Map<String, Object>> result = new ToolResult<>(metadata);
-        result.setSuccess(true);
-        result.setContent(content.toString());
-        result.setMetadata(metadata);
-        
-        return result;
+        metadata.put("status", agent.status.toString());
+        workflowResult.setMetadata(metadata);
+        return workflowResult;
     }
-    
+
     /**
-     * 并行执行多个任务
+     * Execute agent tasks through Workflow IR + EffectVM.
      */
     @SuppressWarnings("unchecked")
-    private ToolResult<Map<String, Object>> executeTasks(Map<String, Object> args, Session session) {
+    private ToolResult<Map<String, Object>> executeTasks(Map<String, Object> args, ToolExecutionContext toolContext) {
         List<Map<String, Object>> taskConfigs = (List<Map<String, Object>>) args.get("tasks");
-        Boolean parallel = args.get("parallel") instanceof Boolean ?
-            (Boolean) args.get("parallel") : true;
-        Long globalTimeout = args.get("timeout") instanceof Number ?
-            ((Number) args.get("timeout")).longValue() : DEFAULT_GLOBAL_TIMEOUT_MS;
+        Boolean parallel = args.get("parallel") instanceof Boolean
+            ? (Boolean) args.get("parallel")
+            : true;
+        Long globalTimeout = args.get("timeout") instanceof Number
+            ? ((Number) args.get("timeout")).longValue()
+            : DEFAULT_GLOBAL_TIMEOUT_MS;
 
         if (taskConfigs == null || taskConfigs.isEmpty()) {
-            return ToolResult.error("tasks 参数是必需的");
+            return ToolResult.error("tasks parameter is required");
         }
-
-        session.getLogger().info("AgentTool: 执行 " + taskConfigs.size() + " 个任务, parallel=" + parallel);
-        StepMessageBroadcaster broadcaster = StepMessageBroadcaster.getInstance();
-
-        // 构建 SubAgentTask 列表
-        List<SubAgentTask> tasks = new ArrayList<>();
-        for (Map<String, Object> config : taskConfigs) {
-            SubAgentTask task = buildTaskFromConfig(config);
-            tasks.add(task);
-            broadcaster.broadcastStepStart(task.getTaskId(), task.getName(), task.getTaskDescription());
-        }
-
-        // 重试/熔断/降级状态
-        String executionMode = "parallel";
-        String circuitState = "closed";
-        int totalRetries = 0;
-        int consecutiveFailures = 0;
-        int totalFailedCount = 0;
-        boolean degradedToHeuristic = false;
-        List<String> strategyHints = new ArrayList<>();
-
-        try {
-            ParallelExecutionResult executionResult;
-
-            if (parallel) {
-                CompletableFuture<ParallelExecutionResult> future =
-                    parallelExecutor.executeAsync(tasks, session, globalTimeout);
-                executionResult = future.get();
-            } else {
-                executionResult = parallelExecutor.execute(tasks, session, globalTimeout);
-            }
-
-            // --- 重试阶段：对可恢复错误的任务进行有限重试 ---
-            List<SubAgentResult> retriedResults = new ArrayList<>();
-            for (SubAgentResult r : executionResult.getFailedResults()) {
-                if (isRetryableResult(r) && MAX_RETRIES_PER_TASK > 0) {
-                    SubAgentTask failedTask = findTaskInList(tasks, r.getTaskId());
-                    if (failedTask != null) {
-                        totalRetries++;
-                        consecutiveFailures++;
-                        logger.info("[AgentTool] Retrying task " + r.getTaskId() + " (retry #" + totalRetries + ")");
-                        broadcaster.broadcastStepAction(r.getTaskId(), "Retrying (attempt #" + (1 + totalRetries) + ")...");
-                        try {
-                            CompletableFuture<ParallelExecutionResult> retryFuture =
-                                parallelExecutor.executeAsync(List.of(failedTask), session,
-                                    Math.min(failedTask.getTimeoutMs(), DEFAULT_TASK_TIMEOUT_MS));
-                            ParallelExecutionResult retryResult = retryFuture.get(
-                                    Math.min(failedTask.getTimeoutMs(), DEFAULT_TASK_TIMEOUT_MS),
-                                    TimeUnit.MILLISECONDS);
-                            List<SubAgentResult> retryResults = retryResult.getResults();
-                            if (!retryResults.isEmpty() && retryResults.get(0).isSuccess()) {
-                                consecutiveFailures = 0;
-                                retriedResults.add(retryResults.get(0));
-                                continue;
-                            }
-                        } catch (Exception e) {
-                            logger.warning("[AgentTool] Retry failed for " + r.getTaskId() + ": " + e.getMessage());
-                        }
-                    }
-                } else {
-                    consecutiveFailures++;
-                }
-                totalFailedCount++;
-                retriedResults.add(r);
-            }
-
-            // 替换重试成功的结果
-            if (!retriedResults.isEmpty()) {
-                List<SubAgentResult> merged = new ArrayList<>(executionResult.getSuccessfulResults());
-                merged.addAll(retriedResults);
-                executionResult = new ParallelExecutionResult(merged, executionResult.getTotalExecutionTimeMs());
-            }
-
-            // --- 熔断/降级检查 ---
-            if (totalFailedCount >= CIRCUIT_BREAKER_THRESHOLD) {
-                circuitState = "open";
-                executionMode = "degraded_partial";
-                strategyHints.add("⚠️ " + totalFailedCount + " 个子任务连续失败，触发熔断保护。本轮自动并行已被降级。");
-                logger.warning("[AgentTool] Circuit breaker opened: " + totalFailedCount + " consecutive failures");
-            } else if (consecutiveFailures >= STRATEGY_SWITCH_HINT_THRESHOLD) {
-                circuitState = "half-open";
-                executionMode = "degraded_hint";
-                strategyHints.add("ⓘ " + consecutiveFailures + " 个子任务连续失败，建议切换策略：减少并行度、简化任务描述，或改用 heuristic 计划。");
-                logger.warning("[AgentTool] Strategy switch hint: " + consecutiveFailures + " consecutive failures");
-            }
-
-            // 广播失败/完成事件
-            for (SubAgentResult r : executionResult.getFailedResults()) {
-                broadcaster.broadcastStepComplete(r.getTaskId(), r.getError() != null ? r.getError() : "Unknown error", false);
-            }
-            for (SubAgentResult r : executionResult.getSuccessfulResults()) {
-                broadcaster.broadcastStepComplete(r.getTaskId(), r.getOutput(), true);
-            }
-
-            // 构建结果
-            ToolResult<Map<String, Object>> result = buildExecutionResult(executionResult);
-
-            // --- 注入降级元数据 ---
-            Map<String, Object> meta = result.getMetadata();
-            if (meta == null) meta = new HashMap<>();
-            meta.put("execution_mode", executionMode);
-            meta.put("retry_count", totalRetries);
-            meta.put("circuit_state", circuitState);
-            meta.put("partial_results", totalFailedCount > 0 && totalFailedCount < tasks.size());
-            meta.put("timeout_ms", globalTimeout);
-            if (!strategyHints.isEmpty()) {
-                meta.put("strategy_hints", strategyHints);
-                String hintText = String.join("\n", strategyHints);
-                result.setContent(result.getContent() + "\n\n" + hintText);
-            }
-            result.setMetadata(meta);
-            return result;
-
-        } catch (Exception e) {
-            logger.severe("Task execution failed: " + e.getMessage());
-            return ToolResult.error("任务执行失败: " + e.getMessage());
-        }
+        return executeTasksViaWorkflowRuntime(args, taskConfigs, parallel, globalTimeout, toolContext);
     }
 
-    private ToolResult<Map<String, Object>> autoExecuteTasks(Map<String, Object> args, Session session) {
+    private ToolResult<Map<String, Object>> autoExecuteTasks(Map<String, Object> args, ToolExecutionContext context) {
+        Session session = context.getSession();
         String task = stringValue(args.get("task"));
         if (task == null || task.isBlank()) {
             return ToolResult.error("task parameter is required for auto_execute");
@@ -783,7 +651,7 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
         executeArgs.put("parallel", true);
         executeArgs.put("timeout", globalTimeout);
 
-        ToolResult<Map<String, Object>> result = executeTasks(executeArgs, session);
+        ToolResult<Map<String, Object>> result = executeTasks(executeArgs, context);
         Map<String, Object> metadata = new HashMap<>();
         if (result.getMetadata() != null) {
             metadata.putAll(result.getMetadata());
@@ -794,6 +662,182 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
         metadata.put("planned_tasks", plannedTasks);
         result.setMetadata(metadata);
         return result;
+    }
+
+    private ToolResult<Map<String, Object>> executeTasksViaWorkflowRuntime(
+            Map<String, Object> args,
+            List<Map<String, Object>> taskConfigs,
+            boolean parallel,
+            long globalTimeout,
+            ToolExecutionContext toolContext) {
+        long start = System.currentTimeMillis();
+        Session session = toolContext.getSession();
+        String runId = "agent-tool-" + sanitizeForPath(session.getId()) + "-" + executionCounter.incrementAndGet();
+        Path workflowRoot = Path.of(System.getProperty(
+            "jwcode.workflow.root",
+            Path.of(System.getProperty("user.home"), ".jwcode", "workflows").toString()));
+        Path runDir = workflowRoot.resolve(runId);
+
+        try {
+            List<SubAgentTask> tasks = new ArrayList<>();
+            List<WorkflowNode> nodes = new ArrayList<>();
+            StepMessageBroadcaster broadcaster = StepMessageBroadcaster.getInstance();
+
+            for (Map<String, Object> config : taskConfigs) {
+                SubAgentTask task = buildTaskFromConfig(config);
+                tasks.add(task);
+                broadcaster.broadcastStepStart(task.getTaskId(), task.getName(), task.getTaskDescription());
+                nodes.add(toAgentNode(task));
+            }
+
+            WorkflowNode body = parallel
+                ? new ParallelNode("agent-tool-parallel", nodes, Math.max(1, Math.min(nodes.size(), MAX_AUTO_AGENTS)), ErrorMode.NULL)
+                : new PipelineNode("agent-tool-pipeline", nodes, ErrorMode.FAIL_FAST);
+            WorkflowIR ir = new WorkflowIR(
+                "agent-tool-workflow",
+                new PhaseNode("agent-tool-execute", "agent-tool-execute", List.of(body)),
+                new WorkflowBudget(
+                    1_000_000L,
+                    Math.max(1, taskConfigs.size() + 1),
+                    0,
+                    Duration.ofMillis(Math.max(1, globalTimeout)),
+                    Math.max(1, Math.min(taskConfigs.size(), MAX_AUTO_AGENTS)),
+                    MAX_AUTO_AGENTS),
+                "workflow-ir.v1");
+            Files.createDirectories(runDir);
+            Files.writeString(runDir.resolve("ir.json"), new com.jwcode.core.workflow.WorkflowCompiler().toJson(ir), StandardCharsets.UTF_8);
+
+            WorkflowLedger ledger = new WorkflowLedger(runId, runDir);
+            WorkflowArtifactStore artifacts = new WorkflowArtifactStore(runDir);
+            LocalAgentHand hand = llmService == null
+                ? new LocalAgentHand()
+                : new LocalAgentHand(llmService, null,
+                    toolContext.getWorkingDirectory() != null ? toolContext.getWorkingDirectory() : Path.of(System.getProperty("user.dir")),
+                    null);
+            EffectVM vm = new EffectVM(ledger, artifacts, hand, null);
+            WorkflowResult workflowResult = vm.execute(runId, ir,
+                WorkflowInput.of(session.getId(), MAPPER.valueToTree(args)));
+
+            List<SubAgentResult> subResults = toSubAgentResults(tasks, workflowResult.output(), runId);
+            ParallelExecutionResult executionResult = new ParallelExecutionResult(subResults, System.currentTimeMillis() - start);
+            ToolResult<Map<String, Object>> result = buildExecutionResult(executionResult);
+
+            Map<String, Object> metadata = result.getMetadata() != null
+                ? new HashMap<>(result.getMetadata())
+                : new HashMap<>();
+            metadata.put("workflow_runtime", true);
+            metadata.put("workflow_run_id", runId);
+            metadata.put("workflow_status", workflowResult.status().name());
+            metadata.put("workflow_dir", runDir.toString());
+            metadata.put("execution_mode", parallel ? "workflow_parallel" : "workflow_pipeline");
+            result.setMetadata(metadata);
+            result.setSuccess(workflowResult.status() == com.jwcode.core.workflow.WorkflowStatus.COMPLETED
+                && executionResult.getFailureCount() == 0);
+            return result;
+        } catch (Exception e) {
+            logger.warning("[AgentTool] Workflow runtime execution failed: " + e.getMessage());
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("workflow_runtime", true);
+            metadata.put("workflow_run_id", runId);
+            metadata.put("workflow_status", "FAILED");
+            metadata.put("workflow_dir", runDir.toString());
+            metadata.put("execution_mode", parallel ? "workflow_parallel" : "workflow_pipeline");
+            metadata.put("error", e.getMessage());
+            ToolResult<Map<String, Object>> result = new ToolResult<>(metadata);
+            result.setSuccess(false);
+            result.setContent("Workflow runtime execution failed: " + e.getMessage());
+            result.setMetadata(metadata);
+            return result;
+        }
+    }
+
+    private AgentNode toAgentNode(SubAgentTask task) {
+        Map<String, Object> promptPayload = new LinkedHashMap<>();
+        promptPayload.put("task_id", task.getTaskId());
+        promptPayload.put("name", task.getName());
+        promptPayload.put("role", task.getRole());
+        promptPayload.put("task", task.getTaskDescription());
+        promptPayload.put("context", task.getContext());
+        String prompt = "Execute this AgentTool sub-task and return a concise result.\n\n"
+            + MAPPER.valueToTree(promptPayload).toPrettyString();
+        return new AgentNode(
+            task.getTaskId(),
+            normalizeWorkflowRole(task.getAgentType() != null ? task.getAgentType() : task.getRole()),
+            prompt,
+            List.of(),
+            null,
+            0,
+            task.getTimeoutMs());
+    }
+
+    private String normalizeWorkflowRole(String role) {
+        String lower = role == null ? "" : role.toLowerCase(Locale.ROOT);
+        if (lower.contains("code") || lower.contains("debug") || lower.contains("implement") || lower.contains("开发")) {
+            return "coder";
+        }
+        if (lower.contains("test") || lower.contains("review") || lower.contains("verify") || lower.contains("评审") || lower.contains("测试")) {
+            return "verifier";
+        }
+        if (lower.contains("explore") || lower.contains("analy") || lower.contains("doc") || lower.contains("搜索") || lower.contains("分析")) {
+            return "explorer";
+        }
+        return "main";
+    }
+
+    private List<SubAgentResult> toSubAgentResults(List<SubAgentTask> tasks, JsonNode output, String runId) {
+        JsonNode resultsNode = unwrapAgentToolOutput(output);
+        List<SubAgentResult> results = new ArrayList<>();
+        for (int i = 0; i < tasks.size(); i++) {
+            SubAgentTask task = tasks.get(i);
+            JsonNode node = resultsNode != null && resultsNode.isArray() && i < resultsNode.size()
+                ? resultsNode.get(i)
+                : null;
+            long now = System.currentTimeMillis();
+            if (node == null || node.isNull()) {
+                results.add(SubAgentResult.builder()
+                    .taskId(task.getTaskId())
+                    .success(false)
+                    .error("Workflow sub-task returned null")
+                    .agentId(normalizeWorkflowRole(task.getAgentType()))
+                    .agentName(task.getName())
+                    .startTime(now)
+                    .endTime(now)
+                    .metadata(Map.of("workflow_run_id", runId))
+                    .build());
+                continue;
+            }
+
+            boolean success = !node.has("success") || node.get("success").asBoolean(true);
+            String content = node.hasNonNull("content") ? node.get("content").asText() : node.toString();
+            long durationMs = node.has("durationMs") ? node.get("durationMs").asLong(0) : 0;
+            Map<String, Object> data = MAPPER.convertValue(node, new TypeReference<Map<String, Object>>() {});
+            results.add(SubAgentResult.builder()
+                .taskId(task.getTaskId())
+                .success(success)
+                .output(success ? content : null)
+                .error(success ? null : (node.hasNonNull("errorMessage") ? node.get("errorMessage").asText() : content))
+                .executionTimeMs(durationMs)
+                .agentId(normalizeWorkflowRole(task.getAgentType()))
+                .agentName(task.getName())
+                .data(data)
+                .metadata(Map.of("workflow_run_id", runId))
+                .build());
+        }
+        return results;
+    }
+
+    private JsonNode unwrapAgentToolOutput(JsonNode output) {
+        if (output == null || output.isNull()) {
+            return MAPPER.createArrayNode();
+        }
+        JsonNode node = output;
+        if (node.isArray() && node.size() == 1 && node.get(0).isArray()) {
+            node = node.get(0);
+        }
+        if (node.isArray() && node.size() == 1 && node.get(0).isArray()) {
+            node = node.get(0);
+        }
+        return node;
     }
 
     private List<Map<String, Object>> decomposeTaskWithFallback(
@@ -974,6 +1018,14 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
 
     private String stringValue(Object value) {
         return value != null ? String.valueOf(value) : null;
+    }
+
+    /**
+     * 将字符串中的非法文件名字符替换为安全字符。
+     * Windows 不允许 : &lt; &gt; " | ? * 出现在文件/路径名中。
+     */
+    private String sanitizeForPath(String id) {
+        return id != null ? id.replaceAll("[:<>\"|?*]", "-") : "unknown";
     }
 
     /**
@@ -1193,11 +1245,7 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
         
         boolean cancelled = false;
         
-        // 1. 尝试取消 ParallelAgentExecutor 中的任务
-        if (parallelExecutor != null) {
-            cancelled = parallelExecutor.cancel(taskId);
-        }
-        
+        // 1. 尝试取消 Workflow Runtime 中的任务
         // 2. 同时检查 AgentInfo 中的任务
         for (AgentInfo agent : agentManager.getAllAgents()) {
             if (taskId.equals(agent.taskId) && agent.executionFuture != null && !agent.executionFuture.isDone()) {
@@ -1422,9 +1470,6 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
         }
         
         // 如果有关联的执行任务，先取消
-        if (agent.taskId != null && parallelExecutor != null) {
-            parallelExecutor.cancel(agent.taskId);
-        }
         if (agent.executionFuture != null && !agent.executionFuture.isDone()) {
             agent.executionFuture.cancel(true);
         }
@@ -1557,8 +1602,8 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
         this.llmService = llmService;
     }
     
-    public void setAgentRegistry(AgentRegistry agentRegistry) {
-        this.agentRegistry = agentRegistry;
+    public void setAgentRegistry(Object ignoredLegacyRegistry) {
+        // AgentTool execution is workflow-only; registry injection is kept as a no-op for old callers.
     }
     
     @Override
@@ -1706,7 +1751,7 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
         public Date createdAt;
         public Date updatedAt;
         
-        // 新增字段：与 ParallelAgentExecutor 打通
+        // 新增字段：与 Workflow Runtime 打通
         public String taskId;
         public CompletableFuture<SubAgentResult> executionFuture;
         public SubAgentResult executionResult;
@@ -1749,6 +1794,40 @@ public class AgentTool implements Tool<Map<String, Object>, Map<String, Object>,
         }
     }
     
+    private static class WorkflowBlackboard {
+        private final Map<String, Object> values = new ConcurrentHashMap<>();
+        private final Map<String, String> intermediate = new ConcurrentHashMap<>();
+
+        void put(String key, Object value) {
+            values.put(key, value);
+            if (value instanceof String stringValue) {
+                intermediate.put(key, stringValue);
+            }
+        }
+
+        Object get(String key) {
+            return values.get(key);
+        }
+
+        void remove(String key) {
+            values.remove(key);
+            intermediate.remove(key);
+        }
+
+        void clearBlackboard() {
+            values.clear();
+            intermediate.clear();
+        }
+
+        Map<String, Object> snapshot() {
+            return new LinkedHashMap<>(values);
+        }
+
+        Map<String, String> intermediateSnapshot() {
+            return new LinkedHashMap<>(intermediate);
+        }
+    }
+
     public static class AgentManager {
         private final Map<String, AgentInfo> agents = new ConcurrentHashMap<>();
         private final List<String> colors = Arrays.asList("🔵", "🟢", "🟡", "🟣", "🔶", "🔷", "💜", "💚");

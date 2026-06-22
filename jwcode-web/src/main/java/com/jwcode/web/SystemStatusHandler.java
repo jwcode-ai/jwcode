@@ -12,6 +12,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.management.ManagementFactory;
 import java.nio.charset.StandardCharsets;
+import java.util.logging.Logger;
 
 /**
  * 系统状态 API 处理器
@@ -19,6 +20,7 @@ import java.nio.charset.StandardCharsets;
  */
 public class SystemStatusHandler implements HttpHandler {
 
+    private static final Logger LOGGER = Logger.getLogger(SystemStatusHandler.class.getName());
     private static final ObjectMapper objectMapper = new ObjectMapper();
     private static WebServer webServer;
 
@@ -126,7 +128,7 @@ public class SystemStatusHandler implements HttpHandler {
                 Thread.sleep(500);
                 webServer.restart();
             } catch (Exception e) {
-                System.err.println("Restart failed: " + e.getMessage());
+                LOGGER.warning("Restart failed: " + e.getMessage());
             }
         }, "server-restart").start();
     }
@@ -153,9 +155,9 @@ public class SystemStatusHandler implements HttpHandler {
             try {
                 Thread.sleep(500);
                 webServer.stop();
-                System.out.println("Server stopped. Exiting JVM...");
+                LOGGER.info("Server stopped. Exiting JVM...");
             } catch (Exception e) {
-                System.err.println("Shutdown failed: " + e.getMessage());
+                LOGGER.warning("Shutdown failed: " + e.getMessage());
             } finally {
                 System.exit(0);
             }

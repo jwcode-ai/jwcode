@@ -160,7 +160,9 @@ public class CronTestScheduler {
         for (String part : field.split(",")) {
             try {
                 if (Integer.parseInt(part.trim()) == value) return true;
-            } catch (NumberFormatException ignored) {}
+            } catch (NumberFormatException ignored) {
+                // Non-numeric cron field part — skip
+            }
         }
         return false;
     }

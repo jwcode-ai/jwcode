@@ -36,6 +36,10 @@ import java.util.logging.Logger;
  *   <li><b>Interrupt</b>: if configured, pause before/after specified nodes</li>
  * </ol>
  */
+/**
+ * @deprecated Pregel graph orchestration is retained for compatibility. New durable workflows should use EffectVM.
+ */
+@Deprecated
 public class CompiledAgentGraph {
 
     private static final Logger logger = Logger.getLogger(CompiledAgentGraph.class.getName());
@@ -357,7 +361,7 @@ public class CompiledAgentGraph {
         /**
          * Execute the agent and collect its writes.
          * Subclasses/adapters can override this to plug in their own execution
-         * mechanism (LLMQueryEngine, A2AFacade, etc.).
+         * mechanism (LLMQueryEngine, Workflow Runtime, etc.).
          */
         NodeResult executeAgent(GraphTask task) {
             // Default implementation: produce an empty success result.

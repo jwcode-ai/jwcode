@@ -46,7 +46,13 @@ public class StepCallbackAdapter implements ObservationPipeline.Observer {
                     return; // 已处理过，跳过
                 }
             }
-                        callback.onStepAction(e.toolName(), "执行 " + e.toolName());
+            callback.onToolCallChunk(new LLMService.StreamToolCallEvent(
+                e.toolCallId(),
+                "function",
+                e.toolName(),
+                e.arguments(),
+                true));
+            callback.onStepAction(e.toolName(), "执行 " + e.toolName());
         } else if (event instanceof ObservationEvent.SwarmTaskStarted e) {
             String data = "{\"agentId\":\"" + escapeJson(e.agentId()) + "\",\"taskId\":\"" + escapeJson(e.taskId()) + "\",\"description\":\"" + escapeJson(e.description()) + "\",\"type\":\"" + e.type() + "\",\"priority\":" + e.priority() + "}";
             callback.onSwarmEvent("task_start", data);

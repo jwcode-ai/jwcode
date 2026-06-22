@@ -2,7 +2,6 @@ package com.jwcode.core.hook;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
-import com.jwcode.core.a2a.dispatcher.LocalAgentDispatcher;
 import com.jwcode.core.agent.MainAgentStateMachine;
 import com.jwcode.core.hook.executor.AgentHookExecutor;
 import com.jwcode.core.hook.executor.PromptHookExecutor;
@@ -65,7 +64,9 @@ public class HookSystemInitializer {
                             Map<String, Object> existing = MAPPER.readValue(
                                 statsFile.toFile(), Map.class);
                             stats.putAll(existing);
-                        } catch (Exception ignored) {}
+                        } catch (Exception e) {
+                            logger.fine("Failed to load tool usage stats: " + e.getMessage());
+                        }
                     }
                     Object val = stats.getOrDefault(toolName, 0);
                     long count = val instanceof Number ? ((Number) val).longValue() + 1 : 1;
@@ -106,8 +107,8 @@ public class HookSystemInitializer {
     public static HookInitResult initialize(Path projectRoot,
                                              ToolExecutor toolExecutor,
                                              MainAgentStateMachine stateMachine,
-                                             LocalAgentDispatcher dispatcher) {
-        return initialize(projectRoot, toolExecutor, stateMachine, dispatcher, null, null);
+                                             Object ignoredLegacyDispatcher) {
+        return initialize(projectRoot, toolExecutor, stateMachine, ignoredLegacyDispatcher, null, null);
     }
 
     /**
@@ -116,7 +117,7 @@ public class HookSystemInitializer {
     public static HookInitResult initialize(Path projectRoot,
                                              ToolExecutor toolExecutor,
                                              MainAgentStateMachine stateMachine,
-                                             LocalAgentDispatcher dispatcher,
+                                             Object ignoredLegacyDispatcher,
                                              PromptHookExecutor.LlmCallback llmCallback,
                                              AgentHookExecutor.AgentCallback agentCallback) {
         long startTime = System.currentTimeMillis();
@@ -158,6 +159,7 @@ public class HookSystemInitializer {
             // 6. 创建 HookChain + 审计日志
             HookAuditLogger auditLogger = new HookAuditLogger();
             HookChain chain = new HookChain(hookRegistry, auditLogger);
+            HookChain.setGlobalInstance(chain); // 注册全局引用，供 TaskStore 等使用
 
             // 7. 注入到各拦截点
             if (toolExecutor != null) {
@@ -168,11 +170,6 @@ public class HookSystemInitializer {
                 stateMachine.setHookChain(chain);
                 logger.info("[HookInit] Injected → MainAgentStateMachine");
             }
-            if (dispatcher != null) {
-                dispatcher.setHookChain(chain);
-                logger.info("[HookInit] Injected → LocalAgentDispatcher");
-            }
-
             // 8. 广播
             HookEventBroadcaster.broadcastInit(hookCount, resolved);
 

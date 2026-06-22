@@ -13,7 +13,7 @@ import java.util.logging.Logger;
 /**
  * LLMQueryEnginePool — 轻量级对象池，按 sessionId 缓存 LLMQueryEngine 实例。
  *
- * <p><b>设计意图</b>：消除 {@link LocalAgentDispatcher} 中每次子任务
+ * <p><b>设计意图</b>：消除 {@link Workflow Runtime} 中每次子任务
  * 都 new LLMQueryEngine 的 GC 压力（构造器包含 TokenBudget、ObsPipeline、
  * ContextWindowManager 等多重对象分配）。</p>
  *

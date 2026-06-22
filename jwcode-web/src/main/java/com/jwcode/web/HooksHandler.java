@@ -5,8 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.jwcode.core.agent.Agent;
-import com.jwcode.core.agent.AgentRegistry;
 import com.jwcode.core.hook.*;
 import com.jwcode.core.hook.executor.AgentHookExecutor;
 import com.jwcode.core.hook.executor.HttpHookExecutor;
@@ -47,13 +45,11 @@ public class HooksHandler implements HttpHandler {
         Pattern.CASE_INSENSITIVE);
 
     private final HookRegistry registry;
-    private final AgentRegistry agentRegistry;
     private final Path configFilePath;
     private final Path adminAuditPath;
 
-    public HooksHandler(HookRegistry registry, AgentRegistry agentRegistry, Path configFilePath) {
+    public HooksHandler(HookRegistry registry, Object ignoredLegacyAgentRegistry, Path configFilePath) {
         this.registry = Objects.requireNonNull(registry, "registry");
-        this.agentRegistry = agentRegistry != null ? agentRegistry : AgentRegistry.createDefault();
         this.configFilePath = configFilePath.toAbsolutePath().normalize();
         this.adminAuditPath = this.configFilePath.resolveSibling("hook-admin-audit.jsonl");
     }
@@ -212,13 +208,22 @@ public class HooksHandler implements HttpHandler {
 
     private void getAgents(HttpExchange exchange) throws IOException {
         ArrayNode agents = MAPPER.createArrayNode();
-        for (Agent agent : agentRegistry.getAll()) {
+        for (Map<String, String> role : workflowRolePresets()) {
             ObjectNode a = agents.addObject();
-            a.put("id", agent.getId());
-            a.put("name", agent.getName());
-            a.put("description", agent.getDescription());
+            a.put("id", role.get("id"));
+            a.put("name", role.get("name"));
+            a.put("description", role.get("description"));
         }
         sendSuccess(exchange, agents);
+    }
+
+    private List<Map<String, String>> workflowRolePresets() {
+        return List.of(
+            Map.of("id", "explorer", "name", "explorer", "description", "Workflow role preset for discovery and context gathering"),
+            Map.of("id", "coder", "name", "coder", "description", "Workflow role preset for implementation effects"),
+            Map.of("id", "verifier", "name", "verifier", "description", "Workflow role preset for validation effects"),
+            Map.of("id", "reviewer", "name", "reviewer", "description", "Workflow role preset for review and risk analysis")
+        );
     }
 
     private void getStats(HttpExchange exchange) throws IOException {
@@ -647,7 +652,9 @@ public class HooksHandler implements HttpHandler {
                     entry.has("changeType") ? entry.get("changeType").asText() : "",
                     ""
                 ));
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                logger.finest("Failed to parse audit log entry: " + e.getMessage());
+            }
         }
         return logs;
     }

@@ -55,13 +55,20 @@ public class TaskListTool implements Tool<TaskListInput, TaskListOutput, Void> {
     @Override
     public String getPrompt() {
         return """
-               使用 TaskList 工具列出所有任务。一次性返回全部匹配的任务，无需分页。
-               
+               TaskList — 查看所有任务及其当前状态。
+
+               ## 使用时机：
+               - 上下文压缩后，用 TaskList 恢复任务进度认知
+               - 完成一个任务后，查看下一个待处理的任务
+               - 用户询问当前进度时，展示任务列表
+               - 恢复会话时，重新了解未完成的工作
+               - 使用 activeOnly 聚焦于未完成的活跃任务
+
                参数:
                - activeOnly: 是否只显示活跃任务（可选，默认 false）
                - status: 按状态过滤（可选，值: PENDING, RUNNING, COMPLETED, FAILED, STOPPED, CANCELLED）
                - tag: 按标签过滤（可选）
-               
+
                示例:
                - {} - 列出所有任务
                - {"activeOnly": true} - 只列出活跃任务

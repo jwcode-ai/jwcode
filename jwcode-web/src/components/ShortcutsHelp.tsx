@@ -12,9 +12,9 @@ function Row({ keys, label }: { keys: string[]; label: string }) {
     <div className="flex items-center justify-between py-2 border-b border-dark-border/50 last:border-0">
       <span className="text-sm text-dark-text">{label}</span>
       <span className="flex items-center gap-1">
-        {keys.map((k, i) => (
+        {keys.map((k) => (
           <kbd
-            key={i}
+            key={k}
             className="px-2 py-0.5 text-xs font-mono bg-dark-bg rounded border border-dark-border text-dark-muted"
           >
             {k}

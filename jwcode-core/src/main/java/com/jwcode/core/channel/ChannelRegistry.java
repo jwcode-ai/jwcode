@@ -8,6 +8,7 @@ import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
@@ -113,7 +114,14 @@ public class ChannelRegistry {
     /** 供 ChannelMessageDispatcher 回调：发送消息到指定渠道用户 */
     public void send(String channelId, String recipientId, String text) {
         ChannelAdapter a = adapters.get(channelId);
-        if (a != null) a.send(recipientId, text);
+        if (a != null) {
+            try {
+                a.send(recipientId, text);
+            } catch (Exception e) {
+                log.log(Level.FINE, "[ChannelRegistry] send failed silently: channel=" + channelId
+                    + " to=" + recipientId, e);
+            }
+        }
     }
 
     /** 持久化当前配置（适配器运行时更新了 config.extra，如微信 bot_token，需落盘） */
@@ -123,7 +131,9 @@ public class ChannelRegistry {
 
     public void shutdown() {
         adapters.values().forEach(a -> {
-            try { a.shutdown(); } catch (Exception ignored) {}
+            try { a.shutdown(); } catch (Exception e) {
+                log.log(Level.WARNING, "[ChannelRegistry] Adapter shutdown error", e);
+            }
         });
         adapters.clear();
     }
@@ -149,7 +159,9 @@ public class ChannelRegistry {
     private void stopAdapter(String id) {
         ChannelAdapter a = adapters.remove(id);
         if (a != null) {
-            try { a.shutdown(); } catch (Exception ignored) {}
+            try { a.shutdown(); } catch (Exception e) {
+                log.log(Level.WARNING, "[ChannelRegistry] Error stopping adapter " + id, e);
+            }
         }
     }
 
@@ -158,8 +170,9 @@ public class ChannelRegistry {
             Files.createDirectories(configFile.getParent());
             MAPPER.writerWithDefaultPrettyPrinter()
                     .writeValue(configFile.toFile(), new ArrayList<>(configs.values()));
+            log.fine("[ChannelRegistry] Config saved (" + configs.size() + " channels)");
         } catch (IOException e) {
-            log.warning("[ChannelRegistry] Failed to save config: " + e.getMessage());
+            log.log(Level.WARNING, "[ChannelRegistry] Failed to save config", e);
         }
     }
 }

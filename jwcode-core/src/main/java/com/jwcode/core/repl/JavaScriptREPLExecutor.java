@@ -140,6 +140,20 @@ public class JavaScriptREPLExecutor extends REPLExecutor {
         return sb.toString();
     }
 
+    /**
+     * 检查内存使用是否超过限制。
+     *
+     * JavaScript REPL 以子进程（node）运行，不消耗 JVM 堆内存；
+     * JVM 的 totalMemory/freeMemory 不反映子进程实际使用量。
+     * 此处跳过 JVM 堆检查以避免误报。
+     *
+     * @return false 始终返回 false，子进程内存由操作系统限制
+     */
+    @Override
+    protected boolean isMemoryExceeded() {
+        return false;
+    }
+
     @Override
     public void reset() {
         logger.fine("JavaScript REPL reset: no-op (stateless executor)");

@@ -64,7 +64,7 @@ export const HookApprovalCard = memo(function HookApprovalCard({
     setResolving(true);
     if (countdownRef.current) clearInterval(countdownRef.current);
     wsService.send({
-      type: 'hook_allow' as any,
+      type: 'hook_allow',
       data: JSON.stringify({ approvalId: approval.approvalId }),
     });
     onResolved?.(approval.approvalId, 'approved');
@@ -75,7 +75,7 @@ export const HookApprovalCard = memo(function HookApprovalCard({
     setResolving(true);
     if (countdownRef.current) clearInterval(countdownRef.current);
     wsService.send({
-      type: 'hook_deny' as any,
+      type: 'hook_deny',
       data: JSON.stringify({ approvalId: approval.approvalId }),
     });
     onResolved?.(approval.approvalId, 'denied');
@@ -88,7 +88,7 @@ export const HookApprovalCard = memo(function HookApprovalCard({
     const approvalStore = useHookApprovalStore.getState();
     approvalStore.addToSessionAllowList(approval.toolName);
     wsService.send({
-      type: 'hook_allow' as any,
+      type: 'hook_allow',
       data: JSON.stringify({ approvalId: approval.approvalId }),
     });
     onResolved?.(approval.approvalId, 'approved');
@@ -100,7 +100,7 @@ export const HookApprovalCard = memo(function HookApprovalCard({
     if (countdownRef.current) clearInterval(countdownRef.current);
     useHookApprovalStore.getState().setAutoMode(true);
     wsService.send({
-      type: 'hook_allow' as any,
+      type: 'hook_allow',
       data: JSON.stringify({ approvalId: approval.approvalId }),
     });
     onResolved?.(approval.approvalId, 'approved');

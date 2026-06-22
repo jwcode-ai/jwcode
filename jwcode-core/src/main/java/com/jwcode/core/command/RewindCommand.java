@@ -5,9 +5,11 @@ import com.jwcode.core.session.Session;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.logging.Logger;
 
 /** /rewind - remove recent assistant+user message pairs from the session. */
 public class RewindCommand implements Command {
+    private static final Logger logger = Logger.getLogger(RewindCommand.class.getName());
     @Override public String getName() { return "rewind"; }
     @Override public String getDescription() { return "Rewind the session by removing recent messages"; }
     @Override public String getUsage() { return "rewind [steps]"; }
@@ -21,7 +23,9 @@ public class RewindCommand implements Command {
         }
         int steps = 1;
         if (args.length > 0) {
-            try { steps = Integer.parseInt(args[0].trim()); } catch (NumberFormatException ignored) {}
+            try { steps = Integer.parseInt(args[0].trim()); } catch (NumberFormatException e) {
+                logger.fine("Invalid step number: " + e.getMessage());
+            }
         }
         if (steps < 1) steps = 1;
         List<Message> msgs = new ArrayList<>(session.getMessages());

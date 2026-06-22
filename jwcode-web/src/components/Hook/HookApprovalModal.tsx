@@ -36,7 +36,7 @@ export function HookApprovalModal({ isOpen, onCloseModal }: HookApprovalModalPro
   if (autoMode) {
     pendingApprovals.forEach((item) => {
       wsService.send({
-        type: 'hook_allow' as any,
+        type: 'hook_allow',
         data: JSON.stringify({ approvalId: item.approvalId }),
       });
     });
@@ -75,7 +75,7 @@ export function HookApprovalModal({ isOpen, onCloseModal }: HookApprovalModalPro
       setResolving(true);
       resolvingRef.current = true;
       wsService.send({
-        type: 'hook_allow' as any,
+        type: 'hook_allow',
         data: JSON.stringify({ approvalId: currentApproval.approvalId }),
       });
       advanceQueue();
@@ -118,7 +118,7 @@ export function HookApprovalModal({ isOpen, onCloseModal }: HookApprovalModalPro
     resolvingRef.current = true;
     if (countdownRef.current) clearInterval(countdownRef.current);
     wsService.send({
-      type: 'hook_allow' as any,
+      type: 'hook_allow',
       data: JSON.stringify({ approvalId: currentApproval.approvalId }),
     });
     advanceQueue();
@@ -129,7 +129,7 @@ export function HookApprovalModal({ isOpen, onCloseModal }: HookApprovalModalPro
     resolvingRef.current = true;
     if (countdownRef.current) clearInterval(countdownRef.current);
     wsService.send({
-      type: 'hook_deny' as any,
+      type: 'hook_deny',
       data: JSON.stringify({ approvalId: currentApproval.approvalId }),
     });
     advanceQueue();
@@ -141,7 +141,7 @@ export function HookApprovalModal({ isOpen, onCloseModal }: HookApprovalModalPro
     if (countdownRef.current) clearInterval(countdownRef.current);
     approvalStore.addToSessionAllowList(currentApproval.toolName);
     wsService.send({
-      type: 'hook_allow' as any,
+      type: 'hook_allow',
       data: JSON.stringify({ approvalId: currentApproval.approvalId }),
     });
     advanceQueue();
@@ -153,7 +153,7 @@ export function HookApprovalModal({ isOpen, onCloseModal }: HookApprovalModalPro
     if (countdownRef.current) clearInterval(countdownRef.current);
     setAutoMode(true);
     wsService.send({
-      type: 'hook_allow' as any,
+      type: 'hook_allow',
       data: JSON.stringify({ approvalId: currentApproval.approvalId }),
     });
     advanceQueue();

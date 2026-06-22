@@ -2,6 +2,7 @@ package com.jwcode.core.service;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Logger;
 
 /**
  * SettingsService - 设置管理服务
@@ -13,7 +14,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * @since 1.0.0
  */
 public class SettingsService {
-    
+
+    private static final Logger LOGGER = Logger.getLogger(SettingsService.class.getName());
+
     private final Map<String, Object> userSettings;
     private final Map<String, Object> projectSettings;
     
@@ -191,7 +194,7 @@ public class SettingsService {
             java.nio.file.Files.createDirectories(SETTINGS_FILE.getParent());
             MAPPER.writeValue(SETTINGS_FILE.toFile(), exportSettings());
         } catch (java.io.IOException e) {
-            System.err.println("[SettingsService] Save failed: " + e.getMessage());
+            LOGGER.warning("Save failed: " + e.getMessage());
         }
     }
 
@@ -203,7 +206,7 @@ public class SettingsService {
                 importSettings(data);
             }
         } catch (java.io.IOException e) {
-            System.err.println("[SettingsService] Load failed: " + e.getMessage());
+            LOGGER.warning("Load failed: " + e.getMessage());
         }
     }
 }

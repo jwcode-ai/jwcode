@@ -156,7 +156,9 @@ public class CuratorStateStore {
                         v = stripQuotes(v);
                         try {
                             states.put(k, SkillLifecycleState.valueOf(v));
-                        } catch (IllegalArgumentException ignored) {}
+                        } catch (IllegalArgumentException ignored) {
+                            // Skip invalid enum value — may be from older format
+                        }
                     }
                 }
             }

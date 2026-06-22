@@ -51,7 +51,9 @@ public class SharedMemoryService {
     private final Map<String, List<SharedMemory>> teamMemories = new ConcurrentHashMap<>();
 
     private SharedMemoryService() {
-        try { Files.createDirectories(MEMORY_DIR); } catch (IOException ignored) {}
+        try { Files.createDirectories(MEMORY_DIR); } catch (IOException e) {
+            logger.fine("Cannot create memory dir: " + e.getMessage());
+        }
         loadAll();
     }
 

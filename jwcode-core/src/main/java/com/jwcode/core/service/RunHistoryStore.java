@@ -149,7 +149,9 @@ public class RunHistoryStore {
             try (Stream<Path> files = Files.walk(dir)) {
                 files.sorted(Comparator.reverseOrder())
                     .forEach(p -> {
-                        try { Files.delete(p); } catch (IOException ignored) {}
+                        try { Files.delete(p); } catch (IOException ignored) {
+                            LOG.finest("Cannot delete " + p);
+                        }
                     });
             }
         }

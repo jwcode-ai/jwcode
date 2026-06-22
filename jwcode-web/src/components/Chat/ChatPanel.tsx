@@ -1,19 +1,21 @@
 import { memo, useRef, useCallback, useState, useMemo, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
-import { Zap, Square, Pause, Play } from 'lucide-react';
+import { CheckCircle2, RefreshCw, Zap, Square, Pause, Play } from 'lucide-react';
 import { Message, TabId, LogEntry, FileNode } from '../../types';
 import { MessageBubble } from './MessageBubble';
 import { SlashCommandMenu } from '../SlashCommandMenu';
 import { FileMentionMenu } from './FileMentionMenu';
 import { useSlashCommands, SlashCommand } from '../../hooks/useSlashCommands';
 import { useInputHistory, addToHistory } from '../../hooks/useInputHistory';
-import { usePlanStore } from '../../stores/planStore';
+import { useExecutionModeStore } from '../../stores/executionModeStore';
 import { useTokenStore } from '../../stores/tokenStore';
 import { useHookApprovalStore } from '../../stores/useHookApprovalStore';
 import { api } from '../../services/api';
 import { ContextManager } from './ContextManager';
 import { SessionTaskBoard } from './SessionTaskBoard';
+import { useWorkflowStore } from '../../stores/workflowStore';
+import wsService from '../../services/websocket';
 
 interface ChatPanelProps {
   messages: Message[];
@@ -61,8 +63,11 @@ export const ChatPanel = memo(function ChatPanel({
   setActiveTab, createNewSession, clearMessages, setTheme, toggleTerminal, setLogs, setUnreadLogs,
 }: ChatPanelProps) {
   const { t } = useTranslation();
-  const planMode = usePlanStore((s) => s.mode);
-  const toggleMode = usePlanStore((s) => s.toggleMode);
+  const executionMode = useExecutionModeStore((s) => s.mode);
+  const toggleMode = useExecutionModeStore((s) => s.toggleMode);
+  const setMode = useExecutionModeStore((s) => s.setMode);
+  const currentPlanContent = useExecutionModeStore((s) => s.currentPlanContent);
+  const planTasks = useWorkflowStore((s) => s.getTasksForSession(sessionId).filter((task) => task.source === 'plan'));
   const hasPendingApproval = useHookApprovalStore((s) => s.pendingApprovals.length > 0);
 
   // Filter out tombstoned (deleted) messages so Virtuoso doesn't allocate space for them
@@ -135,6 +140,34 @@ export const ChatPanel = memo(function ChatPanel({
       closeFileMention();
     }
   };
+
+  const executePlan = useCallback(() => {
+    if (!currentPlanContent || isGenerating) return;
+    setMode('act');
+    wsService.send({
+      type: 'plan_confirm',
+      sessionId,
+      message: currentPlanContent,
+      data: JSON.stringify({
+        plan: currentPlanContent,
+        tasks: planTasks,
+      }),
+    });
+  }, [currentPlanContent, isGenerating, planTasks, sessionId, setMode]);
+
+  const refinePlan = useCallback(() => {
+    if (!currentPlanContent || isGenerating) return;
+    setMode('plan');
+    wsService.send({
+      type: 'plan_refine',
+      sessionId,
+      message: 'Please refine the current plan.',
+      data: JSON.stringify({
+        plan: currentPlanContent,
+        tasks: planTasks,
+      }),
+    });
+  }, [currentPlanContent, isGenerating, planTasks, sessionId, setMode]);
 
   const closeFileMention = () => {
     setShowFileMenu(false);
@@ -362,12 +395,37 @@ export const ChatPanel = memo(function ChatPanel({
         <SessionTaskBoard sessionId={sessionId} />
       </div>
 
-      {/* Plan/Act Mode Banner */}
-      {planMode === "plan" && (
+      {/* Plan/Goal Mode Banner */}
+      {executionMode === "plan" && (
         <div className="px-3 pt-1 pb-0.5 bg-accent-purple/10 border-b border-accent-purple/20 flex items-center gap-2 text-xs">
           <span className="text-accent-purple font-bold">{t('plan.readOnlyMode')}</span>
           <span className="text-dark-muted">{t('plan.planModeHint')}</span>
           <button onClick={toggleMode} className="ml-auto px-2 py-0.5 text-[10px] bg-accent-green text-white rounded">{t('plan.switchToAct')}</button>
+        </div>
+      )}
+      {executionMode === "goal" && (
+        <div className="px-3 pt-1 pb-0.5 bg-accent-purple/10 border-b border-accent-purple/20 flex items-center gap-2 text-xs">
+          <span className="text-accent-purple font-bold">Goal</span>
+          <span className="text-dark-muted">Messages run through durable workflow: explore, code, verify.</span>
+        </div>
+      )}
+      {currentPlanContent && !isGenerating && executionMode !== "goal" && (
+        <div className="px-3 py-2 bg-dark-surface border-t border-dark-border flex items-center gap-2 text-xs">
+          <span className="text-dark-muted truncate">Plan ready</span>
+          <button
+            onClick={executePlan}
+            className="ml-auto inline-flex items-center gap-1 px-2 py-1 rounded bg-accent-green text-white hover:opacity-90 transition-opacity"
+          >
+            <CheckCircle2 size={12} />
+            Execute
+          </button>
+          <button
+            onClick={refinePlan}
+            className="inline-flex items-center gap-1 px-2 py-1 rounded border border-dark-border text-dark-text hover:bg-dark-hover transition-colors"
+          >
+            <RefreshCw size={12} />
+            Refine
+          </button>
         </div>
       )}
       {/* Input Area */}
@@ -386,14 +444,16 @@ export const ChatPanel = memo(function ChatPanel({
               ref={textareaRef} value={input} onChange={handleChange} onKeyDown={handleKeyDown}
               placeholder={
                 hasPendingApproval ? '请先在弹窗中处理审批请求...' :
-                planMode === "plan" ? t('plan.planTitle') :
-                planMode === "act" ? t('plan.actTitle') :
+                executionMode === "plan" ? t('plan.planTitle') :
+                executionMode === "goal" ? "Goal Mode: run as durable workflow" :
+                executionMode === "act" ? t('plan.actTitle') :
                 t('chat.inputPlaceholder')
               }
               rows={1} disabled={isGenerating || hasPendingApproval} aria-label={t('a11y.messageInput')} className={`flex-1 bg-dark-bg border rounded-lg px-3 sm:px-4 py-2.5 sm:py-3 text-dark-text placeholder-dark-muted resize-none focus:outline-none focus:border-accent-green focus:ring-2 focus:ring-accent-green/20 text-sm min-h-[40px] max-h-[40vh] transition-all ${
                 hasPendingApproval ? "border-accent-yellow/50 opacity-60" :
-                planMode === "plan" ? "border-accent-purple/50" :
-                planMode === "act" ? "border-accent-green/50" :
+                executionMode === "plan" ? "border-accent-purple/50" :
+                executionMode === "goal" ? "border-accent-purple/50" :
+                executionMode === "act" ? "border-accent-green/50" :
                 "border-dark-border"
               }`}
               onCompositionStart={() => { isComposingRef.current = true; }}

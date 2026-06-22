@@ -14,12 +14,20 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 import java.util.logging.Level;
 
 public class AnthropicLLMService extends AbstractHttpLLMService {
 
     private final AnthropicMessageConverter converter;
+    /** IO 线程池 — 替代 ForkJoinPool.commonPool() */
+    private static final ExecutorService IO_EXECUTOR = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "anthropic-io-" + r.hashCode());
+        t.setDaemon(true);
+        return t;
+    });
 
     public AnthropicLLMService(ServiceConfig config) {
         super(config, "Anthropic");
@@ -171,7 +179,7 @@ public class AnthropicLLMService extends AbstractHttpLLMService {
                 }
             }
             return LLMResponse.error("MAX_RETRIES", "Max retries exceeded");
-        });
+        }, IO_EXECUTOR);
     }
 
     @Override
@@ -262,7 +270,7 @@ public class AnthropicLLMService extends AbstractHttpLLMService {
                 }
             }
             return LLMResponse.error("MAX_RETRIES", "Max retries exceeded");
-        });
+        }, IO_EXECUTOR);
     }
 
     // ======================== Anthropic SSE Stream Processor ========================

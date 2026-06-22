@@ -1,147 +1,81 @@
-﻿import { memo, useEffect, useState, useRef } from "react";
-import { useSwarmStore, SwarmTask } from "../../stores/swarmStore";
-import { Clock, CheckCircle2, Loader2, XCircle, Cpu, Search, FileCode, TestTube, Eye } from "lucide-react";
+import { memo } from "react";
+import { useWorkflowStore } from "../../stores/workflowStore";
+import { useSwarmStore } from "../../stores/swarmStore";
+import { AgentTreeView } from "./AgentTreeView";
+import { ThinkingStatus } from "./ThinkingStatus";
 
-const TYPE_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
-  ANALYSIS: { label: "Analysis", color: "border-l-accent-blue", icon: Search },
-  PLANNING: { label: "Planning", color: "border-l-accent-purple", icon: Cpu },
-  EXECUTION: { label: "Execution", color: "border-l-accent-green", icon: FileCode },
-  VERIFICATION: { label: "Verification", color: "border-l-accent-yellow", icon: TestTube },
-};
-
-function getTypeConfig(type: string) {
-  return TYPE_CONFIG[type] || { label: type, color: "border-l-dark-border", icon: Eye };
-}
-
-function SwarmTaskItem({ task }: { task: SwarmTask }) {
-  const tc = getTypeConfig(task.type);
-  const isRunning = task.status === "running";
-  const isSuccess = task.status === "success";
-  const [elapsed, setElapsed] = useState(0);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  useEffect(() => {
-    if (isRunning) {
-      const startTime = Date.now();
-      setElapsed(0);
-      timerRef.current = setInterval(() => {
-        setElapsed(Math.floor((Date.now() - startTime) / 1000));
-      }, 1000);
-    }
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [isRunning]);
-
-  const duration = task.durationMs ? Math.floor(task.durationMs / 1000) : (isRunning ? elapsed : 0);
-  const durationStr = duration > 0
-    ? duration >= 60 ? `${Math.floor(duration / 60)}m ${duration % 60}s` : `${duration}s`
-    : "";
-
-  return (
-    <div className={`flex items-center gap-2 py-1.5 px-2 rounded bg-dark-bg border-l-2 ${tc.color} ${isRunning ? "animate-pulse" : ""}`}>
-      {/* Agent type icon */}
-      <span className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${isRunning ? "bg-accent-blue/20 text-accent-blue" : isSuccess ? "bg-accent-green/20 text-accent-green" : "bg-accent-red/20 text-accent-red"}`}>
-        {isRunning ? (
-          <Loader2 size={12} className="animate-spin" />
-        ) : isSuccess ? (
-          <CheckCircle2 size={12} />
-        ) : (
-          <XCircle size={12} />
-        )}
-      </span>
-
-      {/* Agent ID badge */}
-      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-dark-hover text-dark-muted shrink-0">
-        {task.agentId.replace("swarm-", "").replace(/-/g, " ")}
-      </span>
-
-      {/* Description */}
-      <span className="text-xs text-dark-text truncate flex-1 min-w-0">
-        {task.description}
-      </span>
-
-      {/* Duration */}
-      {durationStr && (
-        <span className="text-[10px] text-dark-muted shrink-0 flex items-center gap-1">
-          <Clock size={10} />
-          {durationStr}
-        </span>
-      )}
-
-      {/* Status badge */}
-      <span className={`text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${
-        isRunning ? "bg-accent-blue/20 text-accent-blue" :
-        isSuccess ? "bg-accent-green/20 text-accent-green" :
-        "bg-accent-red/20 text-accent-red"
-      }`}>
-        {isRunning ? "running" : isSuccess ? "done" : "failed"}
-      </span>
-    </div>
-  );
-}
-
+/**
+ * SwarmVisualizer — displays multi-agent execution as a tree view.
+ *
+ * Data comes from workflowStore (primary) for the tree structure,
+ * and from swarmStore (legacy fallback) for backward compatibility
+ * when no agent_flow_event data is available.
+ */
 export const SwarmVisualizer = memo(function SwarmVisualizer({ sessionId }: { sessionId: string }) {
-  const [mounted, setMounted] = useState(false);
+  /* ── Primary: workflowStore (tree data from agent_flow_event) ── */
+  const trees = useWorkflowStore((s) => s.getAgentTree(sessionId));
+  const runningCount = useWorkflowStore((s) => s.getRunningAgentCount(sessionId));
+  const totalTokens = useWorkflowStore((s) => {
+    const agents = s.agentsBySession[sessionId];
+    if (!agents) return 0;
+    return Object.values(agents).reduce((sum, a) => sum + (a.tokens || 0), 0);
+  });
 
-  useEffect(() => {
-    setMounted(true);
-  }, []);
+  /* ── Fallback: legacy swarmStore (flat task list, no tree) ── */
+  const legacyTasks = useSwarmStore((s) => s.swarmsBySession[sessionId]?.tasks || []);
 
-  const tasks = useSwarmStore((s) => s.swarmsBySession[sessionId]?.tasks || []);
-  const completedCount = useSwarmStore((s) => s.swarmsBySession[sessionId]?.completedCount || 0);
-  const totalCount = useSwarmStore((s) => s.swarmsBySession[sessionId]?.totalCount || 0);
+  // Derive earliest start time from agent data
+  const agents = useWorkflowStore((s) => s.agentsBySession[sessionId]);
+  const startTime = agents ? Math.min(
+    ...Object.values(agents).map(a => a.updatedAt),
+    Date.now()
+  ) : undefined;
 
-  if (!mounted || tasks.length === 0) return null;
+  // Nothing to show
+  if (trees.length === 0 && legacyTasks.length === 0) return null;
 
-  const progress = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
-  const allDone = completedCount >= totalCount && totalCount > 0;
-  const hasRunning = tasks.some(t => t.status === "running");
+  /* ── Legacy flat-list fallback (no tree data) ── */
+  if (trees.length === 0 && legacyTasks.length > 0) {
+    const completedCount = legacyTasks.filter(t => t.status === "success").length;
+    const totalCount = legacyTasks.length;
+    const progress = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
+    const allDone = completedCount >= totalCount && totalCount > 0;
 
-  return (
-    <div className="mb-3 border border-dark-border rounded-lg overflow-hidden bg-dark-surface/50">
-      {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 bg-dark-hover border-b border-dark-border">
-        <div className="flex items-center gap-2">
-          <Cpu size={14} className="text-accent-purple" />
-          <span className="text-xs font-medium text-dark-text">Agent Swarm</span>
-          {hasRunning && (
-            <span className="flex items-center gap-1 text-[10px] text-accent-blue">
-              <Loader2 size={10} className="animate-spin" />
-              Executing...
-            </span>
-          )}
-          {allDone && (
-            <span className="text-[10px] text-accent-green">Complete</span>
-          )}
-        </div>
-        <div className="flex items-center gap-2 text-[10px] text-dark-muted">
-          <span>{completedCount}/{totalCount} tasks</span>
-          {progress > 0 && (
-            <span className="w-16 h-1.5 bg-dark-border rounded-full overflow-hidden">
+    return (
+      <div className="mb-3 border border-dark-border rounded-lg overflow-hidden bg-dark-surface/50">
+        <div className="flex items-center justify-between px-3 py-2 bg-dark-hover border-b border-dark-border">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-accent-purple/10 text-accent-purple">legacy</span>
+            <span className="text-xs text-dark-text">Swarm Tasks</span>
+          </div>
+          <div className="flex items-center gap-2 text-[10px] text-dark-muted">
+            <span>{completedCount}/{totalCount}</span>
+            <div className="w-16 h-1.5 bg-dark-border rounded-full overflow-hidden">
               <span
                 className={`h-full block rounded-full transition-all ${
                   allDone ? "bg-accent-green" : "bg-accent-blue"
                 }`}
                 style={{ width: `${progress}%` }}
               />
-            </span>
-          )}
+            </div>
+          </div>
+        </div>
+        <div className="p-2 text-[10px] text-dark-muted text-center">
+          {legacyTasks.length} task{legacyTasks.length > 1 ? 's' : ''} — flat list (no tree data available)
         </div>
       </div>
+    );
+  }
 
-      {/* Task list */}
-      <div className="p-2 space-y-1 max-h-48 overflow-y-auto">
-        {tasks.map((task) => (
-          <SwarmTaskItem key={task.taskId} task={task} />
-        ))}
-      </div>
-
-      {/* Stats footer */}
-      {allDone && (
-        <div className="px-3 py-1.5 border-t border-dark-border bg-accent-green/5 text-[10px] text-accent-green flex items-center gap-2">
-          <CheckCircle2 size={11} />
-          Swarm completed: {totalCount} tasks in parallel
-        </div>
-      )}
+  /* ── Primary: tree view ── */
+  return (
+    <div>
+      <AgentTreeView trees={trees} runningCount={runningCount} />
+      <ThinkingStatus
+        runningCount={runningCount}
+        totalTokens={totalTokens}
+        startTime={startTime}
+      />
     </div>
   );
 });

@@ -304,6 +304,7 @@ public class ToolRegistry {
         registry.register(new TaskGetTool());
         registry.register(new TaskUpdateTool());
         registry.register(new TaskListTool());
+        registry.register(new ChangeDirectoryTool());
         registry.register(new PowerShellTool());
         registry.register(new SmartAnalyzeTool(new com.jwcode.core.code.analysis.TreeSitterCodeSemanticAnalyzer()));
         registry.register(new EnterWorktreeTool());

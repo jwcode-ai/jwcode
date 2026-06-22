@@ -213,7 +213,9 @@ public class YamlConfigLoader {
                 String content = Files.readString(path);
                 log.warn("Config file content preview (first 200 chars): {}",
                     content != null ? content.substring(0, Math.min(200, content.length())) : "null");
-            } catch (IOException ignored) {}
+            } catch (IOException ex) {
+                log.debug("Cannot read config content preview: {}", ex.getMessage());
+            }
             return Optional.empty();
         }
     }

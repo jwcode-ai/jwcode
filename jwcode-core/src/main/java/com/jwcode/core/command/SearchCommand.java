@@ -10,10 +10,12 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.logging.Logger;
 import java.util.stream.Stream;
 
 /** /search - case-insensitive text search across the workspace. */
 public class SearchCommand implements Command {
+    private static final Logger logger = Logger.getLogger(SearchCommand.class.getName());
     private static final Set<String> IGNORE_DIRS = Set.of(
         ".git", "node_modules", "dist", "target", "build", "coverage", ".idea", ".vscode");
     private static final Set<String> TEXT_EXTS = Set.of(
@@ -56,7 +58,9 @@ public class SearchCommand implements Command {
                             hits.add(rel + ":" + (i + 1) + ": " + line);
                         }
                     }
-                } catch (IOException ignored) {}
+                } catch (IOException e) {
+                    logger.fine("Search read error: " + e.getMessage());
+                }
             });
         } catch (IOException e) {
             return CommandResult.error("Search failed: " + e.getMessage());

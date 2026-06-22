@@ -56,7 +56,9 @@ public class SessionSharingService {
     private final Map<String, List<SharedSession>> sharedSessions = new ConcurrentHashMap<>();
 
     private SessionSharingService() {
-        try { Files.createDirectories(SHARE_DIR); } catch (IOException ignored) {}
+        try { Files.createDirectories(SHARE_DIR); } catch (IOException ignored) {
+            logger.fine("Cannot create share directory: " + SHARE_DIR);
+        }
         loadAll();
     }
 

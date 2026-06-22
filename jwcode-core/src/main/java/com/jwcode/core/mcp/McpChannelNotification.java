@@ -5,6 +5,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
+import java.util.logging.Logger;
 
 /**
  * McpChannelNotification - MCP 通道通知管理
@@ -29,7 +30,9 @@ import java.util.function.Consumer;
  * @since 1.0.0
  */
 public class McpChannelNotification {
-    
+
+    private static final Logger LOGGER = Logger.getLogger(McpChannelNotification.class.getName());
+
     /**
      * 通知订阅者映射表（主题 -> 订阅者列表）
      */
@@ -145,7 +148,7 @@ public class McpChannelNotification {
                     subscriber.getCallback().accept(message);
                 } catch (Exception e) {
                     // 订阅者处理失败，记录日志但不影响其他订阅者
-                    System.err.println("通知订阅者处理失败：" + e.getMessage());
+                    LOGGER.warning("Notification subscriber failed: " + e.getMessage());
                 }
             }
         }
@@ -157,7 +160,7 @@ public class McpChannelNotification {
                 try {
                     subscriber.getCallback().accept(message);
                 } catch (Exception e) {
-                    System.err.println("通知订阅者处理失败：" + e.getMessage());
+                    LOGGER.warning("Notification subscriber failed: " + e.getMessage());
                 }
             }
         }

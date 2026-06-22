@@ -163,7 +163,9 @@ public class PluginManager {
 
         PluginClassLoader cl = classLoaders.remove(pluginId);
         if (cl != null) {
-            try { cl.close(); } catch (Exception ignored) {}
+            try { cl.close(); } catch (Exception e) {
+                logger.finest("Failed to close plugin classloader: " + e.getMessage());
+            }
         }
 
         manifests.remove(pluginId);

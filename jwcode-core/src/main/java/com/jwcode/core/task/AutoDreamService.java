@@ -228,9 +228,13 @@ public class AutoDreamService {
                             types.merge(ext, 1, Integer::sum);
                         }
                     }
-                } catch (Exception ignored) {}
+                } catch (Exception e) {
+                    logger.finest("[AutoDream] scanFileTypes entry error: " + e.getMessage());
+                }
             });
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            logger.finest("[AutoDream] scanFileTypes dir error: " + e.getMessage());
+        }
     }
 
     private void scanTodos(Path dir, List<String> todos, int maxDepth) {
@@ -256,17 +260,25 @@ public class AutoDreamService {
                                         if (todos.size() >= 20) return;
                                     }
                                 }
-                            } catch (Exception ignored) {}
+                            } catch (Exception e) {
+                                logger.finest("[AutoDream] scanTodos read error: " + e.getMessage());
+                            }
                         }
                     }
-                } catch (Exception ignored) {}
+                } catch (Exception e) {
+                    logger.finest("[AutoDream] scanTodos entry error: " + e.getMessage());
+                }
             });
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            logger.finest("[AutoDream] scanTodos dir error: " + e.getMessage());
+        }
     }
 
     private void notifyListeners(DreamResult result) {
         for (Consumer<DreamResult> listener : listeners) {
-            try { listener.accept(result); } catch (Exception ignored) {}
+            try { listener.accept(result); } catch (Exception e) {
+                logger.warning("[AutoDream] listener error: " + e.getMessage());
+            }
         }
     }
 }

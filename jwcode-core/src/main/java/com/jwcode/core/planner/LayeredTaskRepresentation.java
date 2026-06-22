@@ -1,6 +1,5 @@
 package com.jwcode.core.planner;
 
-import com.jwcode.core.a2a.model.StepStatus;
 import com.jwcode.core.agent.parallel.SubAgentResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

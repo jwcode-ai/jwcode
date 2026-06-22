@@ -53,8 +53,21 @@ public class TaskUpdateTool implements Tool<TaskUpdateInput, TaskUpdateOutput, V
     @Override
     public String getPrompt() {
         return """
-               使用 TaskUpdate 工具更新任务信息。
-               
+               TaskUpdate — 更新任务状态和进度信息。
+
+               ## 状态流转说明：
+               - 开始工作时: PENDING → RUNNING
+               - 有进展时: RUNNING → RUNNING（更新 progress 字段）
+               - 完成时: RUNNING → COMPLETED（同时设 progress: 100）
+               - 失败时: RUNNING → FAILED（在 outputAppend 中记录失败原因）
+               - 取消时: 任意状态 → CANCELLED
+
+               ## 使用时机：
+               - 开始处理一个任务时，立即标记为 RUNNING
+               - 任务完成后立即标记为 COMPLETED
+               - 不要批量处理多个任务后才更新状态
+               - 使用 outputAppend 记录关键进展或决策
+
                参数:
                - id: 任务ID（必需）
                - title: 新标题（可选）
@@ -64,9 +77,9 @@ public class TaskUpdateTool implements Tool<TaskUpdateInput, TaskUpdateOutput, V
                - tags: 新标签列表（可选）
                - progress: 新进度 0-100（可选）
                - outputAppend: 追加的输出内容（可选）
-               
+
                示例:
-               - {"id": "task-xxx", "status": "RUNNING"} - 更新任务状态为运行中
+               - {"id": "task-xxx", "status": "RUNNING"} - 开始处理任务
                - {"id": "task-xxx", "progress": 50} - 更新任务进度为 50%
                - {"id": "task-xxx", "outputAppend": "处理完成部分 A"} - 追加任务输出
                - {"id": "task-xxx", "status": "COMPLETED", "progress": 100} - 标记任务完成

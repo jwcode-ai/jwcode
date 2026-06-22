@@ -355,7 +355,9 @@ public class ExtractMemoriesService {
                     MemoryEntry entry = MemoryEntry.parse(path, content);
                     try {
                         entry.lastModified = Files.getLastModifiedTime(path).toInstant();
-                    } catch (IOException ignored) {}
+                    } catch (IOException e) {
+                        logger.finest("Cannot get lastModified for " + path.getFileName() + ": " + e.getMessage());
+                    }
                     entries.add(entry);
                 } catch (IOException e) {
                     logger.fine("[extractMemories] 读取失败: " + path + " - " + e.getMessage());

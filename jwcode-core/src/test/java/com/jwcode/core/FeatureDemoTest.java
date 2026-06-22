@@ -67,13 +67,13 @@ public class FeatureDemoTest {
         log.info("========== Phase 2: Agent 协作能力 ==========");
         
         // 演示并行执行器创建
-        log.info("🤖 创建 ParallelAgentExecutor...");
+        log.info("🤖 创建 Workflow Runtime role nodes...");
         log.info("✅ 支持 ForkJoinPool 并行执行");
         log.info("✅ 支持任务超时控制");
         log.info("✅ 支持任务取消");
         
         // 演示子任务创建
-        log.info("📋 创建 SubAgentTask...");
+        log.info("📋 创建 Workflow AgentNode...");
         log.info("✅ 支持任务依赖管理");
         log.info("✅ 支持 Builder 模式");
         

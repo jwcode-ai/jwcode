@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { usePlanStore } from '../../stores/planStore';
+import { useExecutionModeStore } from '../../stores/executionModeStore';
 
 /**
  * PlanPanel — Plan/Act 模式面板（简化版）
@@ -10,10 +10,10 @@ import { usePlanStore } from '../../stores/planStore';
  * - 分析完成后显示"切换到 Act 模式执行"提示
  */
 export function PlanPanel() {
-  const mode = usePlanStore((s) => s.mode);
-  const currentPlanContent = usePlanStore((s) => s.currentPlanContent);
-  const modeHistory = usePlanStore((s) => s.modeHistory);
-  const setMode = usePlanStore((s) => s.setMode);
+  const mode = useExecutionModeStore((s) => s.mode);
+  const currentPlanContent = useExecutionModeStore((s) => s.currentPlanContent);
+  const modeHistory = useExecutionModeStore((s) => s.modeHistory);
+  const setMode = useExecutionModeStore((s) => s.setMode);
 
   const [showPlanContent, setShowPlanContent] = useState(false);
 

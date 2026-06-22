@@ -391,13 +391,14 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
         String lower = command.toLowerCase().trim();
         
         // 检测 cd 命令（切换工作目录）
-        if (lower.startsWith("cd ") || lower.equals("cd") || 
+        if (lower.startsWith("cd ") || lower.equals("cd") ||
             lower.startsWith("chdir ") || lower.equals("chdir") ||
             lower.startsWith("pushd ") || lower.equals("pushd")) {
-            return "⚠️ 切换工作目录无法持久化！\n" +
-                   "  - Session 的 workingDirectory 在会话创建时已固定，无法通过命令修改\n" +
-                   "  - 每次命令执行都在独立进程中运行，目录变更不会保留\n" +
-                   "  - 建议：在命令中使用完整路径，或在 BashTool 的 cwd 参数中指定工作目录";
+            return "⚠️ Bash 中的 cd 只对当前命令进程有效，不会持久化到会话！\n" +
+                   "  - 请使用 ChangeDirectory 工具来切换 AI 的工作目录\n" +
+                   "  - ChangeDirectory 会更新 Session 的工作目录并刷新 <environment> 信息\n" +
+                   "  - 之后所有操作（Bash、FileRead、Glob、Grep）将在新目录下执行\n" +
+                   "  - 虽然 cd 仅影响本次命令，但你可以在当前命令中使用 cd 后再运行其他命令";
         }
         
         // 检测 export/setx 命令（设置环境变量）
@@ -609,30 +610,38 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
             
             // 使用线程读取输出
             CompletableFuture<Void> outputFuture = readProcessOutput(process, outputBuilder, errorBuilder);
-            
-            // 等待进程完成或超时
+
+            // 等待进程完成或超时（带输出空闲检测）
             long timeout = input.getTimeoutMillis();
-            boolean completed = process.waitFor(timeout, TimeUnit.MILLISECONDS);
-            
+            boolean completed = waitForProcessWithIdleTimeout(process, outputBuilder, timeout, IDLE_TIMEOUT_MS);
+
             long executionTime = System.currentTimeMillis() - startTime;
-            
+
             if (!completed) {
-                // 超时，终止进程
+                // 超时或空闲，终止进程
                 process.destroyForcibly();
                 process.waitFor(5000, TimeUnit.MILLISECONDS); // 等待进程终止
-                
+
                 // 等待输出读取完成
                 try {
                     outputFuture.get(2000, TimeUnit.MILLISECONDS);
                 } catch (TimeoutException e) {
                     outputFuture.cancel(true);
                 }
-                
+
                 String partialOutput = outputBuilder.toString();
+                boolean idleTimeout = executionTime < timeout;
+                if (idleTimeout) {
+                    String msg = "命令因持续 " + (IDLE_TIMEOUT_MS / 1000) + "s 无输出被终止（可能等待用户输入）";
+                    logger.warning("[BashTool] " + msg + ": " + truncateForLog(input.command()));
+                    String enhancedOutput = truncateOutput(partialOutput)
+                        + "\n\n[" + msg + "，实际执行 " + executionTime + "ms]";
+                    return ToolResult.success(BashOutput.timeout(
+                        enhancedOutput, input.command(), executionTime
+                    ));
+                }
                 return ToolResult.success(BashOutput.timeout(
-                    truncateOutput(partialOutput),
-                    input.command(),
-                    executionTime
+                    truncateOutput(partialOutput), input.command(), executionTime
                 ));
             }
             
@@ -1082,6 +1091,59 @@ public class BashTool implements Tool<BashInput, BashOutput, BashTool.BashProgre
         }
     }
     
+    /**
+     * 等待进程完成，同时监控输出空闲状态。
+     * <p>
+     * 如果进程在 {@code idleTimeoutMs} 内未产生任何输出（且仍在运行），
+     * 判定为挂起（如等待 stdin 输入的交互程序），提前终止。
+     * </p>
+     *
+     * @param process       要等待的进程
+     * @param outputBuilder 输出缓冲区（由 readProcessOutput 线程写入）
+     * @param totalTimeoutMs 总超时时间
+     * @param idleTimeoutMs 输出空闲超时时间
+     * @return true 如果进程正常退出，false 如果超时或空闲超时
+     */
+    private boolean waitForProcessWithIdleTimeout(
+            Process process, StringBuilder outputBuilder,
+            long totalTimeoutMs, long idleTimeoutMs) {
+        long deadline = System.currentTimeMillis() + Math.min(totalTimeoutMs, MAX_EXECUTION_TIMEOUT_MS);
+        int lastOutputLen = 0;
+        long lastOutputTime = System.currentTimeMillis();
+        int idleCycles = 0;
+
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                long remaining = Math.max(1, deadline - System.currentTimeMillis());
+                long waitSegment = Math.min(remaining, idleTimeoutMs);
+                boolean exited = process.waitFor(waitSegment, TimeUnit.MILLISECONDS);
+                if (exited) {
+                    return true;
+                }
+                // 检查输出是否增长
+                int currentLen = outputBuilder.length();
+                if (currentLen > lastOutputLen) {
+                    // 产生了新输出 → 刷新最后输出时间，重置空闲计数
+                    lastOutputLen = currentLen;
+                    lastOutputTime = System.currentTimeMillis();
+                    idleCycles = 0;
+                } else {
+                    // 连续 idleCycles+1 次无输出
+                    idleCycles++;
+                    if (idleCycles >= 2 && System.currentTimeMillis() - lastOutputTime >= idleTimeoutMs) {
+                        // 连续 2 个空闲窗口（~60s）无输出 → 判定为挂起
+                        process.destroyForcibly();
+                        return false;
+                    }
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return false; // 总超时
+    }
+
     /**
      * 截断输出
      */

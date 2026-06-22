@@ -3,7 +3,6 @@ package com.jwcode.core.tool;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.jwcode.core.a2a.model.ErrorSummary;
 import com.jwcode.core.tool.context.ToolExecutionContext;
 
 import java.io.IOException;

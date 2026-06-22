@@ -14,6 +14,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
@@ -334,6 +335,16 @@ public class SmartAnalyzeTool implements Tool<SmartAnalyzeInput, SmartAnalyzeOut
     @Override
     public boolean isReadOnly(SmartAnalyzeInput input) {
         return true;
+    }
+
+    @Override
+    public Set<SideEffect> getSideEffects() {
+        return Set.of(SideEffect.READ_ONLY);
+    }
+
+    @Override
+    public ToolCategory getCategory() {
+        return ToolCategory.CODE_ANALYSIS;
     }
 
     @Override

@@ -13,7 +13,7 @@ When interruption is detected:
    - Current task ID and description
    - Completed sub-tasks and their results
    - In-progress sub-task state
-   - SharedContextBus contents
+   - WorkflowLedger state and artifact references
    - Execution timeline so far
 3. **Acknowledge** to user that task is paused
 4. **Process** the new input
@@ -21,7 +21,7 @@ When interruption is detected:
 ### Resume Procedure
 When user asks to resume:
 1. **Load Checkpoint** for the paused task
-2. **Restore** SharedContextBus contents
+2. **Restore** WorkflowLedger state and artifacts
 3. **Continue** from the last incomplete sub-task
 4. **Notify** user of current progress
 
@@ -29,4 +29,4 @@ When user asks to resume:
 Checkpoints are stored in: `.jwcode/checkpoint/{taskId}/`
 - `context.json`: Execution context
 - `results.json`: Completed sub-task results
-- `bus.json`: SharedContextBus contents
+- `ledger.json`: WorkflowLedger state and artifact references

@@ -83,7 +83,8 @@ public class LLMQueryEngine {
     private com.jwcode.core.agent.CompactorAgent compactorAgent;
     // 片段注册表（ContextFragment 架构）
     private final FragmentRegistry fragmentRegistry;
-    private boolean fragmentsInitialized = false;
+    // 上下文片段注入器（提取自本类的分散注入方法）
+    private final ContextFragmentInjector contextFragmentInjector;
 
     // 【R1/R2】恢复转换状态：跟踪上次迭代使用的恢复策略（collapse_drain_retry 单次触发保护）
     private volatile String lastTransitionReason = null;
@@ -116,6 +117,8 @@ public class LLMQueryEngine {
     private int consecutiveThinkingOnlyRounds = 0;
     // 【修复】连续失败工具轮数检测：连续 N 轮工具调用全部失败则强制终止
     private int consecutiveFailedToolRounds = 0;
+    // 【修复】按工具跟踪连续失败次数，键为工具名，值为 [连续失败次数, 最近错误摘要]
+    private final java.util.Map<String, java.util.AbstractMap.SimpleEntry<Integer, String>> perToolFailureCount = new java.util.concurrent.ConcurrentHashMap<>();
     // 【R6】max_output_tokens 恢复计数：finish_reason=length 时的续写恢复次数上限
     private int maxOutputTokensRecoveryCount = 0;
     private static final int MAX_OUTPUT_TOKENS_RECOVERY_LIMIT = 3;
@@ -159,7 +162,9 @@ public class LLMQueryEngine {
         initBudgetHandler();
         // 初始化片段注册表（ContextFragment 架构）
         this.fragmentRegistry = FragmentRegistry.getInstance();
-        initDefaultFragments();
+        this.contextFragmentInjector = new ContextFragmentInjector(
+            session, agentRegistry, toolExecutor, fragmentRegistry);
+        contextFragmentInjector.initDefaultFragments();
     }
 
     /**
@@ -188,22 +193,6 @@ public class LLMQueryEngine {
             logger.warning("[LLMQueryEngine] Failed to init BudgetExhaustedHandler: " + e.getMessage());
             this.budgetHandler = null;
         }
-    }
-
-    /**
-     * 初始化默认片段 — 向 FragmentRegistry 注册内置片段。
-     */
-    private void initDefaultFragments() {
-        if (fragmentsInitialized) return;
-        fragmentRegistry.registerAll(List.of(
-            new AgentRoleFragment(),
-            new FileEditGuidelinesFragment(),
-            new EnvironmentInfoFragment(),
-            new ToolDefinitionsFragment(),
-            new PermissionContextFragment()
-        ));
-        fragmentsInitialized = true;
-        logger.info("[LLMQueryEngine] 已注册 " + fragmentRegistry.getAllSorted().size() + " 个默认片段");
     }
 
     /**
@@ -386,8 +375,8 @@ public class LLMQueryEngine {
         session.addMessage(Message.createUserMessage(prompt));
 
         // 通过片段注册表注入上下文片段（文件编辑指南、环境信息等）
-        injectContextFragments();
-        
+        contextFragmentInjector.injectContextFragments();
+
         // 【优化】重置无进展检测计数器
         resetStagnationDetectors();
 
@@ -401,246 +390,9 @@ public class LLMQueryEngine {
     /**
      * 通过 FragmentRegistry 注入所有启用的上下文片段。
      *
-     * <p>替代原来的分散注入方法（injectAgentSystemPrompt、addFileEditGuidelines、
-     * injectEnvironmentInfo），统一通过片段注册表管理。
-     */
-    private void injectContextFragments() {
-        Agent agent = agentRegistry != null ? agentRegistry.getCurrent() : null;
-        FragmentContext ctx = new FragmentContext(
-            session, agent, toolExecutor, null);
-        List<FragmentResult> results = fragmentRegistry.buildAndInject(ctx, session);
-
-        if (!results.isEmpty()) {
-            int totalTokens = results.stream().mapToInt(FragmentResult::tokenCount).sum();
-            logger.info("[LLMQueryEngine] 已注入 " + results.size() + " 个上下文片段，"
-                + "合计 ~" + totalTokens + " tokens | "
-                + results.stream()
-                    .map(r -> r.fragmentId() + "(" + r.tokenCount() + ")")
-                    .reduce((a, b) -> a + ", " + b).orElse(""));
-        }
-    }
 
     /**
-     * 【Phase 5】注入当前 Agent 的系统提示词
-     * 在对话开始时注入，让 LLM 知晓自己的角色、职责和可用工具约束。
-     *
-     * @deprecated 已委托给 {@link AgentRoleFragment}，保留用于向后兼容。
-     */
-    @Deprecated
-    private void injectAgentSystemPrompt() {
-        if (agentRegistry == null) return;
-        Agent agent = agentRegistry.getCurrent();
-        if (agent == null) return;
-
-        // 检查最近是否已经注入过该 Agent 的提示词（避免重复）
-        String marker = "[AGENT_ROLE:" + agent.getId() + "]";
-        if (hasRecentSystemPrompt(marker)) {
-            logger.fine("[LLMQueryEngine] Agent system prompt already injected for " + agent.getId());
-            return;
-        }
-
-        StringBuilder prompt = new StringBuilder();
-        prompt.append(marker).append("\n");
-        prompt.append("# 当前角色：").append(agent.getName()).append("\n\n");
-        prompt.append(agent.getSystemPrompt()).append("\n\n");
-        
-        // 注入 AICL 上下文解析规则（让 AI 理解优先级和生命周期）
-        prompt.append(AICLPromptBuilder.buildCompactPrompt()).append("\n\n");
-
-        // 显式列出可用工具（增强约束感）
-        List<Tool<?, ?, ?>> allowedTools = toolExecutor.getEnabledTools().stream()
-            .filter(t -> agent.canUseTool(t.getName()))
-            .toList();
-        if (!allowedTools.isEmpty()) {
-            prompt.append("## 你当前可用的工具（仅限以下工具）\n\n");
-            for (Tool<?, ?, ?> t : allowedTools) {
-                prompt.append("- ").append(t.getName()).append(": ").append(t.getDescription()).append("\n");
-            }
-            prompt.append("\n");
-        }
-
-        // 显式列出禁止工具（对 Orchestrator 尤为重要）
-        List<Tool<?, ?, ?>> disallowedTools = toolExecutor.getEnabledTools().stream()
-            .filter(t -> !agent.canUseTool(t.getName()))
-            .toList();
-        if (!disallowedTools.isEmpty()) {
-            prompt.append("## 你【禁止】使用的工具（必须通过 AgentTool 指派给子Agent）\n\n");
-            for (Tool<?, ?, ?> t : disallowedTools) {
-                prompt.append("- ").append(t.getName()).append("\n");
-            }
-            prompt.append("\n如果你需要执行上述禁止工具的工作，请使用 AgentTool 创建对应角色的子Agent来完成。\n\n");
-        }
-
-        session.addMessage(Message.createSystemMessage(prompt.toString()));
-        logger.info("[LLMQueryEngine] 已注入 Agent 系统提示词 | agent=" + agent.getId()
-            + " | 允许工具=" + allowedTools.size()
-            + " | 禁止工具=" + disallowedTools.size());
-    }
-
     /**
-     * 添加文件编辑指南到系统提示
-     *
-     * @deprecated 已委托给 {@link FileEditGuidelinesFragment}，保留用于向后兼容。
-     */
-    @Deprecated
-    private void addFileEditGuidelines() {
-        String guidelines = """
-            【重要】文件编辑规则：
-            
-            1. 编辑任何文件前，必须先使用 FileReadTool 读取文件最新内容
-            2. 禁止基于记忆或推测编辑文件，必须使用刚读取的实际内容
-            3. 读取文件前，如果不确定文件路径或文件名，必须先使用 GlobTool 搜索确认，禁止猜测文件路径
-            4. 如果工具执行失败，立即使用 FileReadTool 重新读取文件
-            5. 检查错误信息中的文件内容提示，修正编辑指令
-            6. 同一文件多次编辑失败时，考虑使用 GrepTool 搜索关键代码片段
-            
-            这些规则是为了避免"幻觉"问题 - 即 AI 基于不准确的文件内容生成编辑指令。
-            
-            【‼️ 最高优先级】任务结束规则 — 这是整个系统最重要的规则，违反将导致任务无限循环，严重浪费资源：
-
-            ## [FINISH] 协议 — 每个回复都必须遵守
-
-            你的每一次回复都必须以下面两种方式之一结束：
-
-            ▶ 方式一（需要工具）：回复中调用工具 → 系统执行工具 → 自动继续下一轮
-            ▶ 方式二（任务完成）：回复最后一行输出 [FINISH] → 系统立即结束对话
-
-            [FINISH] 意味着：「我的任务已全部完成，这是最终回复，不再需要任何工具调用。」
-
-            ✅ 必须输出 [FINISH] 的场景：
-            - 回答了一个简单问题（如"当前目录是什么？"、"文件内容是什么？"）
-            - 工具执行完毕并确认结果正确
-            - 任务清单中所有步骤已标记 ✅ 完成
-            - 用户的问题已经被完整回答
-
-            ❌ 常见错误（会导致无限循环）：
-            - 回答了问题但忘记输出 [FINISH] → 系统会继续追问，消耗 token
-            - 工具调用完成后只说了"完成了"但没加 [FINISH] → 系统不理解已完成
-            - 在回复中间夹杂 [FINISH] → 必须在最后一行的行首，独占一行
-
-            正确格式（最后一行必须是纯粹的 [FINISH]，不能有任何前缀）：
-              文件已成功写入 D:\\test\\output.txt，共写入 42 行数据。
-              [FINISH]
-
-            错误格式：
-              文件已成功写入。[FINISH] ← 不在最后一行
-              文件已成功写入。
-              [FINISH] ← 正确！但前面说了"完成了"却没加标记
-
-            ⚠️ 核心规则：不输出 [FINISH] = 任务未完成 = 系统继续追问 = 浪费 token。
-            
-            【重要】简单任务快速路径（避免过度工程化）：
-            
-            对于简单的文件操作，不要走"枚举→分类→逐个读取"的复杂路径，直接使用原子工具：
-            
-            - 批量读取多个文件 → 使用 BatchReadTool（替代逐个 FileReadTool）
-            - 合并多个文件为一个 → 使用 MergeFilesTool（如：合并 md 文件）
-            - 按模式搜索并复制/移动 → 使用 BashTool 或 PowerShellTool 的 shell 批处理
-            - 简单统计/过滤文件内容 → 使用 BashTool 的 grep/find/awk 等（Linux）或 Select-String（Windows）
-            
-            原则：能用 1 轮工具调用完成的，绝不用 5 轮。
-            
-            【重要】任务清单执行规则：
-            
-            1. 如果存在任务清单，必须在每次回复开头简要汇报当前进度（如"步骤 2/5 已完成，正在执行步骤 3"）
-            2. 每完成一个步骤，在回复中明确标注该步骤状态变更（如"✅ 步骤 X 完成"）
-            3. 如果发现遗漏的工作，动态添加新步骤并继续执行（AI自动执行，无需用户确认）
-            4. 如果发现某个步骤不需要，可以自动删除该步骤
-            5. 如果发现步骤顺序不合理，可以自动调整顺序
-            6. 如果需要用户补充信息，使用 AskUserQuestionTool 主动提问，不要空等
-            7. 所有步骤完成后，添加 [FINISH] 标记结束对话
-            8. 在回复末尾使用以下格式显示任务进度：
-               【任务进度】X/Y 已完成 | Z 待处理
-               例如：【任务进度】3/5 已完成 | 2 待处理
-            
-            重要：任务清单的添加/删除/调整由 AI 自动判断并执行，无需询问用户！
-            如果发现当前步骤遗漏了相关工作，直接添加新步骤。
-            如果发现某个步骤已经完成或不需要，可以直接删除。
-            如果发现后续步骤需要提前执行，可以直接调整顺序。
-            
-【关键】执行诚信规则（绝对禁止——违反即任务失败）：
-
-            1. **禁止谎报完成**：绝对不能声称完成了某个步骤而实际上没有执行相应的工具调用。
-               标注"✅ 步骤 X 完成"之前，必须已经实际执行了该步骤所需的全部工具操作。
-
-            2. **禁止虚构结果**：绝对不能编造文件内容、命令输出、或任何你没有实际获取到的信息。
-               如果工具调用失败，必须如实报告失败，而不是假装成功。
-               ❌ 工具返回 "Error: file not found" → 不得说"文件修改成功"
-               ❌ BashTool 返回空 → 不得说"编译通过，BUILD SUCCESS"
-               ❌ 未调用任何测试工具 → 不得说"测试全部通过"
-
-            3. **禁止跳跃执行**：必须按照任务清单的顺序逐个执行步骤。
-               不得在未执行步骤 1-3 的情况下直接声称步骤 4 完成。
-
-            4. **完成必须有证据**：每个步骤完成后，在回复中附上实际的执行结果摘要
-              （如读取到的文件内容片段、命令执行的输出摘要、修改的文件路径列表）。
-              没有证据的"完成"声明将被视为无效（编造）。
-
-            5. **失败必须上报**：如果某个步骤尝试多次仍无法完成，必须明确标记为失败
-              并说明原因，不得悄悄跳过或假装完成。
-
-            6. **【强制】在输出 [FINISH] 之前，执行自我审计**：
-               a. 回查当前对话中的所有工具调用记录（tool-call → tool-result 消息对）
-               b. 确认每一个声称的"已修改"、"已通过"、"已完成"都有对应的真实工具调用
-               c. 确认引用的所有文件内容/命令输出都来自工具返回值，而非你的推测或记忆
-               d. 如果发现任何声明缺少工具调用证据 → 不得输出 [FINISH]，必须先补执行
-               e. 编造内容比执行失败严重 10 倍——宁可报告失败，不要编造成功
-            
-            【重要】大任务拆分规则：
-            
-            当任务涉及多个独立子任务（如"同时修改多个不相关文件"、"并行分析多个模块"），你必须使用 AgentTool 创建子 Agent 并行执行：
-            
-            - 使用 AgentTool 的 execute 操作分配子任务
-            - 每个子 Agent 拥有独立的上下文和迭代预算，不会消耗主 Agent 的资源
-            - 子 Agent 完成后自动清理上下文，结果合并返回主 Agent
-            - 适用于：批量代码审查、多文件重构、并行测试、跨模块分析
-            
-            示例：{"action": "execute", "tasks": [{"name": "review-auth", "role": "安全专家", "task": "审查认证模块"}, {"name": "review-api", "role": "API专家", "task": "审查接口模块"}]}
-            """;
-        
-        session.addMessage(Message.createSystemMessage(guidelines));
-    }
-
-    /**
-     * 注入环境信息到系统提示
-     *
-     * @deprecated 已委托给 {@link EnvironmentInfoFragment}，保留用于向后兼容。
-     */
-    @Deprecated
-    private void injectEnvironmentInfo() {
-        String marker = "[ENV_INFO]";
-        if (hasRecentSystemPrompt(marker)) {
-            return;
-        }
-
-        String osName = System.getProperty("os.name", "Unknown");
-        String osVersion = System.getProperty("os.version", "Unknown");
-        String osArch = System.getProperty("os.arch", "Unknown");
-        String javaVersion = System.getProperty("java.version", "Unknown");
-        String userName = System.getProperty("user.name", "Unknown");
-        String workingDir = session.getWorkingDirectory();
-
-        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
-            .withZone(ZoneId.systemDefault());
-        String currentTime = formatter.format(Instant.now());
-
-        String envInfo = """
-            %s
-            【当前环境信息】
-            - 操作系统：%s %s (%s)
-            - Java 版本：%s
-            - 当前用户：%s
-            - 当前时间：%s
-            - 工作目录：%s
-
-            注意：以上环境信息随用户操作动态更新。当用户询问"当前工作目录"、
-            "现在时间"、"操作系统"等问题时，请以上述信息为准。
-            """.formatted(marker, osName, osVersion, osArch, javaVersion, userName, currentTime, workingDir);
-
-        session.addMessage(Message.createSystemMessage(envInfo));
-        logger.info("[LLMQueryEngine] 已注入环境信息 | OS=" + osName + " | 工作目录=" + workingDir);
-    }
-
     /**
      * 【优化】重置无进展检测计数器（新任务开始时调用）
      */
@@ -648,6 +400,7 @@ public class LLMQueryEngine {
         this.consecutiveToolOnlyRounds = 0;
         this.consecutiveThinkingOnlyRounds = 0;
         this.consecutiveFailedToolRounds = 0;
+        this.perToolFailureCount.clear();
         this.lastToolNames = new java.util.ArrayList<>();
         this.repeatedToolPatternCount = 0;
         this.fabricationCheckInjected = false;
@@ -674,7 +427,9 @@ public class LLMQueryEngine {
     // 【修复】连续失败工具轮数检测：连续 N 轮工具调用全部失败则强制终止
     private static final int MAX_CONSECUTIVE_FAILED_TOOL_ROUNDS = 3;
     // 【优化】重复工具检测：同一工具连续调用超过此阈值触发干预
-    private static final int MAX_REPEATED_TOOL_CALLS = 5;
+    private static final int MAX_REPEATED_TOOL_CALLS = 3;
+    // 【修复】单工具连续失败次数阈值（如 REPL 因内存限制连续失败）
+    private static final int PER_TOOL_FAILURE_THRESHOLD = 3;
     // 【优化】[FINISH] 提示注入间隔：每 N 轮才检查一次，避免频繁注入
     private static final int FINISH_REMINDER_INTERVAL = 2; // 强提醒: 每 2 轮注入 [FINISH] 提示
     
@@ -987,7 +742,7 @@ public class LLMQueryEngine {
         session.addMessage(Message.createUserMessage(prompt));
 
         // 通过片段注册表注入上下文片段（文件编辑指南、环境信息等）
-        injectContextFragments();
+        contextFragmentInjector.injectContextFragments();
 
         // 【优化】重置无进展检测计数器
         resetStagnationDetectors();
@@ -1291,6 +1046,10 @@ public class LLMQueryEngine {
             // 触发事件：开始执行工具
             pipeline.publish(new ObservationEvent.StepStart("工具调用",
                 "执行 " + toolName + " (第 " + toolIndex + "/" + toolCalls.size() + " 个)"));
+            pipeline.publish(new ObservationEvent.ToolCall(
+                toolName,
+                tc.getFunction().getArguments(),
+                tc.getId()));
 
             // 记录工具调用历史
             toolCallHistory.add(toolName + ":" + tc.getFunction().getArguments());
@@ -1350,6 +1109,34 @@ public class LLMQueryEngine {
                 consecutiveFailedToolRounds = 0;
             }
 
+            // 【修复】按工具跟踪连续失败次数，达到阈值时注入熔断提示
+            for (ToolExecutionResult result : results) {
+                boolean success = result.getResult() != null && !result.getResult().startsWith("Error:");
+                String toolName = result.getToolName();
+                if (!success) {
+                    String errorSummary = result.getResult() != null
+                        ? result.getResult().substring(0, Math.min(80, result.getResult().length()))
+                        : "unknown error";
+                    perToolFailureCount.merge(toolName,
+                        new java.util.AbstractMap.SimpleEntry<>(1, errorSummary),
+                        (old, __) -> {
+                            int count = old.getKey() + 1;
+                            return new java.util.AbstractMap.SimpleEntry<>(count, errorSummary);
+                        });
+                    int failCount = perToolFailureCount.get(toolName).getKey();
+                    if (failCount == PER_TOOL_FAILURE_THRESHOLD) {
+                        String warning = "⛔ 【系统警告】工具 " + toolName + " 已连续 " + failCount
+                            + " 次失败（最近错误: " + errorSummary + "）。"
+                            + "请停止使用此工具，换用其他方案或直接输出 [FINISH]。";
+                        logger.warning("[LLMQueryEngine] " + warning);
+                        session.addMessage(Message.createSystemMessage(warning));
+                    }
+                } else {
+                    // 工具成功 → 重置该工具的失败计数
+                    perToolFailureCount.remove(toolName);
+                }
+            }
+
             // 【任务生命周期】根据工具结果更新任务状态
             if (hasAskUserQuestion) {
                 String question = results.stream()
@@ -1372,7 +1159,7 @@ public class LLMQueryEngine {
                     }
                 }
             } else if (hasError) {
-                taskLifecycleManager.failStep(session, "工具执行失败");
+                taskLifecycleManager.failStep(session, summarizeToolFailures(results));
             } else {
                 taskLifecycleManager.advanceStep(session, "工具执行成功");
             }
@@ -1405,6 +1192,31 @@ public class LLMQueryEngine {
             }
         }
         return false;
+    }
+
+    private String summarizeToolFailures(List<ToolExecutionResult> results) {
+        if (results == null || results.isEmpty()) {
+            return "工具执行失败：无工具结果";
+        }
+
+        List<String> failures = new ArrayList<>();
+        for (ToolExecutionResult result : results) {
+            String content = result.getResult();
+            if (content == null || !content.startsWith("Error:")) {
+                continue;
+            }
+
+            String reason = content.substring("Error:".length()).trim();
+            if (reason.isEmpty()) {
+                reason = "未返回具体错误";
+            }
+            failures.add(result.getToolName() + " 失败: " + truncate(reason, 180));
+        }
+
+        if (failures.isEmpty()) {
+            return "工具执行失败：未返回具体错误";
+        }
+        return String.join("; ", failures);
     }
     
     /**

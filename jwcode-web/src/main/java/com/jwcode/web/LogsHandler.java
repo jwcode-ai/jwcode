@@ -19,6 +19,7 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.logging.Logger;
 import java.util.stream.Stream;
 
 /**
@@ -28,6 +29,8 @@ import java.util.stream.Stream;
  * 安全设计：所有操作限制在 {workspaceDir}/logs/ 目录下，防止目录逃逸攻击。
  */
 public class LogsHandler implements HttpHandler {
+    private static final Logger logger = Logger.getLogger(LogsHandler.class.getName());
+
 
     private static final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -122,7 +125,9 @@ public class LogsHandler implements HttpHandler {
                               node.put("modified", Files.getLastModifiedTime(p).toMillis());
                               node.put("previewable", isPreviewable(name));
                               files.add(node);
-                          } catch (IOException ignored) {}
+                          } catch (IOException e) {
+                              logger.finest("Cannot read file metadata: " + e.getMessage());
+                          }
                       });
             }
         }
@@ -153,7 +158,9 @@ public class LogsHandler implements HttpHandler {
         if (maxLinesStr != null && !maxLinesStr.isEmpty()) {
             try {
                 maxLines = Math.max(1, Math.min(100000, Integer.parseInt(maxLinesStr)));
-            } catch (NumberFormatException ignored) {}
+            } catch (NumberFormatException ignored) {
+                // Use default maxLines (1000)
+            }
         }
 
         try {

@@ -251,7 +251,7 @@ public class CapabilityEvalSuite {
      * 注意：当前版本执行"模拟执行"模式 — 跳过真实的 LLM 调用，
      * 专注于验证评测框架本身的完整性（任务加载、验收检查、报告生成）。
      *
-     * 未来版本将通过 LLMQueryEngine 或 A2AFacade 提交给真实的 Agent 执行。
+     * 未来版本将通过 LLMQueryEngine 或 Workflow Runtime 提交给真实的 Agent 执行。
      */
     private void executeTasks(List<EvalTask> tasks, String label) {
         if (tasks.isEmpty()) {

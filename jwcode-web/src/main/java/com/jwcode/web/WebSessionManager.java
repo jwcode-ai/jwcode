@@ -5,12 +5,16 @@ import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 /**
  * Web 会话管理器 — 支持消息存储与会话持久化。
  */
 public class WebSessionManager {
+
+    private static final Logger logger = Logger.getLogger(WebSessionManager.class.getName());
 
     private final Map<String, WebSession> sessions = new ConcurrentHashMap<>();
     private final AtomicInteger sessionCounter = new AtomicInteger(1);
@@ -20,7 +24,9 @@ public class WebSessionManager {
 
     public WebSessionManager() {
         Path home = Paths.get(System.getProperty("user.home"), ".jwcode", "sessions");
-        try { Files.createDirectories(home); } catch (IOException ignored) {}
+        try { Files.createDirectories(home); } catch (IOException e) {
+            logger.log(Level.WARNING, "Cannot create sessions directory: " + home, e);
+        }
         this.storageDir = home;
         loadPersistedSessions();
     }
@@ -39,7 +45,9 @@ public class WebSessionManager {
     public void removeSession(String sessionId) {
         WebSession removed = sessions.remove(sessionId);
         if (removed != null) {
-            try { Files.deleteIfExists(storageDir.resolve(sessionId + ".json")); } catch (IOException ignored) {}
+            try { Files.deleteIfExists(storageDir.resolve(sessionId + ".json")); } catch (IOException e) {
+                logger.finest("Cannot delete session file: " + e.getMessage());
+            }
         }
     }
 
@@ -96,7 +104,9 @@ public class WebSessionManager {
             }
             sb.append("]}");
             Files.writeString(file, sb.toString());
-        } catch (IOException ignored) {}
+        } catch (IOException e) {
+            logger.finest("Cannot persist session " + sessionId + ": " + e.getMessage());
+        }
     }
 
     private void loadPersistedSessions() {
@@ -119,9 +129,13 @@ public class WebSessionManager {
                         sessions.put(id, s);
                         sessionCounter.set(Math.max(sessionCounter.get(), Integer.parseInt(id.replace("session_", "")) + 1));
                     }
-                } catch (IOException ignored) {}
+                } catch (IOException e) {
+                    logger.finest("Cannot load session file " + f.getName() + ": " + e.getMessage());
+                }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            logger.warning("Failed to load persisted sessions: " + e.getMessage());
+        }
     }
 
     private String extractJsonString(String json, String key) {

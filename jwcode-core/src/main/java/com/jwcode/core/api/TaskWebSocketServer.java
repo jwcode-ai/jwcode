@@ -3,10 +3,6 @@ package com.jwcode.core.api;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-import com.jwcode.core.a2a.model.AgentCard;
-import com.jwcode.core.a2a.model.Skill;
-import com.jwcode.core.a2a.registry.A2ARegistry;
-import com.jwcode.core.a2a.registry.AgentSession;
 import com.jwcode.core.task.TaskStore;
 import org.java_websocket.WebSocket;
 import org.java_websocket.handshake.ClientHandshake;
@@ -29,13 +25,13 @@ import java.util.logging.Logger;
  * Provides WebSocket endpoint for real-time communication
  * Port: 8081
  * 
- * <p>增强功能：
+ * <p>澧炲己鍔熻兘锛?
  * <ul>
- *   <li>支持 Agent 注册（通过 URL 参数 agentId/agentType）</li>
- *   <li>支持按 agentId 定向推送消息</li>
- *   <li>支持按 sessionId 定向推送消息</li>
- *   <li>集成 A2ARegistry 管理 Agent 会话</li>
- *   <li>心跳检测与过期清理</li>
+ *   <li>鏀寔 Agent 娉ㄥ唽锛堥€氳繃 URL 鍙傛暟 agentId/agentType锛?/li>
+ *   <li>鏀寔鎸?agentId 瀹氬悜鎺ㄩ€佹秷鎭?/li>
+ *   <li>鏀寔鎸?sessionId 瀹氬悜鎺ㄩ€佹秷鎭?/li>
+ *   <li>闆嗘垚 A2ARegistry 绠＄悊 Agent 浼氳瘽</li>
+ *   <li>蹇冭烦妫€娴嬩笌杩囨湡娓呯悊</li>
  * </ul>
  * </p>
  */
@@ -46,59 +42,56 @@ public class TaskWebSocketServer extends WebSocketServer {
         .registerModule(new JavaTimeModule())
         .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
     
-    /** 所有 WebSocket 连接集合 */
+    /** 鎵€鏈?WebSocket 杩炴帴闆嗗悎 */
     private final CopyOnWriteArraySet<WebSocket> connections = new CopyOnWriteArraySet<>();
     
-    /** 按 connectionId 索引的 WebSocket 连接 */
+    /** 鎸?connectionId 绱㈠紩鐨?WebSocket 杩炴帴 */
     private final ConcurrentHashMap<String, WebSocket> connectionsById = new ConcurrentHashMap<>();
     
-    /** 按 sessionId 索引的 WebSocket 连接 */
+    /** 鎸?sessionId 绱㈠紩鐨?WebSocket 杩炴帴 */
     private final ConcurrentHashMap<String, WebSocket> connectionsBySession = new ConcurrentHashMap<>();
     
-    /** 按 agentId 索引的 WebSocket 连接 */
+    /** 鎸?agentId 绱㈠紩鐨?WebSocket 杩炴帴 */
     private final ConcurrentHashMap<String, WebSocket> connectionsByAgent = new ConcurrentHashMap<>();
     
-    /** WebSocket 连接的反向索引：conn -> connectionId */
+    /** WebSocket 杩炴帴鐨勫弽鍚戠储寮曪細conn -> connectionId */
     private final ConcurrentHashMap<WebSocket, String> connectionIds = new ConcurrentHashMap<>();
     
-    /** 连接 ID 生成器 */
+    /** 杩炴帴 ID 鐢熸垚鍣?*/
     private final AtomicLong idGenerator = new AtomicLong(0);
     
-    // 心跳定时器
+    // 蹇冭烦瀹氭椂鍣?
     private final ScheduledExecutorService heartbeatExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "ws-heartbeat");
         t.setDaemon(true);
         return t;
     });
     
-    // 过期清理定时器
+    // 杩囨湡娓呯悊瀹氭椂鍣?
     private final ScheduledExecutorService cleanupExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "ws-cleanup");
         t.setDaemon(true);
         return t;
     });
     
-    // 心跳间隔（秒）
+    // 蹇冭烦闂撮殧锛堢锛?
     private static final int HEARTBEAT_INTERVAL = 25;
     
-    // 过期清理间隔（秒）
+    // 杩囨湡娓呯悊闂撮殧锛堢锛?
     private static final int CLEANUP_INTERVAL = 60;
     
-    // A2A Registry
-    private final A2ARegistry registry = A2ARegistry.getInstance();
-    
-    // WebSocket 消息处理器（用于处理 chat/plan 等业务消息）
+    // WebSocket 娑堟伅澶勭悊鍣紙鐢ㄤ簬澶勭悊 chat/plan 绛変笟鍔℃秷鎭級
     private WebSocketMessageHandler messageHandler;
     
     public TaskWebSocketServer(int port) {
         super(new InetSocketAddress(port));
-        // 设置连接超时检测，防止 java-websocket 自动断开空闲连接
-        // 0 表示禁用超时检测，由我们自己的心跳机制管理
+        // 璁剧疆杩炴帴瓒呮椂妫€娴嬶紝闃叉 java-websocket 鑷姩鏂紑绌洪棽杩炴帴
+        // 0 琛ㄧず绂佺敤瓒呮椂妫€娴嬶紝鐢辨垜浠嚜宸辩殑蹇冭烦鏈哄埗绠＄悊
         this.setConnectionLostTimeout(0);
     }
     
     /**
-     * 设置消息处理器
+     * 璁剧疆娑堟伅澶勭悊鍣?
      */
     public void setMessageHandler(WebSocketMessageHandler handler) {
         this.messageHandler = handler;
@@ -106,14 +99,14 @@ public class TaskWebSocketServer extends WebSocketServer {
     
     @Override
     public void onOpen(WebSocket conn, ClientHandshake handshake) {
-        // 生成唯一连接 ID
+        // 鐢熸垚鍞竴杩炴帴 ID
         String connectionId = "conn-" + idGenerator.incrementAndGet();
         
         connections.add(conn);
         connectionIds.put(conn, connectionId);
         connectionsById.put(connectionId, conn);
         
-        // 解析 URL 参数
+        // 瑙ｆ瀽 URL 鍙傛暟
         String query = handshake.getResourceDescriptor();
         Map<String, String> params = parseQueryParams(query);
         
@@ -122,37 +115,18 @@ public class TaskWebSocketServer extends WebSocketServer {
         String sessionId = params.get("sessionId");
         String agentName = params.get("agentName");
         
-        // 如果携带 sessionId，建立 session 映射
+        // 濡傛灉鎼哄甫 sessionId锛屽缓绔?session 鏄犲皠
         if (sessionId != null && !sessionId.isEmpty()) {
             connectionsBySession.put(sessionId, conn);
             logger.info("[TaskWebSocket] Session mapped: " + sessionId + " -> " + connectionId);
         }
         
-        // 如果携带 agentId，注册到 A2A Registry
+        // 濡傛灉鎼哄甫 agentId锛屾敞鍐屽埌 A2A Registry
         if (agentId != null && !agentId.isEmpty()) {
             connectionsByAgent.put(agentId, conn);
-            
-            // 构建 AgentCard 并注册到 Registry
             String name = agentName != null ? agentName : agentId;
             String type = agentType != null ? agentType : "generic";
-            
-            AgentCard card = AgentCard.builder()
-                .name(name)
-                .description("Agent connected via WebSocket: " + agentId)
-                .agentType(type)
-                .skills(parseSkills(params))
-                .build();
-            
-            AgentSession session = AgentSession.builder()
-                .agentName(name)
-                .agentType(type)
-                .agentCard(card)
-                .connectionId(connectionId)
-                .maxLoad(parseIntParam(params, "maxLoad", 3))
-                .build();
-            
-            registry.register(session);
-            logger.info("[TaskWebSocket] Agent registered: " + name + " (type=" + type + ")");
+            logger.info("[TaskWebSocket] Agent connection mapped: " + name + " (type=" + type + ")");
         }
         
         logger.info("[TaskWebSocket] New connection: " + conn.getRemoteSocketAddress() 
@@ -174,14 +148,11 @@ public class TaskWebSocketServer extends WebSocketServer {
         connections.remove(conn);
         connectionsById.remove(connectionId);
         
-        // 从 session 映射中移除
+        // 浠?session 鏄犲皠涓Щ闄?
         connectionsBySession.values().remove(conn);
         
-        // 从 agent 映射中移除并注销 Registry
+        // 浠?agent 鏄犲皠涓Щ闄ゅ苟娉ㄩ攢 Registry
         connectionsByAgent.values().remove(conn);
-        if (connectionId != null) {
-            registry.unregister(connectionId);
-        }
         
         logger.info("[TaskWebSocket] Connection closed: " + conn.getRemoteSocketAddress() 
             + " id=" + connectionId);
@@ -193,7 +164,7 @@ public class TaskWebSocketServer extends WebSocketServer {
         logger.fine("[TaskWebSocket] Message from " + connId + ": " + message);
         
         try {
-            // 解析 JSON 消息
+            // 瑙ｆ瀽 JSON 娑堟伅
             @SuppressWarnings("unchecked")
             Map<String, Object> msgMap = MAPPER.readValue(message, Map.class);
             
@@ -204,27 +175,24 @@ public class TaskWebSocketServer extends WebSocketServer {
                 msgContent = (String) msgMap.getOrDefault("data", "");
             }
 
-            // 处理心跳
+            // 澶勭悊蹇冭烦
             if ("pong".equals(type)) {
-                if (connId != null) {
-                    registry.heartbeat(connId);
-                }
                 return;
             }
             
-            // 先回复 ack 确认收到
+            // 鍏堝洖澶?ack 纭鏀跺埌
             sendMessage(conn, Map.of(
                 "type", "ack",
                 "original", message
             ));
             
-            // 如果有消息处理器，将消息交给处理器处理
+            // 濡傛灉鏈夋秷鎭鐞嗗櫒锛屽皢娑堟伅浜ょ粰澶勭悊鍣ㄥ鐞?
             if (messageHandler != null && !type.isEmpty()) {
                 String finalType = type;
                 String finalSessionId = sessionId;
                 String finalMsg = msgContent;
                 
-                // 异步处理消息，避免阻塞 WebSocket 线程
+                // 寮傛澶勭悊娑堟伅锛岄伩鍏嶉樆濉?WebSocket 绾跨▼
                 messageHandler.handleMessage(finalSessionId, finalType, finalMsg)
                     .thenAccept(result -> {
                         logger.fine("[TaskWebSocket] Message processed: type=" + finalType 
@@ -252,9 +220,6 @@ public class TaskWebSocketServer extends WebSocketServer {
             connectionsById.remove(connId);
             connectionsBySession.values().remove(conn);
             connectionsByAgent.values().remove(conn);
-            if (connId != null) {
-                registry.unregister(connId);
-            }
         }
     }
     
@@ -262,7 +227,7 @@ public class TaskWebSocketServer extends WebSocketServer {
     public void onStart() {
         logger.info("[TaskWebSocket] Server started on port " + getPort());
         
-        // 启动心跳定时器，定期发送 ping 消息保持连接活跃
+        // 鍚姩蹇冭烦瀹氭椂鍣紝瀹氭湡鍙戦€?ping 娑堟伅淇濇寔杩炴帴娲昏穬
         heartbeatExecutor.scheduleAtFixedRate(() -> {
             try {
                 if (!connections.isEmpty()) {
@@ -273,13 +238,10 @@ public class TaskWebSocketServer extends WebSocketServer {
             }
         }, HEARTBEAT_INTERVAL, HEARTBEAT_INTERVAL, TimeUnit.SECONDS);
         
-        // 启动过期清理定时器
+        // 鍚姩杩囨湡娓呯悊瀹氭椂鍣?
         cleanupExecutor.scheduleAtFixedRate(() -> {
             try {
-                int purged = registry.purgeExpiredSessions();
-                if (purged > 0) {
-                    logger.info("[TaskWebSocket] Cleanup: purged " + purged + " expired sessions");
-                }
+                // Connection cleanup is handled by WebSocket close events.
             } catch (Exception e) {
                 logger.warning("[TaskWebSocket] Cleanup error: " + e.getMessage());
             }
@@ -288,7 +250,7 @@ public class TaskWebSocketServer extends WebSocketServer {
         logger.info("[TaskWebSocket] Heartbeat started (interval: " + HEARTBEAT_INTERVAL + "s)");
         logger.info("[TaskWebSocket] Cleanup started (interval: " + CLEANUP_INTERVAL + "s)");
         
-        // 注册 TaskStore 监听器 — 任务变更时自动广播到所有 WebSocket 客户端
+        // 娉ㄥ唽 TaskStore 鐩戝惉鍣?鈥?浠诲姟鍙樻洿鏃惰嚜鍔ㄥ箍鎾埌鎵€鏈?WebSocket 瀹㈡埛绔?
         TaskStore.getInstance().addTaskListener(event -> {
             try {
                 String action = event.getAction();
@@ -304,10 +266,10 @@ public class TaskWebSocketServer extends WebSocketServer {
         logger.info("[TaskWebSocket] TaskStore listener registered for real-time task push");
     }
     
-    // ==================== 定向推送方法 ====================
+    // ==================== 瀹氬悜鎺ㄩ€佹柟娉?====================
     
     /**
-     * 向指定 agentId 推送消息
+     * 鍚戞寚瀹?agentId 鎺ㄩ€佹秷鎭?
      */
     public boolean sendToAgent(String agentId, Map<String, Object> data) {
         WebSocket conn = connectionsByAgent.get(agentId);
@@ -320,7 +282,7 @@ public class TaskWebSocketServer extends WebSocketServer {
     }
     
     /**
-     * 向指定 sessionId 推送消息
+     * 鍚戞寚瀹?sessionId 鎺ㄩ€佹秷鎭?
      */
     public boolean sendToSession(String sessionId, Map<String, Object> data) {
         WebSocket conn = connectionsBySession.get(sessionId);
@@ -333,7 +295,7 @@ public class TaskWebSocketServer extends WebSocketServer {
     }
     
     /**
-     * 向指定 connectionId 推送消息
+     * 鍚戞寚瀹?connectionId 鎺ㄩ€佹秷鎭?
      */
     public boolean sendToConnection(String connectionId, Map<String, Object> data) {
         WebSocket conn = connectionsById.get(connectionId);
@@ -346,7 +308,7 @@ public class TaskWebSocketServer extends WebSocketServer {
     }
     
     /**
-     * 向指定 WebSocket 连接推送消息
+     * 鍚戞寚瀹?WebSocket 杩炴帴鎺ㄩ€佹秷鎭?
      */
     private void sendMessage(WebSocket conn, Map<String, Object> data) {
         try {
@@ -363,8 +325,8 @@ public class TaskWebSocketServer extends WebSocketServer {
     /**
      * Broadcast message to all connected clients
      * 
-     * <p>每个连接单独 try/catch，防止单个连接异常中断整个广播循环。
-     * 同时记录每个失败连接的 connectionId 便于诊断。</p>
+     * <p>姣忎釜杩炴帴鍗曠嫭 try/catch锛岄槻姝㈠崟涓繛鎺ュ紓甯镐腑鏂暣涓箍鎾惊鐜€?
+     * 鍚屾椂璁板綍姣忎釜澶辫触杩炴帴鐨?connectionId 渚夸簬璇婃柇銆?/p>
      */
     public void broadcast(Map<String, Object> data) {
         String json;
@@ -414,46 +376,40 @@ public class TaskWebSocketServer extends WebSocketServer {
         ));
     }
     
-    // ==================== 查询方法 ====================
+    // ==================== 鏌ヨ鏂规硶 ====================
+    
     
     /**
-     * 获取 A2A Registry 实例
-     */
-    public A2ARegistry getRegistry() {
-        return registry;
-    }
-    
-    /**
-     * 获取连接数量
+     * 鑾峰彇杩炴帴鏁伴噺
      */
     public int getConnectionCount() {
         return connections.size();
     }
     
     /**
-     * 获取所有连接的 connectionId
+     * 鑾峰彇鎵€鏈夎繛鎺ョ殑 connectionId
      */
     public Set<String> getAllConnectionIds() {
         return new HashSet<>(connectionsById.keySet());
     }
     
     /**
-     * 获取所有已注册的 agentId
+     * 鑾峰彇鎵€鏈夊凡娉ㄥ唽鐨?agentId
      */
     public Set<String> getAllAgentIds() {
         return new HashSet<>(connectionsByAgent.keySet());
     }
     
-    // ==================== 工具方法 ====================
+    // ==================== 宸ュ叿鏂规硶 ====================
     
     /**
-     * 解析 URL 查询参数
+     * 瑙ｆ瀽 URL 鏌ヨ鍙傛暟
      */
     private Map<String, String> parseQueryParams(String query) {
         Map<String, String> params = new HashMap<>();
         if (query == null || query.isEmpty()) return params;
         
-        // 去掉路径部分，只保留查询参数
+        // 鍘绘帀璺緞閮ㄥ垎锛屽彧淇濈暀鏌ヨ鍙傛暟
         int qIndex = query.indexOf('?');
         if (qIndex < 0) return params;
         
@@ -470,26 +426,11 @@ public class TaskWebSocketServer extends WebSocketServer {
     }
     
     /**
-     * 解析技能参数（格式：skills=code,debug,test）
+     * 瑙ｆ瀽鎶€鑳藉弬鏁帮紙鏍煎紡锛歴kills=code,debug,test锛?
      */
-    private List<Skill> parseSkills(Map<String, String> params) {
-        String skillsStr = params.get("skills");
-        if (skillsStr == null || skillsStr.isEmpty()) {
-            return Collections.emptyList();
-        }
-        
-        List<Skill> skills = new ArrayList<>();
-        for (String skillId : skillsStr.split(",")) {
-            skillId = skillId.trim();
-            if (!skillId.isEmpty()) {
-                skills.add(new Skill(skillId, skillId, "Skill: " + skillId, null, null));
-            }
-        }
-        return skills;
-    }
     
     /**
-     * 解析整数参数
+     * 瑙ｆ瀽鏁存暟鍙傛暟
      */
     private int parseIntParam(Map<String, String> params, String key, int defaultValue) {
         String val = params.get(key);
@@ -509,7 +450,7 @@ public class TaskWebSocketServer extends WebSocketServer {
     @Override
     public void stop() {
         try {
-            // 关闭心跳定时器
+            // 鍏抽棴蹇冭烦瀹氭椂鍣?
             heartbeatExecutor.shutdown();
             cleanupExecutor.shutdown();
             try {
