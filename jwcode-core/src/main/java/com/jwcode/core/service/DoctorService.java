@@ -434,7 +434,7 @@ public class DoctorService {
                 .connectTimeout(Duration.ofSeconds(5))
                 .build();
             HttpRequest req = HttpRequest.newBuilder()
-                .uri(URI.create("https://api.github.com/repos/ngwlh/jwcode/releases/latest"))
+                .uri(URI.create("https://api.github.com/repos/jwcode-ai/jwcode/releases/latest"))
                 .timeout(Duration.ofSeconds(5))
                 .header("Accept", "application/vnd.github+json")
                 .GET()

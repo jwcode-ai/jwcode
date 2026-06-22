@@ -172,8 +172,8 @@ export async function ensureBackendJar(installDir: string): Promise<string | nul
   }
 
   const urls = [
-    `https://ghproxy.com/https://github.com/ngwlh/jwcode/releases/download/v${version}/jwcode-web.jar`,
-    `https://github.com/ngwlh/jwcode/releases/download/v${version}/jwcode-web.jar`,
+    `https://ghproxy.com/https://github.com/jwcode-ai/jwcode/releases/download/v${version}/jwcode-web.jar`,
+    `https://github.com/jwcode-ai/jwcode/releases/download/v${version}/jwcode-web.jar`,
   ];
 
   console.log(`[launcher] Backend JAR not found. Downloading from GitHub Releases...`);
