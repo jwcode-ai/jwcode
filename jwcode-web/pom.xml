@@ -105,25 +105,30 @@
                 <artifactId>maven-surefire-plugin</artifactId>
             </plugin>
 
-            <!-- Build fat JAR with all dependencies for standalone distribution -->
+            <!-- Build fat JAR with all dependencies, excluding Playwright browser binaries.
+                 PlaywrightManager gracefully degrades when driver/ is absent. -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-assembly-plugin</artifactId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.5.3</version>
                 <executions>
                     <execution>
                         <phase>package</phase>
-                        <goals><goal>single</goal></goals>
+                        <goals><goal>shade</goal></goals>
                         <configuration>
-                            <archive>
-                                <manifest>
+                            <filters>
+                                <filter>
+                                    <artifact>com.microsoft.playwright:*</artifact>
+                                    <excludes>
+                                        <exclude>driver/**</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                                     <mainClass>com.jwcode.web.WebLauncher</mainClass>
-                                </manifest>
-                            </archive>
-                            <descriptorRefs>
-                                <descriptorRef>jar-with-dependencies</descriptorRef>
-                            </descriptorRefs>
-                            <finalName>jwcode-web</finalName>
-                            <appendAssemblyId>false</appendAssemblyId>
+                                </transformer>
+                            </transformers>
                         </configuration>
                     </execution>
                 </executions>

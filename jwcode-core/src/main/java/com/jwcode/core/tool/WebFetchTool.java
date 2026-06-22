@@ -87,7 +87,7 @@ public class WebFetchTool implements Tool<WebFetchTool.Input, WebFetchTool.Outpu
 
             模式说明:
             - render_js=false（默认）: 使用 HTTP 直接抓取，速度快但无法处理 JS 渲染的页面
-            - render_js=true: 使用 Playwright 浏览器引擎渲染页面，可获取 SPA 网站的完整内容
+            - render_js=true: 使用系统 Chrome/Chromium 浏览器渲染页面，可获取 SPA 网站的完整内容
 
             示例:
             - {"url": "https://example.com/article"}
@@ -96,7 +96,8 @@ public class WebFetchTool implements Tool<WebFetchTool.Input, WebFetchTool.Outpu
 
             注意:
             - URL 必须是完整的，包含协议（http:// 或 https://）
-            - render_js=true 需要 Playwright 依赖在类路径上，并已安装 Chromium 浏览器
+            - render_js=true 需要系统已安装 Google Chrome 或 Chromium 浏览器
+            - 可通过 CHROME_PATH 环境变量指定 Chrome 路径
             - 某些网站可能会阻止抓取（返回验证码、反爬页面等）
             """;
     }
@@ -288,10 +289,10 @@ public class WebFetchTool implements Tool<WebFetchTool.Input, WebFetchTool.Outpu
 
         if (!pm.isAvailable()) {
             return ToolResult.error(
-                "Playwright 浏览器引擎不可用。请添加依赖并在首次运行时安装 Chromium：\n" +
-                "1. 在 pom.xml 中添加 com.microsoft.playwright:playwright\n" +
-                "2. 运行: playwright install chromium\n" +
-                "或者参考: https://playwright.dev/java/docs/intro");
+                "浏览器 JS 渲染引擎不可用，无法使用 render_js=true 模式。\n" +
+                "请确保已安装 Google Chrome 或 Chromium 浏览器，\n" +
+                "或通过 CHROME_PATH 环境变量指定 Chrome 可执行文件路径。\n" +
+                "当前可使用默认的 HTTP 模式（不设置 render_js）。");
         }
 
         try {

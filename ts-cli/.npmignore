@@ -7,6 +7,4 @@ build.mjs
 *.tsx
 *.map
 *.tsbuildinfo
-*.conf
-proguard.map
 

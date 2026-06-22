@@ -59,7 +59,7 @@ public class BrowserTool implements Tool<String, String, Void> {
     @Override
     public String getDescription() {
         return "浏览器自动化工具：导航(navigate)、页面快照(snapshot)、点击(click)、输入(type)、滚动(scroll)、等待(wait)、截图(screenshot)。" +
-               "使用 Playwright 驱动真实 Chromium 浏览器。本地地址(localhost/127.0.0.1/内网IP)被安全拦截。";
+               "使用系统安装的 Chrome/Chromium 浏览器驱动。本地地址(localhost/127.0.0.1/内网IP)被安全拦截。";
     }
 
     @Override
@@ -88,7 +88,8 @@ public class BrowserTool implements Tool<String, String, Void> {
             注意:
             - navigate/snapshot 在当前浏览器标签页中执行
             - 后续 click/type/scroll/screenshot 作用于上一次 navigate 的页面
-            - 需要 Playwright + Chromium 浏览器依赖
+            - 需要系统已安装 Google Chrome 或 Chromium 浏览器
+            - 可通过 CHROME_PATH 环境变量指定 Chrome 路径
             """;
     }
 
@@ -160,9 +161,9 @@ public class BrowserTool implements Tool<String, String, Void> {
             boolean needsPlaywright = !("navigate".equals(action) || "snapshot".equals(action) || "wait".equals(action));
             if (needsPlaywright && !playwright.isAvailable()) {
                 future.complete(ToolResult.error(
-                    "Playwright 浏览器引擎不可用。click/type/scroll/screenshot 需要 Playwright。\n" +
-                    "安装指引: https://playwright.dev/java/docs/intro\n" +
-                    "或使用 navigate/snapshot/wait 进行基本操作。"));
+                    "浏览器引擎不可用。click/type/scroll/screenshot 需要系统安装的 Chrome/Chromium。\n" +
+                    "请安装 Google Chrome 或 Chromium 浏览器，或设置 CHROME_PATH 环境变量指定路径。\n" +
+                    "当前仅支持 navigate/snapshot/wait 等 HTTP 基本操作。"));
                 return future;
             }
 
@@ -335,14 +336,14 @@ public class BrowserTool implements Tool<String, String, Void> {
             sb.append("Navigated to: ").append(url).append("\n");
             sb.append("Status: ").append(resp.statusCode()).append("\n");
             sb.append("Title: ").append(title).append("\n\n");
-            sb.append("[INFO] Playwright 不可用，使用 HTTP 模式。页面可能缺少 JS 渲染的内容。\n");
-            sb.append("如需完整浏览器功能，请安装 Playwright: https://playwright.dev/java/docs/intro\n\n");
+            sb.append("[INFO] 系统 Chrome 未检测到，使用 HTTP 模式。页面可能缺少 JS 渲染的内容。\n");
+            sb.append("如需完整浏览器功能，请安装 Google Chrome 或设置 CHROME_PATH 环境变量。\n\n");
             sb.append(buildPageSummaryFromHtml(body, url));
 
             return ToolResult.success(sb.toString());
         } catch (Exception e) {
             return ToolResult.error("导航失败: " + e.getMessage() +
-                "\n提示: 安装 Playwright 可获得更好的浏览器兼容性: https://playwright.dev/java/docs/intro");
+                "\n提示: 安装 Google Chrome 或设置 CHROME_PATH 环境变量可获得更好的浏览器兼容性。");
         }
     }
 
@@ -367,7 +368,7 @@ public class BrowserTool implements Tool<String, String, Void> {
             sb.append("=== Accessibility Snapshot (HTTP mode) ===\n");
             sb.append("URL: ").append(url).append("\n");
             sb.append("Title: ").append(title).append("\n");
-            sb.append("[INFO] 安装 Playwright 可获得完整的交互式快照体验\n\n");
+            sb.append("[INFO] 安装 Chrome 可获得完整的交互式快照体验\n\n");
 
             // 提取标题
             java.util.regex.Matcher m = java.util.regex.Pattern

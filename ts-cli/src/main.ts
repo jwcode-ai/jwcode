@@ -39,7 +39,7 @@ process.on('uncaughtException', (err: NodeJS.ErrnoException) => {
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  findInstallDir, findJar, findMvn, ensureBackendJar, buildBackend,
+  findInstallDir, findJar, findMvn, buildBackend,
   startBackend, waitForBackend, cleanupBackend,
   findAvailablePorts, portInUse, killPort,
 } from './launcher.js';
@@ -123,19 +123,22 @@ async function cmdStart(args: Record<string, string | boolean>): Promise<void> {
   console.log(`  HTTP API:  http://localhost:${httpPort}`);
   console.log(`  WebSocket: ws://localhost:${wsPort}/ws`);
 
-  // Ensure JAR exists: build from source (dev) or download from GitHub Releases
+  // Ensure JAR exists: build from source (dev) or error with reinstall instructions
   if (!findJar(installDir) || build) {
     if (existsSync(join(installDir, 'pom.xml'))) {
       // Dev mode — build from source
       buildBackend(installDir);
     } else if (!findJar(installDir)) {
-      // Production mode — download from GitHub Releases
-      const jar = await ensureBackendJar(installDir);
-      if (!jar) {
-        console.error('[launcher] Backend JAR not found and download failed.');
-        console.error('[launcher] Install via: npm install -g @jwcode/cli');
-        process.exit(1);
-      }
+      // Production mode — JAR should be bundled with the npm package
+      console.error('[launcher] Backend JAR not found.');
+      console.error('[launcher]');
+      console.error('[launcher] The backend JAR should be included with the npm package.');
+      console.error('[launcher] Please reinstall: npm install -g @jwcode/cli');
+      console.error('[launcher]');
+      console.error('[launcher] Or build from source:');
+      console.error('[launcher]   git clone https://github.com/jwcode-ai/jwcode');
+      console.error('[launcher]   cd jwcode && npm install -g ./ts-cli');
+      process.exit(1);
     }
   }
 

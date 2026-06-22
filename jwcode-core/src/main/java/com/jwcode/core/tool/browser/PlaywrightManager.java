@@ -1,7 +1,12 @@
 package com.jwcode.core.tool.browser;
 
-import java.net.URI;
+import com.microsoft.playwright.*;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import java.io.File;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
@@ -10,8 +15,8 @@ import java.util.logging.Logger;
 /**
  * PlaywrightManager — 管理 Playwright 浏览器生命周期（单例）。
  *
- * <p>提供对基于 Playwright 的 Chromium 浏览器的延迟初始化、页面渲染和浏览器自动化操作。
- * 当 Playwright 库不在类路径上时，所有操作会优雅降级并返回清晰的错误信息。</p>
+ * <p>使用系统安装的 Chrome/Chromium 浏览器（通过 CHROME_PATH 环境变量或自动检测），
+ * 不下载 Playwright 内置浏览器。</p>
  *
  * <p>支持的渲染模式：</p>
  * <ul>
@@ -29,11 +34,7 @@ public class PlaywrightManager {
 
     private static final Logger logger = Logger.getLogger(PlaywrightManager.class.getName());
     private static final PlaywrightManager INSTANCE = new PlaywrightManager();
-
-    // Playwright 类全名（用于反射检测）
-    private static final String PLAYWRIGHT_CLASS = "com.microsoft.playwright.Playwright";
-    private static final String BROWSER_CLASS = "com.microsoft.playwright.Browser";
-    private static final String PAGE_CLASS = "com.microsoft.playwright.Page";
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     // 浏览器实例锁 + 状态
     private final ReentrantLock lock = new ReentrantLock();
@@ -41,11 +42,11 @@ public class PlaywrightManager {
     private volatile boolean initialized = false;
     private volatile boolean headless = true;
 
-    // 运行时持有的 Playwright 对象（通过 Object 引用避免直接编译依赖）
-    private Object playwrightInstance;
-    private Object browserInstance;
-    private Object browserContextInstance;
-    private final Map<Integer, Object> activePages = new ConcurrentHashMap<>();
+    // 运行时持有的 Playwright 对象（直接 API 类型）
+    private Playwright playwrightInstance;
+    private Browser browserInstance;
+    private BrowserContext browserContextInstance;
+    private final Map<Integer, Page> activePages = new ConcurrentHashMap<>();
     private int nextPageId = 1;
 
     private PlaywrightManager() {
@@ -59,7 +60,6 @@ public class PlaywrightManager {
 
     /**
      * 尝试初始化 Playwright。
-     * 如果 Playwright 不在类路径上，则静默标记为不可用。
      *
      * @return true 如果初始化成功
      */
@@ -73,7 +73,8 @@ public class PlaywrightManager {
             if (available) {
                 logger.info("Playwright 浏览器引擎初始化成功（headless=" + headless + "）");
             } else {
-                logger.warning("Playwright 不可用，浏览器渲染功能将受限。可通过添加依赖启用：com.microsoft.playwright:playwright");
+                logger.severe("Playwright 浏览器引擎不可用。" +
+                    "请确保已安装 Google Chrome 或 Chromium 浏览器，或通过 CHROME_PATH 环境变量指定路径。");
             }
         } catch (Exception e) {
             logger.warning("Playwright 初始化失败: " + e.getMessage());
@@ -105,7 +106,7 @@ public class PlaywrightManager {
      */
     public String getName() {
         if (!initialized) initialize();
-        return available ? "Playwright (Chromium)" : "Playwright (不可用)";
+        return available ? "Playwright + 系统 Chrome" : "Playwright (不可用)";
     }
 
     /**
@@ -114,8 +115,15 @@ public class PlaywrightManager {
     public void shutdown() {
         lock.lock();
         try {
-            closeBrowser();
-            closePlaywright();
+            if (browserInstance != null) {
+                try { browserInstance.close(); } catch (Exception ignored) { }
+                browserInstance = null;
+            }
+            if (playwrightInstance != null) {
+                try { playwrightInstance.close(); } catch (Exception ignored) { }
+                playwrightInstance = null;
+            }
+            browserContextInstance = null;
             available = false;
             initialized = false;
             activePages.clear();
@@ -143,25 +151,22 @@ public class PlaywrightManager {
         long start = System.currentTimeMillis();
         lock.lock();
         try {
-            Object page = createPage();
+            Page page = createPage();
             try {
-                invoke(page, "navigate", url);
+                page.navigate(url);
                 sleep(Math.min(waitMs, 15000));
-
-                String html = (String) invoke(page, "content");
-                String title = (String) invoke(page, "title");
 
                 RenderResult result = new RenderResult();
                 result.success = true;
-                result.html = html;
-                result.title = title;
+                result.html = page.content();
+                result.title = page.title();
                 result.contentType = "text/html";
                 result.loadTimeMs = System.currentTimeMillis() - start;
                 result.metadata = extractMetadata(page);
 
                 return result;
             } finally {
-                closePage(page);
+                page.close();
             }
         } catch (Exception e) {
             logger.warning("渲染页面失败: " + url + " - " + e.getMessage());
@@ -182,24 +187,22 @@ public class PlaywrightManager {
 
         lock.lock();
         try {
-            Object page = createPage();
+            Page page = createPage();
             try {
-                invoke(page, "navigate", url);
+                page.navigate(url);
                 sleep(3000);
 
-                String title = (String) invoke(page, "title");
-                String content = (String) invoke(page, "content");
                 int pageId = nextPageId++;
                 activePages.put(pageId, page);
 
                 NavigationResult result = new NavigationResult();
                 result.success = true;
-                result.title = title;
-                result.pageContent = content;
+                result.title = page.title();
+                result.pageContent = page.content();
                 result.pageId = pageId;
                 return result;
             } catch (Exception e) {
-                closePage(page);
+                page.close();
                 throw e;
             }
         } catch (Exception e) {
@@ -215,7 +218,7 @@ public class PlaywrightManager {
      */
     public ActionResult click(int pageId, String selector) {
         return withPage(pageId, page -> {
-            invoke(page, "click", selector);
+            page.click(selector);
             sleep(500);
             return ActionResult.success("已点击: " + selector);
         });
@@ -226,7 +229,7 @@ public class PlaywrightManager {
      */
     public ActionResult type(int pageId, String selector, String text) {
         return withPage(pageId, page -> {
-            invoke(page, "fill", selector, text);
+            page.fill(selector, text);
             return ActionResult.success("已输入: " + text + " 到: " + selector);
         });
     }
@@ -236,7 +239,7 @@ public class PlaywrightManager {
      */
     public ActionResult scroll(int pageId, int x, int y) {
         return withPage(pageId, page -> {
-            invoke(page, "evaluate", "window.scrollTo(" + x + ", " + y + ")");
+            page.evaluate("window.scrollTo(" + x + ", " + y + ")");
             return ActionResult.success("已滚动到: (" + x + ", " + y + ")");
         });
     }
@@ -246,8 +249,8 @@ public class PlaywrightManager {
      */
     public SnapshotResult snapshot(int pageId) {
         return withPage(pageId, page -> {
-            String title = (String) invoke(page, "title");
-            String content = (String) invoke(page, "content");
+            String title = page.title();
+            String content = page.content();
             return buildSnapshotResult(title, content);
         });
     }
@@ -258,8 +261,8 @@ public class PlaywrightManager {
     public ScreenshotResult screenshot(int pageId) {
         return withPage(pageId, page -> {
             try {
-                // page.screenshot() — 返回 byte[] (PNG)
-                byte[] bytes = (byte[]) invoke(page, "screenshot");
+                Page.ScreenshotOptions opts = new Page.ScreenshotOptions();
+                byte[] bytes = page.screenshot(opts);
                 String base64 = Base64.getEncoder().encodeToString(bytes);
                 ScreenshotResult result = new ScreenshotResult();
                 result.success = true;
@@ -292,129 +295,153 @@ public class PlaywrightManager {
         return available;
     }
 
-    @SuppressWarnings("unchecked")
     private boolean tryInitializePlaywright() {
         try {
-            // 使用反射检测 Playwright 类
-            Class<?> playwrightClass = Class.forName(PLAYWRIGHT_CLASS);
+            // 通过 CreateOptions.setEnv 跳过浏览器自动下载
+            Map<String, String> envOverrides = new HashMap<>();
+            envOverrides.put("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD", "1");
+            Playwright.CreateOptions options = new Playwright.CreateOptions()
+                .setEnv(envOverrides);
 
-            // 调用 Playwright.create()
-            Object p = playwrightClass.getMethod("create").invoke(null);
-            this.playwrightInstance = p;
+            this.playwrightInstance = Playwright.create(options);
+            logger.info("Playwright 浏览器自动下载已跳过，将使用系统 Chrome");
+
+            // 检测系统 Chrome/Chromium
+            Path chromePath = detectSystemChrome();
+            if (chromePath == null) {
+                logger.severe("未检测到系统 Chrome/Chromium 浏览器。请安装 Google Chrome 或 Chromium，"
+                    + "或通过 CHROME_PATH 环境变量指定路径。");
+                this.playwrightInstance.close();
+                this.playwrightInstance = null;
+                return false;
+            }
+            logger.info("使用系统 Chrome: " + chromePath);
 
             // 配置 launch options
-            Class<?> launchOptionsClass = Class.forName("com.microsoft.playwright.BrowserType$LaunchOptions");
-            Object launchOptions = launchOptionsClass.getDeclaredConstructor().newInstance();
-            launchOptionsClass.getMethod("setHeadless", boolean.class).invoke(launchOptions, headless);
+            BrowserType.LaunchOptions launchOptions = new BrowserType.LaunchOptions()
+                .setHeadless(headless)
+                .setExecutablePath(chromePath);
 
-            // 获取 Chromium 浏览器类型
-            Object chromium = p.getClass().getMethod("chromium").invoke(p);
-            Object browser = chromium.getClass()
-                .getMethod("launch", launchOptionsClass)
-                .invoke(chromium, launchOptions);
-            this.browserInstance = browser;
-
-            // 创建 BrowserContext
-            Object context = browser.getClass().getMethod("newContext").invoke(browser);
-            this.browserContextInstance = context;
+            // 启动浏览器
+            this.browserInstance = playwrightInstance.chromium().launch(launchOptions);
+            this.browserContextInstance = browserInstance.newContext();
 
             return true;
-        } catch (ClassNotFoundException e) {
-            logger.info("Playwright 未在类路径中找到: " + e.getMessage());
-            return false;
-        } catch (NoSuchMethodException e) {
-            logger.warning("Playwright API 版本不兼容: " + e.getMessage());
+        } catch (NoClassDefFoundError e) {
+            logger.info("Playwright 依赖未找到: " + e.getMessage());
             return false;
         } catch (Exception e) {
-            // Playwright 可能未安装浏览器二进制文件
-            if (e.getMessage() != null && e.getMessage().contains("Executable doesn't exist")) {
-                logger.warning("Playwright 浏览器二进制文件未安装。运行 'playwright install chromium' 或 'mvn exec:java -Dexec.mainClass=\"com.microsoft.playwright.CLI\" -Dexec.args=\"install chromium\"'");
-            } else {
-                logger.warning("Playwright 初始化失败: " + e.getMessage());
-            }
+            logger.warning("Playwright 初始化失败: " + e.getMessage());
             return false;
         }
-    }
-
-    private Object createPage() throws Exception {
-        // browserContext.newPage()
-        return browserContextInstance.getClass()
-            .getMethod("newPage")
-            .invoke(browserContextInstance);
-    }
-
-    private void closePage(Object page) {
-        try {
-            page.getClass().getMethod("close").invoke(page);
-        } catch (Exception ignored) {
-        }
-    }
-
-    private void closeBrowser() {
-        if (browserInstance != null) {
-            try {
-                browserInstance.getClass().getMethod("close").invoke(browserInstance);
-            } catch (Exception ignored) {
-            }
-            browserInstance = null;
-        }
-    }
-
-    private void closePlaywright() {
-        if (playwrightInstance != null) {
-            try {
-                playwrightInstance.getClass().getMethod("close").invoke(playwrightInstance);
-            } catch (Exception ignored) {
-            }
-            playwrightInstance = null;
-        }
-        browserContextInstance = null;
     }
 
     /**
-     * 通过反射调用对象方法。
+     * 检测系统中已安装的 Chrome/Chromium 浏览器路径。
+     * 优先级：CHROME_PATH 环境变量 > PLAYWRIGHT_CHROME_EXECUTABLE > 常见安装路径
+     *
+     * @return 浏览器可执行文件路径，未找到返回 null
      */
-    private Object invoke(Object obj, String methodName, Object... args) throws Exception {
-        Class<?>[] paramTypes = new Class<?>[args.length];
-        for (int i = 0; i < args.length; i++) {
-            paramTypes[i] = args[i].getClass();
+    private Path detectSystemChrome() {
+        // 1. 环境变量（用户显式指定）
+        String envPath = System.getenv("CHROME_PATH");
+        if (envPath != null && !envPath.isEmpty()) {
+            Path path = Paths.get(envPath);
+            if (Files.exists(path)) {
+                logger.info("通过 CHROME_PATH 环境变量找到 Chrome: " + envPath);
+                return path;
+            }
+            logger.warning("CHROME_PATH 环境变量指定的路径不存在: " + envPath);
         }
-        // 处理基本类型重载：String 参数是最常见的 Playwright API 形式
-        try {
-            return obj.getClass().getMethod(methodName, paramTypes).invoke(obj, args);
-        } catch (NoSuchMethodException e) {
-            // 回退：尝试将 String 参数匹配为 CharSequence
-            for (int i = 0; i < args.length; i++) {
-                if (args[i] instanceof String) {
-                    paramTypes[i] = CharSequence.class;
+
+        envPath = System.getenv("PLAYWRIGHT_CHROME_EXECUTABLE");
+        if (envPath != null && !envPath.isEmpty()) {
+            Path path = Paths.get(envPath);
+            if (Files.exists(path)) {
+                logger.info("通过 PLAYWRIGHT_CHROME_EXECUTABLE 环境变量找到 Chrome: " + envPath);
+                return path;
+            }
+        }
+
+        // 2. 按操作系统检测常见安装路径
+        String os = System.getProperty("os.name").toLowerCase(Locale.ROOT);
+
+        if (os.contains("win")) {
+            // Windows
+            String localAppData = System.getenv("LOCALAPPDATA");
+            String programFiles = System.getenv("ProgramFiles");
+            String programFilesX86 = System.getenv("ProgramFiles(x86)");
+
+            String[] paths = {
+                programFiles + "\\Google\\Chrome\\Application\\chrome.exe",
+                programFilesX86 + "\\Google\\Chrome\\Application\\chrome.exe",
+                localAppData + "\\Google\\Chrome\\Application\\chrome.exe",
+                localAppData + "\\Chromium\\Application\\chrome.exe",
+                System.getProperty("user.home") + "\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe"
+            };
+            for (String p : paths) {
+                if (p != null) {
+                    Path path = Paths.get(p);
+                    if (Files.exists(path)) return path;
                 }
             }
-            return obj.getClass().getMethod(methodName, paramTypes).invoke(obj, args);
+        } else if (os.contains("mac") || os.contains("darwin")) {
+            // macOS
+            String[] paths = {
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                "/Applications/Chromium.app/Contents/MacOS/Chromium"
+            };
+            for (String p : paths) {
+                Path path = Paths.get(p);
+                if (Files.exists(path)) return path;
+            }
+        } else {
+            // Linux: 从 PATH 中查找
+            String pathEnv = System.getenv("PATH");
+            if (pathEnv != null) {
+                String[] dirs = pathEnv.split(File.pathSeparator);
+                String[] executables = {
+                    "google-chrome", "google-chrome-stable",
+                    "chromium", "chromium-browser", "chromium/chrome"
+                };
+                for (String dir : dirs) {
+                    for (String exe : executables) {
+                        Path path = Paths.get(dir, exe);
+                        if (Files.exists(path) && Files.isExecutable(path)) {
+                            return path.toAbsolutePath();
+                        }
+                    }
+                }
+            }
         }
+
+        return null;
+    }
+
+    private Page createPage() {
+        return browserContextInstance.newPage();
     }
 
     /**
      * 提取页面元数据（OG 标签、meta 描述等）。
      */
     @SuppressWarnings("unchecked")
-    private Map<String, String> extractMetadata(Object page) {
+    private Map<String, String> extractMetadata(Page page) {
         Map<String, String> meta = new LinkedHashMap<>();
         try {
-            // 通过 JS eval 提取元数据
             String js = """
                 JSON.stringify({
-                    'description': (document.querySelector('meta[name=\"description\"]')?.content || ''),
-                    'keywords': (document.querySelector('meta[name=\"keywords\"]')?.content || ''),
-                    'og:title': (document.querySelector('meta[property=\"og:title\"]')?.content || ''),
-                    'og:description': (document.querySelector('meta[property=\"og:description\"]')?.content || ''),
-                    'og:image': (document.querySelector('meta[property=\"og:image\"]')?.content || ''),
-                    'og:url': (document.querySelector('meta[property=\"og:url\"]')?.content || '')
+                    'description': (document.querySelector('meta[name="description"]')?.content || ''),
+                    'keywords': (document.querySelector('meta[name="keywords"]')?.content || ''),
+                    'og:title': (document.querySelector('meta[property="og:title"]')?.content || ''),
+                    'og:description': (document.querySelector('meta[property="og:description"]')?.content || ''),
+                    'og:image': (document.querySelector('meta[property="og:image"]')?.content || ''),
+                    'og:url': (document.querySelector('meta[property="og:url"]')?.content || '')
                 })
                 """;
-            String result = (String) invoke(page, "evaluate", js);
-            if (result != null) {
-                com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-                Map<String, String> parsed = mapper.readValue(result, Map.class);
+            String result = page.evaluate(js).toString();
+            if (result != null && !result.isEmpty()) {
+                Map<String, String> parsed = MAPPER.readValue(result, Map.class);
                 meta.putAll(parsed);
                 meta.values().removeIf(v -> v == null || v.isEmpty());
             }
@@ -426,7 +453,6 @@ public class PlaywrightManager {
     /**
      * 构建页面快照结果。
      */
-    @SuppressWarnings("unchecked")
     private SnapshotResult buildSnapshotResult(String title, String html) {
         SnapshotResult result = new SnapshotResult();
         result.success = true;
@@ -438,7 +464,7 @@ public class PlaywrightManager {
 
         // 提取标题
         try {
-            java.util.regex.Matcher m = java.util.regex.Pattern
+            var m = java.util.regex.Pattern
                 .compile("<(h[1-6])[^>]*>([^<]*)</\\1>", java.util.regex.Pattern.CASE_INSENSITIVE)
                 .matcher(html);
             int count = 0;
@@ -456,7 +482,7 @@ public class PlaywrightManager {
 
         // 提取链接
         try {
-            java.util.regex.Matcher m = java.util.regex.Pattern
+            var m = java.util.regex.Pattern
                 .compile("<a[^>]+href=[\"']([^\"']+)[\"'][^>]*>([^<]*)</a>",
                     java.util.regex.Pattern.CASE_INSENSITIVE)
                 .matcher(html);
@@ -481,7 +507,7 @@ public class PlaywrightManager {
      * 在页面上执行操作的辅助方法。
      */
     private <T> T withPage(int pageId, PageOperation<T> op) {
-        Object page = activePages.get(pageId);
+        Page page = activePages.get(pageId);
         if (page == null) {
             return op.onError("页面 " + pageId + " 未找到或已关闭");
         }
@@ -504,7 +530,7 @@ public class PlaywrightManager {
 
     @FunctionalInterface
     private interface PageOperation<T> {
-        T execute(Object page) throws Exception;
+        T execute(Page page) throws Exception;
 
         default T onError(String message) {
             return null;

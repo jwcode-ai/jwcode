@@ -9,15 +9,13 @@
  *   Walks up from script dir to find pom.xml, builds with Maven,
  *   launches via `java -jar` from target/.
  */
-import { spawn, spawnSync, execSync, execFileSync, type ChildProcess } from 'node:child_process';
-import { existsSync, readdirSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
+import { spawn, spawnSync, execSync, type ChildProcess } from 'node:child_process';
 import { join, dirname, delimiter } from 'node:path';
-import { createRequire } from 'node:module';
 import { homedir, platform } from 'node:os';
 import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const MIN_BACKEND_JAR_BYTES = 200 * 1024;
 
 /**
  * Find the installation directory where jwcode's backend JAR lives.
@@ -51,20 +49,12 @@ export function findInstallDir(): string {
 export function findJar(installDir: string): string | null {
   // Production: bundled JAR
   const bundledJar = join(installDir, 'backend', 'jwcode-web.jar');
-  if (existsSync(bundledJar)) {
-    if (!isProguardOutput(bundledJar)) return bundledJar;
-    // Bundled JAR looks like a broken ProGuard output — fall through to dev
-    // location, but only if dev JAR is newer so we don't regress.
-  }
+  if (existsSync(bundledJar)) return bundledJar;
 
   // Development: Maven-built JAR in target/
-  // Prefer the Spring Boot repackaged uber-JAR (jwcode-web.jar), then
-  // fall back to the plain SNAPSHOT jar.
   const targetDir = join(installDir, 'jwcode-web', 'target');
-  const devJarUnversioned = join(targetDir, 'jwcode-web.jar');
   const devJarSnap = join(targetDir, 'jwcode-web-1.0.0-SNAPSHOT.jar');
 
-  if (existsSync(devJarUnversioned) && !isProguardOutput(devJarUnversioned)) return devJarUnversioned;
   if (existsSync(devJarSnap)) return devJarSnap;
 
   // Also check for any other matching JAR in target/
@@ -74,27 +64,11 @@ export function findJar(installDir: string): string | null {
         .filter(f => f.startsWith('jwcode-web') && f.endsWith('.jar'))
         .map(f => ({ name: f, mtime: statSync(join(targetDir, f)).mtimeMs }))
         .sort((a, b) => b.mtime - a.mtime);
-      for (const j of jars) {
-        const p = join(targetDir, j.name);
-        if (!isProguardOutput(p)) return p;
-      }
+      if (jars.length > 0) return join(targetDir, jars[0].name);
     } catch { /* ignore */ }
   }
 
   return null;
-}
-
-/**
- * Detect whether a JAR looks like a broken ProGuard output:
- * has META-INF/proguard/ but no com/jwcode/ classes.
- */
-function isProguardOutput(jarPath: string): boolean {
-  try {
-    const out = execFileSync('unzip', ['-l', jarPath, 'META-INF/proguard/', 'com/jwcode/'], { stdio: ['ignore', 'pipe', 'ignore'] }).toString();
-    return out.includes('META-INF/proguard/') && !out.includes('com/jwcode/');
-  } catch {
-    return false;
-  }
 }
 
 export function findMvn(): string {
@@ -148,124 +122,6 @@ export function findJava(): string {
     } catch {}
   }
   return 'java';
-}
-
-/**
- * Ensure the backend JAR exists by downloading from GitHub Releases if needed.
- * Returns the JAR path, or null if download fails.
- *
- * Tries the current version first, then falls back to previous patch versions.
- * This handles the case where a new npm release was published but the
- * corresponding GitHub Release hasn't been created yet.
- */
-export async function ensureBackendJar(installDir: string): Promise<string | null> {
-  const existing = findJar(installDir);
-  if (existing) return existing;
-
-  const backendDir = join(installDir, 'backend');
-  const jarPath = join(backendDir, 'jwcode-web.jar');
-
-  // Read package version for the release tag
-  let version: string;
-  try {
-    const req = createRequire(import.meta.url);
-    const pkg = req('../package.json');
-    version = pkg.version;
-  } catch {
-    console.error('[launcher] Could not read package.json to determine version.');
-    return null;
-  }
-
-  // Build version fallback list: current first, then previous patch versions
-  const versionsToTry = generateVersionFallbacks(version);
-
-  console.log(`[launcher] Backend JAR not found. Downloading from GitHub Releases...`);
-
-  mkdirSync(backendDir, { recursive: true });
-
-  for (const v of versionsToTry) {
-    const urls = [
-      `https://ghproxy.com/https://github.com/jwcode-ai/jwcode/releases/download/v${v}/jwcode-web.jar`,
-      `https://github.com/jwcode-ai/jwcode/releases/download/v${v}/jwcode-web.jar`,
-    ];
-
-    for (const url of urls) {
-      console.log(`[launcher] Trying v${v}: ${url}`);
-      try {
-        const response = await fetch(url);
-        if (!response.ok) {
-          console.log(`[launcher] HTTP ${response.status}, trying next source...`);
-          continue;
-        }
-
-        const reader = response.body?.getReader();
-        if (!reader) {
-          console.log('[launcher] No response body, trying next source...');
-          continue;
-        }
-
-        const chunks: Uint8Array[] = [];
-        let downloaded = 0;
-        const contentLength = response.headers.get('content-length');
-        const total = Number(contentLength || 0);
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          chunks.push(value);
-          downloaded += value.length;
-          if (total > 0) {
-            const pct = Math.round((downloaded / total) * 100);
-            process.stdout.write(`\r[launcher] Downloading... ${pct}% (${(downloaded / 1024 / 1024).toFixed(1)} MB)`);
-          }
-        }
-
-        const buf = Buffer.concat(chunks);
-        if (buf.length < MIN_BACKEND_JAR_BYTES) {
-          console.log(
-            `\n[launcher] Download too small for v${v}, trying next source: ${buf.length} bytes ` +
-            `(content-length: ${contentLength ?? 'unknown'}, minimum: ${MIN_BACKEND_JAR_BYTES} bytes) ${url}`
-          );
-          continue;
-        }
-
-        writeFileSync(jarPath, buf);
-        console.log(`\n[launcher] Download complete: ${jarPath} (${(buf.length / 1024 / 1024).toFixed(1)} MB)`);
-        return jarPath;
-      } catch (err) {
-        console.log(`[launcher] Download failed: ${err instanceof Error ? err.message : String(err)}`);
-        const isLast = v === versionsToTry[versionsToTry.length - 1] && url === urls[urls.length - 1];
-        if (!isLast) console.log('[launcher] Trying next source...');
-      }
-    }
-  }
-
-  console.error('[launcher] All download sources failed.');
-  console.error('[launcher]');
-  console.error('[launcher] The backend JAR could not be downloaded from GitHub Releases.');
-  console.error('[launcher] This usually means the GitHub Release for this version does not exist yet.');
-  console.error('[launcher]');
-  console.error('[launcher] To fix this:');
-  console.error('[launcher]   1. Run: gh release create v' + version + ' --generate-notes --title "v' + version + '"');
-  console.error('[launcher]   2. Then manually attach the JAR, or reinstall from source.');
-  console.error('[launcher]');
-  console.error('[launcher] Or build from source: git clone https://github.com/jwcode-ai/jwcode && cd jwcode && mvn package -pl jwcode-web -am -DskipTests');
-  return null;
-}
-
-/**
- * Generate version fallback list for JAR download.
- * Tries the current version first, then up to 5 previous patch versions.
- */
-function generateVersionFallbacks(version: string): string[] {
-  const versions: string[] = [version];
-  const parts = version.split('.').map(Number);
-  if (parts.length === 3 && parts[2] > 0) {
-    for (let patch = parts[2] - 1; patch >= Math.max(0, parts[2] - 5); patch--) {
-      versions.push(`${parts[0]}.${parts[1]}.${patch}`);
-    }
-  }
-  return [...new Set(versions)];
 }
 
 export function buildBackend(projectRoot: string): void {

@@ -1,6 +1,6 @@
 {
   "name": "@jwcode/cli",
-  "version": "3.0.19",
+  "version": "3.0.20",
   "description": "JWCode — Java AI Coding Tool TypeScript CLI",
   "type": "module",
   "main": "dist/cli.js",
@@ -11,9 +11,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "build": "node build.mjs",
+    "build:backend": "mvn package -pl jwcode-web -am -q -DskipTests -f ../pom.xml",
     "go": "node build.mjs && node dist/cli.js run",
     "start": "node build.mjs && node dist/cli.js start",
-    "prepublishOnly": "npm run build",
+    "prepublishOnly": "npm run build:backend && node build.mjs --publish",
     "version": "node -e \"const f=require('fs');const v=require('./package.json').version;let l=f.readFileSync('./package-lock.json','utf8');l=l.replace(/\\\"version\\\":\\s*\\\"[^\\\"]+\\\"/g,(m)=>m.replace(/\\\"[^\\\"]+\\\"$/,`\\\"${v}\\\"`));f.writeFileSync('./package-lock.json',l)\" && git add package-lock.json",
     "postversion": "git push origin main --follow-tags && git push origin v$(node -p \"require('./package.json').version\")"
   },
@@ -24,7 +25,8 @@
     "ws": "^8.18.0"
   },
   "files": [
-    "dist/"
+    "dist/",
+    "backend/jwcode-web.jar"
   ],
   "engines": {
     "node": ">=18"
