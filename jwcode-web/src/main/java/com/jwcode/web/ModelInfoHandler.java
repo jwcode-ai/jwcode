@@ -260,7 +260,7 @@ public class ModelInfoHandler implements HttpHandler {
         
         provider.getModels().add(newModel);
         
-        // 保存配置到用户目录 C:\Users\HUAWEI\.jwcode\config.yaml
+        // 保存配置到用户目录 ~/.jwcode/config.yaml
         try {
             loader.saveConfig(config);
             logger.info("Saved new model '" + modelId + "' to provider '" + providerName + "'");

@@ -61,6 +61,7 @@ replay_pid*
 
 # === Auto-generated ===
 .attach_*
+*.keystore
 
 # Nested ts-cli git repo
 ts-cli/.git/
