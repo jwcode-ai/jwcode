@@ -23,7 +23,7 @@ settings:
   log-level: INFO
 
   engine:
-    max-iterations: 50
+    max-iterations: 0
     timeout-minutes: 5
     token-budget: 1000000
     max-message-history: 0

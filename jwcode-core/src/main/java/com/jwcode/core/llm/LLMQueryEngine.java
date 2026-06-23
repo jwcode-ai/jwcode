@@ -1870,7 +1870,7 @@ public class LLMQueryEngine {
     // ==================== 数据类 ====================
     
     public static class EngineConfig {
-        private int maxIterations = 50; // 默认 50 轮迭代上限，防止无限循环
+        private int maxIterations = 0; // 默认 0 表示无限制（由 TokenBudget 控制），设为 >0 表示硬上限
         private Duration timeout = Duration.ofMinutes(5);
         private int maxEmptyResponses = DEFAULT_MAX_EMPTY_RESPONSES;
         private boolean reasoningModel = false;

@@ -351,7 +351,10 @@ public class YamlConfigLoader {
     }
     
     private void mergeEngineSettings(JwcodeConfig.EngineSettings target, JwcodeConfig.EngineSettings source) {
-        // maxIterations is kept at 0 (unlimited), controlled by TokenBudget instead
+        // maxIterations 默认 0（无限制），由 TokenBudget 控制迭代次数
+        if (source.getMaxIterations() != 0) {
+            target.setMaxIterations(source.getMaxIterations());
+        }
         if (source.getTimeoutMinutes() != 5) {
             target.setTimeoutMinutes(source.getTimeoutMinutes());
         }
